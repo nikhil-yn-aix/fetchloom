@@ -1264,12 +1264,9 @@ fn editing_code_makes_build_pin_again() -> Result {
 }
 
 /// the warnings of the json document `value` about recipe code git does not have.
-fn code_warnings(value: &Value) -> Vec<&str> {
-    value["warnings"]
-        .as_array()
+fn code_warnings(value: &Value) -> Vec<String> {
+    crate::support::warned(value)
         .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
         .filter(|warning| warning.contains(", code of "))
         .collect()
 }
@@ -2713,9 +2710,9 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
     );
     let warned = "clean's pinned result is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here";
     assert!(
-        document["warnings"]
-            .as_array()
-            .is_some_and(|warnings| warnings.iter().any(|warning| warning == warned)),
+        crate::support::warned(&document)
+            .iter()
+            .any(|warning| warning == warned),
         "{}",
         document["warnings"]
     );

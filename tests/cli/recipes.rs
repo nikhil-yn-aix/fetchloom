@@ -45,10 +45,8 @@ fn cloned(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
 
 /// how many of the warnings in the `--json` document `output` printed are `warning`.
 fn warned(output: &std::process::Output, warning: &str) -> Result<usize> {
-    Ok(json(output)?["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    Ok(crate::support::warned(&json(output)?)
+        .iter()
         .filter(|told| *told == warning)
         .count())
 }
@@ -68,12 +66,14 @@ fn sync_warns_of_a_recipe_not_built_yet() -> Result {
     with(&sandbox, &server, WRITE)?;
     let output = sandbox.run(&["--json", "sync"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
     assert_eq!(
-        json(&output)?["warnings"],
-        json!([
+        crate::support::warned(&document),
+        [
             "clean is not built yet; run `fetchloom build clean` to make it, then commit data.lock and data.lock.d"
-        ])
+        ]
     );
+    assert_eq!(document["warnings"][0]["kind"], "build.unbuilt");
     let named = sandbox.run(&["--json", "sync", "clean"])?;
     assert_eq!(named.status.code(), Some(60), "{}", text(&named.stdout)?);
     let error = &json(&named)?["errors"][0];
@@ -112,7 +112,11 @@ fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
             "{args:?}: {}",
             text(&output.stdout)?
         );
-        assert_eq!(json(&output)?["warnings"], json!([warned_text]), "{args:?}");
+        assert_eq!(
+            crate::support::warned(&json(&output)?),
+            [warned_text],
+            "{args:?}"
+        );
     }
     delete(&placed)?;
     let output = sandbox.run(&["--json", "path", "clean"])?;

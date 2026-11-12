@@ -21,7 +21,7 @@ use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
@@ -129,9 +129,11 @@ pub(super) fn remind_lists(context: &Context) {
             "run `git add data.lock.d` before you commit: git does not have {named}{since}"
         ));
     } else {
-        output.warn_with(
+        output.warn_detailed(
+            Warning::GitLockPartUntracked,
             &format!("git does not have {named}{since}"),
-            "run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out",
+            Some("run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out"),
+            &missing,
         );
     }
 }
@@ -248,7 +250,12 @@ pub(super) fn warn_recipe_code(output: &Output, project: &Project, manifest: &Ma
         let Some((said, help)) = uncommitted(&files, ignored) else {
             continue;
         };
-        output.warn_with(&said, &help);
+        output.warn_detailed(
+            Warning::GitCodeUntracked,
+            &said,
+            Some(&help),
+            files.iter().map(|file| &file.file),
+        );
         if files.len() > 1 {
             for file in &files {
                 output.detail(&file.file);
@@ -1457,6 +1464,7 @@ pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
 pub(super) fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
         work.context.output.warn_with(
+            Warning::CacheUnregistered,
             &format!(
                 "could not add this project to the cache's list of projects in {}: {err}. `fetchloom cache gc` may then delete files this project needs",
                 work.cache.root().display()

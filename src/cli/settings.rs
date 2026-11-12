@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::Context;
 use crate::mirror::Mirrors;
 use crate::net::Splitting;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::settings::{Origin, Set};
 use crate::units;
 
@@ -99,9 +99,11 @@ pub(super) fn run(context: &Context) -> Report {
 /// variable and never the value, which may be a secret.
 pub(super) fn warn_misnamed(output: &Output, names: impl IntoIterator<Item = std::ffi::OsString>) {
     for (name, meant) in crate::settings::misnamed(names) {
-        output.warn_with(
+        output.warn_detailed(
+            Warning::SettingsUnknownVariable,
             &format!("{name} is set, but fetchloom reads no such variable, so it changes nothing"),
-            &format!("did you mean {meant}?"),
+            Some(&format!("did you mean {meant}?")),
+            [&name],
         );
     }
 }

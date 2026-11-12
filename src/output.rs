@@ -4,6 +4,7 @@ mod fit;
 mod picker;
 mod progress;
 mod style;
+mod warning;
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -19,6 +20,7 @@ use serde::Serialize;
 pub(crate) use progress::{Bar, Setup, Ticker, Wait};
 use style::Tone;
 pub(crate) use style::{ColorChoice, Style};
+pub(crate) use warning::Warning;
 
 use crate::error::Error;
 use crate::units;
@@ -56,7 +58,7 @@ pub(crate) struct Output {
     held: Mutex<Option<Vec<String>>>,
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
-    warnings: Mutex<Vec<String>>,
+    warnings: Mutex<Vec<Warned>>,
     failed: Mutex<Option<Error>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
     hints: bool,
@@ -186,7 +188,7 @@ struct Document<'a, T> {
     command: Option<&'a str>,
     status: &'static str,
     result: Option<DocumentResult<'a, T>>,
-    warnings: Vec<String>,
+    warnings: Vec<Warned>,
     errors: Vec<Problem<'a>>,
     work: WorkDone,
 }
@@ -196,6 +198,27 @@ struct Document<'a, T> {
 enum DocumentResult<'a, T> {
     Complete(&'a T),
     Partial(&'a serde_json::Value),
+}
+
+/// a warning as `--json` lists it: its kind, what it says, the paths or names it is about, and
+/// what to do, as an error's are.
+#[derive(Clone, Debug, Serialize)]
+struct Warned {
+    kind: &'static str,
+    message: String,
+    details: Vec<String>,
+    help: Option<String>,
+}
+
+impl Warned {
+    /// the warning as one sentence, as a person reads it.
+    #[cfg(test)]
+    fn said(&self) -> String {
+        match &self.help {
+            Some(help) => format!("{}; {help}", self.message),
+            None => self.message.clone(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -303,6 +326,7 @@ impl Output {
         };
         if !unread.is_empty() {
             output.warn_with(
+                Warning::SettingsColorsUnread,
                 &format!(
                     "FETCHLOOM_COLORS: kept the default for {}",
                     unread.join(", ")
@@ -355,44 +379,55 @@ impl Output {
         }
     }
 
-    /// the warnings told so far, for tests.
+    /// the warnings told so far, each as a person reads it, for tests.
     #[cfg(test)]
     pub(crate) fn told(&self) -> Vec<String> {
-        self.warnings
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.warned()
     }
 
-    pub(crate) fn warn(&self, text: &str) {
-        self.warnings
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(text.to_owned());
-        // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
-        if self.tells(Level::Quiet) {
-            let yellow = toned(self.style.color, Tone::Warn);
-            self.line(&format!(
-                "{yellow}warning:{yellow:#} {}",
-                accented(&plain(text), Paint::new(), self.style.color)
-            ));
-        }
+    /// a warning of `kind`, which `--json` names so a script can tell it from the others.
+    pub(crate) fn warn(&self, kind: Warning, text: &str) {
+        self.warn_detailed(kind, text, None, std::iter::empty::<&str>());
     }
 
     /// a warning and what to do about it, the help on a line of its own as an error's is, so
-    /// neither runs long. `--json` and the python package get them as one sentence.
-    pub(crate) fn warn_with(&self, text: &str, help: &str) {
+    /// neither runs long. `--json` gives the help a field of its own.
+    pub(crate) fn warn_with(&self, kind: Warning, text: &str, help: &str) {
+        self.warn_detailed(kind, text, Some(help), std::iter::empty::<&str>());
+    }
+
+    /// a warning with the paths or names it is about, which `--json` lists in its `details`. a
+    /// person reads them, if at all, in the lines its caller tells under it.
+    pub(crate) fn warn_detailed(
+        &self,
+        kind: Warning,
+        text: &str,
+        help: Option<&str>,
+        details: impl IntoIterator<Item = impl std::fmt::Display>,
+    ) {
         self.warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(format!("{text}; {help}"));
+            .push(Warned {
+                kind: kind.name(),
+                message: text.to_owned(),
+                details: details
+                    .into_iter()
+                    .map(|detail| detail.to_string())
+                    .collect(),
+                help: help.map(str::to_owned),
+            });
+        // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
         if self.tells(Level::Quiet) {
             let yellow = toned(self.style.color, Tone::Warn);
-            self.line(&format!(
-                "{yellow}warning:{yellow:#} {}\n{}",
-                accented(&plain(text), Paint::new(), self.style.color),
-                help_line(help, self.style.color)
-            ));
+            let said = accented(&plain(text), Paint::new(), self.style.color);
+            self.line(&match help {
+                Some(help) => format!(
+                    "{yellow}warning:{yellow:#} {said}\n{}",
+                    help_line(help, self.style.color)
+                ),
+                None => format!("{yellow}warning:{yellow:#} {said}"),
+            });
         }
     }
 
@@ -424,13 +459,15 @@ impl Output {
         output
     }
 
-    /// the warnings told so far, as `--json` lists them.
+    /// the warnings told so far, each as a person reads it, for tests.
     #[cfg(test)]
     pub(crate) fn warned(&self) -> Vec<String> {
         self.warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .iter()
+            .map(Warned::said)
+            .collect()
     }
 
     /// the closing line of a run that worked.

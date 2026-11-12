@@ -20,6 +20,7 @@ use crate::cache::{Cache, Claim, Partial, UrlRecord};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
+use crate::output::Warning;
 use crate::place::{Method, Order, Placer};
 use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::stop::Stop;
@@ -692,6 +693,7 @@ fn warn_packed(context: &Context, remote: &Remote, fetched: &Fetched, destinatio
     }
     let file = came.rsplit('/').next().unwrap_or(came);
     context.output.warn_with(
+        Warning::ArchivePacked,
         &format!(
             "{} holds the archive {file}, kept packed as it came",
             destination.shown

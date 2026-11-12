@@ -20,7 +20,7 @@ a result JSON cannot represent, such as a path that is not UTF-8, returns a comp
 | `command` | `add`, `remove`, `drop`, `sync`, `lock`, `build`, `status`, `list`, `export`, `push`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, a `cache gc --inputs` that needs a yes, search candidates, `get` runs of several links, what `export` found, what a `push` planned when the cache lacks files or it needs a yes, what a `build` did before it failed, and a `lock` whose merge needs a choice; null for other failures |
-| `warnings` | array of strings, including in quiet mode |
+| `warnings` | array of warning objects, including in quiet mode: each has `kind`, `message`, `details` and `help`, as an error does; [warning kinds](#warning-kinds) lists every kind |
 | `errors` | empty on success; one error object on failure |
 | `errors[].kind` | one of the names in [exit codes](exit-codes.md) |
 | `errors[].message` | summary string |
@@ -97,6 +97,66 @@ JSON lists every difference, as rows in a pipe do, while a terminal shows 20 row
 `cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this kind also covers partial cleanup failures. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
+
+## warning kinds
+
+a warning's `kind` says what it is about, so a script can act on one without reading its `message`, whose words may change. `details` lists the paths or names it is about, often none, and `help` says what to do, or is null. a person reads the same warning on stderr, as `warning:` with its help on the line below.
+
+```json
+{"kind":"name.taken","message":"iris was taken, so this one is iris-2","details":[],"help":"choose a name with --as <name>"}
+```
+
+| kind | what it says |
+|---|---|
+| `archive.packed` | an archive stays packed: fetchloom does not unpack its format, it needs other parts, it came inside another archive, or `-o` saved it whole |
+| `archive.unreadable` | a file named as an archive is no archive fetchloom can read, so it stays as it is |
+| `auth.key_remains` | after `auth logout`, another place still holds a key for the account, which requests go on using |
+| `auth.key_unsendable` | a key holds a character no request header can carry, such as a line break, so it is never sent |
+| `auth.no_keyring` | this machine has no credential store, so `auth login` saved the key in a file readable only by you |
+| `auth.readable` | other users of this machine may read a file that holds logins or keys, such as a `.netrc` open to them |
+| `build.changed` | a recipe changed since it was built, and data.lock still pins the result built before |
+| `build.left_out` | a recipe's pinned result is on neither this machine nor a mirror, so the run leaves it out |
+| `build.unbuilt` | a recipe is not built yet |
+| `build.unchecked` | whether a recipe changed since its build could not be told |
+| `cache.changed` | a cached file changed, so it is downloaded again the next time it is needed |
+| `cache.unreadable` | a path in the cache could not be read or removed |
+| `cache.unregistered` | the project could not join the cache's list of projects, so `cache gc` may delete files it needs |
+| `download.encoded` | a server sent a file compressed with `Content-Encoding`, and it is kept as sent |
+| `download.unnamed` | a server gave no name for a file |
+| `download.web_page` | a link meant for a data file answered with a web page |
+| `export.left_out` | the list `export` wrote leaves out files no link holds, as `result.left_out` says |
+| `git.code_untracked` | git does not have code a recipe runs; `details` names the files |
+| `git.lock_part_untracked` | git does not have lists in `data.lock.d` that data.lock names, so a clone cannot read data.lock; `details` names them |
+| `import.skipped` | an import left out links or special files, which fetchloom never follows; `details` names them |
+| `license.restricted` | a dataset's license does not allow some uses, which the message names |
+| `lock.stale_part` | `data.lock.d` holds lists data.lock no longer names; `details` names them |
+| `merge.formatting` | a merge kept one side's entry of a dataset, which the other side writes differently only in comments or spacing |
+| `merge.unpinned` | after a merge, neither side's data.lock pins datasets as data.toml now asks |
+| `mirror.damaged` | a mirror holds a damaged copy of a file, so it was not used |
+| `mirror.skipped` | a mirror is missing, unreadable or unreachable, so the run skips it |
+| `mirror.unreadable` | `cache gc` could not read copies on a mirror |
+| `name.taken` | the name an add chose was taken, so the dataset got a number |
+| `network.private_origin` | a later run downloads from a private address only once `allowed_origins` lists it; `details` names each origin |
+| `network.retry` | a request failed and is tried again |
+| `path.tilde` | a path starts with a folder named `~`, which is not your home folder there |
+| `place.adopted_removed` | a removal deletes files that were already there when fetchloom adopted them |
+| `place.blocked` | something in the way keeps files out of the data folder |
+| `place.copied` | files were copied rather than linked to the cache |
+| `place.exclude_unreached` | an `exclude` names files inside an archive, which only its members table reaches; `details` names them |
+| `place.kept` | a file differs from data.lock and stays as it is, as `result.placement.kept` says |
+| `place.left_behind` | files stay in a folder no dataset uses now; `details` names them |
+| `place.overwritten` | a dry run of `sync --force` would replace a file sync keeps |
+| `place.path_folder` | a dataset's `path` makes a folder named like the one file it holds |
+| `place.put_back` | files fetchloom placed were deleted or moved, so they were put back; `details` names them |
+| `place.restored` | a changed file was put back as data.lock pins it |
+| `place.unportable` | files have names windows and fat disks cannot store |
+| `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
+| `search.partial` | a catalog did not answer a search in time, or its search failed |
+| `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |
+| `settings.unknown_variable` | a variable set is one typo from one fetchloom reads, so it changes nothing; `details` names it |
+| `source.moved` | a file is gone from its link in data.lock and came from where the source lists it now |
+| `source.partial` | what a source lists may not be all of the dataset, as for an osf project with components or a record that holds only a README |
+| `trace.unwritable` | `FETCHLOOM_TRACE` names a file fetchloom cannot write, so the run records no timeline |
 
 ## dry runs
 

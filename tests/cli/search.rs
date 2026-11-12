@@ -349,11 +349,12 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
         "{document}"
     );
     assert!(
-        document["warnings"][0]
+        document["warnings"][0]["message"]
             .as_str()
             .unwrap_or_default()
             .starts_with("kaggle search failed:")
     );
+    assert_eq!(document["warnings"][0]["kind"], "search.partial");
     Ok(())
 }
 

@@ -270,7 +270,8 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             code=finished.returncode,
         ) from None
     for warning in answer["warnings"]:
-        warnings.warn(_spoken(warning, keywords), stacklevel=3)
+        said = f"{warning['message']}; {warning['help']}" if warning["help"] else warning["message"]
+        warnings.warn(_spoken(said, keywords), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
         help = error["help"]

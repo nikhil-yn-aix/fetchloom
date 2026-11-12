@@ -30,6 +30,7 @@ use crate::digest::{Block, Sha256};
 use crate::error::{Error, FileFailure, Kind};
 use crate::name;
 use crate::net::{self, Fetched, Net, Origin};
+use crate::output::Warning;
 use crate::place::Method;
 use crate::plan::{self, Patterns, Plan};
 use crate::project::lock::LockedFile;
@@ -343,6 +344,7 @@ fn warn_tilde(context: &Context, path: &Path) {
         |home| home.join(parts.as_path()).display().to_string(),
     );
     context.output.warn_with(
+        Warning::PathTilde,
         &format!(
             "{shown} starts with a folder named ~ here, not your home folder, since a shell turns ~ into it only outside quotes"
         ),
@@ -1252,6 +1254,7 @@ async fn unpack(
     let tell_packed = |path: &str, said: String| {
         let placed = format!("{}/{path}", folder.display());
         context.output.warn_with(
+            Warning::ArchivePacked,
             &said,
             &archive::unpack_elsewhere(System::RUNNING, &placed, "", "--no-extract"),
         );

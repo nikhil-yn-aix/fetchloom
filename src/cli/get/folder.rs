@@ -9,6 +9,7 @@ use super::super::Context;
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
+use crate::output::Warning;
 use crate::place::{Method, Order, Placer, Unlinked};
 use crate::plan::Target;
 use crate::project::state::Look;
@@ -307,8 +308,8 @@ fn tell_placed(
     if let Some(why @ Unlinked::Synced(_)) = why {
         let because = why.copied_because(folder.display(), things);
         match &because.help {
-            Some(help) => output.warn_with(&because.said, help),
-            None => output.warn(&because.said),
+            Some(help) => output.warn_with(Warning::PlaceCopied, &because.said, help),
+            None => output.warn(Warning::PlaceCopied, &because.said),
         }
     }
     let what = match targets {

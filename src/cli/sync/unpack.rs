@@ -19,7 +19,7 @@ use crate::archive::{self, System, Unpacked, parts};
 use crate::cache::{Cache, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::output::{Bar, Output, Ticker};
+use crate::output::{Bar, Output, Ticker, Warning};
 use crate::plan;
 use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::{Lock, Locked, LockedFile};
@@ -179,10 +179,13 @@ pub(in crate::cli) async fn unpack_all(
             Ok(None) if unpack.lone => tell_lone(&context.output, &unpack.label),
             // the run says how a person unpacks it where it places the file
             Ok(None) if archive::unsupported(cache, &unpack.archive, unpack.size).is_some() => {}
-            Ok(None) => context.output.warn(&format!(
-                "{} is no archive fetchloom can read, so it stays as it is",
-                unpack.label
-            )),
+            Ok(None) => context.output.warn(
+                Warning::ArchiveUnreadable,
+                &format!(
+                    "{} is no archive fetchloom can read, so it stays as it is",
+                    unpack.label
+                ),
+            ),
             Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
                 tell_lone(&context.output, &unpack.label);
             }
@@ -350,6 +353,7 @@ impl Loop<'_> {
             ),
         };
         self.context.output.warn_with(
+            Warning::PlaceUnportable,
             &said,
             "a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to",
         );
@@ -425,6 +429,7 @@ impl Loop<'_> {
             .rsplit_once('/')
             .map_or_else(String::new, |(folder, _)| format!("{folder}/"));
         self.context.output.warn_with(
+            Warning::ArchivePacked,
             &format!(
                 "{dataset}/{inside} stays packed: it came inside {outer}, and fetchloom unpacks no archive inside another"
             ),
@@ -488,7 +493,9 @@ impl Loop<'_> {
                 "fetchloom joins a split archive only from every one of its parts: check that select and exclude keep them all, or ask the dataset's authors for the missing one".to_owned(),
             ),
         };
-        self.context.output.warn_with(&said, &help);
+        self.context
+            .output
+            .warn_with(Warning::ArchivePacked, &said, &help);
     }
 
     /// learns what every archive of `pinned`, imports pinned whole, unpacks to, from its bytes in
@@ -598,10 +605,13 @@ impl Loop<'_> {
                     )
                 })?;
                 if !checked {
-                    self.context.output.warn(&format!(
-                        "{dataset}/{} changed in the cache, so it is downloaded again",
-                        file.path
-                    ));
+                    self.context.output.warn(
+                        Warning::CacheChanged,
+                        &format!(
+                            "{dataset}/{} changed in the cache, so it is downloaded again",
+                            file.path
+                        ),
+                    );
                 }
                 whole &= checked;
             }
@@ -727,6 +737,7 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
 /// says that the lone part `label` stays packed, as its bytes are no archive on their own.
 fn tell_lone(output: &Output, label: &str) {
     output.warn_with(
+        Warning::ArchivePacked,
         &format!("{label} stays packed, since it does not unpack on its own"),
         "it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part",
     );

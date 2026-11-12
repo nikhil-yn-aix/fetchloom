@@ -110,7 +110,12 @@ class HelperOptions(unittest.TestCase):
 
     def test_strict_sync_raises_on_kept_files(self):
         kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
-        warning = "data/iris/iris.csv has changed, so it stays"
+        warning = {
+            "kind": "place.kept",
+            "message": "data/iris/iris.csv has changed, so it stays",
+            "details": [],
+            "help": "`fetchloom sync --force` replaces it",
+        }
         response = subprocess.CompletedProcess(
             [], 0, json.dumps({"status": "ok", "result": kept, "warnings": [warning]}), ""
         )
@@ -511,7 +516,12 @@ class Errors(unittest.TestCase):
                 "details": ["--sha256 names 000000000000, data.csv holds d144ff83495e"],
                 "help": "check the hash first, or add --force to replace the file",
             }],
-            "warnings": ["x.csv holds the archive x.zip; use `--dir x` to unpack it into a folder"],
+            "warnings": [{
+                "kind": "archive.packed",
+                "message": "x.csv holds the archive x.zip",
+                "details": [],
+                "help": "use `--dir x` to unpack it into a folder",
+            }],
         }
         response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
         with patch.object(fetchloom, "_program", return_value="fetchloom"):

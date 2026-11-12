@@ -437,6 +437,22 @@ pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+/// each warning of a `--json` document as one sentence, its help after a semicolon.
+pub(crate) fn warned(document: &serde_json::Value) -> Vec<String> {
+    document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|warning| {
+            let message = warning["message"].as_str().unwrap_or_default();
+            match warning["help"].as_str() {
+                Some(help) => format!("{message}; {help}"),
+                None => message.to_owned(),
+            }
+        })
+        .collect()
+}
+
 /// writes over a file as a user would, clearing its read-only flag first.
 pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
     let mut permissions = std::fs::metadata(path)?.permissions();

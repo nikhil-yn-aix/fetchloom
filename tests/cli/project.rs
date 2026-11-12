@@ -803,13 +803,9 @@ fn parts(sandbox: &Sandbox) -> Result<Vec<String>> {
 /// the warnings of the json document `value` about lists git does not have, without those a
 /// disk adds, such as fat's copies.
 fn git_warnings(value: &serde_json::Value) -> Vec<String> {
-    value["warnings"]
-        .as_array()
+    crate::support::warned(value)
         .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
         .filter(|warning| warning.contains("git does not have"))
-        .map(str::to_owned)
         .collect()
 }
 
@@ -851,13 +847,9 @@ fn status_names_lists_git_does_not_have() -> Result {
 
 /// the warnings of the json document `value` about recipe code git does not have.
 fn code_warnings(value: &serde_json::Value) -> Vec<String> {
-    value["warnings"]
-        .as_array()
+    crate::support::warned(value)
         .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
         .filter(|warning| warning.contains("code of clean"))
-        .map(str::to_owned)
         .collect()
 }
 
@@ -3031,13 +3023,9 @@ fn status_names_a_list_data_lock_no_longer_names() -> Result {
     fs::write(sandbox.work().join(stale), b"a list of another data.lock")?;
     let unnamed = || -> Result<Vec<String>> {
         let document = json(&sandbox.run(&["--json", "status"])?)?;
-        Ok(document["warnings"]
-            .as_array()
+        Ok(crate::support::warned(&document)
             .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
             .filter(|warning| warning.contains("no longer names"))
-            .map(str::to_owned)
             .collect())
     };
     assert_eq!(

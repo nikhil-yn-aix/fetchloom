@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::{Context, args};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::source::local;
 use crate::source::search::{self, Candidate, Catalog};
 use crate::units;
@@ -249,7 +249,7 @@ async fn find(
     context.stop.check()?;
     let result = result?;
     for warning in result.warnings {
-        context.output.warn(&warning);
+        context.output.warn(Warning::SearchPartial, &warning);
     }
     if result.candidates.is_empty() {
         return Err(Error::new(

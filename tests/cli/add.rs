@@ -10,7 +10,7 @@ use crate::project::{partial_bytes, told_a_stop};
 use crate::support::wait_until;
 use crate::support::{
     Part, Result, Routes, Running, Sandbox, Server, delete_folder, file, json, reply, sha256_hex,
-    text, without_copy_warning,
+    text, warned, without_copy_warning,
 };
 
 #[test]
@@ -33,9 +33,12 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     let document = json(&sandbox.run(&["add", &third.url, "--dry-run", "--json"])?)?;
     assert_eq!(
         document["warnings"],
-        serde_json::json!([
-            "iris was taken, so this one is iris-3; choose a name with --as <name>"
-        ])
+        serde_json::json!([{
+            "kind": "name.taken",
+            "message": "iris was taken, so this one is iris-3",
+            "details": [],
+            "help": "choose a name with --as <name>"
+        }])
     );
     Ok(())
 }
@@ -1140,15 +1143,15 @@ fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
     fs::write(sandbox.work().join("links.txt"), links)?;
     let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    let mut warnings = json(&output)?["warnings"].clone();
-    warnings.as_array_mut().unwrap().retain(|warning| {
-        warning.as_str() != Some("the drive holding data cannot link files, so files were copied")
+    let mut warnings = warned(&json(&output)?);
+    warnings.retain(|warning| {
+        warning != "the drive holding data cannot link files, so files were copied"
     });
     assert_eq!(
         warnings,
-        serde_json::json!([
+        [
             "iris was taken, so this one is iris-2; to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name"
-        ])
+        ]
     );
     Ok(())
 }

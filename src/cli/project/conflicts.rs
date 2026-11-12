@@ -6,6 +6,7 @@ use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
 use crate::error::{Error, Kind};
+use crate::output::Warning;
 use crate::project::lock::merge::markers::{self, Sides};
 use crate::project::lock::merge::{self, Choices, Merged, Side, Summary};
 use crate::project::lock::{self, Lock};
@@ -59,7 +60,7 @@ pub(super) fn merge(
     let merged = merge::merge(&manifest, lock.as_ref(), &choices, &project.root, &told)
         .map_err(|error| in_project(error, project))?;
     for warning in &merged.warnings {
-        context.output.warn(warning);
+        context.output.warn(Warning::MergeFormatting, warning);
     }
     let rendered = merged.lock.as_ref().map(Lock::render);
     let lock_changed = rendered.is_some() && rendered != conflicted.lock;
@@ -233,7 +234,7 @@ fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_
             [one] => (one.clone(), "is", "it"),
             many => (many.join(", "), "are", "them"),
         };
-        output.warn(&format!(
+        output.warn(Warning::MergeUnpinned, &format!(
             "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
         ));
     }

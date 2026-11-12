@@ -18,7 +18,7 @@ stop when the lock check fails. after sync, inspect kept conflicts before using 
 | `command` | identify the command, or null for welcome, version or an unrecognized prefix |
 | `status` | require `ok` for successful completion |
 | `result` | read the command-specific fields |
-| `warnings` | inspect warnings even in quiet mode |
+| `warnings` | inspect warnings even in quiet mode: branch on each one's `kind`, listed in [warning kinds](reference/json-output.md#warning-kinds), never on its `message` |
 | `errors` | read `kind`, `message`, `details`, nullable `help` and nullable `fix`, a command to run next; download failures also include `failures` |
 | `work` | inspect request, byte, retry, resume, cache and placement counters |
 

@@ -15,7 +15,7 @@ use crate::cache::{Cache, Member};
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::mirror::{Location, Mirrors};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock::archives::{self, Pinned};
@@ -310,7 +310,12 @@ fn warn_unnamed(output: &Output, project: &Project) {
                 super::project::command("status -v")
             ),
         };
-        output.warn_with(&format!("{said}, so nothing reads {them}"), &help);
+        output.warn_detailed(
+            Warning::LockStalePart,
+            &format!("{said}, so nothing reads {them}"),
+            Some(&help),
+            &parts,
+        );
         if parts.len() > 1 {
             for part in &parts {
                 output.detail(part);
@@ -337,11 +342,13 @@ fn warn_untracked(output: &Output, project: &Project) {
         ),
     };
     let them = if missing.len() == 1 { "it" } else { "them" };
-    output.warn_with(
+    output.warn_detailed(
+        Warning::GitLockPartUntracked,
         &said,
-        &format!(
+        Some(&format!(
             "run `git add data.lock.d`, then commit {them} with data.lock, since a clone without {them} cannot read data.lock"
-        ),
+        )),
+        &missing,
     );
     if missing.len() > 1 {
         for part in &missing {

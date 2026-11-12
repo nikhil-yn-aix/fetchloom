@@ -37,7 +37,7 @@ use crate::cache::{Access, Cache};
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::net::{self, Net, Notice};
-use crate::output::{Interrupt, Level, Output, Style};
+use crate::output::{Interrupt, Level, Output, Style, Warning};
 use crate::settings::{File, Settings};
 use crate::stop::{Heard, Stop};
 use crate::threads::Threads;
@@ -151,6 +151,7 @@ impl Context {
             .filter(|path| crate::auth::netrc::too_open(path))
         {
             self.output.warn_with(
+                Warning::AuthReadable,
                 &format!(
                     "other users of this machine can open {}, which holds logins",
                     path.display()
@@ -161,6 +162,7 @@ impl Context {
         for credential in credentials {
             if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
                 self.output.warn_with(
+                    Warning::AuthKeyUnsendable,
                     &format!(
                         "a key for {} is never sent, since it holds a character no request header can carry, such as a line break",
                         credential.host
@@ -194,10 +196,13 @@ impl Context {
                 of,
             } => {
                 if lines.tell(&host, Instant::now()) {
-                    output.warn(&format!(
-                        "{reason}. trying again in {} (try {next} of {of})",
-                        units::duration(wait)
-                    ));
+                    output.warn(
+                        Warning::NetworkRetry,
+                        &format!(
+                            "{reason}. trying again in {} (try {next} of {of})",
+                            units::duration(wait)
+                        ),
+                    );
                 }
             }
             Notice::Waiting {
@@ -550,7 +555,7 @@ pub(crate) fn run() -> ExitCode {
         .fitted(crate::output::story_columns());
     let mut context = Context::new(output);
     if let Some(refused) = &logs.refused {
-        context.output.warn(refused);
+        context.output.warn(Warning::TraceUnwritable, refused);
     }
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));

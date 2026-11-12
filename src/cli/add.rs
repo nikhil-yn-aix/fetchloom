@@ -26,7 +26,7 @@ use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::Net;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest, Source};
@@ -463,9 +463,10 @@ fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     }
     if !restored {
         // the error's details give the steps that put them back
-        context
-            .output
-            .warn("stopped, but data.toml and data.lock could not be put back as they were");
+        context.output.warn(
+            Warning::ProjectNotRestored,
+            "stopped, but data.toml and data.lock could not be put back as they were",
+        );
         return error;
     }
     // what a stopped download kept stays in the details, so the same add continues from there.
@@ -1096,16 +1097,21 @@ fn walk_import(
 
 /// warns about the links and special files below `shown` that an import left out.
 fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
-    match skipped {
-        [] => {}
-        [one] => output.warn(&format!(
+    let said = match skipped {
+        [] => return,
+        [one] => format!(
             "left out {one} in {shown}, a link or a special file, which fetchloom never follows or imports"
-        )),
-        [first, ..] => output.warn(&format!(
+        ),
+        [first, ..] => format!(
             "left out {} in {shown}, such as {first}, which fetchloom never follows or imports",
-            units::count(skipped.len() as u64, "link or special file", "links and special files")
-        )),
-    }
+            units::count(
+                skipped.len() as u64,
+                "link or special file",
+                "links and special files"
+            )
+        ),
+    };
+    output.warn_detailed(Warning::ImportSkipped, &said, None, skipped);
 }
 
 /// says what an import left out as the system's own, such as finder's `.DS_Store`.
@@ -2084,12 +2090,14 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
         allowed
             .origins
             .extend(rest.iter().map(|origin| (*origin).clone()));
-        context.output.warn_with(
+        context.output.warn_detailed(
+            Warning::NetworkPrivateOrigin,
             &format!(
                 "a later run downloads from {}, {what}, only once allowed_origins lists {them}",
                 units::listed(&named, "and")
             ),
-            &allowed.remedy(last),
+            Some(&allowed.remedy(last)),
+            &named,
         );
     }
     let committed = committed(work.project);
@@ -2500,6 +2508,7 @@ fn free_name(
         return Err(taken(&name));
     };
     output.warn_with(
+        Warning::NameTaken,
         &format!("{name} was taken, so this one is {numbered}"),
         rename,
     );

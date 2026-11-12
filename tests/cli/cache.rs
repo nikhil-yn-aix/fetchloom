@@ -119,13 +119,7 @@ fn unreadable_objects_have_their_own_report() -> Result {
                 document["result"]["unreadable"][0]["path"],
                 serde_json::json!(object)
             );
-            document["warnings"]
-                .as_array()
-                .ok_or("warnings is not an array")?
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n")
+            crate::support::warned(&document).join("\n")
         } else {
             text(&output.stderr)?
         };
@@ -503,13 +497,7 @@ fn sync_warns_when_gc_registration_fails() -> Result {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
         let warnings = if json {
             let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-            document["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n")
+            crate::support::warned(&document).join("\n")
         } else {
             text(&output.stderr)?
         };
@@ -651,14 +639,9 @@ fn gc_reports_refused_removals_to_people_and_scripts() -> Result {
             assert_eq!(document["result"]["removed_bytes"], 0);
             assert_eq!(document["result"]["removed_leftovers"], 0);
             assert!(
-                document["warnings"]
-                    .as_array()
-                    .unwrap()
+                crate::support::warned(&document)
                     .iter()
-                    .any(|warning| warning
-                        .as_str()
-                        .unwrap()
-                        .contains(&object.display().to_string()))
+                    .any(|warning| warning.contains(&object.display().to_string()))
             );
         } else {
             let report = text(&output.stderr)?;
@@ -758,14 +741,9 @@ fn gc_reports_failed_registration_removal_with_partial_counts() -> Result {
                 "PermissionDenied"
             );
             assert!(
-                report["warnings"]
-                    .as_array()
-                    .unwrap()
+                crate::support::warned(&report)
                     .iter()
-                    .any(|warning| warning
-                        .as_str()
-                        .unwrap()
-                        .contains(&registration.display().to_string()))
+                    .any(|warning| warning.contains(&registration.display().to_string()))
             );
         } else {
             let report = text(&output.stderr)?;

@@ -20,7 +20,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Held, Missing, Seen};
 use crate::mirror::{Location, Mirrors, Wanted};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -426,6 +426,7 @@ fn route(
         }
         if let Some(cause) = cause {
             output.warn_with(
+                Warning::MirrorUnreadable,
                 &format!(
                     "could not read {} on {}: {cause}",
                     units::count(unreadable, "copy", "copies"),
@@ -856,7 +857,7 @@ fn warn_missing(output: &Output, root: &Path, missing: Missing) {
             "check that this account may read it".to_owned(),
         ),
     };
-    output.warn_with(&warning, &help);
+    output.warn_with(Warning::MirrorSkipped, &warning, &help);
 }
 
 #[cfg(test)]

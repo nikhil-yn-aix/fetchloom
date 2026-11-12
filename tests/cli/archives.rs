@@ -1009,7 +1009,9 @@ fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
         "sample.rar stays packed, since fetchloom does not unpack rar; {}",
         next_step("sample/sample.rar", "--no-extract")
     );
-    assert_eq!(json(&got)?["warnings"], serde_json::json!([warning]));
+    let document = json(&got)?;
+    assert_eq!(crate::support::warned(&document), [warning]);
+    assert_eq!(document["warnings"][0]["kind"], "archive.packed");
     assert_eq!(fs::read(sandbox.work().join("sample/sample.rar"))?, RAR);
     Ok(())
 }

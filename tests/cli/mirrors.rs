@@ -197,12 +197,16 @@ fn a_misspelled_variable_is_warned_about_once_by_every_command() -> Result {
         shown(&json(&output)?, "mirrors")["value"],
         serde_json::json!([])
     );
+    // a script picks the typo out by its kind and its variable, whatever the words say
     for command in ["settings", "status"] {
         assert_eq!(
             json(&run(&["--json", command])?)?["warnings"],
-            serde_json::json!([
-                "FETCHLOOM_MIRROR is set, but fetchloom reads no such variable, so it changes nothing; did you mean FETCHLOOM_MIRRORS?"
-            ]),
+            serde_json::json!([{
+                "kind": "settings.unknown_variable",
+                "message": "FETCHLOOM_MIRROR is set, but fetchloom reads no such variable, so it changes nothing",
+                "details": ["FETCHLOOM_MIRROR"],
+                "help": "did you mean FETCHLOOM_MIRRORS?"
+            }]),
             "{command}"
         );
         let output = run(&[command])?;

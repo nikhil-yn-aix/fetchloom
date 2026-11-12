@@ -11,7 +11,7 @@ use super::Job;
 use crate::cache::Cache;
 use crate::error::{Error, Kind};
 use crate::net::{self, Event, Fetch, Fetched, Net};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::source::{self, Listing, Reference};
 
 /// where to look for a locked file again: the version its dataset is pinned to, and the file's
@@ -106,12 +106,15 @@ pub(super) async fn recover(
             again.resolved
         ))
     })?;
-    output.warn(&format!(
-        "{} is gone from its link in data.lock. {} still lists it, so it came from {}",
-        job.label,
-        again.resolved,
-        net::host(&remote.url)
-    ));
+    output.warn(
+        Warning::SourceMoved,
+        &format!(
+            "{} is gone from its link in data.lock. {} still lists it, so it came from {}",
+            job.label,
+            again.resolved,
+            net::host(&remote.url)
+        ),
+    );
     Ok(fetched)
 }
 

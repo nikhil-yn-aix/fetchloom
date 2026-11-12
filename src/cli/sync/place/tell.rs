@@ -7,7 +7,7 @@ use super::put::Tally;
 use super::{
     Blocker, ChangedCopy, Entry, LeftBehind, Placement, Preview, Reason, Scope, Undroppable,
 };
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
 use crate::project::manifest::Manifest;
@@ -91,8 +91,8 @@ pub(super) fn tell(
     {
         let because = copy_warning(why, &manifest.data_dir);
         match &because.help {
-            Some(help) => output.warn_with(&because.said, help),
-            None => output.warn(&because.said),
+            Some(help) => output.warn_with(Warning::PlaceCopied, &because.said, help),
+            None => output.warn(Warning::PlaceCopied, &because.said),
         }
     }
     warn_kept(output, manifest, scope, placement);
@@ -101,7 +101,7 @@ pub(super) fn tell(
     warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
-            output.warn(&format!(
+            output.warn(Warning::PlaceRestored, &format!(
                 "{path} was put back as pinned: its bytes had changed though its size and time had not"
             ));
         } else {
@@ -115,6 +115,7 @@ pub(super) fn tell(
                 ),
             };
             output.warn_with(
+                Warning::PlaceRestored,
                 &said,
                 "to edit a dataset's files, set copy = true for it in data.toml",
             );
@@ -135,7 +136,12 @@ fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedC
 fn warn_unreached(output: &Output, unreached: &[plan::Unreached]) {
     for found in unreached {
         let (said, help) = unreached_said(found);
-        output.warn_with(&said, &help);
+        output.warn_detailed(
+            Warning::PlaceExcludeUnreached,
+            &said,
+            Some(&help),
+            &found.paths,
+        );
         for path in &found.paths {
             output.detail(path);
         }
@@ -254,7 +260,12 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
             "to keep the data folder somewhere else than {data}/, set data_dir in data.toml"
         ));
     }
-    output.warn_with(&said, &leave.join("; "));
+    output.warn_detailed(
+        Warning::PlacePutBack,
+        &said,
+        Some(&leave.join("; ")),
+        &paths,
+    );
     for path in paths {
         output.detail(path);
     }
@@ -386,10 +397,10 @@ fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: bool) 
 fn warn_adopted_removed(output: &Output, paths: &[String], verb: &str) {
     match paths {
         [] => {}
-        [path] => output.warn(&format!(
+        [path] => output.warn(Warning::PlaceAdoptedRemoved, &format!(
             "{verb} {path}, a file that was already there when fetchloom adopted it"
         )),
-        [first, ..] => output.warn(&format!(
+        [first, ..] => output.warn(Warning::PlaceAdoptedRemoved, &format!(
             "{verb} {} files that were already there when fetchloom adopted them, such as {first}",
             paths.len()
         )),
@@ -443,11 +454,14 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         tell_adoptions(output, &folder, &files);
     }
     for overwritten in &preview.placement.overwritten {
-        output.warn(&format!(
-            "{} is {}, and --force would replace it",
-            overwritten.path,
-            overwritten_what(overwritten.reason)
-        ));
+        output.warn(
+            Warning::PlaceOverwritten,
+            &format!(
+                "{} is {}, and --force would replace it",
+                overwritten.path,
+                overwritten_what(overwritten.reason)
+            ),
+        );
     }
     let placement = &preview.placement;
     tell_removed(
@@ -467,11 +481,11 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
-            output.warn(&format!(
+            output.warn(Warning::PlaceRestored, &format!(
                 "{path} would be put back as pinned: its bytes changed though its size and time did not"
             ));
         } else {
-            output.warn(&match changed_copy(placement, path) {
+            output.warn(Warning::PlaceRestored, &match changed_copy(placement, path) {
                 Some(copy) => format!(
                     "{path} would be put back as pinned: it is linked to the cache's copy, which was changed. the changed copy would be kept as {}",
                     copy.kept_as
@@ -593,11 +607,13 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
                 ),
             ),
         };
-        output.warn_with(
+        output.warn_detailed(
+            Warning::PlaceLeftBehind,
             &format!(
                 "{folder} still holds {placed}, and {theirs}. fetchloom leaves them all there"
             ),
-            &help,
+            Some(&help),
+            files,
         );
         for path in files {
             output.detail(path);
@@ -632,7 +648,7 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
             "delete them when you no longer need them".to_owned(),
         ),
     };
-    output.warn_with(&said, &help);
+    output.warn_detailed(Warning::PlaceLeftBehind, &said, Some(&help), files);
     for path in files {
         output.detail(path);
     }
@@ -666,7 +682,12 @@ fn warn_retired(output: &Output, placement: &Placement) {
                 ),
             ),
         };
-        output.warn_with(&said, &help);
+        output.warn_detailed(
+            Warning::PlaceLeftBehind,
+            &said,
+            Some(&help),
+            &retired.unplaced,
+        );
         for path in &retired.unplaced {
             output.detail(path);
         }
@@ -689,10 +710,11 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
     for (blocker, files, datasets) in blocking.into_values() {
         let force = forcing(manifest, scope, &datasets);
         let (said, help) = in_the_way(blocker, files, &force);
-        match &blocker.dataset {
-            Some(dataset) => output.warn_with(&said, &left_alone(manifest, dataset)),
-            None => output.warn_with(&said, &help),
-        }
+        let help = match &blocker.dataset {
+            Some(dataset) => left_alone(manifest, dataset),
+            None => help,
+        };
+        output.warn_with(Warning::PlaceBlocked, &said, &help);
     }
     for kept in &placement.kept {
         let force = forcing(
@@ -740,7 +762,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                 "delete it if you do not need it".to_owned(),
             ),
         };
-        output.warn_with(&message, &help);
+        output.warn_with(Warning::PlaceKept, &message, &help);
     }
 }
 

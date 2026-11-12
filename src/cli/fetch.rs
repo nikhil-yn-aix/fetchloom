@@ -20,7 +20,7 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
 use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable};
-use crate::output::{Bar, Output, Ticker};
+use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::{self, Remote};
 use crate::stop::Stop;
 use crate::units;
@@ -542,7 +542,7 @@ impl<'a> Watch<'a> {
                         )
                     })
                 {
-                    self.output.warn_with(&format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
+                    self.output.warn_with(Warning::DownloadWebPage, &format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
             Event::Encoded(ref encoding) => {
@@ -550,7 +550,8 @@ impl<'a> Watch<'a> {
                     && !self.encoded.swap(true, Ordering::Relaxed)
                 {
                     let (said, help) = encoded(label, encoding);
-                    self.output.warn_with(&said, &help);
+                    self.output
+                        .warn_with(Warning::DownloadEncoded, &said, &help);
                 }
             }
             Event::Arrived => {
@@ -871,6 +872,7 @@ async fn run_each(
                     && name.bytes().all(|byte| byte.is_ascii_digit())
                 {
                     output.warn_with(
+                        Warning::DownloadUnnamed,
                         &format!("the server did not name {name}"),
                         "try the article or DOI link, which names its files",
                     );

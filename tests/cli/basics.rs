@@ -225,6 +225,17 @@ fn a_palette_recolors_output_and_a_typo_only_warns() -> Result {
         stderr.contains("FETCHLOOM_COLORS: kept the default for done=teal\n"),
         "{stderr}"
     );
+    let document: Value = serde_json::from_slice(
+        &sandbox
+            .command(&["help", "--json"])
+            .env("FETCHLOOM_COLORS", "unknown=red")
+            .output()?
+            .stdout,
+    )?;
+    assert_eq!(
+        document["warnings"][0]["kind"], "settings.colors_unread",
+        "{document}"
+    );
     Ok(())
 }
 
@@ -780,7 +791,7 @@ fn cli_output_non_unicode_paths_return_error_documents() -> Result {
         assert!(
             document["warnings"]
                 .as_array()
-                .is_some_and(|warnings| warnings.iter().any(|warning| warning
+                .is_some_and(|warnings| warnings.iter().any(|warning| warning["message"]
                     .as_str()
                     .is_some_and(|text| text.contains("done=teal"))))
         );

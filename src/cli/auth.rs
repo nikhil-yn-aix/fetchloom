@@ -11,6 +11,7 @@ use super::args::{Auth, AuthAction, Login, Logout};
 use crate::auth::{self, Account, Found, Home, Need, Origin, Secret, Step, store};
 use crate::error::{Error, Kind};
 use crate::net::Api;
+use crate::output::Warning;
 use crate::units;
 
 /// what `auth` reports.
@@ -76,6 +77,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
         .store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(path) = auth::netrc::path(&auth::env).filter(|path| auth::netrc::too_open(path)) {
         output.warn_with(
+            Warning::AuthReadable,
             &format!(
                 "other users of this machine can open {}, which holds logins",
                 path.display()
@@ -462,7 +464,7 @@ fn save(
                 .unwrap_or_default()
                 .join("credentials.json");
             if told {
-                output.warn(&format!(
+                output.warn(Warning::AuthNoKeyring, &format!(
                     "this machine has no credential store, so the key is saved in {}, readable only by you",
                     file.display()
                 ));
@@ -519,6 +521,7 @@ fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
         .is_some_and(|profile| lower(path).starts_with(lower(&profile)));
     if !inside {
         output.warn_with(
+            Warning::AuthReadable,
             &format!(
                 "{} is outside your user folder, so other users of this machine may be able to read it",
                 path.display()
@@ -622,6 +625,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
         output.warn_with(
+            Warning::AuthKeyRemains,
             &format!(
                 "a {} key is still read from {}",
                 title(&account),
@@ -732,6 +736,7 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
         _ => format!("sign in again with `{}`", account.command()),
     };
     output.warn_with(
+        Warning::AuthKeyUnsendable,
         &format!(
             "the {} key in {} is never sent, since it holds a character no request header can carry, such as a line break",
             title(account),

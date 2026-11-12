@@ -26,7 +26,7 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock::archives::{self, Archive};
@@ -209,7 +209,9 @@ impl<'a> Loop<'a> {
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
         for (said, help) in plan::file_shaped_paths(manifest, &plan) {
-            self.context.output.warn_with(&said, &help);
+            self.context
+                .output
+                .warn_with(Warning::PlacePathFolder, &said, &help);
         }
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
@@ -297,6 +299,7 @@ impl<'a> Loop<'a> {
             ),
         };
         self.context.output.warn_with(
+            Warning::BuildLeftOut,
             &said,
             &format!(
                 "run `{}` to make {them} here",
@@ -1383,8 +1386,8 @@ pub(super) fn tell_stale(
             Ok(changes) => changes,
             Err(error) => {
                 match &error.help {
-                    Some(help) => output.warn_with(&error.message, help),
-                    None => output.warn(&error.message),
+                    Some(help) => output.warn_with(Warning::BuildUnchecked, &error.message, help),
+                    None => output.warn(Warning::BuildUnchecked, &error.message),
                 }
                 stale.push(name.clone());
                 continue;
@@ -1392,6 +1395,7 @@ pub(super) fn tell_stale(
         };
         if changes.first() == Some(&crate::recipe::Change::Unbuilt) {
             output.warn_with(
+                Warning::BuildUnbuilt,
                 &format!("{name} is not built yet"),
                 &format!(
                     "run `{}` to make it, then commit data.lock and data.lock.d",
@@ -1417,6 +1421,7 @@ pub(super) fn tell_stale(
             continue;
         }
         output.warn_with(
+            Warning::BuildChanged,
             &format!("{name} changed since it was built: {}", said.join("; ")),
             &format!(
                 "data.lock still pins the result built before; run `{}`, then commit data.lock and data.lock.d",
@@ -1961,7 +1966,7 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
 pub(super) fn tell_kept(output: &Output, listing: &Listing, kept: &[Remote]) {
     tell_facts(output, listing, kept);
     for warning in &listing.warnings {
-        output.warn(warning);
+        output.warn(Warning::SourcePartial, warning);
     }
 }
 
@@ -2008,7 +2013,10 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     if let Some(license) = &listing.license
         && let Some(limit) = restriction(license)
     {
-        output.warn(&format!("the license {license} does not allow {limit}"));
+        output.warn(
+            Warning::LicenseRestricted,
+            &format!("the license {license} does not allow {limit}"),
+        );
     }
 }
 

@@ -1695,12 +1695,13 @@ fn remove_says_it_deletes_a_file_that_was_there_before_it_was_adopted() -> Resul
 
     let dry = json(&sandbox.run(&["--json", "remove", "iris", "--dry-run"])?)?;
     assert_eq!(
-        dry["warnings"],
-        serde_json::json!([
+        crate::support::warned(&dry),
+        [
             "would remove data/iris/iris.csv, a file that was already there when fetchloom adopted it"
-        ]),
+        ],
         "{dry}"
     );
+    assert_eq!(dry["warnings"][0]["kind"], "place.adopted_removed");
     assert_eq!(fs::read(&placed)?, V1);
     let removed = sandbox.run(&["remove", "iris"])?;
 
@@ -2612,7 +2613,7 @@ fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
     for args in [&["--json", "sync", "--dry-run"][..], &["--json", "sync"]] {
         let output = sandbox.run(args)?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-        let warnings = json(&output)?["warnings"].to_string();
+        let warnings = crate::support::warned(&json(&output)?).join("\n");
         assert!(warnings.contains(said), "{warnings}");
     }
     assert_eq!(

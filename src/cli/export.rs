@@ -19,6 +19,7 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
+use crate::output::Warning;
 use crate::place::Placer;
 use crate::plan;
 use crate::project::lock::{self, Lock};
@@ -176,6 +177,7 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
         ("they were", "them")
     };
     output.warn_with(
+        Warning::ExportLeftOut,
         &format!(
             "the list leaves out {} of {datasets}: {they_were} imported from a folder on this machine, so no link holds {them}",
             crate::units::count(files, "file", "files")
@@ -229,15 +231,16 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
         } else {
             "recipes make their"
         };
-        output.warn(&format!(
-            "the list leaves out {datasets}: {makes} files, so no link holds them"
-        ));
+        output.warn(
+            Warning::ExportLeftOut,
+            &format!("the list leaves out {datasets}: {makes} files, so no link holds them"),
+        );
     }
     let unplaced = named(Reason::NotPlaced);
     if !unplaced.is_empty() {
         let datasets = crate::units::listed(&unplaced, "and");
         let its = if unplaced.len() == 1 { "its" } else { "their" };
-        output.warn(&format!(
+        output.warn(Warning::ExportLeftOut, &format!(
             "the list leaves out {datasets}: place = false keeps {its} files out of the data folder"
         ));
     }

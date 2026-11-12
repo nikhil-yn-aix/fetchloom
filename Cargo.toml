@@ -18,9 +18,11 @@ include = [
     "/LICENSE",
     "/NOTICE",
     "/README.md",
-    # help.rs checks its topics against these pages in its tests
+    # help.rs checks its topics against these pages in its tests, and output's warning kinds
+    # against the JSON reference
     "/docs/user/reference/environment.md",
     "/docs/user/reference/exit-codes.md",
+    "/docs/user/reference/json-output.md",
 ]
 default-run = "fetchloom"
 

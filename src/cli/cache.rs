@@ -15,7 +15,7 @@ use super::{Context, open_cache};
 use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Supply, Usage, Use};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::project::Project;
 use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::{self, Lock};
@@ -577,10 +577,13 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
-            output.warn(&format!(
-                "{} has changed, so fetchloom downloads it again the next time it is needed",
-                cache.object_path(digest).display()
-            ));
+            output.warn(
+                Warning::CacheChanged,
+                &format!(
+                    "{} has changed, so fetchloom downloads it again the next time it is needed",
+                    cache.object_path(digest).display()
+                ),
+            );
         }
     }
     let verb = if checked.unreadable.is_empty() {
@@ -617,6 +620,7 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
 
 fn warn_failure(output: &Output, action: &str, failure: &Failure) {
     output.warn_with(
+        Warning::CacheUnreadable,
         &format!("{action} {}", failure.description()),
         failure.advice(),
     );

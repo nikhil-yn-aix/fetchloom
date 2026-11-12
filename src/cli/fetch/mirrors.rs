@@ -15,6 +15,7 @@ use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Gave, Missing};
 use crate::mirror::{Location, Mirrors, Wanted, web};
 use crate::net::{Fetched, Net};
+use crate::output::Warning;
 use crate::project::lock::archives::Archive;
 use crate::settings::{Origin, Settings};
 use crate::stop::Stop;
@@ -100,7 +101,9 @@ impl Mirrored {
             return;
         }
         if let Some((warning, help)) = &skip.warning {
-            context.output.warn_with(warning, help);
+            context
+                .output
+                .warn_with(Warning::MirrorSkipped, warning, help);
         }
         answers.down.insert(index, skip.said);
     }
@@ -737,15 +740,19 @@ async fn blocking<T: Send + 'static>(
 fn tell_damaged(context: &Context, location: &Location, labels: &[String]) {
     for label in labels.iter().take(NAMED) {
         context.output.warn_with(
+            Warning::MirrorDamaged,
             &format!("the mirror {location} holds a damaged copy of {label}, so it was not used"),
             "ask whoever keeps the mirror to replace it",
         );
     }
     if labels.len() > NAMED {
-        context.output.warn(&format!(
-            "the mirror {location} holds {} more damaged copies, so they were not used",
-            units::grouped((labels.len() - NAMED) as u64)
-        ));
+        context.output.warn(
+            Warning::MirrorDamaged,
+            &format!(
+                "the mirror {location} holds {} more damaged copies, so they were not used",
+                units::grouped((labels.len() - NAMED) as u64)
+            ),
+        );
     }
 }
 
