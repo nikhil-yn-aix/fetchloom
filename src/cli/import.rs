@@ -347,11 +347,16 @@ fn checked_names(files: &[Found], shown: &str) -> Result<(), Error> {
                     if other == named && was_folder && is_folder {
                         continue;
                     }
-                    let problem = if other == named {
-                        format!("{shown} holds \"{named}\" both as a file and as a folder")
-                    } else {
+                    let problem = if other != named {
                         format!(
                             "{shown} holds \"{other}\" and \"{named}\", which are one name on disks that ignore case"
+                        )
+                    } else if was_folder || is_folder {
+                        format!("{shown} holds \"{named}\" both as a file and as a folder")
+                    } else {
+                        // a folder holds no name twice, so these two differed until they were composed
+                        format!(
+                            "{shown} holds two files named \"{named}\", their unicode written two ways, which macos disks see as one name"
                         )
                     };
                     return Err(Error::new(Kind::SourceInvalid, problem)
@@ -925,6 +930,14 @@ mod tests {
             (
                 &["bell\u{7}.csv"],
                 "./flowers holds \"bell\\u{7}.csv\", which fetchloom refuses because it holds a control character",
+            ),
+            (
+                &["caf\u{e9}.csv", "caf\u{e9}.csv"],
+                "./flowers holds two files named \"caf\u{e9}.csv\", their unicode written two ways, which macos disks see as one name",
+            ),
+            (
+                &["a", "a/b.csv"],
+                "./flowers holds \"a\" both as a file and as a folder",
             ),
         ] {
             let error = checked_names(&found(paths), "./flowers").unwrap_err();

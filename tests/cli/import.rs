@@ -507,3 +507,25 @@ fn an_import_the_cache_disk_cannot_hold_asks_first() -> Result {
     assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr)?);
     Ok(())
 }
+
+/// two files whose names differ only in how their unicode is written, as a mac and a linux
+/// machine may write café, are refused as that, never as a file and a folder.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn names_written_with_two_unicode_forms_are_refused_as_such() -> Result {
+    let sandbox = Sandbox::new()?;
+    let twins = sandbox.folder("twins")?;
+    fs::write(twins.join("caf\u{e9}.csv"), b"1\n")?;
+    fs::write(twins.join("cafe\u{301}.csv"), b"2\n")?;
+    let output = sandbox.run(&["add", "../twins"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.starts_with(
+            "error: ../twins holds two files named \"caf\u{e9}.csv\", their unicode written two ways, which macos disks see as one name\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
