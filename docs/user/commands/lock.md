@@ -52,7 +52,7 @@ warning: mc changed since it was built: c.py changed
 
 ## upgrading
 
-`--upgrade` revalidates unchecksummed URLs and files whose source now states an MD5 that `data.lock` lacks. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
+`--upgrade` revalidates unchecksummed URLs and files whose source now states an MD5 that `data.lock` lacks. a bucket object whose listing gives the ETag and size this machine recorded when it last downloaded it is not downloaded again, as [buckets](../sources/buckets.md#pins) explains. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
 
 an [import](add.md#files-on-this-machine) has no source with a newer version: `--upgrade <name>` naming one exits 10 with `reference.unresolved`, and `--upgrade` alone keeps it as data.lock pins it and says so with a `Skipped` line.
 

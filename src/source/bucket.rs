@@ -244,6 +244,8 @@ struct Object {
     key: String,
     size: u64,
     md5: Option<Md5>,
+    /// the `ETag` the listing gives, when GETs of the object send the same one.
+    etag: Option<String>,
     url: Url,
 }
 
@@ -371,6 +373,7 @@ impl Prefix {
             md5: object.md5,
             url: object.url,
             named_by_server: false,
+            etag: object.etag,
         };
         let folder = if self.key.is_empty() || self.key.ends_with('/') {
             self.key.clone()

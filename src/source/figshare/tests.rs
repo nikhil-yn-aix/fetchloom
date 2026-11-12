@@ -42,6 +42,7 @@ fn lists_every_field_without_requesting_files_twice() {
                 md5: Md5::from_hex("4adbc16263f40b9f4eb22a52bf94372f"),
                 url: Url::parse("https://ndownloader.figshare.com/files/70482987").unwrap(),
                 named_by_server: false,
+                etag: None,
             },
             Remote {
                 path: "labt_a_2743468_sm3771.docx".to_owned(),
@@ -50,6 +51,7 @@ fn lists_every_field_without_requesting_files_twice() {
                 md5: Md5::from_hex("7027c09ac3f0c3f0f59be4d99c9dc4d0"),
                 url: Url::parse("https://ndownloader.figshare.com/files/70482990").unwrap(),
                 named_by_server: false,
+                etag: None,
             },
         ]
     );

@@ -270,6 +270,7 @@ impl File {
             md5,
             url: dataset.file_url(self.data.id)?,
             named_by_server: false,
+            etag: None,
         })
     }
 }

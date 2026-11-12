@@ -182,6 +182,19 @@ one file is under the batch rule's 64, so both ways flush it on its own; its row
 
 before's time was cpu, growing with the square of the list: 12.8 s of user time for 2,000 links, 414 s for 10,000. a trace of after's 10,000 links shows 3.1 s of downloads, 0.64 s relocking and 0.61 s placing, and at a terminal no gap of more than 0.85 s without a new line or bar. tmpfs leaves out the disk's flushes, which the change does not touch.
 
+## upgrading a bucket prefix, 2026-11-12
+
+`lock --upgrade` of a dataset pinning five tar shards of 2,037,760 bytes from an s3-compatible stand-in on this machine, after a sixth appeared there. the stand-in states each object's size and an ETag in its listing and ignores conditional requests, as wf-audio's did; such a service's ETag is no MD5. the counts are the upgrade's alone, from `--json` work counters; one run each, since they do not vary.
+
+| build | stand-in | requests | bytes downloaded | objects written |
+|---|---|---:|---:|---:|
+| c9da2d6 | ignores conditional requests | 7 | 12,228,135 | 126 |
+| reuse by listed ETag and size | ignores conditional requests | 2 | 2,039,335 | 121 |
+| c9da2d6 | answers a matching `If-None-Match` with 304 | 7 | 2,039,335 | 121 |
+| reuse by listed ETag and size | answers a matching `If-None-Match` with 304 | 2 | 2,039,335 | 121 |
+
+the two requests are the listing and the new shard. the stand-in that answers 304 sent no bytes for the five old shards before the change either, but took a request for each.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.

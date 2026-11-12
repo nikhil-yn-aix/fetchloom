@@ -44,6 +44,7 @@ fn a_folder_lists_the_files_of_every_folder_inside_it() {
         md5: None,
         url: uc(id),
         named_by_server: false,
+        etag: None,
     };
     assert_eq!(
         listing.files,

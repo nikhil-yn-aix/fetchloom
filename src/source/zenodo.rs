@@ -178,6 +178,7 @@ impl File {
             md5: Some(md5),
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 }
@@ -225,6 +226,7 @@ mod tests {
                 url: Url::parse("https://zenodo.org/api/records/3608990/files/iris.csv/content")
                     .unwrap(),
                 named_by_server: false,
+                etag: None,
             }]
         );
         assert_eq!(recorded.asked(), [IRIS]);

@@ -188,6 +188,7 @@ impl Dataset {
             md5: None,
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 
@@ -322,6 +323,7 @@ mod tests {
             ))
             .unwrap(),
             named_by_server: false,
+            etag: None,
         };
         assert_eq!(
             listing.files,

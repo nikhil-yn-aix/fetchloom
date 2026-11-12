@@ -1081,6 +1081,7 @@ mod tests {
             md5: None,
             url: url::Url::parse(&format!("https://example.org/{path}")).unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let error = only(vec![remote("a.csv"), remote("b.csv")], &parsed, &listing).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
@@ -1268,6 +1269,7 @@ mod tests {
             )
             .unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let error = refuse_zipped(&cache, &remote, &zipped.digest).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
@@ -1305,6 +1307,7 @@ mod tests {
             md5: None,
             url: url::Url::parse("https://example.org/data.csv").unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let fetched = Fetched {
             digest: crate::digest::sha256(served),

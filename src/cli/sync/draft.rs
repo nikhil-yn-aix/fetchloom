@@ -8,7 +8,7 @@ use url::Url;
 use super::super::fetch::{self, Job};
 use super::unpack::Unpack;
 use crate::archive::{self, Packed, parts};
-use crate::cache::{Cache, parts_key};
+use crate::cache::{Cache, UrlRecord, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
@@ -95,14 +95,21 @@ impl Draft {
                     _ if earlier.is_some() => None,
                     _ => stated(cache, &remote),
                 };
+                let listed = match (remote.sha256, earlier, &stated) {
+                    (None, None, None) => unchanged(cache, &remote, source.extract),
+                    _ => None,
+                };
                 let known = match (remote.sha256, remote.size) {
                     (Some(sha256), Some(size)) => Some((sha256, size)),
                     _ => earlier
                         .map(|file| (file.sha256, file.size))
-                        .or_else(|| stated.as_ref().map(|stated| (stated.digest, stated.size))),
+                        .or_else(|| stated.as_ref().map(|stated| (stated.digest, stated.size)))
+                        .or_else(|| listed.as_ref().map(|record| (record.sha256, record.size))),
                 };
                 // a carried pin keeps its link as data.lock has it, version and all
-                let version = stated.and_then(|stated| stated.version);
+                let version = stated
+                    .and_then(|stated| stated.version)
+                    .or_else(|| listed.and_then(|record| record.validators.version));
                 // carried over, a file keeps the path data.lock gave it: a name its server gave,
                 // or the zip its source wrapped it in
                 let path = earlier.map_or_else(|| remote.path.clone(), |file| file.path.clone());
@@ -233,6 +240,7 @@ impl Draft {
                     md5: file.md5,
                     url: link(&locked.name, file)?,
                     named_by_server: false,
+                    etag: None,
                 };
                 Ok(DraftFile {
                     remote,
@@ -744,6 +752,26 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
         .then_some(stated)
 }
 
+/// what this machine's cache recorded the link served, while the listing gives the strong
+/// `ETag` and the size recorded with those bytes and the cache still holds them, or for an
+/// archive that unpacks, the files it unpacked to. this trusts a service to give an object
+/// another `ETag` once its bytes change, as an answer that a file is unchanged is trusted.
+fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
+    let etag = remote
+        .etag
+        .as_deref()
+        .filter(|etag| etag.starts_with('"'))?;
+    let size = remote.size?;
+    let record = cache.url_record(remote.url.as_str())?;
+    if record.size != size || record.validators.etag.as_deref() != Some(etag) {
+        return None;
+    }
+    let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
+    (cache.find(&record.sha256, Some(size)).is_some()
+        || unpacks && cache.holds_unpacked(&record.sha256, None))
+    .then_some(record)
+}
+
 /// the file data.lock already pins for this remote file, when it is the same file: the same
 /// link, and the same path unless the server names the file or its source wrapped it in a zip.
 /// a listed size says nothing about the zip. a pin made without an MD5 says nothing of whether
@@ -1058,6 +1086,7 @@ mod tests {
                 md5: None,
                 url: url.clone(),
                 named_by_server: false,
+                etag: None,
             }],
         };
         let locked = Locked {
@@ -1172,6 +1201,7 @@ mod tests {
             md5: None,
             url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let drafted = |files: Vec<Remote>, previous: Option<&Locked>| {
             let listing = Listing {
@@ -1249,6 +1279,7 @@ mod tests {
             md5: None,
             url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let listing = || Listing {
             within: Vec::new(),
@@ -1412,6 +1443,7 @@ mod tests {
                 md5: None,
                 url: url.clone(),
                 named_by_server: false,
+                etag: None,
             }],
         };
         let locked = |unpacks_to| Locked {
@@ -1481,6 +1513,7 @@ mod tests {
             md5: crate::digest::Md5::from_hex(md5),
             url: url.clone(),
             named_by_server: false,
+            etag: None,
         };
         let by_url = HashMap::from([(locked.files[0].url.clone(), vec![&locked.files[0]])]);
         assert!(carried(&by_url, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
@@ -1535,6 +1568,7 @@ mod tests {
                 md5: stated,
                 url: url.clone(),
                 named_by_server: false,
+                etag: None,
             }],
         };
         let entry = &manifest.datasets["d"];
@@ -1726,6 +1760,7 @@ mod tests {
                 md5,
                 url: link.clone(),
                 named_by_server: false,
+                etag: None,
             }],
         };
         let manifest = Manifest::parse("[datasets.raw]\nref = \"s3://lab-raw/raw/\"\n").unwrap();

@@ -234,6 +234,10 @@ pub(crate) struct Remote {
     pub(crate) url: Url,
     /// the path is only a guess from the link, and the name the server sends replaces it.
     pub(crate) named_by_server: bool,
+    /// the `ETag` the listing gives, which the service also sends with the file's bytes. a
+    /// relock reuses what this machine downloaded from the link before, while the listing
+    /// still gives the `ETag` and size the cache recorded with it.
+    pub(crate) etag: Option<String>,
 }
 
 impl Reference {
@@ -654,6 +658,7 @@ fn single(url: &Url) -> Listing {
             md5: None,
             url: url.clone(),
             named_by_server: true,
+            etag: None,
         }],
     }
 }

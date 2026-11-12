@@ -240,6 +240,7 @@ impl Entry {
             md5: hashes.md5,
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 

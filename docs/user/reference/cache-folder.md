@@ -58,7 +58,7 @@ each step of a [recipe](../recipes.md) runs in a `.build` folder under `tmp/`, w
 
 ## URL and partial records
 
-`urls/` records are JSON written for revalidated, unpinned URLs, and for each link a `get` kept one file from when only its site can list it, keyed by the link and the patterns that chose the file, with the file's path in `name`, so an offline `get` can do without the listing. gc removes a record once neither its object nor the record of what it unpacked to is left:
+`urls/` records are JSON written for revalidated, unpinned URLs, and for each link a `get` kept one file from when only its site can list it, keyed by the link and the patterns that chose the file, with the file's path in `name`, so an offline `get` can do without the listing. a lock takes a record's `sha256` without a request when an S3 listing gives the link with the record's strong `validators.etag` and `size`, and the cache still holds that object or the files it unpacked to. gc removes a record once neither its object nor the record of what it unpacked to is left:
 
 | field | value |
 |---|---|

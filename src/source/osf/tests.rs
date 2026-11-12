@@ -21,6 +21,7 @@ fn expected_file() -> Remote {
         md5: Md5::from_hex("44325d4f13b09f3769ede09d7c20a82c"),
         url: Url::parse("https://osf.io/download/sejcv/?version=1").unwrap(),
         named_by_server: false,
+        etag: None,
     }
 }
 

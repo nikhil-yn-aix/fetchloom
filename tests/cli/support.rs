@@ -894,6 +894,7 @@ fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>)
 pub(crate) struct Routes {
     pub(crate) url: String,
     requests: Arc<Mutex<Vec<String>>>,
+    answers: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
     _running: ServerTask,
 }
 
@@ -901,20 +902,12 @@ impl Routes {
     /// serves each `(target, response)` pair, where a response is what [`reply`] or [`file`]
     /// builds.
     pub(crate) fn start(routes: Vec<(String, Vec<Part>)>) -> Result<Routes> {
-        let mut answers = std::collections::HashMap::new();
-        for (target, parts) in routes {
-            let mut bytes = Vec::new();
-            for part in parts {
-                if let Part::Bytes(part) = part {
-                    bytes.extend(part);
-                }
-            }
-            answers.insert(target, bytes);
-        }
+        let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let seen = requests.clone();
+        let known = answers.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             let missing = head("404 Not Found", &[("Content-Length", "0")]);
             while let Some((mut stream, _connection)) = stop.accept(&listener) {
@@ -928,16 +921,39 @@ impl Routes {
                 if let Ok(mut seen) = seen.lock() {
                     seen.push(asked.clone());
                 }
-                let answer = answers.get(&target).unwrap_or(&missing);
-                let _ = stream.write_all(answer);
+                let answer = known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&target)
+                    .unwrap_or(&missing)
+                    .clone();
+                let _ = stream.write_all(&answer);
                 let _ = stream.flush();
             }
         })?;
-        Ok(Routes {
+        let served = Routes {
             url,
             requests,
+            answers,
             _running: running,
-        })
+        };
+        served.change(routes);
+        Ok(served)
+    }
+
+    /// answers each `(target, response)` pair from now on, in place of any answer the target had,
+    /// as a service does once its files change.
+    pub(crate) fn change(&self, routes: Vec<(String, Vec<Part>)>) {
+        let mut answers = self.answers.lock().unwrap_or_else(PoisonError::into_inner);
+        for (target, parts) in routes {
+            let mut bytes = Vec::new();
+            for part in parts {
+                if let Part::Bytes(part) = part {
+                    bytes.extend(part);
+                }
+            }
+            answers.insert(target, bytes);
+        }
     }
 
     /// the head of every request so far, lowercased.

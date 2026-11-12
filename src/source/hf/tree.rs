@@ -132,6 +132,7 @@ impl Repo {
             md5: None,
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 }

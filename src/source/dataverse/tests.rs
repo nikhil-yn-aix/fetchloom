@@ -42,6 +42,7 @@ fn lists_original_bytes_and_nested_paths_in_one_request() {
                 )
                 .unwrap(),
                 named_by_server: false,
+                etag: None,
             },
             Remote {
                 path: "code/language.py".to_owned(),
@@ -53,6 +54,7 @@ fn lists_original_bytes_and_nested_paths_in_one_request() {
                 )
                 .unwrap(),
                 named_by_server: false,
+                etag: None,
             },
             Remote {
                 path: "data/primary/primary-data.zip".to_owned(),
@@ -64,6 +66,7 @@ fn lists_original_bytes_and_nested_paths_in_one_request() {
                 )
                 .unwrap(),
                 named_by_server: false,
+                etag: None,
             },
         ]
     );

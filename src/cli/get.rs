@@ -1648,6 +1648,7 @@ mod tests {
             md5: None,
             url: url::Url::parse("https://example.org/iris.csv").unwrap(),
             named_by_server: false,
+            etag: None,
         };
         assert_eq!(
             fetched_step(&["iris.csv".to_owned()], &[fetched], &[remote], started),
@@ -1672,6 +1673,7 @@ mod tests {
                 md5: None,
                 url: url::Url::parse(&format!("https://example.org/{path}")).unwrap(),
                 named_by_server: false,
+                etag: None,
             };
             fetch::listed_job(&remote, path, extract)
         };
@@ -1731,6 +1733,7 @@ mod tests {
             md5: None,
             url: url::Url::parse("https://example.org/large.zip").unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let mut context = approval_context();
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
@@ -1757,6 +1760,7 @@ mod tests {
             md5: None,
             url: url::Url::parse("https://example.org/cached.zip").unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
         remote.path = "missing.bin".to_owned();
@@ -1784,6 +1788,7 @@ mod tests {
             md5: None,
             url: url::Url::parse("https://example.org/large.bin").unwrap(),
             named_by_server: false,
+            etag: None,
         };
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, false)];
         let context = approval_context();
@@ -1816,6 +1821,7 @@ mod tests {
                     md5: None,
                     url: url::Url::parse(&format!("https://example.org/{path}")).unwrap(),
                     named_by_server: false,
+                    etag: None,
                 })
                 .collect(),
             unavailable: Vec::new(),

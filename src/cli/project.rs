@@ -1679,6 +1679,7 @@ pub(crate) mod tests {
             md5: None,
             url: url::Url::parse(url).unwrap(),
             named_by_server: false,
+            etag: None,
         }
     }
 

@@ -117,6 +117,7 @@ impl Walk {
                     md5: None,
                     url: file_url(&key.id, key.resource.as_deref())?,
                     named_by_server: false,
+                    etag: None,
                 }),
             }
             if self.files.len() + self.unavailable.len() > most_files() {

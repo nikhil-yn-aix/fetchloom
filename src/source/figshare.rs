@@ -263,6 +263,7 @@ impl File {
             md5,
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 

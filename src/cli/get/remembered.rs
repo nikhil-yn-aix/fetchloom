@@ -85,6 +85,7 @@ pub(super) fn file(
         md5: None,
         url: Url::parse(&parsed.reference.to_string()).ok()?,
         named_by_server: false,
+        etag: None,
     })
 }
 

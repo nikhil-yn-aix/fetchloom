@@ -187,8 +187,9 @@ fn object(
             .map_err(|_| prefix.invalid("the bucket makes no valid link"))?;
         url.set_path(&format!("/{}/soap", prefix.bucket));
     }
+    let etag = contents.text_of("ETag");
     let md5 = if prefix.endpoint.is_none() && !signed {
-        contents.text_of("ETag").and_then(etag_md5)
+        etag.and_then(etag_md5)
     } else {
         None
     };
@@ -196,6 +197,7 @@ fn object(
         key,
         size,
         md5,
+        etag: etag.map(str::to_owned),
         url,
     })
 }

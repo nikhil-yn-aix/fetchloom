@@ -1303,3 +1303,227 @@ fn get_counts_the_files_it_keeps_when_it_resolves() -> Result {
     );
     Ok(())
 }
+
+/// a tar holding the one file `name`, with `body`.
+fn tar_of(name: &str, body: &[u8]) -> Result<Vec<u8>> {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder.append_data(&mut header, name, body)?;
+    Ok(builder.into_inner()?)
+}
+
+/// what an s3-compatible service answers for the prefix `shards/` of its bucket `speech`, given
+/// each object as its key, bytes and `ETag`: a listing that states each one's size and `ETag`,
+/// and each object. such a service promises no MD5 in an `ETag`.
+fn speech_bucket(objects: &[(String, Vec<u8>, String)]) -> Vec<(String, Vec<Part>)> {
+    let listed: Vec<(&str, String, u64)> = objects
+        .iter()
+        .map(|(key, body, etag)| (key.as_str(), etag.clone(), body.len() as u64))
+        .collect();
+    let mut routes = vec![(
+        s3_listing("/speech/", "shards/", None),
+        s3_stated(&listed, None),
+    )];
+    for (key, body, etag) in objects {
+        routes.push((format!("/speech/{key}"), file(body, &format!("\"{etag}\""))));
+    }
+    routes
+}
+
+/// the first `count` shards of [`speech_bucket`], each a tar of one sample, with the MD5 an
+/// s3-compatible service such as `MinIO` gives as its `ETag`.
+fn speech_shards(count: usize) -> Result<Vec<(String, Vec<u8>, String)>> {
+    (0..count)
+        .map(|number| {
+            let body = tar_of(
+                &format!("sample-{number}.txt"),
+                format!("sample {number}").as_bytes(),
+            )?;
+            let etag = md5(&body);
+            Ok((format!("shards/shard-{number:06}.tar"), body, etag))
+        })
+        .collect()
+}
+
+/// a project in the sandbox that pins `objects` of [`speech_bucket`] as the dataset `shards`, and
+/// the server answering for them.
+fn speech_project(sandbox: &Sandbox, objects: &[(String, Vec<u8>, String)]) -> Result<Routes> {
+    let routes = Routes::start(speech_bucket(objects))?;
+    sandbox.allow(&routes.url);
+    let reference = format!("s3:{}/speech/shards/", routes.url);
+    let added = sandbox.run(&["add", &reference, "--as", "shards"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    Ok(routes)
+}
+
+/// what `routes` were asked for since they had answered `asked` requests, the listing first.
+fn asked_since(routes: &Routes, asked: usize) -> Vec<String> {
+    let mut targets = routes.targets().split_off(asked);
+    targets.sort();
+    targets
+}
+
+/// wf-audio F05: one shard added to an s3-compatible prefix is the one object `lock --upgrade`
+/// downloads. the others list the size and `ETag` this machine's cache recorded when it
+/// downloaded them, so their pins stay without their bytes coming again.
+#[test]
+fn an_upgrade_downloads_only_the_objects_a_listing_shows_are_new_or_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut shards = speech_shards(6)?;
+    let new = shards.pop().ok_or("no shards")?;
+    let routes = speech_project(&sandbox, &shards)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    shards.push(new);
+    routes.change(speech_bucket(&shards));
+    let asked = routes.targets().len();
+
+    let upgraded = sandbox.run(&["lock", "--upgrade", "shards"])?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    assert_eq!(
+        asked_since(&routes, asked),
+        [
+            "/speech/?list-type=2&prefix=shards%2F&encoding-type=url",
+            "/speech/shards/shard-000005.tar"
+        ]
+    );
+    let upgraded = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    for (key, ..) in &shards[..5] {
+        let pin = |lock: &str| {
+            lock.lines()
+                .find(|line| line.contains(key.as_str()))
+                .map(str::to_owned)
+        };
+        assert_eq!(pin(&upgraded), pin(&lock), "{key}");
+    }
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data/shards/sample-5.txt"))?,
+        b"sample 5"
+    );
+    assert_eq!(routes.targets().len(), asked + 2, "sync asks nothing more");
+    Ok(())
+}
+
+/// an object whose listing states another `ETag` or another size than this machine recorded is
+/// downloaded again, as one the cache has no record of is, and its new bytes are pinned.
+#[test]
+fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut shards = speech_shards(3)?;
+    let routes = speech_project(&sandbox, &shards)?;
+    let changed = tar_of("sample-0.txt", b"sample 0 again")?;
+    shards[0].2 = md5(&changed);
+    shards[0].1 = changed;
+    // a service that keeps the ETag of bytes whose size changed still lists the new size
+    shards[1].1 = tar_of("sample-1.txt", &[b'x'; 600])?;
+    routes.change(speech_bucket(&shards));
+    let asked = routes.targets().len();
+
+    let upgraded = sandbox.run(&["lock", "--upgrade", "shards"])?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    assert_eq!(
+        asked_since(&routes, asked),
+        [
+            "/speech/?list-type=2&prefix=shards%2F&encoding-type=url",
+            "/speech/shards/shard-000000.tar",
+            "/speech/shards/shard-000001.tar"
+        ]
+    );
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let data = sandbox.work().join("data/shards");
+    assert_eq!(fs::read(data.join("sample-0.txt"))?, b"sample 0 again");
+    assert_eq!(fs::read(data.join("sample-1.txt"))?, [b'x'; 600]);
+    Ok(())
+}
+
+/// the record that spares a download lives in this machine's cache, not in data.lock, so a
+/// teammate's upgrade downloads every object no checksum pins, as it always has.
+#[test]
+fn an_upgrade_on_a_machine_without_the_record_downloads_every_object() -> Result {
+    let sandbox = Sandbox::new()?;
+    let shards = speech_shards(3)?;
+    let routes = speech_project(&sandbox, &shards)?;
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let asked = routes.targets().len();
+
+    let upgraded = sandbox
+        .command_in(&teammate, &["lock", "--upgrade", "shards"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    assert_eq!(asked_since(&routes, asked).len(), 4);
+    assert_eq!(
+        fs::read_to_string(teammate.join("data.lock"))?,
+        fs::read_to_string(sandbox.work().join("data.lock"))?
+    );
+    Ok(())
+}
+
+/// reuse trusts that a service's `ETag` and size change with an object's bytes. one that keeps
+/// both while the bytes change gets its old pin kept here, and the change shows wherever the
+/// bytes are downloaded: the pinned SHA-256 refuses them and nothing is placed.
+#[test]
+fn bytes_changed_under_an_unchanged_etag_are_refused_where_they_are_downloaded() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut shards = speech_shards(2)?;
+    let routes = speech_project(&sandbox, &shards)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let changed = tar_of("sample-1.txt", b"sample 9")?;
+    assert_eq!(changed.len(), shards[1].1.len());
+    shards[1].1 = changed;
+    routes.change(speech_bucket(&shards));
+    let asked = routes.targets().len();
+
+    let upgraded = sandbox.run(&["lock", "--upgrade", "shards"])?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    assert_eq!(asked_since(&routes, asked).len(), 1, "only the listing");
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&teammate, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
+    let document = json(&synced)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "integrity.mismatch",
+        "{document}"
+    );
+    assert!(!teammate.join("data/shards/sample-1.txt").exists());
+    Ok(())
+}

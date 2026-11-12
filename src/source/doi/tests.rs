@@ -114,6 +114,7 @@ fn bare_prefixed_and_web_dois_return_the_complete_dataset() {
                 url: Url::parse("https://zenodo.org/api/records/3608990/files/iris.csv/content")
                     .unwrap(),
                 named_by_server: false,
+                etag: None,
             }]
         );
         assert_eq!(recorded.asked(), [HANDLE, RECORD]);

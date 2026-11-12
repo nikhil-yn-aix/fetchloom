@@ -111,6 +111,7 @@ fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error
         key: item.name,
         size,
         md5,
+        etag: None,
         url,
     })
 }

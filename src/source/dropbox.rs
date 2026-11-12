@@ -75,6 +75,7 @@ impl Link {
                 md5: None,
                 url: self.url.clone(),
                 named_by_server: true,
+                etag: None,
             }],
         }
     }

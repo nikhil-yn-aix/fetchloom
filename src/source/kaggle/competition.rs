@@ -214,6 +214,7 @@ impl Competition {
             md5: None,
             url,
             named_by_server: false,
+            etag: None,
         })
     }
 
@@ -370,6 +371,7 @@ mod tests {
             md5: None,
             url: download(path),
             named_by_server: false,
+            etag: None,
         }
     }
 

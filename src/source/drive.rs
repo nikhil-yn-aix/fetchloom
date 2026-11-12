@@ -129,6 +129,7 @@ impl Item {
                 md5: None,
                 url: file_url(&item.id, item.resource.as_deref())?,
                 named_by_server: true,
+                etag: None,
             }],
         })
     }
