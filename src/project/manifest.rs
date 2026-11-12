@@ -2426,6 +2426,27 @@ pub(crate) mod tests {
         assert!(with_dataset_from(ours, theirs, "missing").is_err());
     }
 
+    /// a merge cannot rewrite datasets this side writes inline, as `datasets = { … }`, so taking
+    /// one from the other side is refused, with help to merge by hand.
+    #[test]
+    fn a_dataset_from_the_other_side_is_refused_where_datasets_are_inline() {
+        let ours = "datasets = { alpha = { ref = \"zenodo:1\" } }\n";
+        let theirs = "[datasets.beta]\nref = \"zenodo:2\"\n";
+        let error = match with_dataset_from(ours, theirs, "beta") {
+            Ok(text) => panic!("merged into inline datasets as {text:?}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "data.toml writes its datasets inline, so fetchloom cannot merge them"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("merge data.toml by hand, then run `fetchloom lock`")
+        );
+    }
+
     #[test]
     fn each_dataset_reads_alone_and_the_rest_without_them() {
         let text = "# inputs\n\n[project]\ndata_dir = \"in\"\n\n# about alpha\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.beta]\nref = \"zenodo:2\"\n";
