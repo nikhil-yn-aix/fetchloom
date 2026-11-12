@@ -414,7 +414,7 @@ impl Net {
         credentials: &Credentials,
         scope: &str,
         endpoint: Option<&Url>,
-    ) -> Result<(Bearer, Duration), Error> {
+    ) -> Result<(Bearer, Option<Duration>), Error> {
         let google = Url::parse(TOKEN_ENDPOINT).map_err(|err| {
             Error::new(
                 Kind::AuthRequired,
@@ -448,7 +448,7 @@ impl Net {
                         value,
                         identity: credentials.shown().into(),
                     };
-                    return Ok((bearer, token.lifetime));
+                    return Ok((bearer, Some(token.lifetime)));
                 }
                 Err(failure) => failure,
             };

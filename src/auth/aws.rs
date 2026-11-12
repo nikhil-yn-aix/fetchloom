@@ -5,16 +5,15 @@
 //! passed over for another identity, and keys reach an S3-compatible endpoint only where the
 //! person's own AWS settings send them there.
 
-mod lease;
 mod program;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
-use self::lease::Lease;
 use self::program::Program;
+use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
 use crate::net::sign::Keys;
 use crate::source::Var;
@@ -35,7 +34,10 @@ pub(crate) enum Source {
     /// keys written in the environment or a profile, which never expire.
     Keys(Arc<Keys>),
     /// a program that prints keys, run again shortly before they expire.
-    Program { program: Program, lease: Box<Lease> },
+    Program {
+        program: Program,
+        lease: Box<Lease<Arc<Keys>>>,
+    },
 }
 
 impl Identity {
@@ -49,7 +51,17 @@ impl Identity {
     pub(crate) async fn keys(&self, now: SystemTime, stop: &Stop) -> Result<Arc<Keys>, Error> {
         match &self.source {
             Source::Keys(keys) => Ok(keys.clone()),
-            Source::Program { program, lease } => lease.keys(now, program.run(now, stop)).await,
+            Source::Program { program, lease } => {
+                let run = || async {
+                    let issued = program.run(now, stop).await?;
+                    // keys that expired by `now` are refused before they come this far
+                    let lifetime = issued
+                        .expires
+                        .map(|expires| expires.duration_since(now).unwrap_or_default());
+                    Ok((Arc::new(issued.keys), lifetime))
+                };
+                lease.get(Instant::now, run).await
+            }
         }
     }
 }
