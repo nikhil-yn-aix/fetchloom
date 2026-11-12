@@ -182,6 +182,50 @@ fn settings_show_the_mirrors_a_run_asks_with_the_command_lines_first() -> Result
     Ok(())
 }
 
+/// a variable one typo from one fetchloom reads, as `FETCHLOOM_MIRROR` is from
+/// `FETCHLOOM_MIRRORS`, gets one warning naming the variable it is near and never its value.
+/// another unknown name is left alone, since a wrapper or another version may read it.
+#[test]
+fn a_misspelled_mirrors_variable_is_warned_about_once_by_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let run = |arguments: &[&str]| {
+        sandbox
+            .command(arguments)
+            .env("FETCHLOOM_MIRROR", "/mnt/lab-share")
+            .env("FETCHLOOM_ELSEWHERE", "1")
+            .output()
+    };
+    let output = run(&["--json", "settings"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    assert_eq!(
+        document["warnings"],
+        serde_json::json!([
+            "FETCHLOOM_MIRROR is set, but fetchloom reads no such variable, so it changes nothing; did you mean FETCHLOOM_MIRRORS?"
+        ])
+    );
+    assert_eq!(shown(&document, "mirrors")["value"], serde_json::json!([]));
+    let output = run(&["settings"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(
+        stderr
+            .matches("warning: FETCHLOOM_MIRROR is set, but fetchloom reads no such variable")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: did you mean FETCHLOOM_MIRRORS?"),
+        "{stderr}"
+    );
+    for said in [&output.stdout, &output.stderr] {
+        assert!(!text(said)?.contains("lab-share"));
+        assert!(!text(said)?.contains("ELSEWHERE"));
+    }
+    Ok(())
+}
+
 /// an empty `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` and `FETCHLOOM_PUSH_TO` clear what the
 /// settings file names, so a check meant to reach the sources never takes the file's mirror, and
 /// push never writes to the file's folder.

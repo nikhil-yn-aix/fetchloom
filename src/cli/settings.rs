@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::Context;
 use crate::mirror::Mirrors;
 use crate::net::Splitting;
+use crate::output::Output;
 use crate::settings::{Origin, Set};
 use crate::units;
 
@@ -51,6 +52,7 @@ struct File {
 }
 
 pub(super) fn run(context: &Context) -> Report {
+    warn_misnamed(&context.output, std::env::vars_os().map(|(name, _)| name));
     let shown = rows(context);
     let machine = context.settings.machine;
     let output = &context.output;
@@ -85,6 +87,17 @@ pub(super) fn run(context: &Context) -> Report {
             path: file.path.as_ref().map(|path| path.display().to_string()),
             found: file.found,
         },
+    }
+}
+
+/// warns about each of `names` that is one typo from a variable fetchloom reads, naming that
+/// variable and never the value, which may be a secret.
+pub(super) fn warn_misnamed(output: &Output, names: impl IntoIterator<Item = std::ffi::OsString>) {
+    for (name, meant) in crate::settings::misnamed(names) {
+        output.warn_with(
+            &format!("{name} is set, but fetchloom reads no such variable, so it changes nothing"),
+            &format!("did you mean {meant}?"),
+        );
     }
 }
 
@@ -366,7 +379,7 @@ mod tests {
     use super::*;
     use crate::cli::fetch::mirrors::Mirrored;
     use crate::mirror::Location;
-    use crate::output::{Level, Output, Style};
+    use crate::output::{Level, Style};
 
     fn folder(path: &str) -> Location {
         Location::Folder(PathBuf::from(path))

@@ -65,6 +65,20 @@ const BOOLEANS: [&str; 1] = ["mirrors_only"];
 /// the keys an empty variable clears rather than leaving to the settings file: where requests go
 /// and where push writes, so blanking one for a run cannot leave the file's choice in force.
 const CLEARED: [&str; 3] = ["mirrors", "mirrors_only", "push_to"];
+/// the variables fetchloom reads besides those of the settings file's keys.
+const OTHERS: [&str; 11] = [
+    "FETCHLOOM_SETTINGS",
+    "FETCHLOOM_OFFLINE",
+    "FETCHLOOM_RATE",
+    "FETCHLOOM_THREADS",
+    "FETCHLOOM_SPLIT",
+    "FETCHLOOM_LOG",
+    "FETCHLOOM_TRACE",
+    "FETCHLOOM_BUILDING",
+    "FETCHLOOM_COLORS",
+    "FETCHLOOM_NO_HINTS",
+    "FETCHLOOM_KEYRING",
+];
 
 /// where a setting's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,6 +546,56 @@ pub(crate) fn variable(key: &str) -> &'static str {
     KEYS.iter()
         .find(|(known, _)| *known == key)
         .map_or("FETCHLOOM_SETTINGS", |(_, variable)| variable)
+}
+
+/// every variable fetchloom reads.
+fn known() -> impl Iterator<Item = &'static str> {
+    KEYS.iter().map(|(_, variable)| *variable).chain(OTHERS)
+}
+
+/// the names among `names` that fetchloom does not read but that are one typo, a character
+/// added, dropped, changed or swapped with its neighbour, from a variable it does, each with that
+/// variable. any other name is left alone, since a wrapper or another version may read it.
+pub(crate) fn misnamed(names: impl IntoIterator<Item = OsString>) -> Vec<(String, &'static str)> {
+    names
+        .into_iter()
+        .filter_map(|name| name.into_string().ok())
+        .filter_map(|name| {
+            // windows finds a variable by its name in any case
+            let compared = if cfg!(windows) {
+                name.to_ascii_uppercase()
+            } else {
+                name.clone()
+            };
+            if known().any(|known| known == compared) {
+                return None;
+            }
+            let meant = known().find(|known| one_typo_apart(&compared, known))?;
+            Some((name, meant))
+        })
+        .collect()
+}
+
+/// whether `a` and `b` differ by one typo: a character added, dropped or changed, or two
+/// neighbours swapped.
+fn one_typo_apart(a: &str, b: &str) -> bool {
+    if a.chars().count().abs_diff(b.chars().count()) > 1 {
+        return false;
+    }
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let start = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[start..], &b[start..]);
+    let end = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    match (&a[..a.len() - end], &b[..b.len() - end]) {
+        ([_], [_] | []) | ([], [_]) => true,
+        ([first, second], [other, another]) => first == another && second == other,
+        _ => false,
+    }
 }
 
 /// how to undo a bad value: unset the variable, or remove the key from the file.
@@ -1465,6 +1529,57 @@ mod tests {
                     origin: Origin::File
                 }
             );
+        }
+    }
+
+    /// a variable one typo from one fetchloom reads, a character added, dropped, changed or
+    /// swapped with its neighbour, is named with the one it is near; known names and names
+    /// further off are left alone.
+    #[test]
+    fn a_name_one_typo_from_a_variable_is_named_with_it() {
+        // put together, since the docs check takes each whole FETCHLOOM_ name in src for a setting
+        let prefixed = |rest: &str| format!("FETCHLOOM_{rest}");
+        let names = [
+            prefixed("OFLINE"),
+            prefixed("SPILT"),
+            prefixed("MIRROR"),
+            prefixed("JOBZ"),
+            "FETCHLOM_CACHE".to_owned(),
+            prefixed("OFFLINEE"),
+            "FETCHLOOM_JOBS".to_owned(),
+            "FETCHLOOM_MIRRORS".to_owned(),
+            "FETCHLOOM_TEST_TICKER".to_owned(),
+            prefixed("SOMETHING_ELSE"),
+            prefixed("JBSO"),
+            "PATH".to_owned(),
+        ];
+        assert_eq!(
+            misnamed(names.map(OsString::from)),
+            [
+                (prefixed("OFLINE"), "FETCHLOOM_OFFLINE"),
+                (prefixed("SPILT"), "FETCHLOOM_SPLIT"),
+                (prefixed("MIRROR"), "FETCHLOOM_MIRRORS"),
+                (prefixed("JOBZ"), "FETCHLOOM_JOBS"),
+                ("FETCHLOM_CACHE".to_owned(), "FETCHLOOM_CACHE"),
+                (prefixed("OFFLINEE"), "FETCHLOOM_OFFLINE"),
+            ]
+        );
+    }
+
+    /// every variable the environment page documents is one fetchloom reads, so setting it is
+    /// never taken for a typo.
+    #[test]
+    fn every_documented_variable_is_known() {
+        let page = include_str!("../docs/user/reference/environment.md");
+        let documented: Vec<&str> = page
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `FETCHLOOM_"))
+            .filter_map(|rest| rest.split('`').next())
+            .collect();
+        assert!(documented.len() > 20, "{documented:?}");
+        for name in documented {
+            let name = format!("FETCHLOOM_{name}");
+            assert!(known().any(|known| known == name), "{name}");
         }
     }
 

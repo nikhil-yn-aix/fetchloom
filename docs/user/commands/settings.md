@@ -37,6 +37,13 @@ memory     4.0 GiB                       this machine   FETCHLOOM_MEMORY
 
 the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is no file there yet.
 
+a set variable one typo from one fetchloom reads changes nothing, so `settings` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
+
+```text
+warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it changes nothing
+  help: did you mean FETCHLOOM_CACHE?
+```
+
 `settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file.
 
 JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for the cache folder, the `push_to` folder and the split mode, a list of text for `allowed_origins`, `s3_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap, no cache folder or no `push_to` folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, for `--mirror`; mirrors from `--mirror` and from a setting that names others show both, the flag first, as `flag,environment` or `flag,file`. `result.machine` holds `processors`, `memory`, the bytes this machine has available, read on linux only and null elsewhere, and `open_files`, the most files a run may hold open or null where the system sets no limit. `result.file` holds `path`, null when there is no folder for a settings file, and `found`.
