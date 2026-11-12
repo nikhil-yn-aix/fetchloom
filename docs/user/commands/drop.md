@@ -17,15 +17,15 @@ fetchloom drop [options] <path>...
 |---|---|
 | `-n`, `--dry-run` | show what would change on disk without changing it |
 
-[global options](README.md#global-options) also apply. each path is a file or a folder in the data folder, from the current folder, or from the folder `-C` names. it may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name there, never a pattern, so a pattern in quotes names no file, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there, as in [raw data only recipes read](#raw-data-only-recipes-read). on windows `\` separates folders too, and names are compared the way a disk that ignores case compares them.
+[global options](README.md#global-options) also apply. each path is a file or a folder in the data folder, from the current folder or the folder `-C` names, and may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name, never a pattern, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there. on windows `\` separates folders too, and names are compared ignoring case.
 
 ## what happens
 
 1. find the files data.lock places at each path, from what this machine recorded about each archive.
 2. write a pattern for each file into `data.toml`, escaped so it matches that file alone:
    - a file inside an archive gets its path inside the archive, in the archive's [members table](../reference/data-toml.md#files-inside-archives). in a dataset that is one archive, that path starts with the folder all its files share, which placing leaves out.
-   - an archive that a table under a [glob key](../reference/data-toml.md#one-table-for-many-shards) covers, with no table of its own, gets one, copied from the glob's `select` and `exclude` before the new pattern goes in, less any `select` pattern that matches no file of that archive, which an archive's own table refuses. a table of its own wins over the glob, so without the copy the archive would get back what the glob left out, and a pattern added to the glob's table would also leave out files of the same name in every other archive it matches.
-   - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too. the pin is rewritten as relocking the same listing would pin it, so `sync --locked` takes it and nothing is resolved again.
+   - an archive that a table under a [glob key](../reference/data-toml.md#one-table-for-many-shards) covers gets a table of its own, copied from the glob's, before the new pattern goes in, so the pattern leaves out a file of that archive alone and the archive keeps what the glob chose.
+   - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too, rewritten as relocking the same listing would, so `sync --locked` takes it and nothing is resolved again.
    - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
    - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
 3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning. a dataset with `place = false` has none to delete.
@@ -67,9 +67,9 @@ exclude = ["00000005.wav"]
 
 the `00000005.wav` of `shard-000000.tar` and `shard-000002.tar` stays, and so does the choice of the other shards. edit both tables to change what every shard keeps.
 
-commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them at a terminal. when a [recipe](../recipes.md) is made from the dataset, directly or through another recipe, that line names its build first, as [raw data only recipes read](#raw-data-only-recipes-read) shows. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees what no project keeps.
+commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them, and the build first when a [recipe](../recipes.md) is made from the dataset. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees it.
 
-an `exclude` written by hand in a dataset does not reach a file inside an archive. the sync that lists the dataset's source again, as the first one after the exclude is written, warns about one that names such a file and matches no file the source lists, and gives the drop command that leaves it out:
+an `exclude` written by hand does not reach a file inside an archive. the next sync that lists the source warns about one that names such a file, and gives the drop that leaves it out:
 
 ```text
 warning: exclude "data/train.csv" in datasets.dataset names a file inside dataset.zip, which exclude does not reach
@@ -86,9 +86,9 @@ $ fetchloom drop data/images/images/img_009.png
   next: run `fetchloom build thumbs`, then commit data.toml, data.lock and data.lock.d
 ```
 
-nothing is deleted, since nothing of `images` is placed. the pattern changes what `thumbs` is made from, while data.lock still pins the result `thumbs` made with the file, so the `next:` line names the build. `fetchloom build --dry-run` then says `Would run thumbs · images changed`, and the build makes it without the file. when several recipes are made from what the drop changed, the line names those no other of them is made from, since a build also makes the recipes its own is made from.
+nothing is deleted, since nothing of `images` is placed. data.lock still pins the result `thumbs` made with the file, so the `next:` line names the build, and `fetchloom build --dry-run` says `Would run thumbs · images changed`.
 
-drop leaves files out; it never renames or moves one. to bring a file back, delete its pattern from `data.toml` and run `fetchloom sync`: a file inside an archive returns from the cache, a mirror or the source, and a file the source lists is pinned again, which asks the source.
+drop never renames or moves a file. to bring one back, delete its pattern from `data.toml` and run `fetchloom sync`.
 
 ## refusals
 
@@ -129,20 +129,18 @@ the pattern reads paths inside the archive, so in a dataset that is one archive 
 
 ## stopping
 
-drop plans everything before it writes: which files each path names and the pattern for each. in a dataset of many files that takes a while, so a line says it is at work, `Planning the drop of data/tiny/d050`, or `of 50 paths` for several. a terminal shows it at once and adds the time it has taken; a log or a pipe gets it after 2 seconds and again every 10 seconds.
-
-ctrl-c while it plans, in a dry run too, stops it before it writes anything, exit 130. stderr:
+drop plans everything before it writes, which in a dataset of many files takes a while, so a line says `Planning the drop of data/tiny/d050`, or `of 50 paths` for several. ctrl-c while it plans stops it before it writes anything, exit 130. stderr:
 
 ```text
    Stopping (press ctrl-c again to quit at once)
     Stopped at your request, so nothing changed
 ```
 
-once drop starts writing `data.toml`, ctrl-c no longer stops it: it says `Finishing what it started (ctrl-c again to quit at once)`, writes `data.lock`, deletes the files and says what it did, as without the ctrl-c.
+once drop starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions](../concepts.md#interruptions) explains.
 
 ## JSON
 
-`--json` returns `result.project`; `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, by path, with `archive` null for a file the source lists; `result.copied`, one `{dataset, archive, from}` for each archive given its own members table as a copy of the glob key `from`'s, often empty; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
+`--json` returns `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, with `archive` null for a file the source lists; `result.copied`, one `{dataset, archive, from}` for each archive given its own members table; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
 
 ## exit codes
 
