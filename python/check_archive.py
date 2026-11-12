@@ -1,7 +1,6 @@
 """unpack only the expected release files, then run the packaged executable."""
 
 import argparse
-import json
 from pathlib import Path
 import tarfile
 import zipfile

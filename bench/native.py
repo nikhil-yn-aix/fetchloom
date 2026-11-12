@@ -31,7 +31,6 @@ SCENARIOS = {
     "zip": dict(count=10000, size=4096, archive=True),
     "large": dict(count=1, size=1 << 30, archive=False),
 }
-PHASES = ("cold", "warm", "settled", "path")
 RESAMPLES = 20000
 
 
