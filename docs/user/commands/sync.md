@@ -150,7 +150,7 @@ a changed hardlink shared by other projects, whose cached copy the cache no long
 
 an entry in a pinned file's way, such as a link at its path or a file where its folder belongs, stays without `--force`, with kept reason `blocked` and its path as `blocked_by`. with `--force`, sync removes it, a link itself and never what it points to; a folder that holds anything stays even then. a file fetchloom placed that no dataset needs now is removed first, so when a pinned file becomes a folder of files, or the other way round, one sync places the new files.
 
-sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` hashes every placed file too, and puts back one whose bytes changed though its size and time did not, without `--force`.
+sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` checks the hash of every placed file too, reusing a hash this scan already checked, and puts back one whose bytes changed though its size and time did not, without `--force`.
 
 if registering with the cache fails, sync still succeeds, with a warning that `cache gc` may not keep the project's files; check the cache's permissions and run sync again.
 

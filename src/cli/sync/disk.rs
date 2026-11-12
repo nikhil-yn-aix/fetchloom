@@ -398,9 +398,10 @@ impl Survey {
             let block = Block::sized(placed.look.size.saturating_add(1));
             Sha256::of_file(&root.join(path), block).is_ok_and(|digest| digest == placed.sha256)
         });
-        for ((path, _), unchanged) in racy.into_iter().zip(unchanged) {
+        for ((path, placed), unchanged) in racy.into_iter().zip(unchanged) {
             if unchanged {
                 self.needs_writing = true;
+                let _ = placed.racy_intact.set(());
             } else {
                 tracing::debug!(%path, "hashing found an edit");
                 self.edited.insert(path.clone());
@@ -679,6 +680,7 @@ impl Survey {
                     && !self.edited.contains(*path)
                     && !self.elsewhere.contains(*path)
                     && !self.vouched.contains(*path)
+                    && (placed.racy_intact.get().is_none() || self.damaged.contains(*path))
             })
             .collect();
         if files.is_empty() {
@@ -1280,6 +1282,7 @@ mod tests {
             writable: method == Method::Copy,
             checked: 0,
             adopted: false,
+            racy_intact: std::sync::OnceLock::new(),
         }
     }
 
@@ -1448,6 +1451,71 @@ mod tests {
         assert!(
             survey.verify(&project.root, &Scope::All, None).is_err(),
             "an unreadable file stops it"
+        );
+    }
+
+    #[test]
+    fn verification_reuses_intact_racy_hashes_without_hiding_unchecked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let recent = old + std::time::Duration::from_secs(4);
+        let files = [
+            ("racy-intact", recent),
+            ("racy-edited", recent),
+            ("unchecked", old),
+            ("outside", old),
+        ];
+        let write = |name: &str, time: SystemTime, bytes: &[u8]| {
+            let path = project.root.join("data").join(name);
+            fs::write(&path, bytes).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        for (name, time) in files {
+            write(name, time, b"original");
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        for (name, _) in files {
+            let path = format!("data/{name}");
+            let mut placed = record(&project.root, &path, b"original", Method::Copy);
+            if name == "outside" {
+                "other".clone_into(&mut placed.dataset);
+            }
+            survey.state.files.insert(path, placed);
+        }
+        for (name, time) in files.into_iter().filter(|(name, _)| *name != "racy-intact") {
+            write(name, time, b"modified");
+            assert_eq!(
+                Look::of(&fs::metadata(project.root.join("data").join(name)).unwrap()),
+                survey.disk[&format!("data/{name}")]
+            );
+        }
+        survey.hash_racy(&project.root, nanos(old) + 2_000_000_000, false);
+        let checked = project.root.join("already-read");
+        fs::rename(project.root.join("data/racy-intact"), &checked).unwrap();
+        let scope = Scope::Only(std::collections::BTreeSet::from(["set".to_owned()]));
+        let found = survey.verify(&project.root, &scope, None).unwrap();
+        assert_eq!(found, HashSet::from(["data/unchecked".to_owned()]));
+        assert_eq!(
+            survey.edited,
+            HashSet::from(["data/racy-edited".to_owned()])
+        );
+        assert_eq!(survey.damaged, HashSet::from(["data/unchecked".to_owned()]));
+        assert!(survey.vouched.is_empty());
+        fs::rename(checked, project.root.join("data/racy-intact")).unwrap();
+        write("racy-intact", recent, b"modified");
+        survey.damaged.insert("data/racy-intact".to_owned());
+        assert_eq!(
+            survey.verify(&project.root, &scope, None).unwrap(),
+            HashSet::from(["data/racy-intact".to_owned(), "data/unchecked".to_owned()])
         );
     }
 
@@ -1854,6 +1922,7 @@ mod tests {
             .files
             .insert("data/a.txt".to_owned(), placed.clone());
         survey.hash_racy(&project.root, 0, false);
+        placed.racy_intact.set(()).unwrap();
         assert_eq!(survey.disk.len(), 1);
         assert_eq!(survey.disk["data/a.txt"], placed.look);
         assert_eq!(survey.listed["data/a.txt"], "data/A.txt");

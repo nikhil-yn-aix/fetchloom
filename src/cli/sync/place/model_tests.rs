@@ -193,6 +193,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
                 writable,
                 checked: 1,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
     }
@@ -272,6 +273,7 @@ fn a_damaged_file_is_replaced_without_force() {
                 writable: true,
                 checked: 1,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         survey.damaged.insert(PATH.to_owned());
@@ -321,6 +323,7 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
                     writable: true,
                     checked: 123,
                     adopted: false,
+                    racy_intact: std::sync::OnceLock::new(),
                 },
             );
             let seen = Look {

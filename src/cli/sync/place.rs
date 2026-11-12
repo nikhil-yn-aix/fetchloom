@@ -1925,6 +1925,7 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
         writable,
         checked,
         adopted: false,
+        racy_intact: std::sync::OnceLock::new(),
     }
 }
 
@@ -2127,6 +2128,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         project.write_state(&state).unwrap();
@@ -2188,6 +2190,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         project.write_state(&state).unwrap();
@@ -2308,6 +2311,7 @@ mod tests {
                         writable: false,
                         checked: 0,
                         adopted: false,
+                        racy_intact: std::sync::OnceLock::new(),
                     },
                 );
             }

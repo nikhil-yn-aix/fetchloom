@@ -476,6 +476,7 @@ mod tests {
                 writable: true,
                 checked: 1,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         state.synced = Some(Synced {

@@ -35,6 +35,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
+| project state | reuse an intact racy hash within one survey | `status --verify` of 32 MiB: musl 0.544, glibc 0.563; controls and memory within noise | kept | [racy hashes](#reusing-racy-hashes-within-a-survey-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -358,6 +359,31 @@ a stopped run pays the whole bound when a blocking task outlives it: `status --v
 | 1 s | 1,001.12 ms | 1,001.12 ms |
 
 a second SIGINT sent as `Stopped` showed did not shorten the wait at 100 ms or 1 s, since the run's listener goes with the runtime; a second ctrl-c while the command still runs exits 130 from a runtime thread without the wait.
+
+## reusing racy hashes within a survey, 2026-11-12
+
+`status --verify` and `sync --verify` hashed an intact file twice when its recorded time was as new as the state file's time: the racy check read it first, then verification read it again. the change keeps that first result on the in-memory placed record, without another set of paths. it leaves edited-versus-damaged handling and cache-doubt checks alone. the proof is never serialized or accepted from a state file; the record stayed 88 bytes on both sides of the layout check.
+
+one release experiment from d0176dd7 per libc ran both arms through a read-once switch, every arm once per seeded shuffled round. the following `status --verify` cases have 12 clean pairs each after warmups, on ext4 over nvme and an owned FAT32 image. state times were fixed to the files' recorded tick to exercise racy reads without sleeps. every fixture's bytes were independently checked; every command's JSON was checked. the shared machine's load bursts remain in the raw records, excluded by the predeclared rule and repeated. timed windows held the measurement lock on cores 12–23, for less than five minutes each.
+
+| files | build | before s [range] | after s [range] | time ratio [95%] | peak RSS ratio [95%] |
+|---|---|---|---|---|---|
+| 2 × 16 MiB, ext4 | glibc | 0.058 [0.056, 0.063] | 0.033 [0.032, 0.036] | 0.563 [0.558, 0.565] | 1.000 [0.985, 1.013] |
+| 2 × 16 MiB, ext4 | musl | 0.055 [0.054, 0.059] | 0.030 [0.029, 0.033] | 0.544 [0.540, 0.553] | 0.987 [0.987, 0.987] |
+| 2 × 16 MiB, FAT32 | glibc | 0.060 [0.058, 0.062] | 0.034 [0.032, 0.035] | 0.560 [0.552, 0.568] | 1.005 [0.998, 1.011] |
+| 2 × 16 MiB, FAT32 | musl | 0.059 [0.057, 0.061] | 0.032 [0.031, 0.037] | 0.543 [0.535, 0.553] | 0.991 [0.990, 0.996] |
+| 10,000 × 4 KiB, ext4 | glibc | 0.077 [0.072, 0.087] | 0.064 [0.063, 0.080] | 0.827 [0.803, 0.840] | 0.981 [0.975, 0.990] |
+| 10,000 × 4 KiB, ext4 | musl | 0.074 [0.073, 0.081] | 0.061 [0.060, 0.066] | 0.821 [0.813, 0.830] | 0.933 [0.929, 0.947] |
+| 100,000 × 32 B, ext4 | glibc | 0.670 [0.653, 0.693] | 0.562 [0.549, 0.606] | 0.837 [0.826, 0.857] | 1.001 [1.000, 1.003] |
+| 100,000 × 32 B, ext4 | musl | 0.652 [0.636, 0.682] | 0.549 [0.532, 0.599] | 0.840 [0.827, 0.882] | 0.953 [0.952, 0.955] |
+
+`sync --locked --verify` of the two 16 MiB files took 0.572 [0.564, 0.577] of its time on glibc and 0.564 [0.554, 0.568] on musl, with peak RSS ratios 1.000 [0.985, 1.011] and 1.000 [1.000, 1.000]. ordinary racy status, non-racy verification, settled status of 10,000 files and settled sync of 100,000 files stayed within noise on both builds; none of their time or memory intervals ended above 1.02. the 100,000-file verification peaked at median 79.0 MiB on glibc both ways and 135.2 to 128.9 MiB on musl.
+
+wall and CPU came from the interleaved harness. peak RSS came from GNU time's child `wait4`, not the python parent's inherited RSS floor; the original harness value is retained beside it. a separate syscall check of the two large files counted 142 to 100 reads on glibc and 137 to 95 on musl. full commands, samples, excluded rounds and build hashes remain with the sweep outside the repository. no native windows or macos performance claim is made.
+
+the fixed-input regression makes a file unavailable after its racy hash, then verifies that it is not reopened, an unchecked changed file is still found, and a racy edit stays an edit. the old code failed on the second open. disabling the new proof reproduced that failure. state round-trip checks reject a forged persisted proof, and the alias regression carries the proof with the record; these checks also passed on FAT32.
+
+the change meets the 10% keep rule without a measured control regression. it is kept, with the switch removed and the state format unchanged.
 
 ## short-copy EOF dispatch, 2026-11-12
 

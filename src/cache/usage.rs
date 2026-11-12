@@ -318,6 +318,7 @@ mod tests {
                     writable: false,
                     checked: 0,
                     adopted: false,
+                    racy_intact: std::sync::OnceLock::new(),
                 },
             );
         }

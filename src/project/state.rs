@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,9 @@ pub(crate) struct Placed {
     /// as placed, so a removal of it can say so.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) adopted: bool,
+    /// this survey's intact racy hash, kept inline rather than in another set of paths.
+    #[serde(skip)]
+    pub(crate) racy_intact: OnceLock<()>,
 }
 
 /// how a file looks on disk without reading it: its size and modification time.
@@ -306,10 +310,22 @@ mod tests {
                 writable: true,
                 checked: 43,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         let read = State::parse(&state.render());
         assert_eq!(read.files, state.files);
+        let bytes = state.render();
+        state.files["data/iris/iris.csv"]
+            .racy_intact
+            .set(())
+            .unwrap();
+        assert_eq!(state.render(), bytes);
+        let mut untrusted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        untrusted["files"]["data/iris/iris.csv"]["racy_intact"] = true.into();
+        let bytes = serde_json::to_vec(&untrusted).unwrap();
+        assert_eq!(State::parse(&bytes).files, read.files);
+        assert_eq!(State::parse_only(&bytes, &|_| true).files, read.files);
         assert_eq!(read.synced, None, "no sync settled yet");
         state.synced = Some(Synced {
             manifest: digest::sha256(b"data.toml"),
@@ -358,6 +374,7 @@ mod tests {
                     writable: false,
                     checked: 43,
                     adopted: size == 2,
+                    racy_intact: std::sync::OnceLock::new(),
                 },
             );
         }
@@ -412,6 +429,7 @@ mod tests {
                 writable: false,
                 checked: 43,
                 adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
             },
         );
         state.synced = Some(Synced {

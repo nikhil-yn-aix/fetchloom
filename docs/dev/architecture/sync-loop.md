@@ -54,7 +54,7 @@ kept entries move from the old lock into the new one instead of being copied. `r
 
 ### hash files a clock cannot distinguish
 
-racy means a file's recorded modification time is at least as new as the state file's own time. on a coarse clock, an edit during the same tick can leave both size and time unchanged. `Survey::hash_racy` hashes those apparent matches before trusting them. when the data folder and `.fetchloom` sit on different devices, the data folder's clock may be the coarser one, such as fat's, which cuts times down to two seconds, so the state's time is moved two seconds earlier before the comparison. a racy hardlink found edited that is still the cache's copy, or a copy a change mark records, is damage to that shared copy, so sync puts it back; any other racy edit is kept and warned about.
+racy means a file's recorded modification time is at least as new as the state file's own time. on a coarse clock, an edit during the same tick can leave both size and time unchanged. `Survey::hash_racy` hashes those apparent matches before trusting them. an intact result stays on its in-memory record for this survey, so `--verify` need not read it again; it is never saved in the state or accepted from a state file. when the data folder and `.fetchloom` sit on different devices, the data folder's clock may be the coarser one, such as fat's, which cuts times down to two seconds, so the state's time is moved two seconds earlier before the comparison. a racy hardlink found edited that is still the cache's copy, or a copy a change mark records, is damage to that shared copy, so sync puts it back; any other racy edit is kept and warned about.
 
 ```mermaid
 flowchart TD
@@ -71,7 +71,7 @@ flowchart TD
     ready -->|no| work["relock, plan, fetch and place"]
 ```
 
-settling writes newer state so later runs need not hash the same intact files. `Survey::verify` hashes every placed file that still looks as recorded, for a run that asks to check bytes, under a bar that moves as each 1 MiB block is read: a hardlink found changed joins `elsewhere`, since its bytes are the cache's copy, and any other file joins `damaged`; placement replaces both without force, and the settled shortcut is not taken while either holds anything. `audit` marks the object behind a link in `elsewhere` that is still the object itself. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
+settling writes newer state so later runs need not hash the same intact files. `Survey::verify` hashes every placed file that still looks as recorded and whose bytes this survey has not already checked, for a run that asks to check bytes, under a bar that moves as each 1 MiB block is read: a hardlink found changed joins `elsewhere`, since its bytes are the cache's copy, and any other file joins `damaged`; placement replaces both without force, and the settled shortcut is not taken while either holds anything. `audit` marks the object behind a link in `elsewhere` that is still the object itself. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
 
 ### metadata scanning
 
