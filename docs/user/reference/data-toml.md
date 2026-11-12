@@ -195,8 +195,8 @@ a members table changes which files land, not what data.lock pins, so editing on
 | a table for an archive data.lock does not pin for the dataset, or a glob key that matches none | after an upgrade renames `pets.zip`, the table must follow it, or the files it left out would come back without a word |
 | two glob keys that match one archive with no table of its own | the archive would have two tables, so the error names both keys and the archive; give it a table of its own, which wins over both |
 | a members table on a dataset with `extract = false` | its archives stay packed, so there are no files inside to choose |
-| a `select` pattern that matches no file inside its archive | the error shows a path inside the archive, or the pattern with the archive's top folder in front when that one matches |
-| patterns that leave an archive no file | to leave the whole archive out, `exclude` it in the dataset instead |
+| a `select` pattern that matches no file inside its archive, or for a glob key, inside any archive the key covers | the error shows a path inside the archive, or the pattern with the archive's top folder in front when that one matches |
+| patterns of an archive's own table that leave it no file | to leave the whole archive out, `exclude` it in the dataset instead; a glob key's table may leave a shard none |
 
 an `exclude` that matches nothing is fine: the upstream may have fixed the file. the archive is still unpacked whole into the cache, and [`fetchloom cache gc`](../commands/cache.md#gc) frees the files no project keeps.
 
@@ -219,7 +219,7 @@ sync placed only the 40 `.wav` and 40 `.txt` files of each shard, from `data/sha
      Synced 1 dataset into data
 ```
 
-each archive the key matches takes the table as if it were written under its own path, so a `select` pattern that matches no file inside one shard is refused, naming the key and that shard. a table under an archive's own path wins over any glob, so `[datasets.shards.members."shard-000003.tar"]` alone chooses for that shard. `*` stays inside one folder: `"shard-*.tar"` does not match `train/shard-000000.tar`, which `"train/shard-*.tar"` or `"**/shard-*.tar"` does.
+shards may differ, so each `select` pattern of a glob key needs a file in one archive the key covers, not in each, and a shard the table leaves no file places none: with `.flac` files in one of six shards, `select = ["*.flac", "*.txt"]` placed the `.txt` files of all six and the `.flac` files of that one. a pattern that matches in no shard, as the typo `"*.flca"`, is refused once every shard the key covers is unpacked here: `the select pattern "*.flca" in members."shard-*.tar" of datasets.shards matches no file inside the 6 archives it covers`. a table under an archive's own path wins over any glob, so `[datasets.shards.members."shard-000003.tar"]` alone chooses for that shard. `*` stays inside one folder: `"shard-*.tar"` does not match `train/shard-000000.tar`, which `"train/shard-*.tar"` or `"**/shard-*.tar"` does.
 
 ## encoding and validation
 

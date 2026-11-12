@@ -61,6 +61,13 @@ struct Copied {
     from: String,
 }
 
+/// the glob key whose table an archive's own table starts as a copy of, and the select patterns
+/// of it that match no file of the archive, which the copy leaves out.
+struct FromGlob {
+    key: String,
+    unmatched: Vec<String>,
+}
+
 /// the planned files one path names: the file at it, or every file under a folder.
 struct Asked<'p, 'a> {
     /// the path in the project, with `/` between folders, as spelled in the plan when it names a
@@ -83,9 +90,8 @@ struct Edit<'a> {
     leaving: BTreeSet<&'a str>,
     /// patterns for the members table of each archive, by its path in data.lock.
     members: BTreeMap<&'a str, BTreeSet<String>>,
-    /// the glob key whose table each archive in `members` without a table of its own starts
-    /// from.
-    copied: BTreeMap<&'a str, String>,
+    /// the glob key's table each archive in `members` without a table of its own starts from.
+    copied: BTreeMap<&'a str, FromGlob>,
     /// the files left out, as `--json` lists them.
     left: Vec<Left>,
 }
@@ -229,7 +235,7 @@ fn copies(edits: &BTreeMap<&str, Edit>) -> Vec<Copied> {
             edit.copied.iter().map(|(archive, from)| Copied {
                 dataset: (*dataset).to_owned(),
                 archive: (*archive).to_owned(),
-                from: from.clone(),
+                from: from.key.clone(),
             })
         })
         .collect()
@@ -798,23 +804,52 @@ fn edits<'a>(
     for (dataset, edit) in &mut edits {
         let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
         whole_archives(locked, edit, &archives);
-        // a pattern added to the glob's table would reach every archive it covers
-        let Some(source) = manifest
+        if let Some(source) = manifest
             .datasets
             .get(*dataset)
             .and_then(|entry| entry.source())
-        else {
-            continue;
-        };
-        for archive in edit.members.keys() {
-            if let Some((key, _)) = source.members.of(dataset, archive)?
-                && key != *archive
-            {
-                edit.copied.insert(archive, key.to_owned());
-            }
+        {
+            edit.copied = from_globs(source, locked, &edit.members, cache)?;
         }
     }
     Ok(edits)
+}
+
+/// the glob key's table each archive in `members`, by its path in `locked`, starts its own table
+/// from, for one with no table of its own: a pattern added to the glob's table would reach every
+/// archive it covers.
+fn from_globs<'a>(
+    source: &manifest::Source,
+    locked: &Locked,
+    members: &BTreeMap<&'a str, BTreeSet<String>>,
+    cache: &Cache,
+) -> Result<BTreeMap<&'a str, FromGlob>, Error> {
+    let mut copied = BTreeMap::new();
+    for archive in members.keys() {
+        let Some((key, filter)) = source
+            .members
+            .of(&locked.name, archive)?
+            .filter(|(key, _)| key != archive)
+        else {
+            continue;
+        };
+        let holds = locked
+            .files
+            .iter()
+            .find(|file| file.path == *archive)
+            .and_then(|file| archives::archive(&locked.files, file).recorded(cache))
+            .unwrap_or_default();
+        let unmatched = filter
+            .select
+            .globs()
+            .iter()
+            .filter(|glob| !holds.iter().any(|member| glob.matches(&member.path)))
+            .map(|glob| glob.as_str().to_owned())
+            .collect();
+        let key = key.to_owned();
+        copied.insert(*archive, FromGlob { key, unmatched });
+    }
+    Ok(copied)
 }
 
 /// the error for a planned file whose dataset data.lock does not pin, which planning rules out.
@@ -1092,7 +1127,13 @@ fn written(
         pace.look()?;
         for (archive, patterns) in &edit.members {
             if let Some(from) = edit.copied.get(archive) {
-                updated = manifest::with_members_copied(&updated, dataset, from, archive)?;
+                updated = manifest::with_members_copied(
+                    &updated,
+                    dataset,
+                    &from.key,
+                    archive,
+                    &from.unmatched,
+                )?;
             }
             let patterns: Vec<String> = patterns.iter().cloned().collect();
             updated = manifest::with_exclusions(&updated, dataset, Some(archive), &patterns)?;
@@ -1174,7 +1215,10 @@ fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, dry_run: b
             for left in left {
                 output.detail(&left.path);
             }
-            if let Some(from) = archive.and_then(|archive| edit.copied.get(archive)) {
+            if let Some(from) = archive
+                .and_then(|archive| edit.copied.get(archive))
+                .map(|from| &from.key)
+            {
                 output.hint(&if dry_run {
                     format!("{of} would have its own members table, copied from members.\"{from}\", so later changes to that table would not reach it")
                 } else {

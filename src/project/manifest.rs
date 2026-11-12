@@ -1422,9 +1422,11 @@ fn inline(what: &str) -> Error {
 }
 
 /// data.toml's text with the members table of the dataset `name` under the glob key `from`
-/// copied under `archive`, its select and exclude as written, without the comments around them.
-/// a table under an archive's own path wins over a glob, so the one drop writes for an archive a
-/// glob covers starts as a copy, and the archive keeps what the glob chose.
+/// copied under `archive`, its select and exclude as written, without the comments around them
+/// and the select patterns in `unmatched`, which match no file of the archive. a table under an
+/// archive's own path wins over a glob, so the one drop writes for an archive a glob covers
+/// starts as a copy, and the archive keeps what the glob chose; a pattern that matches nothing
+/// there keeps nothing, and an archive's own table refuses it.
 ///
 /// # Errors
 ///
@@ -1434,6 +1436,7 @@ pub(crate) fn with_members_copied(
     name: &str,
     from: &str,
     archive: &str,
+    unmatched: &[String],
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
     let members = document
@@ -1455,6 +1458,21 @@ pub(crate) fn with_members_copied(
         if let Some(value) = source.get(key).and_then(Item::as_value) {
             let mut value = value.clone();
             value.decor_mut().clear();
+            if key == "select" && !unmatched.is_empty() {
+                let patterns: Vec<&str> = match &value {
+                    Value::String(one) => vec![one.value().as_str()],
+                    Value::Array(list) => list.iter().filter_map(Value::as_str).collect(),
+                    _ => Vec::new(),
+                };
+                let kept: Array = patterns
+                    .into_iter()
+                    .filter(|pattern| !unmatched.iter().any(|left| left == pattern))
+                    .collect();
+                // a select left empty would keep every file, so the copy keeps it whole
+                if !kept.is_empty() {
+                    value = Value::Array(kept);
+                }
+            }
             table.insert(key, Item::Value(value));
         }
     }

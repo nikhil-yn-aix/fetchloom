@@ -285,6 +285,40 @@ fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
     Ok(())
 }
 
+/// a glob key's select pattern that matches no file of the archive drop copies its table for
+/// stays out of the copy: it keeps nothing there, and the archive's own table, held to today's
+/// rule, would refuse it.
+#[test]
+fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("uneven")?;
+    fs::write(
+        folder.join("a.zip"),
+        zipped(&[("x.png", b"x"), ("notes.md", b"n")])?,
+    )?;
+    fs::write(
+        folder.join("b.zip"),
+        zipped(&[("y.png", b"y"), ("z.png", b"z")])?,
+    )?;
+    ok(&sandbox.run(&["add", "../uneven"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let glob = "[datasets.uneven]\nref = \"local\"\n\n[datasets.uneven.members.\"*.zip\"]\nselect = [\"*.png\", \"*.md\"]\n";
+    fs::write(&manifest, glob)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    ok(&sandbox.run(&["drop", "data/uneven/b/y.png"])?)?;
+    assert_eq!(
+        fs::read_to_string(&manifest)?,
+        format!(
+            "{glob}\n[datasets.uneven.members.\"b.zip\"]\nselect = [\"*.png\"]\nexclude = [\"y.png\"]\n"
+        )
+    );
+    let data = sandbox.work().join("data/uneven");
+    assert!(!data.join("b/y.png").exists());
+    assert_eq!(fs::read(data.join("b/z.png"))?, b"z");
+    ok(&sandbox.run(&["sync", "--locked"])?)?;
+    Ok(())
+}
+
 /// a file the source lists leaves data.lock too, rewritten as relocking would pin it, so a
 /// locked sync takes it. an import could not be listed again, so a stale pin would fail here.
 #[test]
