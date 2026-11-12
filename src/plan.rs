@@ -1,6 +1,5 @@
-//! where every locked file lands in the project, checked for clashes before anything is written.
-//! names are compared the way a case-insensitive disk compares them, so a lock that places
-//! cleanly here places cleanly on windows too.
+//! where every locked file lands in the project, checked for clashes before anything is written,
+//! with names compared as a disk that ignores case does, so a lock placing here places on windows.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,7 +24,6 @@ pub(crate) struct Target<'a> {
     pub(crate) size: u64,
     /// a writable copy, for tools that write into their inputs.
     pub(crate) copy: bool,
-    /// what in data.lock holds these bytes.
     pub(crate) holder: Holder<'a>,
 }
 
@@ -48,7 +46,6 @@ impl<'a> Target<'a> {
         }
     }
 
-    /// whether the target is a file an archive unpacks to.
     fn unpacked(&self) -> bool {
         self.file().is_some_and(|file| file.unpacks_to.is_some())
     }
@@ -101,9 +98,8 @@ pub(crate) fn from_cache<'a>(
     plan(manifest, lock, &|archive| archive.recorded(cache))
 }
 
-/// [`from_cache`] for an add of the datasets `added`, whose patterns came from its command line,
-/// so a clash among their files names the add's options: a failed add leaves data.toml without
-/// them.
+/// [`from_cache`] for an add of `added`, whose patterns came from its command line: a clash names
+/// those options, since a failed add leaves data.toml without them.
 pub(crate) fn from_cache_adding<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -127,9 +123,8 @@ pub(crate) fn from_cache_adding<'a>(
     )
 }
 
-/// every file of `lock`'s fetched datasets as a build reads them: [`from_cache`]'s, then those of
-/// datasets `place = false` keeps out of the data folder, laid out where they would land. only
-/// the placed ones are checked for clashes, since only they reach the data folder.
+/// every file of `lock`'s fetched datasets as a build reads them, those `place = false` keeps out
+/// laid out where they would land. only placed files are checked for clashes.
 pub(crate) fn inputs<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -163,9 +158,8 @@ pub(crate) fn inputs<'a>(
     Ok(plan)
 }
 
-/// refuses, before anything is downloaded, a clash among the files of `datasets` whose place is
-/// already known, as the cache records what each archive unpacked to. an archive with no record
-/// is planned once it is unpacked, and checked then, before anything is placed.
+/// refuses, before anything downloads, a clash among the files of `datasets` the cache's records
+/// already place. an archive with no record is checked once it is unpacked, before any placing.
 pub(crate) fn foresee<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
@@ -178,10 +172,8 @@ pub(crate) fn foresee<'a>(
     planned(manifest, datasets, &[], &members, &|_| Patterns::InDataToml).map(drop)
 }
 
-/// every file the lock places for the datasets data.toml lists, or the first clash: the files of
-/// each source, an archive replaced by the files `members` says it unpacked to, and the result
-/// of each recipe as data.lock pins it. a dataset with `place = false` places nothing. datasets
-/// may share a folder, but no two files may share a path.
+/// every file the lock places for data.toml's datasets, archives as `members` recorded them, or
+/// the first clash: datasets may share a folder, never a path. `place = false` places nothing.
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -303,15 +295,11 @@ fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Er
 }
 
 /// adds where one dataset's files land in `folder`, an archive standing for the files `members`
-/// says it unpacked to that its table in `filters` keeps. where each kept file lands is decided
-/// from every file the archive holds, so a filter never moves another file. a split archive
-/// stands at its first part, and its other parts land nowhere.
-///
-/// # Errors
-///
-/// `project.invalid` for an archive two glob keys match; for an archive's own table whose select
-/// matches no file of it, or that leaves it no file; and for a glob key's select pattern that
-/// matches no file of any archive the key covers, once this machine knows them all.
+/// says it unpacked to that its table in `filters` keeps. each kept file lands where the whole
+/// archive puts it, so a filter never moves a file; a split archive stands at its first part.
+/// `project.invalid` refuses an archive two glob keys match, an own table whose select matches
+/// none of its files or that keeps none, and a glob key's select matching no file of any archive
+/// it covers, once this machine knows them all.
 pub(crate) fn expand<'a>(
     plan: &mut Plan<'a>,
     dataset: &'a str,
@@ -423,10 +411,9 @@ fn left_nothing(
     .help(help.to_owned())
 }
 
-/// the archives a glob key's table covers in one dataset, which of its select patterns a file of
-/// them matches, and whether it keeps a file of one: shards may differ, so a pattern needs a
-/// match in one of them, not in each, and a shard it leaves no file places none, while the
-/// table leaving every one of them none is a mistake.
+/// the archives a glob key's table covers in one dataset, which select patterns their files match
+/// and whether it keeps a file. shards differ, so a pattern needs a match in one of them, and only
+/// a table that keeps no file of any is a mistake.
 struct Covered<'m, 'a> {
     key: &'m str,
     filter: &'m MemberFilter,
@@ -547,9 +534,8 @@ fn selected(
     }
 }
 
-/// the refusal of `unmatched`, a select pattern of `table`, a key and its table, that matches no
-/// file `inside` says where, showing a file of `example`, an archive and what it holds, or the
-/// pattern that would match there once the archive's top folder leads it.
+/// the refusal of `unmatched`, a select pattern of `table` matching no file `inside` says where,
+/// showing a file of `example` or the pattern that would match below the archive's top folder.
 fn unmatched_select(
     dataset: &str,
     (key, filter): (&str, &MemberFilter),
@@ -584,14 +570,12 @@ fn unmatched_select(
     })
 }
 
-/// the last part of an archive's path, its file name.
 fn archive_name(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
 
-/// a dataset exclude pattern that matches files inside an archive. a dataset's own patterns
-/// choose among the files its source lists, so it leaves those files where they are, though a
-/// person who wrote it most likely meant to leave them out.
+/// a dataset exclude pattern matching files inside an archive, which it leaves where they are,
+/// since it chooses among the files the source lists, though its writer likely meant them out.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Unreached {
     pub(crate) dataset: String,
@@ -606,10 +590,9 @@ pub(crate) struct Unreached {
 /// listed. data.lock keeps no file an exclude left out, so only a listing tells this.
 pub(crate) type Unlisted = HashMap<String, Vec<String>>;
 
-/// each exclude pattern of a dataset that matches a planned file inside an archive by the
-/// file's path below the dataset's folder, the path a person sees, and matched no file the
-/// dataset's source listed, as `unlisted` says. a pattern that left out a listed file did its
-/// job, as `train.csv` beside `train.csv.zip` does, so a dataset `unlisted` lacks has none.
+/// each exclude of a dataset that matches a planned file inside an archive by its path below the
+/// dataset's folder, unless it left out a listed file, as `unlisted` tells, and so did its job. a
+/// dataset `unlisted` lacks has none.
 pub(crate) fn unreached(
     manifest: &Manifest,
     targets: &[Target],
@@ -678,11 +661,9 @@ pub(crate) enum Patterns {
     OnCommandLine,
 }
 
-/// where an archive's files land inside its dataset's folder, in the order of `members`. a
-/// dataset that is one archive gets the archive's files straight in its folder, without the one
-/// top folder they may all share, as nix's fetchzip does. an archive beside other files unpacks
-/// where it sits: a lone top folder or file comes out as it is, as `unzip` would make it, and
-/// anything else goes into a folder named after the archive.
+/// where an archive's files land in its dataset's folder, in `members`' order: a dataset that is
+/// one archive gets them without their shared top folder, as nix's fetchzip does; one beside other
+/// files keeps a lone top folder or file as `unzip` would, else a folder named after the archive.
 pub(crate) fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> Vec<String> {
     let (beside, name) = archive.rsplit_once('/').unwrap_or(("", archive));
     let top = common_top(members);
@@ -727,9 +708,8 @@ fn key(path: &str) -> String {
     name::fold(path)
 }
 
-/// a warning and its help for each dataset whose `path` ends in the name of a file placed
-/// straight inside it, as `path = "train.csv"` puts train.csv at data/train.csv/train.csv: a
-/// person who wrote that most likely meant the file's own place, since `path` names a folder.
+/// a warning and its help for each dataset whose `path` ends in the name of a file placed straight
+/// inside it, as `path = "train.csv"` gives data/train.csv/train.csv: `path` names a folder.
 pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String, String)> {
     let mut warnings = Vec::new();
     for (dataset, entry) in &manifest.datasets {
@@ -765,10 +745,8 @@ pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String
     warnings
 }
 
-/// the paths below the folder of `locked`, a dataset data.toml lists, that windows or a fat disk
-/// cannot store, as [`name::unportable`] finds them, sorted: its own files and the files its
-/// archives unpack to, as `members` records them and its members tables keep them. this machine
-/// may store them fine, so they are only told.
+/// the sorted paths below the folder of `locked` that windows or a fat disk cannot store, as
+/// [`name::unportable`] finds them among its files and kept archive members, only to be told.
 pub(crate) fn unportable(
     manifest: &Manifest,
     locked: &Locked,
@@ -811,8 +789,7 @@ pub(crate) fn unportable(
 }
 
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
-/// path as a case-insensitive disk sees it, or a file where a folder must be. datasets may share
-/// folders, so targets of two datasets clash only where their files do.
+/// path as a disk that ignores case sees it, or a file where a folder must be.
 pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error> {
     check_by(targets, &|_| patterns)
 }
@@ -900,9 +877,8 @@ fn clash(
     Error::new(Kind::ProjectInvalid, message).help(fix(first, second, targets, patterns))
 }
 
-/// how to resolve a clash between `first` and `second`, two of `targets`: give one of two
-/// datasets a folder of its own, or within one dataset keep an archive involved packed, or leave
-/// a file out.
+/// how to resolve a clash of `first` and `second`: a folder of its own for one of two datasets,
+/// or within one dataset an archive kept packed or a file left out.
 fn fix(
     first: &Target,
     second: &Target,
@@ -933,9 +909,8 @@ fn fix(
     }
 }
 
-/// how to resolve a clash in one dataset between `member`, a file inside one of its archives, and
-/// `listed`, a file its source lists beside that archive: leave out the listed one, or the member
-/// while its archive keeps another file, or keep the archives packed.
+/// how to resolve a clash in one dataset between `member`, inside an archive, and `listed` beside
+/// it: leave out either, the member only while its archive keeps another file, or keep it packed.
 fn beside(member: &Target, listed: &LockedFile, targets: &[Target], patterns: Patterns) -> String {
     let dataset = member.dataset;
     let archive = member.file().map_or("", |file| file.path.as_str());
@@ -1116,8 +1091,7 @@ mod tests {
             .collect())
     }
 
-    /// a split archive lands as the archive whole would, by its name before the counter, while
-    /// its parts land nowhere; one that stays packed lands as its parts.
+    /// by its name before the counter, its parts landing nowhere; packed, it lands as its parts.
     #[test]
     fn a_split_archive_lands_as_the_whole_would() {
         let parts: &[&str] = &["scans.zip.001", "scans.zip.002"];
@@ -1155,8 +1129,7 @@ mod tests {
         );
     }
 
-    /// a filter decides which members are placed, never where: a kept file lands where it would
-    /// without the filter, though the files left show no folder they all share.
+    /// a kept file lands where it would without the filter, though those left share no top folder.
     #[test]
     fn member_filters_leave_other_members_where_they_were() {
         let members: &[&str] = &["top/a.csv", "top/b.csv", "other.txt"];
@@ -1186,9 +1159,7 @@ mod tests {
         );
     }
 
-    /// a name windows or a fat disk cannot store is found among a dataset's own files and the
-    /// files its archives unpack to, as they land below its folder, but not in a member its
-    /// table leaves out.
+    /// as they land below the dataset's folder, but not in a member its table leaves out.
     #[test]
     fn names_windows_cannot_store_are_found_in_files_and_archives() {
         let (manifest, locked) = pinned(
@@ -1240,9 +1211,8 @@ mod tests {
         );
     }
 
-    /// once an upgrade renames the archive, a table under its old name must follow it rather
-    /// than let the files it left out return. a pin data.toml has moved past is planned as it
-    /// stands until sync pins again.
+    /// as after an upgrade renamed it, rather than let the files it left out return. a pin
+    /// data.toml moved past is planned as it stands until sync pins again.
     #[test]
     fn a_members_table_for_an_archive_the_lock_does_not_pin_is_refused() {
         let text = format!("{ONE}\n[datasets.a.members.\"pets.zip\"]\nexclude = \"x\"\n");
@@ -1295,9 +1265,8 @@ mod tests {
             .collect()
     }
 
-    /// a table under a glob key chooses the files of each archive whose path in the dataset it
-    /// matches, as a table under that path would, and an archive's own table wins over it. `*`
-    /// stays inside one folder, so a shard in a folder of the dataset is not matched.
+    /// as a table under that path would, and an archive's own table wins over it. `*` stays in one
+    /// folder, so a shard in a folder of the dataset is not matched.
     #[test]
     fn a_glob_key_chooses_the_files_of_every_archive_it_matches() {
         let paths = [&SHARDS[..], &["train/shard-000003.tar"]].concat();
@@ -1326,9 +1295,8 @@ mod tests {
         );
     }
 
-    /// two glob keys matching one archive leave no one table for it, so planning stops, naming
-    /// both and the archive, unless the archive has a table of its own, which wins over both.
-    /// gc and status, which cannot stop, take no table for it and keep every file.
+    /// planning stops naming both and the archive, unless it has a table of its own, which wins;
+    /// gc and status, which cannot stop, take no table and keep every file.
     #[test]
     fn two_glob_keys_matching_one_archive_are_refused() {
         let text = format!(
@@ -1382,8 +1350,7 @@ mod tests {
         ]
     }
 
-    /// a glob key's select patterns each need a file in some archive the key covers, not in
-    /// every one: shards that differ place what each holds, and one left no file places none.
+    /// each select needs a file in one covered archive, not all; a shard left none places none.
     #[test]
     fn a_glob_tables_select_places_each_kind_where_it_is() {
         let (manifest, locked) = pinned(
@@ -1403,8 +1370,7 @@ mod tests {
         );
     }
 
-    /// a glob key's select pattern that matches a file in no archive the key covers, as a typo,
-    /// is refused naming the key and the pattern, once every archive it covers is known here.
+    /// as a typo would, naming the key and the pattern, once every archive it covers is known.
     #[test]
     fn a_glob_tables_select_that_matches_in_no_archive_is_refused() {
         let (manifest, locked) = pinned(
@@ -1437,8 +1403,7 @@ mod tests {
         );
     }
 
-    /// a glob key's table that leaves every archive it covers no file is refused naming the key,
-    /// as an archive's own table that leaves it none is, once this machine knows them all.
+    /// naming the key, as an own table leaving its archive none is, once all are known here.
     #[test]
     fn a_glob_table_that_leaves_every_archive_no_file_is_refused() {
         let (manifest, locked) = pinned(
@@ -1519,10 +1484,8 @@ mod tests {
         );
     }
 
-    /// a dataset exclude chooses among the files its source lists, so one written against a
-    /// file inside an archive leaves it where it is; it is found by the path the file lands at
-    /// below the dataset's folder, which is what a person writes. one that left out a file the
-    /// listing named, as `images/x.png` here, did its job.
+    /// it leaves the file where it is, found by the path the file lands at, as a person writes it;
+    /// one that left out a file the listing named, as `images/x.png`, did its job.
     #[test]
     fn an_exclude_naming_files_inside_an_archive_is_found() {
         let (manifest, locked) = pinned(
@@ -1705,10 +1668,9 @@ mod tests {
         assert_eq!(planned.unknown[0].1.path, "x.zip");
     }
 
-    /// a file beside an archive that holds one of the same name: either can be left out, the
-    /// archive's only when the members table leaves it another file, or the archive kept packed.
-    /// two archives of one dataset that unpack a file to one path are both named with that path,
-    /// and the remedies keep leaving one out and keeping them packed, beside a dataset for each.
+    /// a file beside an archive holding one of the same name: either can be left out, the member
+    /// only while its table keeps another file, or the archive kept packed. two archives with one
+    /// path are both named, with the same remedies beside a dataset for each.
     #[test]
     fn a_clash_between_two_archives_names_both() {
         let (manifest, locked) = pinned(ONE, &[("a", &["fold-000000.tar", "fold-000001.tar"])]);
@@ -1753,8 +1715,7 @@ mod tests {
         }
     }
 
-    /// a dataset data.toml makes with a recipe places nothing from a source pin data.lock still
-    /// has under its name, since only a build makes its files.
+    /// only a build makes its files, whatever source pin data.lock still has under its name.
     #[test]
     fn a_recipe_places_nothing_from_an_old_source_pin() {
         let made = manifest(
@@ -1780,8 +1741,7 @@ mod tests {
         );
     }
 
-    /// a dataset with `place = false`, fetched or made, has no target: nothing of it is
-    /// downloaded, unpacked or placed, and its files clash with no other dataset's.
+    /// fetched or made, nothing of it is downloaded, unpacked or placed, and nothing clashes.
     #[test]
     fn an_unplaced_dataset_has_no_targets() {
         let (unplaced, mut locked) = pinned(
@@ -1872,8 +1832,7 @@ mod tests {
         }
     }
 
-    /// a lock, as from a clone, naming a file whose name is longer than a disk allows is refused
-    /// before anything is written, and the help says how to leave it out. 255 bytes still fit.
+    /// before anything is written, its help saying how to leave it out; 255 bytes still fit.
     #[test]
     fn a_name_longer_than_the_255_bytes_a_disk_allows_is_refused() {
         for (name, fits) in [("f".repeat(255), true), ("f".repeat(256), false)] {
@@ -1950,8 +1909,7 @@ mod tests {
         );
     }
 
-    /// `path` names a folder, so one that ends in the name of a file placed straight inside it
-    /// most likely meant that file's own place.
+    /// `path` names a folder, so one ending in its file's name likely meant the file's place.
     #[test]
     fn a_path_named_like_its_file_is_found() {
         let flagged = |path: &str, files: &[&str]| {
