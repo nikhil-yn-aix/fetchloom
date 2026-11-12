@@ -1,6 +1,7 @@
 //! keeping the cache tidy: which projects use it, how big it is, freeing what no project needs,
 //! and hashing every object again.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
@@ -288,7 +289,7 @@ impl Cache {
             return Ok(false);
         }
         let intact = !super::changed::doubted(&path, &metadata, self.changed_at(digest)?)
-            || hash(&path, stop).is_ok_and(|actual| actual == *digest);
+            || hash(&path, stop, &|_| {}).is_ok_and(|actual| actual == *digest);
         stop.check()?;
         Ok(intact)
     }
@@ -599,11 +600,19 @@ impl Cache {
                 if stop.is_asked() {
                     break;
                 }
-                let actual = hash(&object.path, stop);
+                let left = Cell::new(object.size);
+                let actual = hash(&object.path, stop, &|read| {
+                    let counted = read.min(left.get());
+                    left.set(left.get() - counted);
+                    progress(counted);
+                });
                 if stop.is_asked() {
                     break;
                 }
-                progress(object.size);
+                // an object that ended early or could not be read still fills its share of the bar
+                if left.get() > 0 {
+                    progress(left.get());
+                }
                 if stop.is_asked() {
                     break;
                 }
@@ -712,7 +721,8 @@ pub(super) fn on_disk(metadata: &fs::Metadata) -> u64 {
     }
 }
 
-fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
+/// hashes the object at `path`, telling `progress` the bytes of each block as it reads them.
+fn hash(path: &Path, stop: &Stop, progress: &dyn Fn(u64)) -> io::Result<Sha256> {
     let mut file = super::read_unfollowed(path)?;
     let mut hasher = digest::Hasher::default();
     let mut buffer = vec![0; 1024 * 1024];
@@ -725,6 +735,7 @@ fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
             return Ok(hasher.finish().0);
         }
         hasher.update(&buffer[..read]);
+        progress(read as u64);
     }
 }
 
@@ -1483,6 +1494,20 @@ mod tests {
             [bad.digest],
             "projects linking to it can learn it changed"
         );
+    }
+
+    /// a bar sized from the scan moves as each block of a large object is read, never only once
+    /// the whole object is hashed.
+    #[test]
+    fn verifying_tells_the_bytes_of_each_block_it_reads() {
+        let (_dir, cache) = cache();
+        let block = 1024 * 1024;
+        store(&cache, &vec![7; 2 * block + 3]);
+        let told = Mutex::new(Vec::new());
+        let checked = cache.verify_all(1, &|bytes| told.lock().unwrap().push(bytes));
+        assert_eq!(checked.changed, []);
+        let block = block as u64;
+        assert_eq!(told.into_inner().unwrap(), [block, block, 3]);
     }
 
     #[test]

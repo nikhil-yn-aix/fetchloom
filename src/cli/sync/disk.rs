@@ -11,12 +11,13 @@ use super::place::local;
 use crate::cache::{self, Cache};
 use crate::digest::Sha256;
 use crate::error::Error;
-use crate::name;
+use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::Project;
 use crate::project::state::{Look, State, nanos};
 use crate::threads::Threads;
+use crate::{name, units};
 
 /// the data folder as fetchloom recorded placing it and as it is now.
 pub(crate) struct Survey {
@@ -626,12 +627,23 @@ impl Survey {
         Ok(())
     }
 
+    /// as [`Survey::verify_shown`] does, with no bar.
+    pub(crate) fn verify(&mut self, root: &Path, scope: &Scope) -> Result<HashSet<String>, Error> {
+        self.verify_shown(root, scope, None)
+    }
+
     /// hashes every placed file of a dataset in `scope` that still looks as placed and that
     /// nothing here hashed or put in doubt already, so changed bytes that kept their size and
-    /// time show too, as `--verify` asks. a hardlink found changed is the cache's copy, so it
-    /// joins `elsewhere`; any other file joins `damaged`. a file that cannot be read stops the
-    /// check. returns the files it found changed, which a plain sync cannot see.
-    pub(crate) fn verify(&mut self, root: &Path, scope: &Scope) -> Result<HashSet<String>, Error> {
+    /// time show too, as `--verify` asks. given `output`, a bar of the bytes moves as each block
+    /// is read. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
+    /// file joins `damaged`. a file that cannot be read stops the check. returns the files it
+    /// found changed, which a plain sync cannot see.
+    pub(crate) fn verify_shown(
+        &mut self,
+        root: &Path,
+        scope: &Scope,
+        output: Option<&Output>,
+    ) -> Result<HashSet<String>, Error> {
         let files: Vec<(&String, &crate::project::state::Placed)> = self
             .state
             .files
@@ -648,9 +660,24 @@ impl Survey {
             return Ok(HashSet::new());
         }
         let _span = tracing::debug_span!("verify", files = files.len()).entered();
-        let intact = place::run_all(&files, self.threads, |(path, placed)| {
-            Sha256::of_file(&root.join(path.as_str())).map(|digest| digest == placed.sha256)
+        let shown = output.map(|output| {
+            let total = files.iter().map(|(_, placed)| placed.look.size).sum();
+            let what = units::count(files.len() as u64, "placed file", "placed files");
+            let bar = output.bar("Checking", what.clone());
+            bar.start(Some(total), 0);
+            (bar, output.ticker("Checking", what, [Some(total)]))
         });
+        let read = |bytes| {
+            if let Some((bar, ticker)) = &shown {
+                bar.advance(bytes);
+                ticker.advance(bytes);
+            }
+        };
+        let intact = place::run_all(&files, self.threads, |(path, placed)| {
+            let file = fs::File::open(root.join(path.as_str()))?;
+            Sha256::of_reader_telling(file, &read).map(|digest| digest == placed.sha256)
+        });
+        drop(shown);
         let mut changed = Vec::new();
         for ((path, placed), intact) in files.into_iter().zip(intact) {
             match intact {
@@ -1238,7 +1265,7 @@ mod tests {
         survey.edited.insert("data/edited".to_owned());
 
         let named = Scope::Only(std::collections::BTreeSet::from(["set".to_owned()]));
-        survey.verify(&project.root, &named).unwrap();
+        survey.verify_shown(&project.root, &named, None).unwrap();
 
         let (shared, alone): (Vec<_>, Vec<_>) = ["data/copy", "data/link", "data/lone"]
             .into_iter()
@@ -1253,7 +1280,9 @@ mod tests {
             survey.state.files["data/intact"].look,
         );
         assert!(
-            survey.verify(&project.root, &Scope::All).is_err(),
+            survey
+                .verify_shown(&project.root, &Scope::All, None)
+                .is_err(),
             "an unreadable file stops it"
         );
     }

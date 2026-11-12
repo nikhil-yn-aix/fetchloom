@@ -45,15 +45,25 @@ impl Sha256 {
     }
 
     /// hashes an opened reader so cache checks never reopen a checked path.
-    pub(crate) fn of_reader(mut reader: impl Read) -> io::Result<Sha256> {
+    pub(crate) fn of_reader(reader: impl Read) -> io::Result<Sha256> {
+        Self::of_reader_telling(reader, &|_| {})
+    }
+
+    /// hashes `reader` as [`Sha256::of_reader`] does, telling `read` the bytes of each block as
+    /// it reads them, so a bar moves while a large file is hashed.
+    pub(crate) fn of_reader_telling(
+        mut reader: impl Read,
+        read: &dyn Fn(u64),
+    ) -> io::Result<Sha256> {
         let mut hasher = Hasher::default();
         let mut buffer = vec![0; 1024 * 1024];
         loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
+            let bytes = reader.read(&mut buffer)?;
+            if bytes == 0 {
                 return Ok(hasher.finish().0);
             }
-            hasher.update(&buffer[..read]);
+            hasher.update(&buffer[..bytes]);
+            read(bytes as u64);
         }
     }
 }
@@ -189,6 +199,19 @@ mod tests {
             None,
             "md5 costs nothing unless asked for"
         );
+    }
+
+    #[test]
+    fn hashing_tells_the_bytes_of_each_block_it_reads() {
+        let block = 1024 * 1024;
+        let bytes = vec![7; 2 * block + 3];
+        let told = std::cell::RefCell::new(Vec::new());
+        let digest =
+            Sha256::of_reader_telling(bytes.as_slice(), &|read| told.borrow_mut().push(read))
+                .unwrap();
+        assert_eq!(digest, sha256(&bytes));
+        let block = block as u64;
+        assert_eq!(told.into_inner(), [block, block, 3]);
     }
 
     #[test]

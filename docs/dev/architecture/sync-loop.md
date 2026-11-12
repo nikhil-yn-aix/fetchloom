@@ -69,7 +69,7 @@ flowchart TD
     ready -->|no| work["relock, plan, fetch and place"]
 ```
 
-settling writes newer state so later runs need not hash the same intact files. `Survey::verify` hashes every placed file that still looks as recorded, for a run that asks to check bytes: a hardlink found changed joins `elsewhere`, since its bytes are the cache's copy, and any other file joins `damaged`; placement replaces both without force, and the settled shortcut is not taken while either holds anything. `audit` marks the object behind a link in `elsewhere` that is still the object itself. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
+settling writes newer state so later runs need not hash the same intact files. `Survey::verify` hashes every placed file that still looks as recorded, for a run that asks to check bytes, and `Survey::verify_shown` does the same under a bar that moves as each 1 MiB block is read: a hardlink found changed joins `elsewhere`, since its bytes are the cache's copy, and any other file joins `damaged`; placement replaces both without force, and the settled shortcut is not taken while either holds anything. `audit` marks the object behind a link in `elsewhere` that is still the object itself. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
 
 ### metadata scanning
 
