@@ -322,6 +322,55 @@ fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, P
     Ok((server, two, cache))
 }
 
+/// a copy whose cache has no list of what its zip holds cannot tell the zip's files from others:
+/// status says they are not checked, never that the zip, which no sync places, is missing, nor
+/// that the files it placed are extra, and writes nothing. a file of the person's own beside them
+/// is still extra.
+#[test]
+fn status_of_a_copied_zip_says_its_files_are_not_checked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (_server, two, cache) = copied_zip(&sandbox, 1)?;
+    // an edit of data.toml unsettles the copy, so status compares each file
+    let manifest = two.join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{written}\n# copied to another machine\n"),
+    )?;
+    fs::write(
+        two.join("data").join("dataset").join("notes.txt"),
+        b"mine\n",
+    )?;
+    let state = fs::read(two.join(".fetchloom").join("state"))?;
+    let status = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let document = json(&status(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(
+        result["not_unpacked"],
+        serde_json::json!(["data/dataset/dataset.zip"])
+    );
+    assert_eq!(
+        (&result["extra"], &result["missing"]),
+        (
+            &serde_json::json!(["data/dataset/notes.txt"]),
+            &serde_json::json!([])
+        )
+    );
+    let output = status(&["status"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        text(&output.stdout)?,
+        "      Extra data/dataset/notes.txt\n  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+    );
+    assert_eq!(fs::read(two.join(".fetchloom").join("state"))?, state);
+    Ok(())
+}
+
 /// push downloads the pinned zip the copy's cache lacks, as a sync would, says so, and pushes
 /// what it holds with their list, so a fresh clone then syncs from the mirror alone. no file or
 /// pin of the copy changes.

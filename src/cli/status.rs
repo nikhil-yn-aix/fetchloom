@@ -654,8 +654,22 @@ fn compare(
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
     let going =
         going.get_or_insert_with(|| place::going(survey, targets, &planned.unknown, &project.root));
+    // what fetchloom placed of a dataset whose archive's list this machine lacks may be that
+    // archive's files, which only the list tells, so it is neither extra nor going
+    let unsure: HashSet<&str> = planned
+        .unknown
+        .iter()
+        .map(|(dataset, _)| *dataset)
+        .collect();
     (status.unneeded, status.extra) = extra(survey, &wanted)
         .into_iter()
+        .filter(|path| {
+            !survey
+                .state
+                .files
+                .get(path)
+                .is_some_and(|placed| unsure.contains(placed.dataset.as_str()))
+        })
         .partition(|path| going.contains(path));
     Ok(())
 }
@@ -828,8 +842,10 @@ fn list(output: &Output, status: &Status) {
     }
     for archive in &status.not_unpacked {
         output.report(
-            "Missing",
-            &format!("{archive} · not unpacked on this machine yet"),
+            "Unchecked",
+            &format!(
+                "{archive} · this machine has no list of the files it holds, so they are not checked"
+            ),
         );
     }
     for name in &status.unbuilt {
