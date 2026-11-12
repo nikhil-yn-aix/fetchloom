@@ -48,6 +48,22 @@ $ fetchloom add http://127.0.0.1:19353/many.tar.gz
   hint: scripts can find it with `fetchloom path many`
 ```
 
+## dry runs
+
+`add --dry-run` with a link asks its server nothing: it checks the link's spelling and what data.toml would hold, and says `size unknown`. what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses. from real runs against a server on this machine, where `--json` counted 0 requests for the dry run:
+
+```sh
+$ fetchloom add --dry-run http://127.0.0.1:19354/many/
+  Would pin many, new in data.lock: http://127.0.0.1:19354/many/ · 1 file · size unknown
+Would fetch many/many · size unknown
+Would place data/many · 1 file
+  Would add many to data.toml, its files in data/many
+         Ok dry run, nothing was changed
+$ fetchloom add http://127.0.0.1:19354/many/
+error: http://127.0.0.1:19354/many/ answered with a web page, such as a folder listing, not a file
+  help: open it in a browser, copy the link of each file you want, and give fetchloom those links
+```
+
 ## pins
 
 a plain URL records the parsed URL as both `resolved` and the file's download URL. SHA-256 and size pin its bytes, even though the URL can later change. DOI pins follow the source to which the handle routes.
