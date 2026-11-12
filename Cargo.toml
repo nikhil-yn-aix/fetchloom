@@ -108,7 +108,7 @@ reflink-copy = { version = "0.1", default-features = false }
 tokio = { version = "1.54", features = ["process"] }
 winapi-util = "0.1"
 # safe volume filesystem names for the optional placement worker policy
-sysinfo = { version = "0.37", default-features = false, features = ["disk"] }
+sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
 
 [dev-dependencies]
 # 7z archives for tests, written by the same crate that reads them. aes256 stays off: features
