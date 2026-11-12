@@ -159,12 +159,17 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
 }
 
 /// the project files a person commits: data.lock.d as well when a recipe's result or a big
-/// dataset keeps its file list there, since a clone without it cannot read data.lock.
+/// dataset keeps its file list there, since a clone without it cannot read data.lock, and in a
+/// git repository the .gitignore beside data.toml, where fetchloom keeps the data folder out.
 pub(super) fn committed(project: &Project) -> &'static str {
-    if project.root.join(lock::lists::FOLDER).is_dir() {
-        "data.toml, data.lock and data.lock.d"
-    } else {
-        "data.toml and data.lock"
+    let lists = project.root.join(lock::lists::FOLDER).is_dir();
+    let ignore =
+        Project::repository(&project.root).is_some() && project.root.join(".gitignore").is_file();
+    match (lists, ignore) {
+        (true, true) => "data.toml, data.lock, data.lock.d and .gitignore",
+        (true, false) => "data.toml, data.lock and data.lock.d",
+        (false, true) => "data.toml, data.lock and .gitignore",
+        (false, false) => "data.toml and data.lock",
     }
 }
 

@@ -2796,3 +2796,35 @@ fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
     }
     Ok(())
 }
+
+/// in git, the add that starts a project writes a .gitignore beside data.toml that keeps the data
+/// folder out, so the commit it suggests names that file too, and committing what it names leaves
+/// nothing untracked. outside git no .gitignore is written or named, as
+/// `the_next_step_is_told_only_at_a_terminal` shows.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    sandbox.allow(&server.url);
+    let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(
+            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom sync`\n"
+        ),
+        "{screen}"
+    );
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", ".gitignore"])?;
+    let left = crate::merge::git(&sandbox, &sandbox.work(), &["status", "--porcelain"])?
+        .ok_or("no git")?;
+    assert_eq!(
+        text(&left.stdout)?,
+        "A  .gitignore\nA  data.lock\nA  data.toml\n"
+    );
+    Ok(())
+}

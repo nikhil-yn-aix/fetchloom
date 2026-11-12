@@ -127,7 +127,7 @@ fetchloom sync
 
 `sync` downloads what is missing and checks every download against `data.lock`, so you get the same bytes. files it already verified are reused without hashing them again; `fetchloom cache verify` rehashes the cache when you want to be sure.
 
-with git, `add` already put `data/` in `.gitignore` when the folder was a git repository. if you start git later, run `git init` and then `fetchloom sync`, which writes `.gitignore`. then:
+with git, `add` already put `data/` in `.gitignore` when the folder was a git repository, and its `next:` line then says `commit data.toml, data.lock and .gitignore`. if you start git later, run `git init` and then `fetchloom sync`, which writes `.gitignore`. then:
 
 ```sh
 git add data.toml data.lock .gitignore
