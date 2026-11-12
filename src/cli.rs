@@ -966,7 +966,7 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
         already_stopped,
         tokio::signal::ctrl_c(),
         move || {
-            first_ctrl_c(&stopping.stop, |heard| tell_heard(&stopping.output, heard));
+            heard_first(&stopping.stop, &stopping.output);
         },
         move || {
             // a step's process group ends with fetchloom, so nothing it started runs on
@@ -979,24 +979,24 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
     Ok(runtime)
 }
 
-/// what a first ctrl-c does: stops the run, `tell`ing the person before any task sees the stop,
-/// so no line the stopping work prints comes first, or lets it finish where it has marked its
-/// work as finishing or only the disk is left. says which it did.
+/// what a first ctrl-c does: stops the run, or lets it finish where it has marked its work as
+/// finishing or only the disk is left, as [`Stop::hear`] decides, then `tell`s the person which,
+/// so the work sees a stop by the time `Stopping` shows. says which it did.
 fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) -> Heard {
     let heard = stop.hear();
     tell(heard);
-    if heard == Heard::Stop {
-        stop.ask();
-    }
     heard
 }
 
-fn tell_heard(output: &Output, heard: Heard) {
-    match heard {
-        Heard::Stop => output.stopping(),
-        Heard::Started => output.finishing(),
-        Heard::Downloaded(count) => output.finishing_downloads(count),
-    }
+/// a first ctrl-c, told on `output` while every other line waits, so none that the stopping work
+/// tells comes before `Stopping`.
+fn heard_first(stop: &Stop, output: &Output) -> Heard {
+    let mut alone = output.alone();
+    first_ctrl_c(stop, |heard| match heard {
+        Heard::Stop => alone.stopping(),
+        Heard::Started => alone.finishing(),
+        Heard::Downloaded(count) => alone.finishing_downloads(count),
+    })
 }
 
 /// what ctrl-c does: at the first press, or at once when one came `already`, `stopping` asks the
@@ -1463,21 +1463,57 @@ mod tests {
         assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
     }
 
-    /// a first ctrl-c tells the person before any task sees the stop, so a stopped command's
-    /// own last lines never come before `Stopping`, as they did when a busy machine ran the
-    /// stopped work first. a run past its mark is not stopped but told it finishes.
+    /// a first ctrl-c asks the stop before it tells the person, so once `Stopping` shows, the
+    /// work sees the stop: a test that waited for the line once found the work done anyway. a run
+    /// past its mark is not stopped but told it finishes.
     #[test]
-    fn a_first_ctrl_c_is_told_before_the_work_sees_it() {
+    fn a_first_ctrl_c_is_told_once_the_work_can_see_it() {
         let stop = Stop::default();
         let mut seen = Vec::new();
         first_ctrl_c(&stop, |heard| seen.push((heard, stop.is_asked())));
-        assert_eq!(seen, [(Heard::Stop, false)]);
-        assert!(stop.is_asked());
+        assert_eq!(seen, [(Heard::Stop, true)]);
         let finished = Stop::default();
         finished.finish();
         first_ctrl_c(&finished, |heard| seen.push((heard, finished.is_asked())));
         assert_eq!(seen[1..], [(Heard::Started, false)]);
         assert!(!finished.is_asked());
+    }
+
+    /// work that tells its last line as soon as it sees a stop tells it after `Stopping`, since
+    /// the stop is asked before that line while every other line waits for it.
+    #[test]
+    fn a_line_told_once_the_stop_is_seen_follows_stopping() {
+        let output = Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        let stop = Stop::default();
+        std::thread::scope(|scope| {
+            let work = scope.spawn(|| {
+                let waiting = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap();
+                waiting.block_on(stop.asked());
+                output.say("    Stopped at your request");
+            });
+            assert_eq!(heard_first(&stop, &output), Heard::Stop);
+            work.join().unwrap();
+        });
+        assert_eq!(
+            output.said(),
+            [
+                "   Stopping (press ctrl-c again to quit at once)",
+                "    Stopped at your request",
+            ]
+        );
     }
 
     #[test]

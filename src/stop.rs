@@ -34,8 +34,8 @@ const LET_FINISH: u8 = 4;
 /// what a first ctrl-c does to the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Heard {
-    /// the work stops. the caller tells the person first, then asks the stop with [`Stop::ask`],
-    /// so no line the stopping work prints comes before it.
+    /// the work stops: [`Stop::hear`] asked it, and the caller tells the person while every
+    /// other line waits, so no line the stopping work prints comes before it.
     Stop,
     /// the work had marked itself as finishing, so it runs to its end.
     Started,
@@ -90,18 +90,25 @@ impl Stop {
         }
     }
 
-    /// decides what a first ctrl-c does, and asks nothing yet: a run that marked its work as
-    /// finishing, or whose only downloads left have every byte in, finishes; any other stops,
-    /// once the caller has told the person and called [`Stop::ask`].
+    /// decides what a first ctrl-c does: a run that marked its work as finishing, or whose only
+    /// downloads left have every byte in, finishes; any other stops, and the stop is asked here,
+    /// before the caller tells the person, so once that line shows the work sees it. the choice
+    /// and the ask are made under the watch's lock, so a mark at the same moment comes wholly
+    /// before or after them.
     pub(crate) fn hear(&self) -> Heard {
-        let heard = if self.state.load(Ordering::SeqCst) & FINISHED != 0 {
-            Heard::Started
-        } else if let Some(writing) = self.only_writing() {
-            Heard::Downloaded(writing)
-        } else {
-            return Heard::Stop;
-        };
-        self.state.fetch_or(LET_FINISH, Ordering::SeqCst);
+        let mut heard = Heard::Stop;
+        self.asked.send_if_modified(|asked| {
+            if self.state.load(Ordering::SeqCst) & FINISHED != 0 {
+                heard = Heard::Started;
+            } else if let Some(writing) = self.only_writing() {
+                heard = Heard::Downloaded(writing);
+            } else {
+                self.state.fetch_or(ASKED, Ordering::SeqCst);
+                return !std::mem::replace(asked, true);
+            }
+            self.state.fetch_or(LET_FINISH, Ordering::SeqCst);
+            false
+        });
         heard
     }
 
@@ -244,13 +251,17 @@ mod tests {
 
     use super::*;
 
-    /// a first ctrl-c stops work that has not marked itself as finishing and lets work that has
-    /// run to its end, without asking a stop that would end it anyway.
+    /// a first ctrl-c stops work that has not marked itself as finishing, asking the stop before
+    /// the caller tells the person, and lets work that has run to its end, without asking a stop
+    /// that would end it anyway.
     #[test]
     fn a_ctrl_c_after_the_mark_lets_the_work_finish() {
         let stop = Stop::default();
         assert_eq!(stop.hear(), Heard::Stop);
-        assert!(!stop.is_asked(), "the caller asks once it told the person");
+        assert!(
+            stop.is_asked(),
+            "the work sees the stop before the person is told"
+        );
         let finished = Stop::default();
         finished.finish();
         assert_eq!(finished.hear(), Heard::Started);

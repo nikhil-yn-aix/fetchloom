@@ -180,7 +180,7 @@ impl Terminate {
             if terminate.recv().await.is_none() {
                 return;
             }
-            let heard = super::first_ctrl_c(&stop, |heard| super::tell_heard(&output, heard));
+            let heard = super::heard_first(&stop, &output);
             if heard == crate::stop::Heard::Stop {
                 step::end_running();
             }

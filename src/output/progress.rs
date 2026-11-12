@@ -1068,7 +1068,7 @@ mod tests {
         bar.start(Some(1000), 0);
         bar.advance(452);
         screen.0.lock().unwrap().clear();
-        output.stopping();
+        output.alone().stopping();
         let drawn = screen.0.lock().unwrap().join("\n");
         assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
     }

@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anstyle::Style as Paint;
@@ -42,7 +42,8 @@ pub(crate) struct Output {
     level: Level,
     json: bool,
     bars: Option<MultiProgress>,
-    /// lines told while a person answers a question, written once the answer is in.
+    /// lines told while a person answers a question, written once the answer is in. every line
+    /// is written while holding it, so a first ctrl-c holding it keeps all others back.
     held: Mutex<Option<Vec<String>>>,
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
@@ -67,9 +68,85 @@ pub(crate) struct Output {
     /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
     /// a ctrl-c comes, so that line is told once more at the end.
     closing: Mutex<(Option<String>, bool)>,
-    /// every line told, for tests.
+    /// every line told, in the order it went out, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
+}
+
+/// the output while a first ctrl-c is decided and told, from [`Output::alone`]: every other line
+/// waits until it is dropped, so a line told by work that sees the stop never comes first.
+pub(crate) struct Alone<'a> {
+    output: &'a Output,
+    held: MutexGuard<'a, Option<Vec<String>>>,
+}
+
+impl Alone<'_> {
+    /// says that a first ctrl-c was heard, and what a second one does. every bar says it is
+    /// stopping from then on.
+    pub(crate) fn stopping(&mut self) {
+        let output = self.output;
+        output.stopping.store(true, Ordering::Relaxed);
+        self.heard("Stopping", "(press ctrl-c again to quit at once)");
+        // each bar says so now, not at its next tick, which a busy machine can put off
+        let drawn = output
+            .drawn
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for bar in drawn.iter().filter_map(indicatif::WeakProgressBar::upgrade) {
+            bar.tick();
+        }
+    }
+
+    /// says that a first ctrl-c was heard once the run had marked its work as finishing, so it
+    /// finishes, and what a second one does. a closing line told before it is told again at the
+    /// end.
+    pub(crate) fn finishing(&mut self) {
+        {
+            let mut closing = self
+                .output
+                .closing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            closing.1 = closing.0.is_some();
+        }
+        self.heard(
+            "Finishing",
+            "what it started (ctrl-c again to quit at once)",
+        );
+    }
+
+    /// says that a first ctrl-c came once every byte of `count` downloads was in and the disk
+    /// only keeps them, so the run finishes rather than download them again next time.
+    pub(crate) fn finishing_downloads(&mut self, count: usize) {
+        let which = if count == 1 {
+            "the download is"
+        } else {
+            "the downloads are"
+        };
+        self.heard(
+            "Finishing",
+            &format!("({which} complete; ctrl-c again to quit at once)"),
+        );
+    }
+
+    /// a line told as a ctrl-c is heard, which clears what the terminal echoed of it. a question
+    /// waiting for its answer keeps it with the lines it holds.
+    fn heard(&mut self, verb: &str, text: &str) {
+        let output = self.output;
+        if output.tells(Level::Normal) {
+            let line = output.prepared(&output.over_echo(&verb_line(
+                verb,
+                text,
+                Tone::Warn,
+                output.style.color,
+            )));
+            match self.held.as_mut() {
+                Some(waiting) => waiting.push(line),
+                None => output.write_lines(&[line]),
+            }
+        }
+    }
 }
 
 /// work told once it lasts, as [`Output::lasting`] makes it, until dropped.
@@ -890,69 +967,26 @@ impl Output {
         bars.set_draw_target(ProgressDrawTarget::hidden());
         let answer = ask();
         bars.set_draw_target(progress::terminal());
-        let held = self
-            .held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .unwrap_or_default();
-        bars.suspend(|| {
-            for line in &held {
-                write_line(self.style.color, line);
-            }
-        });
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let lines = held.take().unwrap_or_default();
+        self.write_lines(&lines);
         answer
     }
 
-    /// says that a first ctrl-c was heard, and what a second one does. every bar says it is
-    /// stopping from then on.
-    pub(crate) fn stopping(&self) {
-        self.stopping.store(true, Ordering::Relaxed);
-        self.heard("Stopping", "(press ctrl-c again to quit at once)");
-        // each bar says so now, not at its next tick, which a busy machine can put off
-        let drawn = self
-            .drawn
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        for bar in drawn.iter().filter_map(indicatif::WeakProgressBar::upgrade) {
-            bar.tick();
+    /// the output for a first ctrl-c to decide and tell what it does, every other line waiting
+    /// meanwhile, so the stop can be asked before `Stopping` shows without any line the stopping
+    /// work tells coming first.
+    pub(crate) fn alone(&self) -> Alone<'_> {
+        Alone {
+            output: self,
+            held: self.held.lock().unwrap_or_else(PoisonError::into_inner),
         }
     }
 
-    /// says that a first ctrl-c was heard once the run had marked its work as finishing, so it
-    /// finishes, and what a second one does. a closing line told before it is told again at the
-    /// end.
+    /// says that the run finishes after all, as when a stop came after its last look for one but
+    /// before it marked its work as finishing, and what a second ctrl-c does.
     pub(crate) fn finishing(&self) {
-        {
-            let mut closing = self.closing.lock().unwrap_or_else(PoisonError::into_inner);
-            closing.1 = closing.0.is_some();
-        }
-        self.heard(
-            "Finishing",
-            "what it started (ctrl-c again to quit at once)",
-        );
-    }
-
-    /// says that a first ctrl-c came once every byte of `count` downloads was in and the disk
-    /// only keeps them, so the run finishes rather than download them again next time.
-    pub(crate) fn finishing_downloads(&self, count: usize) {
-        let which = if count == 1 {
-            "the download is"
-        } else {
-            "the downloads are"
-        };
-        self.heard(
-            "Finishing",
-            &format!("({which} complete; ctrl-c again to quit at once)"),
-        );
-    }
-
-    /// a line told as a ctrl-c is heard, which clears what the terminal echoed of it.
-    fn heard(&self, verb: &str, text: &str) {
-        if self.tells(Level::Normal) {
-            self.line(&self.over_echo(&verb_line(verb, text, Tone::Warn, self.style.color)));
-        }
+        self.alone().finishing();
     }
 
     /// `line`, clearing its own line first at a terminal, which echoes `^C` where its cursor
@@ -1002,18 +1036,38 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let text = self.at_start(&shown(text, self.style.unicode));
-        #[cfg(test)]
-        self.said
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(text.clone());
+        let text = self.prepared(text);
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(waiting) = held.as_mut() {
             waiting.push(text);
             return;
         }
-        let write = || write_line(self.style.color, &text);
+        // still holding `held`, so lines go out in the order they were told
+        self.write_lines(&[text]);
+    }
+
+    /// `text` as a line goes out: its symbols as the terminal shows them, from the start of the
+    /// line.
+    fn prepared(&self, text: &str) -> String {
+        self.at_start(&shown(text, self.style.unicode))
+    }
+
+    /// writes `lines` on stderr below the bars. callers hold `held`, so no other line comes
+    /// between.
+    fn write_lines(&self, lines: &[String]) {
+        if lines.is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        self.said
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(lines);
+        let write = || {
+            for line in lines {
+                write_line(self.style.color, line);
+            }
+        };
         match &self.bars {
             Some(bars) => bars.suspend(write),
             None => write(),
@@ -2564,8 +2618,8 @@ mod tests {
     fn a_line_told_at_a_ctrl_c_clears_the_echo() {
         let stopping = "   Stopping (press ctrl-c again to quit at once)";
         let terminal = telling(true);
-        terminal.stopping();
-        terminal.finishing_downloads(1);
+        terminal.alone().stopping();
+        terminal.alone().finishing_downloads(1);
         terminal.done("Added", "late, its files are in data/late");
         assert_eq!(
             terminal.said(),
@@ -2577,7 +2631,7 @@ mod tests {
             ]
         );
         let piped = telling(false);
-        piped.stopping();
+        piped.alone().stopping();
         assert_eq!(piped.said(), [stopping]);
     }
 
