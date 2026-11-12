@@ -263,10 +263,17 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
 /// `usage` when neither names one, or `--to` names a web address.
 fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     let Some(to) = &args.to else {
-        return context.settings.push_to.value.clone().ok_or_else(|| {
-            Error::new(Kind::Usage, "push needs a folder to copy the files into").help(
-                "give --to <folder>, or set push_to in the settings file to a mirror's folder",
-            )
+        let push_to = &context.settings.push_to;
+        return push_to.value.clone().ok_or_else(|| {
+            let error = Error::new(Kind::Usage, "push needs a folder to copy the files into");
+            // only an empty variable clears push_to with nothing in its place
+            if push_to.origin == crate::settings::Origin::Environment {
+                error.help("FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder>, or unset FETCHLOOM_PUSH_TO")
+            } else {
+                error.help(
+                    "give --to <folder>, or set push_to in the settings file to a mirror's folder",
+                )
+            }
         });
     };
     // a web address is text, so a name that is not is a folder
@@ -1484,6 +1491,48 @@ run = ["python3", "report.py", "{clean}", "{out}"]
 
     fn names(selected: &[String]) -> Vec<&str> {
         selected.iter().map(String::as_str).collect()
+    }
+
+    /// with no `--to`, an empty `FETCHLOOM_PUSH_TO` is named as what cleared `push_to`, rather
+    /// than sending a person to set `push_to` in a settings file that may already set it.
+    #[test]
+    fn an_empty_push_to_variable_is_named_as_what_cleared_the_folder() {
+        let mut context = Context::new(crate::output::Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            crate::output::Level::Quiet,
+            false,
+            false,
+        ));
+        let args = args::Push {
+            names: Vec::new(),
+            to: None,
+            inputs: false,
+            dry: args::DryRun { dry_run: false },
+        };
+        let error = target(&context, &args).unwrap_err();
+        assert_eq!(
+            error.help.as_deref(),
+            Some("give --to <folder>, or set push_to in the settings file to a mirror's folder")
+        );
+        context.settings.push_to = crate::settings::Set {
+            value: None,
+            origin: crate::settings::Origin::Environment,
+        };
+        let error = target(&context, &args).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(error.message, "push needs a folder to copy the files into");
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder>, or unset FETCHLOOM_PUSH_TO"
+            )
+        );
     }
 
     /// `--inputs` adds what the named recipes are made from, all the way down, and nothing else.
