@@ -26,31 +26,11 @@ const PATIENCE: Duration = Duration::from_secs(10);
 pub(crate) fn find(path: Option<&OsStr>, project: &Path) -> Option<PathBuf> {
     let name = if cfg!(windows) { "git.exe" } else { "git" };
     let project = project.canonicalize().ok()?;
-    std::env::split_paths(path?)
-        .filter(|folder| folder.is_absolute())
-        .map(|folder| folder.join(name))
-        .find(|program| runnable(program))
-        .filter(|program| {
-            program
-                .canonicalize()
-                .is_ok_and(|real| !real.starts_with(&project))
-        })
-}
-
-/// whether `program` is a file this user may run.
-fn runnable(program: &Path) -> bool {
-    let Ok(found) = program.metadata() else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        found.is_file() && found.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        found.is_file()
-    }
+    crate::machine::installed(path?, name).filter(|program| {
+        program
+            .canonicalize()
+            .is_ok_and(|real| !real.starts_with(&project))
+    })
 }
 
 /// a file as each side of an unfinished merge has it, and as their merge base had it.

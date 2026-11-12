@@ -1,10 +1,10 @@
 //! what this machine gives a run: its processors, the memory a run may use and how many files the
-//! process may hold open. read once, when a run starts.
+//! process may hold open, read once when a run starts, and the programs on its PATH.
 
+use std::ffi::OsStr;
 #[cfg(any(target_os = "linux", test))]
 use std::fs;
-#[cfg(any(target_os = "linux", test))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// the open files a run asks for when its soft limit is lower, as many downloads, archive
 /// writers and placement workers can hold a file each. uv, openjdk and graalvm stop here too:
@@ -167,6 +167,32 @@ fn raise_open_files() -> Option<u64> {
     None
 }
 
+/// the program `file` in the first absolute folder of `path`, a PATH value, that holds it as a
+/// file this user may run. a relative folder is passed over, since it would be whatever folder
+/// fetchloom runs in.
+pub(crate) fn installed(path: &OsStr, file: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|folder| folder.is_absolute())
+        .map(|folder| folder.join(file))
+        .find(|program| runnable(program))
+}
+
+/// whether `program` is a file this user may run: on unix, one with an execute bit set.
+fn runnable(program: &Path) -> bool {
+    let Ok(found) = program.metadata() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        found.is_file() && found.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        found.is_file()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +324,44 @@ mod tests {
             limit >= hard.min(OPEN_MAX),
             "{limit} against a hard limit of {hard}"
         );
+    }
+
+    /// a program is the first file by its name this user may run in an absolute folder of PATH,
+    /// in PATH's order. a relative folder, a folder by that name and, on unix, a file with no
+    /// execute bit are passed over.
+    #[test]
+    fn a_program_is_the_first_runnable_file_in_an_absolute_folder_of_path() {
+        let root = tempfile::tempdir().unwrap();
+        let [plain, folder, first, second] = ["plain", "folder", "first", "second"].map(|name| {
+            let at = root.path().join(name);
+            fs::create_dir(&at).unwrap();
+            at
+        });
+        fs::create_dir(folder.join("tool")).unwrap();
+        for at in [&plain, &first, &second] {
+            fs::write(at.join("tool"), "#!/bin/sh\n").unwrap();
+        }
+        #[cfg(unix)]
+        for at in [&first, &second] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(at.join("tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let relative = Path::new("relative");
+        let plain_runs = (!cfg!(unix)).then(|| plain.join("tool"));
+        let cases: [(&[&Path], Option<PathBuf>); 6] = [
+            (&[], None),
+            (&[relative], None),
+            (&[&folder], None),
+            (&[&plain], plain_runs),
+            (
+                &[&folder, relative, &first, &second],
+                Some(first.join("tool")),
+            ),
+            (&[&second, &first], Some(second.join("tool"))),
+        ];
+        for (folders, program) in cases {
+            let path = std::env::join_paths(folders).unwrap();
+            assert_eq!(installed(&path, "tool"), program, "{folders:?}");
+        }
     }
 }

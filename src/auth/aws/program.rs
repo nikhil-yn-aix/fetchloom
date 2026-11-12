@@ -529,26 +529,7 @@ fn installed(name: &str, var: Var<'_>) -> Option<PathBuf> {
     } else {
         name.to_owned()
     };
-    std::env::split_paths(&var("PATH")?)
-        .filter(|folder| folder.is_absolute())
-        .map(|folder| folder.join(&file))
-        .find(|program| runnable(program))
-}
-
-/// whether `program` is a file this user may run.
-fn runnable(program: &Path) -> bool {
-    let Ok(found) = program.metadata() else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        found.is_file() && found.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        found.is_file()
-    }
+    crate::machine::installed(&var("PATH")?, &file)
 }
 
 #[cfg(test)]
