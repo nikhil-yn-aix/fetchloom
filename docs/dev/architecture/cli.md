@@ -29,6 +29,7 @@ command handlers order effects across modules. `Context` reads settings once and
 | [fetch.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch.rs), [fetch/again.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/again.rs) | bounded transfer scheduling and expired-link recovery | `Job`, `all`, `apart`, `listed_job`, `Again`, `Listings`, `recover` |
 | [fetch/data_folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/data_folder.rs) | pinned files the data folder holds, copied into the cache when it lacks them, before any mirror is asked | `DataFolder`, `found`, `planned`, `holds`, `may_hold`, `take` |
 | [help.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/help.rs), [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) | help and argument errors | `show`, `answer` |
+| [completions.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/completions.rs) | shell completion scripts, and the dataset names they ask for after a name-taking command with the hidden `completions <shell> --names=<word> -- <words before it>`, which reads only data.toml | `print`, `script`, `names`, `with_names` |
 | [logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs) | debug events and trace-file lifetime | `Logs`, `start` |
 
 ## how it works

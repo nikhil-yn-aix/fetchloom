@@ -2309,7 +2309,7 @@ mod tests {
             ("auth", true, &[]),
             ("auth login", true, &["--host", "--with-token"]),
             ("auth logout", false, &[]),
-            ("completions", true, &[]),
+            ("completions", true, &["--names"]),
             ("help", true, &[]),
         ];
         let mut walked = Vec::new();
@@ -2355,8 +2355,11 @@ mod tests {
             .filter(|arg| arg.get_long().is_some_and(|long| long != "help"))
             .collect();
         let flag = |arg: &clap::Arg| format!("--{}", arg.get_long().unwrap_or_default());
+        // a positional only `--` reaches, as the words `completions --names` reads, would follow
+        // every option, and no command needs one
         let positionals: Vec<String> = command
             .get_positionals()
+            .filter(|arg| !arg.is_last_set())
             .map(|arg| values(arg).swap_remove(0))
             .collect();
         let mut companions = vec![String::new()];

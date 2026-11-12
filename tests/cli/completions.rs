@@ -1,4 +1,5 @@
-//! `fetchloom completions`: the script each shell loads to complete commands and options.
+//! `fetchloom completions`: the script each shell loads to complete commands, options and the
+//! names of datasets.
 
 use serde_json::Value;
 
@@ -166,5 +167,88 @@ fn bash_loads_the_script() -> Result {
     assert!(said.contains("-F _fetchloom fetchloom\n"), "{said}");
     assert!(said.contains("-F _fetchloom fl\n"), "{said}");
     assert!(said.lines().any(|line| line == "offered cache"), "{said}");
+    Ok(())
+}
+
+/// the bash script completes the names of the project's datasets after a command that takes them,
+/// read from data.toml alone, in the project and through -C, while a broken settings file is
+/// ignored. a command name, an option and a name outside any project complete as the static
+/// script does. skipped where bash is not installed.
+#[cfg(unix)]
+#[test]
+fn bash_completes_the_dataset_names_data_toml_has() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.iris]\nref = \"https://example.org/iris.csv\"\n\n[datasets.irises]\nref = \"https://example.org/irises.csv\"\n\n[datasets.cows]\nref = \"https://example.org/cows.csv\"\n",
+    )?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let settings = elsewhere.join("settings.toml");
+    std::fs::write(&settings, "jobs = \"many\"\n")?;
+    let script = elsewhere.join("fetchloom.bash");
+    std::fs::write(&script, sandbox.run(&["completions", "bash"])?.stdout)?;
+    let program = crate::support::executable();
+    let folder = program.parent().ok_or("the program has no folder")?;
+    let path = std::env::join_paths(std::iter::once(folder.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))?;
+    let home = sandbox
+        .work()
+        .parent()
+        .ok_or("work has no folder")?
+        .to_path_buf();
+    let offered = |here: &std::path::Path, words: &str| -> Result<Vec<String>> {
+        let complete = format!(
+            r#". "$1" && COMP_WORDS=({words}) && COMP_CWORD=$((${{#COMP_WORDS[@]}} - 1)) &&
+            _fetchloom fetchloom "${{COMP_WORDS[COMP_CWORD]}}" "${{COMP_WORDS[COMP_CWORD - 1]}}" &&
+            printf 'offered %s\n' "${{COMPREPLY[@]}}""#
+        );
+        let output = match std::process::Command::new("bash")
+            .arg("-c")
+            .arg(complete)
+            .arg("bash")
+            .arg(&script)
+            .current_dir(here)
+            .env("PATH", &path)
+            .env("FETCHLOOM_SETTINGS", &settings)
+            .env("HOME", &home)
+            .output()
+        {
+            Ok(output) => output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        Ok(text(&output.stdout)?
+            .lines()
+            .filter_map(|line| line.strip_prefix("offered "))
+            .filter(|offer| !offer.is_empty())
+            .map(str::to_owned)
+            .collect())
+    };
+    let work = sandbox.work();
+    if offered(&work, "fetchloom ca")?.is_empty() {
+        return Ok(());
+    }
+    assert_eq!(offered(&work, "fetchloom path ir")?, ["iris", "irises"]);
+    for words in [
+        "fetchloom sync cows ir",
+        "fetchloom remove ir",
+        "fetchloom build --dry-run ir",
+        "fetchloom lock --upgrade ir",
+    ] {
+        assert_eq!(offered(&work, words)?, ["iris", "irises"], "{words}");
+    }
+    let through = format!("fetchloom -C {} path ir", work.display());
+    assert_eq!(offered(&elsewhere, &through)?, ["iris", "irises"]);
+    // a shell leaves the ~ of the words it completes for the program to read
+    let tilde = "fetchloom -C '~/work' path ir";
+    assert_eq!(offered(&elsewhere, tilde)?, ["iris", "irises"]);
+    assert_eq!(offered(&work, "fetchloom ca")?, ["cache"]);
+    assert_eq!(offered(&work, "fetchloom sync --lo")?, ["--locked"]);
+    assert_eq!(
+        offered(&elsewhere, "fetchloom path ir")?,
+        Vec::<String>::new()
+    );
     Ok(())
 }

@@ -32,7 +32,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, and `-n` previews; `cache verify` hashes every cached file
 - [settings](docs/user/commands/settings.md): each setting's value and where it came from
 - [auth](docs/user/commands/auth.md): `auth login` signs in once, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; `auth logout` signs out, with `--host` too
-- [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish
+- [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish, dataset names included
 
 ## guides
 

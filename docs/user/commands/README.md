@@ -22,7 +22,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
 | [`settings`](settings.md) | show each setting, its value and where it came from | check what a run will use, and why |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
-| [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
+| [`completions`](completions.md) | print a shell completion script | let your shell complete commands, options and dataset names |
 | `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy, then recipes, `place = false`, mirrors and how to edit a dataset's files | learn the [project model](../concepts.md) |
 | `help recipes` | show how to write a recipe in data.toml, with an example to copy | write your first [recipe](../recipes.md) at the terminal |
 | `help environment`, `help exit-codes` | summarize settings, or explain what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |

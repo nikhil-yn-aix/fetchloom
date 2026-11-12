@@ -1,6 +1,6 @@
 # completions
 
-`completions` prints a script that lets your shell complete fetchloom's commands, options and option values when you press tab.
+`completions` prints a script that lets your shell complete fetchloom's commands, options, option values and the names of your datasets when you press tab.
 
 ```sh
 fetchloom completions zsh
@@ -16,7 +16,7 @@ fetchloom completions [options] <shell>
 
 ## loading the script
 
-the steps below make completions permanent: each saves the script where the shell looks, or adds one line to the shell's startup file. a saved script describes the version that wrote it, so write it again after upgrading fetchloom.
+the steps below make completions permanent: each saves the script where the shell looks, or adds one line to the shell's startup file. a saved script describes the version that wrote it, so write it again after upgrading fetchloom. a script an older version wrote keeps completing commands and options, but completes dataset names only once it is written again.
 
 powershell, in the file `$PROFILE` names. the first line creates the file only when it is missing:
 
@@ -58,7 +58,7 @@ fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
 
 elvish: add `eval (fetchloom completions elvish | slurp)` to `~/.config/elvish/rc.elv`.
 
-open a new terminal afterwards. typing `fetchloom ca` and pressing tab then completes `cache`, and `fetchloom cache ` offers `gc` and `verify`.
+open a new terminal afterwards. typing `fetchloom ca` and pressing tab then completes `cache`, and `fetchloom cache ` offers `gc` and `verify`. in a project whose data.toml has `iris`, `fetchloom path ir` completes `iris`.
 
 ## completing fl
 
@@ -73,11 +73,15 @@ zsh keeps the commands each script completes in `~/.zcompdump` and reads them ag
 
 ## what it completes
 
-the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and paths after options such as `-C`, `-o` and `--dir`. they are written once from fetchloom's command line, so they do not complete dataset names or references.
+the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and paths after options such as `-C`, `-o` and `--dir`. these come from fetchloom's command line as it was when the script was written.
+
+after a command that takes a dataset's name, they also complete the names data.toml has: after `path`, `sync`, `remove`, `build`, `list`, `export` and `push`, and after `lock --upgrade`, `--ours` and `--theirs`. for those words the script asks fetchloom, which reads the data.toml of the project the current folder is in, or of the one `-C` names on the line you are completing, `~` included. it reads nothing else and writes nothing: no network, no settings, no data.lock. outside a project, or for a word that is no name, such as an option or the file in `iris/train.csv`, the script completes as it would without names. `add --as` names a new dataset, so it gets no names, and references are never completed.
+
+asking runs fetchloom once per tab, and only after those commands. it reads data.toml's `[datasets.<name>]` lines, the way fetchloom writes them, instead of parsing the whole file, so even 10,000 datasets answer in about 10 ms. a data.toml written another way is parsed whole, which takes about 50 ms at that size.
 
 ## settings it ignores
 
-a shell profile runs `completions` on every start, so it runs before fetchloom reads `-C`, `FETCHLOOM_JOBS`, `FETCHLOOM_THREADS` or `FETCHLOOM_RATE`. a value that would stop another command, or a missing folder after `-C`, never stops a shell from starting.
+a shell profile runs `completions` on every start, so it runs before fetchloom reads `-C`, `FETCHLOOM_JOBS`, `FETCHLOOM_THREADS` or `FETCHLOOM_RATE`. a value that would stop another command, or a missing folder after `-C`, never stops a shell from starting. completing a dataset's name reads no settings either, so a broken settings file never stops it.
 
 ## exit codes
 

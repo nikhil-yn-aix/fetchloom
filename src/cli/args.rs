@@ -1139,6 +1139,15 @@ pub(crate) struct Completions {
     /// the shell that loads the script
     #[arg(value_name = "shell", value_enum, help_heading = "arguments")]
     pub(crate) shell: clap_complete::Shell,
+
+    /// for the scripts: the dataset names that complete this word, after the words after --
+    #[arg(long, hide = true, value_name = "word")]
+    pub(crate) names: Option<String>,
+
+    /// a command line as the shell holds it, from the word after the program's name to the one
+    /// before the word being completed
+    #[arg(last = true, hide = true, value_name = "word")]
+    pub(crate) words: Vec<String>,
 }
 
 /// explain the ideas behind fetchloom, or one command

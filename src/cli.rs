@@ -591,7 +591,7 @@ pub(crate) fn run() -> ExitCode {
     // a shell profile loads the script on every start, so no setting fetchloom reads for its
     // work may stop it
     if let Some(args::Command::Completions(asked)) = &args.command {
-        return completions::print(&context, asked.shell, started);
+        return completions::print(&context, asked, started);
     }
     let name = args.command.as_ref().map(args::Command::name);
     let _command = tracing::debug_span!("command", name).entered();
@@ -897,7 +897,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = block_on(context, auth::run(context, args));
             finish(context, name, outcome, started)
         }
-        args::Command::Completions(asked) => completions::print(context, asked.shell, started),
+        args::Command::Completions(asked) => completions::print(context, &asked, started),
         args::Command::Help(asked) => help::show(context, &asked.topic, started),
     }
 }

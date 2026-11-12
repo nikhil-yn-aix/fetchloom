@@ -109,7 +109,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 | why a run uses some cache, mirror or limit | `fetchloom settings --json`: each setting's `value` and `origin` |
 | a run slow from a far server, or too big for a small or shared machine | `FETCHLOOM_RESOURCES=max` or `lean` before the command, for that run. a setting the user set by name still wins, and `fetchloom settings --json` gives what the level set `origin` `resources` |
 | a project copied with its data folder | run `sync`, `build` or `push` there as usual, `--offline` included: pinned files are copied into the new cache from the data folder once their SHA-256 matches, and `work.data_folder_objects` counts them |
-| shell completion | `fetchloom completions <shell>` for bash, zsh, fish, powershell or elvish; where the script goes is the user's choice |
+| shell completion | `fetchloom completions <shell>` for bash, zsh, fish, powershell or elvish completes commands, options and the dataset names in data.toml; where the script goes is the user's choice |
 
 ## python
 

@@ -61,4 +61,4 @@ the installer also makes `fl` in `~/.local/bin`, a link to fetchloom, so `fl syn
 alias fl=fetchloom
 ```
 
-put the alias in `~/.zshrc` to keep it in later sessions. [completions](commands/completions.md) shows how zsh and bash complete fetchloom's commands and options, under either name.
+put the alias in `~/.zshrc` to keep it in later sessions. [completions](commands/completions.md) shows how zsh and bash complete fetchloom's commands, options and dataset names, under either name.
