@@ -122,3 +122,106 @@ fn progress_tells_its_lines_beside_json() -> Result {
     );
     Ok(())
 }
+
+/// the lines a terminal `columns` wide shows once it has drawn `text`, as from `script`: each
+/// `\n` starts a line, and a character past the last column moves to the next line first.
+#[cfg(target_os = "linux")]
+fn shown_on(text: &str, columns: usize) -> Vec<String> {
+    let mut lines: Vec<Vec<char>> = vec![Vec::new()];
+    let (mut row, mut column, mut wrapping) = (0_usize, 0_usize, false);
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\n' => (row, column, wrapping) = (row + 1, 0, false),
+            '\r' => (column, wrapping) = (0, false),
+            '\u{1b}' if characters.peek() == Some(&'[') => {
+                characters.next();
+                let mut number = String::new();
+                let mut command = ' ';
+                for next in characters.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        command = next;
+                        break;
+                    }
+                    number.push(next);
+                }
+                let count = number.trim_start_matches('?').parse().unwrap_or(1).max(1);
+                wrapping = false;
+                match command {
+                    'A' => row = row.saturating_sub(count),
+                    'B' => row += count,
+                    'C' => column = (column + count).min(columns - 1),
+                    'D' => column = column.saturating_sub(count),
+                    'K' if number == "2" => lines.get_mut(row).map_or((), Vec::clear),
+                    'K' => lines.get_mut(row).map_or((), |line| line.truncate(column)),
+                    _ => {}
+                }
+            }
+            '\u{1b}' => {
+                // an operating system command, such as a link, ends at a bell or `ESC \`
+                while let Some(next) = characters.next() {
+                    if next == '\u{7}' || (next == '\u{1b}' && characters.next() == Some('\\')) {
+                        break;
+                    }
+                }
+            }
+            control if control.is_control() => {}
+            printed => {
+                if wrapping {
+                    (row, column, wrapping) = (row + 1, 0, false);
+                }
+                while lines.len() <= row {
+                    lines.push(Vec::new());
+                }
+                let line = &mut lines[row];
+                while line.len() <= column {
+                    line.push(' ');
+                }
+                line[column] = printed;
+                if column + 1 == columns {
+                    wrapping = true;
+                } else {
+                    column += 1;
+                }
+            }
+        }
+        while lines.len() <= row {
+            lines.push(Vec::new());
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| line.into_iter().collect::<String>().trim_end().to_owned())
+        .collect()
+}
+
+/// a stop leaves no frame of a download's bar behind on a terminal that echoes the ctrl-c, as
+/// most do: a bar drawn to the last column once left the cursor waiting to wrap, the echoed ^C
+/// wrapped onto a line of its own, and clearing the bar cleared that line instead.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stop_leaves_no_bar_behind() -> Result {
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    for columns in [100, 40] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::held_file("/files/big.bin", body.clone())?;
+        let get = sandbox.command(&["get", &server.url]);
+        let size = format!("rows 30 cols {columns}");
+        let Some((code, screen)) =
+            crate::support::typed(&sandbox.work(), &get, &size, "Downloading", "\u{3}")?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(130), "{screen:?}");
+        let shown = shown_on(&screen, columns);
+        assert!(
+            shown.iter().any(|line| line.contains("Stopping")),
+            "{columns}: {shown:#?}"
+        );
+        assert!(
+            !shown.iter().any(|line| line.contains("Downloading")),
+            "{columns}: {shown:#?}\n{screen:?}"
+        );
+    }
+    Ok(())
+}

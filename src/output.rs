@@ -156,7 +156,7 @@ impl Output {
         // indicatif colors through the console crate, which decides on its own unless told
         console::set_colors_enabled_stderr(style.color);
         let bars = (style.interactive && !json && !logs && level >= Level::Normal)
-            .then(MultiProgress::new);
+            .then(|| MultiProgress::with_draw_target(progress::terminal()));
         let output = Output {
             style,
             level,
@@ -773,7 +773,7 @@ impl Output {
         let _ = bars.clear();
         bars.set_draw_target(ProgressDrawTarget::hidden());
         let answer = ask();
-        bars.set_draw_target(ProgressDrawTarget::stderr());
+        bars.set_draw_target(progress::terminal());
         let held = self
             .held
             .lock()

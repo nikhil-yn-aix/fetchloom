@@ -79,6 +79,7 @@ flag help initializes the same palette as the `help` command. both apply `FETCHL
 
 - do not print directly from command handlers. renderer calls preserve stream routing and progress synchronization.
 - never depend on color alone to convey an error or completion.
+- bars draw only through `progress::terminal`, which puts the cursor back at the start of the last bar's line after each frame. indicatif pads every line to the last column, so the cursor would wait there to wrap, and the `^C` a terminal echoes at a stop would wrap onto a line of its own: clearing the bars then cleared that line and left the bar's last frame above `Stopping`. `a_stop_leaves_no_bar_behind` in tests/cli/progress.rs checks it in a terminal that echoes.
 - snapshot filters remove paths, ports, times and rates. inspect unfiltered output when changing a value those filters can hide.
 - literal error kinds are stable script interfaces. prose can improve without renaming them.
 - masked display URLs do not sanitize raw URL values stored elsewhere. semantic argument errors, such as an unknown auth account, need the same masking as clap errors.

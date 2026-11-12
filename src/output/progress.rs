@@ -7,7 +7,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use indicatif::{
+    MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle, TermLike,
+};
 
 use crate::units;
 
@@ -379,6 +381,75 @@ fn fraction(done: u64, total: u64) -> String {
             format!("{value}/{total}")
         }
         _ => format!("{done}/{total}"),
+    }
+}
+
+/// where bars draw: stderr, with the cursor back at the start of the last bar's line after each
+/// frame. indicatif pads every line to the last column, which leaves the cursor waiting to wrap,
+/// so the ^C a terminal echoes at a stop went onto a line of its own, and clearing the bars then
+/// cleared that line and left the bar's last frame on the screen.
+pub(super) fn terminal() -> ProgressDrawTarget {
+    let rested = Rested {
+        term: console::Term::buffered_stderr(),
+        drawn: AtomicBool::new(false),
+    };
+    ProgressDrawTarget::term_like_with_hz(Box::new(rested), 20)
+}
+
+#[derive(Debug)]
+struct Rested {
+    term: console::Term,
+    /// whether a frame was written since the last flush, which leaves the cursor past its end.
+    drawn: AtomicBool,
+}
+
+impl TermLike for Rested {
+    fn width(&self) -> u16 {
+        self.term.size().1
+    }
+
+    fn height(&self) -> u16 {
+        self.term.size().0
+    }
+
+    fn move_cursor_up(&self, n: usize) -> std::io::Result<()> {
+        self.term.move_cursor_up(n)
+    }
+
+    fn move_cursor_down(&self, n: usize) -> std::io::Result<()> {
+        self.term.move_cursor_down(n)
+    }
+
+    fn move_cursor_right(&self, n: usize) -> std::io::Result<()> {
+        self.term.move_cursor_right(n)
+    }
+
+    fn move_cursor_left(&self, n: usize) -> std::io::Result<()> {
+        self.term.move_cursor_left(n)
+    }
+
+    fn write_line(&self, s: &str) -> std::io::Result<()> {
+        self.term.write_line(s)
+    }
+
+    fn write_str(&self, s: &str) -> std::io::Result<()> {
+        if !s.is_empty() {
+            self.drawn.store(true, Ordering::Relaxed);
+        }
+        self.term.write_str(s)
+    }
+
+    fn clear_line(&self) -> std::io::Result<()> {
+        self.term.clear_line()
+    }
+
+    /// ends what indicatif drew or cleared; after a frame, the cursor goes back to its line's
+    /// start.
+    fn flush(&self) -> std::io::Result<()> {
+        if self.drawn.swap(false, Ordering::Relaxed) {
+            self.term.write_str("\r")?;
+        }
+        self.term.flush()
     }
 }
 
