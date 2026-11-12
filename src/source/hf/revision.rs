@@ -206,14 +206,14 @@ impl Repo {
     }
 
     /// the hub refused the key from `origin`, which went with the request: it is old or wrong.
-    /// no sign-in is offered, as the help says what replaces the key, and a key from a variable
-    /// would win over one a sign-in saves.
+    /// no sign-in is offered: the help says how to check a saved key, or what replaces a key from
+    /// a variable, which would win over one a sign-in saves.
     fn refused_key(&self, origin: &Origin) -> Error {
         let help = match origin {
             Origin::Variable(name) => format!(
                 "the key may be old or wrong: set {name} to a current key from {TOKENS}, or unset {name} to use the key `fetchloom auth login hf` saves"
             ),
-            _ => "the key may be old or wrong: sign in again with `fetchloom auth login hf`"
+            _ => "the key may be old or wrong: `fetchloom auth` shows where it comes from and whose it is"
                 .to_owned(),
         };
         Error::new(
@@ -297,7 +297,7 @@ fn sent_key() -> Option<Origin> {
 fn key(origin: &Origin) -> String {
     match origin {
         Origin::Variable(name) => format!("the key in {name}"),
-        origin => format!("the key saved in {origin}"),
+        origin => format!("the key saved in {}", origin.shown()),
     }
 }
 
@@ -312,8 +312,8 @@ mod tests {
     use crate::source::recorded::fixture_bytes;
 
     /// a refused key is named by where it comes from, never by its value: a variable, whose
-    /// replacement the help names, or the file a sign-in saved it to, which signing in again
-    /// replaces. no sign-in is offered for either.
+    /// replacement the help names, or the file a sign-in saved it to, which `fetchloom auth`
+    /// checks. no sign-in is offered for either.
     #[test]
     fn a_refused_key_is_named_by_where_it_comes_from() {
         let repo = Repo::parse("datasets/ILSVRC/imagenet-1k").unwrap();
@@ -338,7 +338,9 @@ mod tests {
         );
         assert_eq!(
             saved.help.as_deref(),
-            Some("the key may be old or wrong: sign in again with `fetchloom auth login hf`")
+            Some(
+                "the key may be old or wrong: `fetchloom auth` shows where it comes from and whose it is"
+            )
         );
         assert!(saved.need.is_none());
     }

@@ -71,7 +71,7 @@ sign in to hugging face now? [y/N] n
   Cancelled signing in to hugging face
 ```
 
-a command that is refused again once you signed in ends with that refusal as an error. `-q` prints the error above the question instead of the `Refused` line.
+a command that is refused again once you signed in ends with that refusal as an error, and so does any refusal while a key for the source is on this machine: signing in again is no remedy, so its help says the key was refused or has no access, and that `fetchloom auth` shows where the key comes from and whose it is; only terms to accept are still offered. a server that asks for a login over plain http gets no offer at all, since fetchloom sends a key only over https. `-q` prints the error above the question instead of the `Refused` line.
 
 `add` first asks the source, once, for the public datasets of the same owner, signed in or not. when one is a typo away, signing in could not help, so no sign-in is offered and the help gives your command with the name fixed; signed in, the error above it reads `hf:datasets/scikit-learn/irsi does not exist, or is not public`. a source that is busy, or whose rate limit is used up, gets no second try, so the error comes at once with no suggestion. `--json` and offline runs ask nothing more:
 
@@ -90,7 +90,7 @@ error: huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-st
   help: the key may be old or wrong: set HF_TOKEN to a current key from https://huggingface.co/settings/tokens, or unset HF_TOKEN to use the key `fetchloom auth login hf` saves
 ```
 
-a key saved by signing in is named by its file, and the help says to sign in again. no sign-in is offered for a key from a variable, which would still win over the key a sign-in saves.
+a key saved by signing in is named by its file, below your home folder as `~/…`, and the help says that `fetchloom auth` shows where it comes from and whose it is. no sign-in is offered for a key from a variable, which would still win over the key a sign-in saves.
 
 ## status
 

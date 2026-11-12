@@ -107,7 +107,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 let who = user
                     .as_ref()
                     .map_or_else(String::new, |user| format!(" as {user}"));
-                let text = format!("to {name}{who} \u{b7} {}", shown(&found.origin));
+                let text = format!("to {name}{who} \u{b7} {}", found.origin.shown());
                 if valid == Some(false) {
                     output.mark(
                         "Refused",
@@ -739,14 +739,6 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
         ),
         &fix,
     );
-}
-
-/// where a key comes from as a line names it, a file below the home folder as `~/…`.
-fn shown(origin: &Origin) -> String {
-    match origin {
-        Origin::File(path) => units::path(path),
-        origin => origin.to_string(),
-    }
 }
 
 /// the account as `fetchloom auth login` takes it, such as hf or earthdata, so the listing names

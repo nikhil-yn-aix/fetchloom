@@ -625,9 +625,11 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
         match offered {
             Some((Ok(true), command)) => {
                 outcome = dispatch(&context, command, Instant::now());
-                // signed in, the command is not offered a sign-in again
+                // signed in, the command is not offered a sign-in again; a key kept out of files,
+                // which `fetchloom auth` cannot show, is the one this refusal came with
                 if let Some(again) = context.refusal().filter(|again| !again.told) {
-                    context.output.error(&again.error);
+                    let error = with_key(again.error, "the key you signed in with", None);
+                    context.output.error(&error);
                 }
             }
             Some((Ok(false), _)) => {}
@@ -1142,7 +1144,9 @@ fn finish<T: Serialize>(
         Some(line) => error.naming(&line),
         None => error,
     });
-    let outcome = outcome.map_err(|error| stop_named(error, context.output.stopped_by()));
+    let outcome = outcome
+        .map_err(|error| stop_named(error, context.output.stopped_by()))
+        .map_err(|error| with_key_here(error, &crate::auth::env));
     if outcome.is_ok() {
         project::remind_lists(context);
     }
@@ -1191,6 +1195,58 @@ fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
         error.message = format!("stopped by a SIGTERM{rest}");
     }
     error
+}
+
+/// `error`, a refusal that signing in could lift, when the environment `var` gives a key for its
+/// account already: signing in again is no remedy, so the help says the key has no access or was
+/// refused, and how to check it, and only terms to accept are still offered. any other error
+/// stays as it is.
+fn with_key_here(error: Error, var: crate::source::Var<'_>) -> Error {
+    let Some(need) = error.need.as_deref() else {
+        return error;
+    };
+    let account = &need.account;
+    let Some(found) = account.find(var).filter(|found| account.sendable(found)) else {
+        return error;
+    };
+    let named = match &found.origin {
+        crate::auth::Origin::Variable(name) => format!("the key in {name}"),
+        origin => format!("the key saved in {}", origin.shown()),
+    };
+    // a detail that names the key already, as one saying it went with the request, is enough
+    let key = if error.details.iter().any(|line| line.starts_with(&named)) {
+        "the key".to_owned()
+    } else {
+        named
+    };
+    with_key(
+        error,
+        &key,
+        Some("`fetchloom auth` shows where it comes from and whose it is"),
+    )
+}
+
+/// `error`, a refusal that signing in could lift, refused with the key `key` went with: its help
+/// says the key was refused or has no access, then `check`, how to check the key, and only a need
+/// for terms to accept stays.
+fn with_key(mut error: Error, key: &str, check: Option<&str>) -> Error {
+    let Some(need) = error.need.as_deref() else {
+        return error;
+    };
+    let check = check.map_or_else(String::new, |check| format!(": {check}"));
+    let help = match (&need.maybe_missing, &need.terms) {
+        (Some(page), _) => {
+            format!("check the name at {page}. if it is right, {key} has no access to it{check}")
+        }
+        (None, Some(terms)) => {
+            format!("accept the terms at {terms} with the account {key} belongs to{check}")
+        }
+        (None, None) => format!("{key} was refused, or has no access to it{check}"),
+    };
+    if need.terms.is_none() {
+        error.need = None;
+    }
+    error.help(help)
 }
 
 /// how much of the story `-q` and `-v` ask for.
@@ -1667,6 +1723,50 @@ mod tests {
                 .credential_hosts()
                 .contains(&"unsaved.example.org")
         );
+    }
+
+    /// a refusal that signing in could lift, with a key here already, says the key was refused or
+    /// has no access and how to check it, never to sign in, and offers to sign in no more: only
+    /// terms to accept stay offered. with no key here, it stays as it was.
+    #[test]
+    fn a_refusal_with_a_key_here_says_to_check_the_key() {
+        use crate::auth::Account;
+        let key = |name: &str| (name == "ZENODO_TOKEN").then(|| "z".into());
+        let none = |_: &str| None;
+        let refused = || Error::new(Kind::AuthRequired, "zenodo:1 is restricted").help("sign in");
+        let page = "https://zenodo.org/records/1".to_owned();
+        let check = "`fetchloom auth` shows where it comes from and whose it is";
+        let cases = [
+            (
+                refused().needs(Account::Zenodo, None),
+                format!("the key in ZENODO_TOKEN was refused, or has no access to it: {check}"),
+                false,
+            ),
+            (
+                refused().needs(Account::Zenodo, Some(page.clone())),
+                format!(
+                    "accept the terms at {page} with the account the key in ZENODO_TOKEN belongs to: {check}"
+                ),
+                true,
+            ),
+            (
+                refused()
+                    .detail("the key in ZENODO_TOKEN went with the request")
+                    .needs_or_missing(Account::Zenodo, page.clone()),
+                format!(
+                    "check the name at {page}. if it is right, the key has no access to it: {check}"
+                ),
+                false,
+            ),
+        ];
+        for (error, help, offered) in cases {
+            let told = with_key_here(error.clone(), &key);
+            assert_eq!(told.help.as_deref(), Some(help.as_str()));
+            assert_eq!(told.need.is_some(), offered, "{help}");
+            let alone = with_key_here(error, &none);
+            assert_eq!(alone.help.as_deref(), Some("sign in"));
+            assert!(alone.need.is_some());
+        }
     }
 
     #[test]

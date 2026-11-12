@@ -401,7 +401,8 @@ const EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags&expand=
 const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags";
 
 /// the hub on this machine: its answer to a name nobody may see, as a typo gets, to a gated
-/// dataset before its terms are accepted, and to a model link whose name a dataset has.
+/// dataset before its terms are accepted, to a model link whose name a dataset has, and to any
+/// key a sign-in checks, as ada's.
 fn hub() -> Result<Routes> {
     let answer = |status: &str, fixture: &str| -> Result<_> {
         let path = workspace().join("tests/fixtures/sources/hf").join(fixture);
@@ -437,6 +438,14 @@ fn hub() -> Result<Routes> {
         (
             "/api/datasets/scikit-learn/iris".to_owned(),
             answer("200 OK", "imdb-revision.json")?,
+        ),
+        (
+            "/api/whoami-v2".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                br#"{"name":"ada"}"#,
+            ),
         ),
     ])
 }
@@ -513,11 +522,91 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     Ok(())
 }
 
-/// the command runs once more after signing in, and a refusal then is told as an error, since
-/// the offer to sign in comes once.
+/// the command runs once more after signing in, and a refusal then says the key it went with has
+/// no access or was refused, never to sign in again, and asks nothing more: a saved key's help
+/// says how to check it, and a key kept for the command alone is named so.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_refusal_after_signing_in_is_told_as_an_error() -> Result {
+fn a_refusal_after_signing_in_says_how_to_check_the_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hub = hub()?;
+    let mut add = sandbox.command(&["add", "hf:datasets/scikit-learn/irs"]);
+    add.env("FETCHLOOM_TEST_HF_API", &hub.url);
+    let page = "check the name at https://huggingface.co/datasets/scikit-learn/irs. if it is right";
+    for (save, help) in [
+        (
+            "n",
+            format!("{page}, the key you signed in with has no access to it\n"),
+        ),
+        (
+            "y",
+            format!("{page}, the key has no access to it: {CHECK_KEY}\n"),
+        ),
+    ] {
+        let keys = format!("y\rhf_test1234567890\r{save}\r");
+        let Some((code, screen)) = crate::support::typed(&sandbox.work(), &add, "", "now?", &keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(40), "{screen}");
+        let signed = screen.find("Signed in to hf as ada");
+        let told =
+            screen.find("error: huggingface.co has no dataset scikit-learn/irs, or it is private");
+        assert!(
+            signed.zip(told).is_some_and(|(signed, told)| signed < told),
+            "{screen}"
+        );
+        let after = &screen[told.unwrap_or_default()..];
+        assert!(after.contains(&help), "{screen}");
+        assert!(!after.contains("auth login"), "{screen}");
+        assert_eq!(screen.matches("now?").count(), 1, "{screen}");
+    }
+    Ok(())
+}
+
+/// how a refusal with a key on this machine says to check it.
+const CHECK_KEY: &str = "`fetchloom auth` shows where it comes from and whose it is";
+
+/// with a key on this machine, a refusal says the key has no access, or was refused, and how to
+/// check it, which `--json` gives as the fix, never a sign-in.
+#[test]
+fn a_refusal_with_a_key_here_says_how_to_check_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hub = hub()?;
+    let token = home(&sandbox)
+        .join(".cache")
+        .join("huggingface")
+        .join("token");
+    std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
+    std::fs::write(&token, "hf_test1234567890\n")?;
+    let output = sandbox
+        .command(&["--json", "add", "hf:datasets/scikit-learn/irs"])
+        .env("FETCHLOOM_TEST_HF_API", &hub.url)
+        .output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    let shown = std::path::Path::new("~")
+        .join(".cache")
+        .join("huggingface")
+        .join("token");
+    assert_eq!(
+        error["details"][0],
+        format!("the key saved in {} went with the request", shown.display())
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "check the name at https://huggingface.co/datasets/scikit-learn/irs. if it is right, the key has no access to it: {CHECK_KEY}"
+        )
+    );
+    assert_eq!(error["fix"], "fetchloom auth");
+    Ok(())
+}
+
+/// a server that asks for a login over plain http gets no offer to sign in, since fetchloom
+/// sends a key only over https, and the help says so.
+#[test]
+fn no_sign_in_is_offered_for_a_login_over_http() -> Result {
     let sandbox = Sandbox::new()?;
     let challenge = [
         ("WWW-Authenticate", "Basic realm=\"lab\""),
@@ -528,19 +617,23 @@ fn a_refusal_after_signing_in_is_told_as_an_error() -> Result {
         reply("401 Unauthorized", &challenge, b""),
     )])?;
     let link = format!("{}/files/x.csv", server.url);
-    let add = sandbox.command(&["add", &link]);
-    let Some((code, screen)) =
-        crate::support::typed(&sandbox.work(), &add, "", "now?", "y\rada\rsecret\ry\r")?
-    else {
-        return Ok(());
-    };
-    assert_eq!(code, Some(40), "{screen}");
-    let signed = screen.find("Signed in to 127.0.0.1");
-    let told = screen.find(&format!("error: 127.0.0.1 refused access to {link} (401)"));
-    assert!(
-        signed.zip(told).is_some_and(|(signed, told)| signed < told),
-        "{screen}"
+    let output = sandbox.run(&["--json", "add", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["help"],
+        "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one"
     );
+    #[cfg(target_os = "linux")]
+    if let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &sandbox.command(&["add", &link]),
+        "",
+        "error:",
+        "",
+    )? {
+        assert_eq!(code, Some(40), "{screen}");
+        assert!(!screen.contains("now?"), "{screen}");
+    }
     Ok(())
 }
 

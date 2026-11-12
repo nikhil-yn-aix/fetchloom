@@ -276,6 +276,9 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 format!("{host} refused access to {} ({code})", Shown(url)),
             );
             match account {
+                Some(_) if url.scheme() != "https" => error.help(
+                    "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one",
+                ),
                 Some(account) => {
                     let command = account.command();
                     error

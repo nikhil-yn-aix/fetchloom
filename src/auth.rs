@@ -72,6 +72,16 @@ pub(crate) enum Origin {
     Keyring,
 }
 
+impl Origin {
+    /// where the key comes from as a line names it, a file below the home folder as `~/…`.
+    pub(crate) fn shown(&self) -> String {
+        match self {
+            Origin::File(path) => crate::units::path(path),
+            origin => origin.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
