@@ -68,7 +68,13 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     if let Some(name) = name {
         super::project::known(&manifest, name, "list")?;
     }
-    let lock = project.lock()?.unwrap_or_default();
+    let lock = match name {
+        Some(name) => project
+            .lock_only(&|other| other == name)?
+            .map(|(lock, _)| lock),
+        None => project.lock()?,
+    }
+    .unwrap_or_default();
     let mut report = listed(&manifest, &lock, super::peek_cache().ok().as_ref());
     let output = &context.output;
     if let Some(name) = name {
