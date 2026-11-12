@@ -49,15 +49,25 @@ error: "md5:0123456789abcdef0123456789abcdef" on line 2 of links.txt is not a SH
   help: a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped
 ```
 
-so leave such hashes out of the list, take a file's own link where the registry gives one, and check the md5 hashes once the files are in place, so a file that changed since the registry was written is not pinned unseen:
+so leave such hashes out of the list, take a file's own link where the registry gives one, and check the md5 hashes once the files are in place, so a file that changed since the registry was written is not pinned unseen. `add -i` names each dataset and file after its link, not after the registry, so the check looks for each registry md5 among the files `fetchloom export` lists, wherever they were placed:
 
 ```sh
 awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ '!/^#/ && NF {print ($3 != "" ? $3 : base $1), ($2 ~ /^md5:/ ? "" : $2)}' registry.txt > links.txt
 fetchloom add -i links.txt
-awk '!/^#/ && $2 ~ /^md5:/ {d = $1; sub(/\.[^.]*$/, "", d); print substr($2, 5) "  data/" d "/" $1}' registry.txt | md5sum -c
+fetchloom export | cut -c67- | tr '\n' '\0' | xargs -0 md5sum > placed.md5
+awk 'NR == FNR {at[$1] = substr($0, 35); next} !/^#/ && $2 ~ /^md5:/ {md5 = substr($2, 5); if (md5 in at) print $1 ": OK, " at[md5]; else {print $1 ": no file add placed has this md5"; bad = 1}} END {exit bad}' placed.md5 registry.txt
 ```
 
-the last line finds each file where `add -i` puts a link ending in its name, as `data/tips/tips.csv` for `tips.csv`; check a file named otherwise at the path `fetchloom path` gives. a line md5sum calls `FAILED` is a file other than the registry's: run `fetchloom remove <name>` rather than commit `data.lock`, and ask whoever keeps the registry.
+stdout of the last line from a real run against a server on this machine, for a registry naming `sub/measurements.csv`, `Measurements.csv`, `field.csv` with its own link to `elsewhere.csv`, and `tips.csv`, which the server changed after the registry was written:
+
+```text
+sub/measurements.csv: OK, data/measurements/measurements.csv
+Measurements.csv: OK, data/measurements-2/Measurements.csv
+field.csv: OK, data/elsewhere/elsewhere.csv
+tips.csv: no file add placed has this md5
+```
+
+a name with no file is one whose link served other bytes than the registry lists, and the line then exits 1. leave data.lock uncommitted: `fetchloom list` shows the dataset each link made, `fetchloom remove <name>` drops one, and whoever keeps the registry knows which bytes are right. md5sum names on stderr a placed file it cannot read; `fetchloom sync` puts it back. an archive is unpacked as it is added, so no placed file holds its own md5 and it shows as having none too; check one against its link, as `curl -sL <link> | md5sum`.
 
 ### files in one folder
 
