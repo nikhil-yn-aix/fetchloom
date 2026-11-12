@@ -187,6 +187,33 @@ fn drop_excludes_a_member_of_its_own_archive_only() -> Result {
     Ok(())
 }
 
+/// data.toml for [`set`] with one members table under the glob key `*.zip`, which keeps the
+/// images of both zips.
+const GLOBBED: &str = "[datasets.set]\nref = \"local\"\n\n[datasets.set.members.\"*.zip\"]\nselect = [\"images/*\"]\n";
+
+/// [`set`] synced with [`GLOBBED`] as its data.toml.
+fn globbed(sandbox: &Sandbox) -> Result<PathBuf> {
+    let folder = set(sandbox)?;
+    fs::write(sandbox.work().join("data.toml"), GLOBBED)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    assert!(!folder.join("train/labels.csv").exists());
+    Ok(folder)
+}
+
+/// a file a glob key's table leaves out already is told by that key, as for any table.
+#[test]
+fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    globbed(&sandbox)?;
+    let output = sandbox.run(&["--json", "drop", "data/set/test/labels.csv"])?;
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        json(&output)?["errors"][0]["message"],
+        "data/set/test/labels.csv is left out already, since select in members.\"*.zip\" of datasets.set does not keep it"
+    );
+    Ok(())
+}
+
 /// a file the source lists leaves data.lock too, rewritten as relocking would pin it, so a
 /// locked sync takes it. an import could not be listed again, so a stale pin would fail here.
 #[test]

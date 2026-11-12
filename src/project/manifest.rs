@@ -79,12 +79,139 @@ pub(crate) struct Source {
     pub(crate) members: Members,
 }
 
-/// what a dataset keeps of the archives it unpacks, by each archive's path as data.lock gives it.
-pub(crate) type Members = BTreeMap<String, MemberFilter>;
+/// what a dataset keeps of the archives it unpacks: a table for each archive under its path as
+/// data.lock gives it, or under a glob key, as `"shard-*.tar"`, for every archive the key
+/// matches.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Members {
+    tables: BTreeMap<String, MemberFilter>,
+    /// the keys with a wildcard, as patterns, in data.toml's order.
+    globs: Vec<(String, Glob)>,
+}
 
-/// the files of one archive a dataset keeps, matched against the archive's own paths, its top
-/// folder included, before placing strips anything. they change where files go, not what
-/// data.lock pins, so they stay out of the dataset's spec.
+/// the keys whose tables an archive's path finds.
+enum Found<'m> {
+    None,
+    One(&'m str),
+    /// two glob keys, and no key of the archive's own.
+    Two(&'m str, &'m str),
+}
+
+impl Members {
+    pub(crate) fn new() -> Members {
+        Members::default()
+    }
+
+    /// adds `filter` under `key`. a key with `*`, `?` or `[` that reads as a pattern is a glob;
+    /// any other key names one archive.
+    fn insert(&mut self, key: String, filter: MemberFilter) {
+        if key.contains(['*', '?', '['])
+            && let Ok(glob) = Glob::new(&key)
+        {
+            self.globs.push((key.clone(), glob));
+        }
+        self.tables.insert(key, filter);
+    }
+
+    /// every table with its key, in key order.
+    pub(crate) fn iter(&self) -> std::collections::btree_map::Iter<'_, String, MemberFilter> {
+        self.tables.iter()
+    }
+
+    /// whether a table's key is `key` as written, not as a pattern matches it.
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        self.tables.contains_key(key)
+    }
+
+    fn found(&self, archive: &str) -> Found<'_> {
+        if let Some((key, _)) = self.tables.get_key_value(archive) {
+            return Found::One(key);
+        }
+        let mut globs = self
+            .globs
+            .iter()
+            .filter(|(_, glob)| glob.matches(archive))
+            .map(|(key, _)| key.as_str());
+        match (globs.next(), globs.next()) {
+            (None, _) => Found::None,
+            (Some(key), None) => Found::One(key),
+            (Some(first), Some(second)) => Found::Two(first, second),
+        }
+    }
+
+    /// the table that chooses the files of the archive at `archive`, its path in the dataset
+    /// `dataset` as data.lock gives it, with its key: the archive's own, which wins, or else the
+    /// one glob key that matches the path. none when no key does.
+    ///
+    /// # Errors
+    ///
+    /// `project.invalid` naming both keys and the archive, when two glob keys match it and it
+    /// has no table of its own.
+    pub(crate) fn of(
+        &self,
+        dataset: &str,
+        archive: &str,
+    ) -> Result<Option<(&str, &MemberFilter)>, Error> {
+        match self.found(archive) {
+            Found::None => Ok(None),
+            Found::One(key) => Ok(Some((key, &self.tables[key]))),
+            Found::Two(first, second) => {
+                let mut error = Error::new(
+                    Kind::ProjectInvalid,
+                    format!(
+                        "members.\"{first}\" and members.\"{second}\" in datasets.{dataset} both match {archive}"
+                    ),
+                );
+                for key in [first, second] {
+                    if let Some(line) = self.tables[key].lines.get("members") {
+                        error = error.detail(line.clone());
+                    }
+                }
+                Err(error.help(format!(
+                    "change one key so only one matches it, or give it a table of its own, as [datasets.{dataset}.members.\"{archive}\"], which wins over both"
+                )))
+            }
+        }
+    }
+
+    /// the table [`Members::of`] finds for `archive`, for a reader that cannot refuse, as gc
+    /// deciding what to keep: none when two glob keys match it, so every file of it counts.
+    /// planning refuses that data.toml.
+    pub(crate) fn get(&self, archive: &str) -> Option<&MemberFilter> {
+        match self.found(archive) {
+            Found::One(key) => Some(&self.tables[key]),
+            Found::None | Found::Two(..) => None,
+        }
+    }
+
+    /// the first table, in key order, whose key neither names one of `archives` nor matches one
+    /// as a pattern.
+    pub(crate) fn unmatched(&self, archives: &[&str]) -> Option<(&str, &MemberFilter)> {
+        let matched = |key: &str| {
+            archives.contains(&key)
+                || self.globs.iter().any(|(glob_key, glob)| {
+                    glob_key == key && archives.iter().any(|archive| glob.matches(archive))
+                })
+        };
+        self.tables
+            .iter()
+            .find(|(key, _)| !matched(key))
+            .map(|(key, filter)| (key.as_str(), filter))
+    }
+}
+
+impl<'m> IntoIterator for &'m Members {
+    type Item = (&'m String, &'m MemberFilter);
+    type IntoIter = std::collections::btree_map::Iter<'m, String, MemberFilter>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// the files a dataset keeps of each archive its key covers, matched against the archive's own
+/// paths, its top folder included, before placing strips anything. they change where files go,
+/// not what data.lock pins, so they stay out of the dataset's spec.
 #[derive(Clone, Debug)]
 pub(crate) struct MemberFilter {
     pub(crate) select: glob::Set,
@@ -1619,10 +1746,10 @@ mod tests {
         ));
         let members = &manifest.datasets["pets"].source().unwrap().members;
         assert_eq!(
-            members.keys().collect::<Vec<_>>(),
+            members.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             ["pets.zip", "raw/b.tar.gz"]
         );
-        let zip = &members["pets.zip"];
+        let zip = members.get("pets.zip").unwrap();
         assert!(zip.keeps("pets-v1/images/cat_001.png"));
         assert!(!zip.keeps("pets-v1/images/dog_010.png"));
         assert!(!zip.keeps("pets-v1/a/b.tmp"));
@@ -1630,7 +1757,7 @@ mod tests {
             zip.keeps("images/dog_010.png"),
             "the top folder is part of it"
         );
-        let tar = &members["raw/b.tar.gz"];
+        let tar = members.get("raw/b.tar.gz").unwrap();
         assert!(tar.keeps("x/a.csv") && !tar.keeps("x/a.txt") && !tar.keeps("old/a.csv"));
         assert_eq!(
             zip.lines["exclude"],
@@ -1645,7 +1772,8 @@ mod tests {
             format!("{PETS}members.\"pets.zip\".exclude = \"a/x.png\"\n"),
         ] {
             let manifest = parse(&written);
-            let zip = &manifest.datasets["pets"].source().unwrap().members["pets.zip"];
+            let members = &manifest.datasets["pets"].source().unwrap().members;
+            let zip = members.get("pets.zip").unwrap();
             assert!(!zip.keeps("a/x.png") && zip.keeps("a/y.png"), "{written}");
         }
         assert!(
@@ -1653,7 +1781,9 @@ mod tests {
                 .source()
                 .unwrap()
                 .members
-                .is_empty()
+                .iter()
+                .next()
+                .is_none()
         );
     }
 
@@ -2049,7 +2179,8 @@ mod tests {
             "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\n  \"pets-v1/images/dog_010.png\",\n  \"pets-v1/images/blurry_011.png\",\n]\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n"
         );
         let read = parse(&twice);
-        let zip = &read.datasets["pets"].source().unwrap().members["pets.zip"];
+        let members = &read.datasets["pets"].source().unwrap().members;
+        let zip = members.get("pets.zip").unwrap();
         assert!(!zip.keeps(&blurry) && zip.keeps("pets-v1/images/cat.png"));
         let listed = with_exclusions(text, "zoo", None, &["b[[]1].csv".to_owned()]).unwrap();
         assert!(

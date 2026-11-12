@@ -42,7 +42,7 @@ scripts and agents write `fetchloom`. `fl` is a short name the installers give a
 - [google drive](docs/user/sources/google-drive.md): shared files and folders, resource keys and download confirmation pages
 - [dropbox](docs/user/sources/dropbox.md): shared file links and folder zips
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, listing, version pins, and private S3 buckets read with AWS keys once `s3_buckets` lists them
-- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, `path = "."` for files straight in `data/`, `place = false` for data only recipes read, shared folders and clashes, secret-URL rejection and credential-safe diagnostic citations
+- [data.toml](docs/user/reference/data-toml.md): manifest keys, members tables for files inside archives, one under a glob key for many shards, path rules, `path = "."` for files straight in `data/`, `place = false` for data only recipes read, shared folders and clashes, secret-URL rejection and credential-safe diagnostic citations
 - [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, split archives' parts, source records, hash encodings and the links it refuses
 - [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions

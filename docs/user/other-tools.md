@@ -112,7 +112,7 @@ fetchloom hosts no data and keeps no accounts. [limits](limits.md) lists what el
 
 ### webdataset shards
 
-`add` unpacks a `.tar` shard into its dataset's folder, where a [members table](reference/data-toml.md#files-inside-archives) in data.toml keeps only some of its files, one table for each shard. webdataset reads shards packed, as `--no-extract` keeps them, but then nothing is unpacked to choose from, so sync refuses a members table:
+`add` unpacks a `.tar` shard into its dataset's folder, where a [members table](reference/data-toml.md#files-inside-archives) in data.toml keeps only some of its files, one table for every shard under a [glob key](reference/data-toml.md#one-table-for-many-shards) such as `"shard-*.tar"`. webdataset reads shards packed, as `--no-extract` keeps them, but then nothing is unpacked to choose from, so sync refuses a members table:
 
 ```text
 error: members in datasets.speech chooses files inside archives, but extract = false keeps them packed

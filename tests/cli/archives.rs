@@ -65,6 +65,25 @@ fn zip_object(cache: &Path) -> PathBuf {
         .join(&ZIP_SHA256[2..])
 }
 
+/// every file below `folder`, by its path from there.
+fn files_in(folder: &Path) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(next) = folders.pop() {
+        for entry in fs::read_dir(next)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                let below = path.strip_prefix(folder)?.to_string_lossy();
+                found.push(below.replace('\\', "/"));
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
 #[test]
 fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1044,7 +1063,7 @@ fn a_folder_of_shards_hints_keeping_them_packed() -> Result {
 /// which only debug builds can be pointed at.
 #[cfg(debug_assertions)]
 mod shards {
-    use super::{Output, Result, Sandbox, file, fs, ok, text};
+    use super::{Output, Result, Sandbox, file, files_in, fs, ok, text};
     use crate::buckets::{md5, s3_listing, s3_page};
     use crate::support::Routes;
 
@@ -1053,31 +1072,67 @@ mod shards {
     /// the hint's start for the 8 shards of [`bucket`] in a dataset named shards.
     const HINT: &str = "shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with";
 
-    /// a tar holding one file, `name`.
-    fn tar_of(name: &str, body: &[u8]) -> Result<Vec<u8>> {
+    /// a tar holding `files`, each a name and its bytes.
+    fn tar_of(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
         let mut builder = tar::Builder::new(Vec::new());
-        let mut header = tar::Header::new_gnu();
-        header.set_size(body.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        builder.append_data(&mut header, name, body)?;
+        for (name, body) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, body.as_slice())?;
+        }
         Ok(builder.into_inner()?)
     }
 
     /// a bucket whose `shards/` prefix holds 8 numbered tar shards of one file each.
     fn bucket() -> Result<Routes> {
-        let base = "/shard-bucket.s3.amazonaws.com/";
         let mut objects = Vec::new();
         for number in 0..8 {
-            let body = tar_of(&format!("sample-{number}.txt"), b"x")?;
+            let body = tar_of(&[(format!("sample-{number}.txt"), b"x".to_vec())])?;
             objects.push((format!("shards/train-{number:06}.tar"), body));
         }
+        served(&objects)
+    }
+
+    /// shard `number` of a speech dataset: two samples, each a `.json`, a `.txt` and a `.wav`
+    /// named by its key, as webdataset writes them.
+    fn speech_shard(number: usize) -> Result<Vec<u8>> {
+        let mut files = Vec::new();
+        for sample in 0..2 {
+            let key = format!("{:08}", number * 1000 + sample);
+            for kind in ["json", "txt", "wav"] {
+                files.push((
+                    format!("{key}.{kind}"),
+                    format!("{kind} {key}").into_bytes(),
+                ));
+            }
+        }
+        tar_of(&files)
+    }
+
+    /// a bucket whose `shards/` prefix holds the first `count` speech shards.
+    fn speech(count: usize) -> Result<Routes> {
+        let objects = (0..count)
+            .map(|number| {
+                Ok((
+                    format!("shards/train-{number:06}.tar"),
+                    speech_shard(number)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        served(&objects)
+    }
+
+    /// a bucket serving `objects`, each a key and its bytes, and a listing of them.
+    fn served(objects: &[(String, Vec<u8>)]) -> Result<Routes> {
+        let base = "/shard-bucket.s3.amazonaws.com/";
         let listed: Vec<(&str, &[u8])> = objects
             .iter()
             .map(|(key, body)| (key.as_str(), body.as_slice()))
             .collect();
         let mut routes = vec![(s3_listing(base, "shards/", None), s3_page(&listed, None))];
-        for (key, body) in &objects {
+        for (key, body) in objects {
             routes.push((
                 format!("{base}{key}"),
                 file(body, &format!("\"{}\"", md5(body))),
@@ -1184,6 +1239,38 @@ mod shards {
         }
         Ok(())
     }
+
+    /// one members table under a glob key keeps the same kind of file in every shard, and a
+    /// shard that arrives later follows it.
+    #[test]
+    fn a_glob_members_table_keeps_one_kind_in_every_shard_and_a_later_one() -> Result {
+        let sandbox = Sandbox::new()?;
+        fs::write(
+            sandbox.work().join("data.toml"),
+            format!(
+                "[datasets.shards]\nref = \"{LINK}\"\n\n[datasets.shards.members.\"train-*.tar\"]\nselect = [\"*.wav\"]\n"
+            ),
+        )?;
+        ok(&run(&sandbox, &speech(2)?, &["sync"])?)?;
+        let data = sandbox.work().join("data/shards");
+        let mut kept = vec![
+            "train-000000/00000000.wav",
+            "train-000000/00000001.wav",
+            "train-000001/00001000.wav",
+            "train-000001/00001001.wav",
+        ];
+        assert_eq!(files_in(&data)?, kept);
+        let three = speech(3)?;
+        ok(&run(&sandbox, &three, &["lock", "--upgrade", "shards"])?)?;
+        ok(&run(&sandbox, &three, &["sync"])?)?;
+        kept.extend(["train-000002/00002000.wav", "train-000002/00002001.wav"]);
+        assert_eq!(files_in(&data)?, kept);
+        assert_eq!(
+            fs::read(data.join("train-000002/00002001.wav"))?,
+            b"wav 00002001"
+        );
+        Ok(())
+    }
 }
 
 /// a members table changes which files of an archive land, not what data.lock pins: editing it
@@ -1228,35 +1315,43 @@ fn a_member_filter_edit_makes_no_request() -> Result {
     Ok(())
 }
 
-/// gc frees a file inside an archive that only a members table leaves out, and keeps every file
-/// the project places.
+/// gc frees a file inside an archive that only a members table leaves out, under the archive's
+/// own path or a glob key, and keeps every file the project places.
 #[test]
 fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
-    ok(&sandbox.run(&["add", &server.url])?)?;
-    let manifest = sandbox.work().join("data.toml");
-    let plain = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        format!(
-            "{plain}\n[datasets.dataset.members.\"dataset.zip\"]\nexclude = [\"dataset/data/train.csv\"]\n"
-        ),
-    )?;
-    ok(&sandbox.run(&["sync"])?)?;
-    let object = |bytes: &[u8]| {
-        let hex = crate::add::sha256_hex(bytes);
-        sandbox
-            .cache()
-            .join("objects")
-            .join(&hex[..2])
-            .join(&hex[2..])
-    };
-    let (readme, train) = (FILES[0].1, FILES[3].1);
-    assert!(object(train).exists());
-    ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
-    assert!(!object(train).exists(), "no project places train.csv");
-    assert!(object(readme).exists(), "the project places README.md");
+    for key in ["dataset.zip", "*.zip"] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+        ok(&sandbox.run(&["add", &server.url])?)?;
+        let manifest = sandbox.work().join("data.toml");
+        let plain = fs::read_to_string(&manifest)?;
+        fs::write(
+            &manifest,
+            format!(
+                "{plain}\n[datasets.dataset.members.\"{key}\"]\nexclude = [\"dataset/data/train.csv\"]\n"
+            ),
+        )?;
+        ok(&sandbox.run(&["sync"])?)?;
+        let object = |bytes: &[u8]| {
+            let hex = crate::add::sha256_hex(bytes);
+            sandbox
+                .cache()
+                .join("objects")
+                .join(&hex[..2])
+                .join(&hex[2..])
+        };
+        let (readme, train) = (FILES[0].1, FILES[3].1);
+        assert!(object(train).exists());
+        ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
+        assert!(
+            !object(train).exists(),
+            "{key}: no project places train.csv"
+        );
+        assert!(
+            object(readme).exists(),
+            "{key}: the project places README.md"
+        );
+    }
     Ok(())
 }
 
@@ -1301,7 +1396,7 @@ fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
 mod split {
     use std::path::{Path, PathBuf};
 
-    use super::{RAR, Result, Sandbox, Server, file, fs, next_step_into, ok, text};
+    use super::{RAR, Result, Sandbox, Server, file, files_in, fs, next_step_into, ok, text};
 
     /// five files under one top folder, as a dataset's authors zip them.
     const SCANS: [(&str, &[u8]); 5] = [
@@ -1330,25 +1425,6 @@ mod split {
             fs::write(folder.join(name), part)?;
         }
         Ok(parts)
-    }
-
-    /// every file below `folder`, by its path from there.
-    fn files_in(folder: &Path) -> Result<Vec<String>> {
-        let mut found = Vec::new();
-        let mut folders = vec![folder.to_path_buf()];
-        while let Some(next) = folders.pop() {
-            for entry in fs::read_dir(next)? {
-                let path = entry?.path();
-                if path.is_dir() {
-                    folders.push(path);
-                } else {
-                    let below = path.strip_prefix(folder)?.to_string_lossy();
-                    found.push(below.replace('\\', "/"));
-                }
-            }
-        }
-        found.sort();
-        Ok(found)
     }
 
     fn object(cache: &Path, bytes: &[u8]) -> PathBuf {

@@ -609,7 +609,16 @@ fn exclude_help(
         None => last.to_owned(),
     };
     let table = match inside {
-        Some(_) => format!("members.\"{}\" of datasets.{dataset}", first.path),
+        Some(_) => {
+            // the table that covers the archive, since a table of its own would win over a glob
+            let key = manifest
+                .datasets
+                .get(dataset)
+                .and_then(|entry| entry.source())
+                .and_then(|source| source.members.of(dataset, &first.path).ok().flatten())
+                .map_or(first.path.as_str(), |(key, _)| key);
+            format!("members.\"{key}\" of datasets.{dataset}")
+        }
         None => format!("datasets.{dataset}"),
     };
     format!(
@@ -634,8 +643,8 @@ fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Opti
             Pinned::Archive(archive) => Some(archive),
             Pinned::File(_) => None,
         }) {
-            let (Some(filter), Some(members)) = (
-                source.members.get(&archive.file.path),
+            let (Some((key, filter)), Some(members)) = (
+                source.members.of(name, &archive.file.path).ok().flatten(),
                 archive.recorded(cache),
             ) else {
                 continue;
@@ -645,7 +654,7 @@ fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Opti
                 .zip(plan::unpacked_paths(archive.path(), alone, &members))
                 .find(|(_, placed)| name::fold(&format!("{folder}/{placed}")) == asked);
             if let Some((member, _)) = found.filter(|(member, _)| !filter.keeps(&member.path)) {
-                let table = format!("members.\"{}\" of datasets.{name}", archive.file.path);
+                let table = format!("members.\"{key}\" of datasets.{name}");
                 return Some(match filter.exclude.matching(&member.path) {
                     Some(glob) => format!("by exclude \"{}\" in {table}", glob.as_str()),
                     None => format!("since select in {table} does not keep it"),
@@ -787,17 +796,20 @@ fn unpacked(
         )
         .help("run `fetchloom sync`, then drop again")
     })?;
-    let filter = manifest
+    let filter = match manifest
         .datasets
         .get(&locked.name)
         .and_then(|entry| entry.source())
-        .and_then(|source| source.members.get(&file.path));
+    {
+        Some(source) => source.members.of(&locked.name, &file.path)?,
+        None => None,
+    };
     let folder = plan::folder(manifest, &locked.name);
     let alone = archives::pinned(&locked.files).len() == 1;
     Ok(members
         .iter()
         .zip(plan::unpacked_paths(archive.path(), alone, &members))
-        .filter(|(member, _)| filter.is_none_or(|filter| filter.keeps(&member.path)))
+        .filter(|(member, _)| filter.is_none_or(|(_, filter)| filter.keeps(&member.path)))
         .map(|(member, path)| (format!("{folder}/{path}"), member.path.clone()))
         .collect())
 }
@@ -1042,7 +1054,7 @@ fn written(
             .and_then(|entry| entry.source())
             .map(|source| &source.members);
         for archive in &edit.leaving {
-            if tables.is_some_and(|tables| tables.contains_key(*archive)) {
+            if tables.is_some_and(|tables| tables.contains_key(archive)) {
                 updated = manifest::without_members(&updated, dataset, archive)?;
             }
         }

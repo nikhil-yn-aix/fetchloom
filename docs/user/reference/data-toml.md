@@ -173,7 +173,7 @@ patterns select the files a source lists, before download and before a server-su
 
 ## files inside archives
 
-`select` and `exclude` choose among the files a source lists, so an archive is one file to them. a `members` table chooses among the files inside one archive, named by the archive's path as data.lock gives it:
+`select` and `exclude` choose among the files a source lists, so an archive is one file to them. a `members` table chooses among the files inside one archive, named by the archive's path as data.lock gives it, or inside each archive a [glob key](#one-table-for-many-shards) matches:
 
 ```toml
 [datasets.pets]
@@ -186,18 +186,40 @@ exclude = [
 ]
 ```
 
-`select` and `exclude` in a members table take the [patterns](#patterns) above and match each file by its path inside the archive, its top folder included, before placing strips that folder. `pets-v1/images/dog_010_corrupt.png` above lands at `data/pets/images/dog_010_corrupt.png`, since a dataset that is one archive loses the folder all its files share. a file a table leaves out is not placed, and every other file lands where it would without the table. a table names one archive, so in a dataset of `train.zip` and `test.zip` that both hold `images/x.png`, a table under `"train.zip"` leaves `test.zip`'s copy in place. without such a table the two copies would land on one path, so the run stops before placing anything, naming the path and both archives, as in `two files would land on data/fold/train/0000.txt: one from fold-000000.zip and one from fold-000001.zip`. leave one copy out, keep the archives packed with `extract = false`, or give each archive a dataset of its own. [`fetchloom drop`](../commands/drop.md) writes these lines for you from the paths in the data folder.
+`select` and `exclude` in a members table take the [patterns](#patterns) above and match each file by its path inside the archive, its top folder included, before placing strips that folder. `pets-v1/images/dog_010_corrupt.png` above lands at `data/pets/images/dog_010_corrupt.png`, since a dataset that is one archive loses the folder all its files share. a file a table leaves out is not placed, and every other file lands where it would without the table. a table under an archive's path names that archive alone, so in a dataset of `train.zip` and `test.zip` that both hold `images/x.png`, a table under `"train.zip"` leaves `test.zip`'s copy in place. without such a table the two copies would land on one path, so the run stops before placing anything, naming the path and both archives, as in `two files would land on data/fold/train/0000.txt: one from fold-000000.zip and one from fold-000001.zip`. leave one copy out, keep the archives packed with `extract = false`, or give each archive a dataset of its own. [`fetchloom drop`](../commands/drop.md) writes these lines for you from the paths in the data folder.
 
 a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. a [recipe](../recipes.md#what-fetchloom-keys) made from the dataset reads only the files kept, so the tables enter its key, and changing one means building it again. each of these is refused with `project.invalid`, exit 50, pointing at its line:
 
 | mistake | why |
 |---|---|
-| a table for an archive data.lock does not pin for the dataset | after an upgrade renames `pets.zip`, the table must follow it, or the files it left out would come back without a word |
+| a table for an archive data.lock does not pin for the dataset, or a glob key that matches none | after an upgrade renames `pets.zip`, the table must follow it, or the files it left out would come back without a word |
+| two glob keys that match one archive with no table of its own | the archive would have two tables, so the error names both keys and the archive; give it a table of its own, which wins over both |
 | a members table on a dataset with `extract = false` | its archives stay packed, so there are no files inside to choose |
 | a `select` pattern that matches no file inside its archive | the error shows a path inside the archive, or the pattern with the archive's top folder in front when that one matches |
 | patterns that leave an archive no file | to leave the whole archive out, `exclude` it in the dataset instead |
 
 an `exclude` that matches nothing is fine: the upstream may have fixed the file. the archive is still unpacked whole into the cache, and [`fetchloom cache gc`](../commands/cache.md#gc) frees the files no project keeps.
+
+### one table for many shards
+
+a key with `*`, `?` or `[` is a [pattern](#patterns) too, matched against each archive's path as data.lock gives it, so one table chooses the same files in every shard of a [webdataset](../concepts.md#webdataset-shards), and in a shard that arrives later. with six shards of 40 samples each, served from this machine:
+
+```toml
+[datasets.shards]
+ref = "s3:http://127.0.0.1:19380/speech/shards/"
+
+[datasets.shards.members."shard-*.tar"]
+select = ["*.wav", "*.txt"]
+```
+
+sync placed only the 40 `.wav` and 40 `.txt` files of each shard, from `data/shards/shard-000000` to `shard-000005`. once `fetchloom lock --upgrade shards` pinned a seventh shard, sync placed its files the same way, as its stderr shows:
+
+```text
+     Placed data/shards · 80 files linked to the cache
+     Synced 1 dataset into data
+```
+
+each archive the key matches takes the table as if it were written under its own path, so a `select` pattern that matches no file inside one shard is refused, naming the key and that shard. a table under an archive's own path wins over any glob, so `[datasets.shards.members."shard-000003.tar"]` alone chooses for that shard. `*` stays inside one folder: `"shard-*.tar"` does not match `train/shard-000000.tar`, which `"train/shard-*.tar"` or `"**/shard-*.tar"` does.
 
 ## encoding and validation
 

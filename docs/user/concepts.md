@@ -128,6 +128,8 @@ webdataset splits a large dataset into numbered tar files, shards such as `train
 
 `sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows when the dataset is new or a change to its entry lists the source again; a later sync, an upgrade and a switch of `extract` show none, and neither do `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
 
+to unpack the shards and keep only some files of each, one [members table](reference/data-toml.md#one-table-for-many-shards) under a glob key chooses them in every shard, and in shards that arrive later, as `select = ["*.wav", "*.txt"]` under `[datasets.shards.members."shard-*.tar"]`.
+
 ## offline
 
 ```sh

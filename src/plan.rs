@@ -273,8 +273,8 @@ fn planned<'a>(
     Ok(plan)
 }
 
-/// refuses a members table that names no archive the dataset's pin unpacks, as when an upgrade
-/// renamed it: the files it left out would come back without a word.
+/// refuses a members table whose key names or, as a glob, matches no archive the dataset's pin
+/// unpacks, as when an upgrade renamed it: the files it left out would come back without a word.
 fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Error> {
     let archives: Vec<&str> = locked
         .files
@@ -282,11 +282,7 @@ fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Er
         .filter(|file| file.unpacks_to.is_some())
         .map(|file| file.path.as_str())
         .collect();
-    let Some((archive, filter)) = source
-        .members
-        .iter()
-        .find(|(archive, _)| !archives.contains(&archive.as_str()))
-    else {
+    let Some((archive, filter)) = source.members.unmatched(&archives) else {
         return Ok(());
     };
     let error = Error::new(
@@ -312,8 +308,8 @@ fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Er
 ///
 /// # Errors
 ///
-/// `project.invalid` for a table whose select matches no file of its archive, or that leaves the
-/// archive no file.
+/// `project.invalid` for a table whose select matches no file of its archive, that leaves the
+/// archive no file, or for an archive two glob keys match.
 pub(crate) fn expand<'a>(
     plan: &mut Plan<'a>,
     dataset: &'a str,
@@ -349,32 +345,32 @@ pub(crate) fn expand<'a>(
             copy,
             holder: Holder::File(file),
         };
+        // before the archive's files are known, so two globs stop a run before it downloads
+        let filter = filters.of(dataset, &file.path)?;
         let Some(members) = members(&archive) else {
             plan.unknown.push((dataset, file));
             continue;
         };
-        let filter = filters.get(&file.path);
-        if let Some(filter) = filter {
-            selected(dataset, &file.path, filter, &members)?;
+        if let Some((key, filter)) = filter {
+            selected(dataset, key, &file.path, filter, &members)?;
         }
         let before = plan.targets.len();
         for (member, path) in members
             .iter()
             .zip(unpacked_paths(archive.path(), alone, &members))
         {
-            if filter.is_none_or(|filter| filter.keeps(&member.path)) {
+            if filter.is_none_or(|(_, filter)| filter.keeps(&member.path)) {
                 plan.targets.push(target(&path, member.sha256, member.size));
             }
         }
-        if let Some(filter) = filter
+        if let Some((key, filter)) = filter
             && plan.targets.len() == before
             && !members.is_empty()
         {
             let error = Error::new(
                 Kind::ProjectInvalid,
                 format!(
-                    "select and exclude in members.\"{}\" of datasets.{dataset} leave no file of {}",
-                    file.path,
+                    "select and exclude in members.\"{key}\" of datasets.{dataset} leave no file of {}",
                     archive_name(&file.path)
                 ),
             );
@@ -394,10 +390,12 @@ pub(crate) fn expand<'a>(
     Ok(())
 }
 
-/// refuses a select pattern of `filter` that matches no file the archive at `archive` holds,
-/// showing one, or the pattern that would match once the archive's top folder leads it.
+/// refuses a select pattern of `filter`, the table under `key`, that matches no file the archive
+/// at `archive` holds, showing one, or the pattern that would match once the archive's top
+/// folder leads it.
 fn selected(
     dataset: &str,
+    key: &str,
     archive: &str,
     filter: &MemberFilter,
     members: &[Member],
@@ -417,7 +415,7 @@ fn selected(
     let error = Error::new(
         Kind::ProjectInvalid,
         format!(
-            "the select pattern \"{}\" in members.\"{archive}\" of datasets.{dataset} matches no file inside {name}",
+            "the select pattern \"{}\" in members.\"{key}\" of datasets.{dataset} matches no file inside {name}",
             unmatched.as_str()
         ),
     );
@@ -1128,6 +1126,135 @@ mod tests {
             placed_from(&manifest, &stale, &[("pets-v2.zip", &["x", "y"])]).unwrap(),
             ["data/a/README", "data/a/pets-v2/x", "data/a/pets-v2/y"]
         );
+        let glob = format!("{ONE}\n[datasets.a.members.\"pets-v1*.zip\"]\nexclude = \"x\"\n");
+        let (manifest, locked) = pinned(&glob, &[("a", &["README", "pets-v2.zip"])]);
+        let error = placed_from(&manifest, &locked, &[("pets-v2.zip", &["x", "y"])]).unwrap_err();
+        assert_eq!(
+            error.message,
+            "members.\"pets-v1*.zip\" in datasets.a names no archive data.lock pins for it",
+            "a glob that matches no archive is refused as such a name is"
+        );
+    }
+
+    /// three webdataset shards beside a readme, and the files of one sample each holds.
+    const SHARDS: [&str; 4] = [
+        "README",
+        "shard-000000.tar",
+        "shard-000001.tar",
+        "shard-000002.tar",
+    ];
+    const SAMPLE: [&str; 3] = ["s.json", "s.txt", "s.wav"];
+
+    /// each shard of [`SHARDS`] unpacking to [`SAMPLE`], and the archives of `more` to theirs.
+    fn shards<'a>(more: &[(&'a str, &'a [&'a str])]) -> Vec<(&'a str, &'a [&'a str])> {
+        SHARDS[1..]
+            .iter()
+            .map(|shard| (*shard, &SAMPLE[..]))
+            .chain(more.iter().copied())
+            .collect()
+    }
+
+    /// a table under a glob key chooses the files of each archive whose path in the dataset it
+    /// matches, as a table under that path would, and an archive's own table wins over it. `*`
+    /// stays inside one folder, so a shard in a folder of the dataset is not matched.
+    #[test]
+    fn a_glob_key_chooses_the_files_of_every_archive_it_matches() {
+        let paths = [&SHARDS[..], &["train/shard-000003.tar"]].concat();
+        let (manifest, locked) = pinned(
+            &format!(
+                "{ONE}[datasets.a.members.\"shard-*.tar\"]\nselect = \"*.wav\"\n[datasets.a.members.\"shard-000001.tar\"]\nselect = \"*.txt\"\n"
+            ),
+            &[("a", &paths)],
+        );
+        assert_eq!(
+            placed_from(
+                &manifest,
+                &locked,
+                &shards(&[("train/shard-000003.tar", &SAMPLE[..])])
+            )
+            .unwrap(),
+            [
+                "data/a/README",
+                "data/a/shard-000000/s.wav",
+                "data/a/shard-000001/s.txt",
+                "data/a/shard-000002/s.wav",
+                "data/a/train/shard-000003/s.json",
+                "data/a/train/shard-000003/s.txt",
+                "data/a/train/shard-000003/s.wav",
+            ]
+        );
+    }
+
+    /// two glob keys matching one archive leave no one table for it, so planning stops, naming
+    /// both and the archive, unless the archive has a table of its own, which wins over both.
+    /// gc and status, which cannot stop, take no table for it and keep every file.
+    #[test]
+    fn two_glob_keys_matching_one_archive_are_refused() {
+        let text = format!(
+            "{ONE}[datasets.a.members.\"shard-*.tar\"]\nselect = \"*.wav\"\n[datasets.a.members.\"*-000001.tar\"]\nselect = \"*.txt\"\n"
+        );
+        let (manifest, locked) = pinned(&text, &[("a", &SHARDS)]);
+        let error = placed_from(&manifest, &locked, &shards(&[])).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "members.\"shard-*.tar\" and members.\"*-000001.tar\" in datasets.a both match shard-000001.tar"
+        );
+        assert_eq!(
+            error.details,
+            [
+                "data.toml:3   [datasets.a.members.\"shard-*.tar\"]",
+                "data.toml:5   [datasets.a.members.\"*-000001.tar\"]"
+            ]
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "change one key so only one matches it, or give it a table of its own, as [datasets.a.members.\"shard-000001.tar\"], which wins over both"
+            )
+        );
+        let members = &manifest.datasets["a"].source().unwrap().members;
+        assert!(members.get("shard-000001.tar").is_none());
+        let (manifest, locked) = pinned(
+            &format!("{text}[datasets.a.members.\"shard-000001.tar\"]\nexclude = \"s.json\"\n"),
+            &[("a", &SHARDS)],
+        );
+        assert_eq!(
+            placed_from(&manifest, &locked, &shards(&[])).unwrap(),
+            [
+                "data/a/README",
+                "data/a/shard-000000/s.wav",
+                "data/a/shard-000001/s.txt",
+                "data/a/shard-000001/s.wav",
+                "data/a/shard-000002/s.wav",
+            ]
+        );
+    }
+
+    /// a glob key's table holds for each archive it matches on its own, so a check it fails
+    /// there names the key and that archive.
+    #[test]
+    fn a_glob_tables_refusal_names_its_key_and_the_archive() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"shard-*.tar\"]\nselect = \"*.wav\"\n"),
+            &[("a", &SHARDS)],
+        );
+        let unvoiced: &[&str] = &["s.json", "s.txt"];
+        let error = placed_from(
+            &manifest,
+            &locked,
+            &[
+                ("shard-000000.tar", &SAMPLE[..]),
+                ("shard-000001.tar", unvoiced),
+                ("shard-000002.tar", &SAMPLE[..]),
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "the select pattern \"*.wav\" in members.\"shard-*.tar\" of datasets.a matches no file inside shard-000001.tar"
+        );
+        assert_eq!(error.details, ["data.toml:4   select = \"*.wav\""]);
     }
 
     #[test]
