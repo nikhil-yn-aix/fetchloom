@@ -1082,20 +1082,42 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
             .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
     )
     .map_err(Error::unchanged)?;
-    let size = missing
-        .iter()
-        .filter_map(|job| job.fetch.expect.size)
-        .fold(0, u64::saturating_add);
-    super::confirm(
+    let (size, room) = needs(&missing);
+    let what = units::count(missing.len() as u64, "file", "files");
+    let doing = if room > size {
+        format!("downloading and unpacking {what}")
+    } else {
+        format!("downloading {what}")
+    };
+    super::confirm_doing(
         &context.output,
         context.yes,
         context.settings.ask_above.value,
-        &units::count(missing.len() as u64, "file", "files"),
+        &what,
         size,
-        Some((cache.root(), size)),
+        Some((cache.root(), room)),
+        &doing,
     )
     .map(|_| ())
     .map_err(Error::unchanged)
+}
+
+/// what the downloads `missing` need: the bytes they move, which the question about their size
+/// counts, and the room on the cache's disk, which counts each archive they unpack once more,
+/// since its files land beside it before it can go. the room is a lower bound: an archive may
+/// unpack to more than its own size, and a size nothing stated counts nothing.
+fn needs(missing: &[&Job]) -> (u64, u64) {
+    let sized = || {
+        missing
+            .iter()
+            .filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpack)))
+    };
+    let moved = sized().map(|(size, _)| size).fold(0, u64::saturating_add);
+    let unpacked = sized()
+        .filter(|(_, unpack)| *unpack)
+        .map(|(size, _)| size)
+        .fold(0, u64::saturating_add);
+    (moved, moved.saturating_add(unpacked))
 }
 
 /// the names the files will have, and the paths they will take in the folder when the cache
@@ -1661,6 +1683,33 @@ mod tests {
                 "up.csv · the cache holds what 127.0.0.1 serves now".to_owned()
             )
         );
+    }
+
+    /// the room a get asks for counts each archive it unpacks once more, since the files land
+    /// beside it before it can go, while the question about the size counts the bytes moved. a
+    /// file kept packed, a file that is no archive and an archive whose size nothing stated add
+    /// nothing, and a sum too large to count stays the largest.
+    #[test]
+    fn the_room_a_get_needs_counts_each_archive_it_unpacks_once_more() {
+        let job = |path: &str, size: Option<u64>, extract: bool| {
+            let remote = Remote {
+                path: path.to_owned(),
+                size,
+                sha256: None,
+                md5: None,
+                url: url::Url::parse(&format!("https://example.org/{path}")).unwrap(),
+                named_by_server: false,
+            };
+            fetch::listed_job(&remote, path, extract)
+        };
+        let zip = job("a.zip", Some(1_000_000), true);
+        assert_eq!(needs(&[&zip]), (1_000_000, 2_000_000));
+        let packed = job("b.zip", Some(1_000_000), false);
+        let csv = job("c.csv", Some(500), true);
+        let unstated = job("d.zip", None, true);
+        assert_eq!(needs(&[&packed, &csv, &unstated]), (1_000_500, 1_000_500));
+        let huge = job("e.tar", Some(u64::MAX - 1), true);
+        assert_eq!(needs(&[&huge, &zip]), (u64::MAX, u64::MAX));
     }
 
     /// links that a stop kept from their folders end the run as that stop, which says first that

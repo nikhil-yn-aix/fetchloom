@@ -844,13 +844,33 @@ fn confirm(
     bytes: u64,
     room: Option<(&std::path::Path, u64)>,
 ) -> Result<bool, Error> {
+    confirm_doing(
+        output,
+        yes,
+        above,
+        what,
+        bytes,
+        room,
+        &format!("downloading {what}"),
+    )
+}
+
+/// [`confirm`], with `doing` naming what needs the room, as downloading and unpacking does.
+fn confirm_doing(
+    output: &Output,
+    yes: bool,
+    above: u64,
+    what: &str,
+    bytes: u64,
+    room: Option<(&std::path::Path, u64)>,
+    doing: &str,
+) -> Result<bool, Error> {
     if let Some((cache, needed)) = room
         && !yes
     {
         let free = crate::space::free(cache);
         if crate::space::short(needed, free).is_some() {
-            let doing = format!("downloading {what}");
-            ask_room(output, &doing, needed, free.unwrap_or_default(), cache)?;
+            ask_room(output, doing, needed, free.unwrap_or_default(), cache)?;
             return Ok(true);
         }
     }
