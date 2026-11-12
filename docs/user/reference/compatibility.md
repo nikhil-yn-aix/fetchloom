@@ -114,6 +114,8 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | DOIs | doi.org handle API, then the repository it names | doi.org |
 | plain links | HTTP/1.1 and HTTP/2 over https; range requests resume and split downloads where the server allows | any server |
 
+google drive and dropbox are read through their shared links rather than an API, and drive's API v3 serves the private items `drive_folders` lists. no live check covers dropbox, and drive's needs google credentials the weekly run does not have.
+
 ## keys shared with other tools
 
 fetchloom reads and saves keys where each source's own tools keep them, so one sign-in serves both. [environment](environment.md#credentials) lists where it looks and in which order, and [auth](../commands/auth.md) where a sign-in saves.

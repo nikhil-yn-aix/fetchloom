@@ -149,7 +149,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 | source | `resolved` | file `url` |
 |---|---|---|
 | plain URL | the parsed URL | the same URL |
-| zenodo | `zenodo:<concrete record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
+| zenodo | `zenodo:<record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
 | figshare | `figshare:<id>@<version>` | the API's download URL |
 | dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
 | dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
@@ -176,13 +176,7 @@ an import records no path of the machine it came from, and no link: its bytes ar
 
 `access` is a hint for sharing the files, never a license check: [`push`](../commands/push.md#data-you-may-not-share) asks before copying a dataset whose `access` is not `public` into a mirror. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. dryad records `public` for a version it shows to anyone and `login` for one it restricts, though its downloads always need a key. mendeley data records `public`, since it lists only published versions, ENA records `public`, since it leaves out runs under controlled access, GEO records `public`, since its file server holds public records only, DANDI records `public`, since it refuses an embargoed dandiset, and OpenNeuro records `public`, since it refuses a private dataset. other sources leave it out.
 
-DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment. a competition file kaggle sent as a zip of itself is recorded at its path plus `.zip`, with `unpacks_to`.
-
-drive locks keep the file id and resource key, without a confirmation form's fields. transfers start at `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t`, with the resource key when needed. a confirmation page can supply the next request without changing the lock URL.
-
-drive folders list no sizes. downloads supply the sizes written to the lock; [approval](../concepts.md#approval) checks a server's length, or the bytes received when no length is stated. google docs exports can change between downloads. select and exclude match those entries too; only a doc that remains selected stops the command. the error names each selected doc and explains how to exclude it, or you can ask the owner to upload a fixed file.
-
-dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins the zip; extraction adds its tree hash. an unnamed HTML answer fails instead of entering the cache as dataset bytes.
+a DOI records the source it leads to. each [source's page](../sources/README.md) says more of what it pins, such as a kaggle competition file sent as a zip of itself, recorded at its path plus `.zip` with `unpacks_to`, or a dropbox folder pinned as one zip.
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 

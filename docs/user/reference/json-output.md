@@ -8,7 +8,7 @@ fetchloom --json --yes sync
 fetchloom --json status
 ```
 
-`--json` prints one document on stdout, also for usage errors, the welcome, the version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. stderr gets only debug logs you asked for, and with `--progress`, plain progress lines after 2 s and then every 10 s. JSON mode never asks a question; use `--yes` when approval is needed.
+`--json` prints one document on stdout, also for usage errors, the welcome, the version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. stderr gets only debug logs you asked for, and with `--progress`, plain progress lines: at once for a download or a lookup, after 2 s for other work, then every 10 s. JSON mode never asks a question; use `--yes` when approval is needed.
 
 in a pipe or a file the document is one line. when stdout is a terminal, it is indented two spaces a level, so a person can read it; it is the same document, with no color, so read all of stdout rather than its first line.
 
@@ -32,7 +32,7 @@ a result JSON cannot represent, such as a path that is not UTF-8, returns a comp
 
 batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
 
-SHA-256 mismatch details give each hash whole with `--json`. a person, `-v` included, reads each cut to its first 12 hex digits, or to just past the first digit where the two differ. parse `kind` and result fields rather than human messages.
+error details give each SHA-256 whole with `--json`. a person reads two hashes compared in one detail whole, one under the other, and any other hash cut to its first 12 hex digits, or to just past the first digit where it differs from another on the line. parse `kind` and result fields rather than human messages.
 
 bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0","commit":"…"}`: `commit` is the git commit the build came from, 40 hex digits, or null for a build outside git. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
 
@@ -161,7 +161,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 
 ## dry runs
 
-`add`, `remove`, `drop`, `sync`, `lock`, `push` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
+`add`, `remove`, `drop`, `sync`, `lock`, `push`, `cache gc` and `get` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present. `build --dry-run` returns its steps instead, as [command results](#command-results) gives them.
 
 for `add`, `remove`, `drop` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
 
@@ -174,6 +174,8 @@ for `add`, `remove`, `drop` and `sync`, `lock_changed` says whether `data.lock` 
 | `unpack` | archives, as `<dataset>/<file>`, that would be unpacked first; their members are not in `place` or the counts |
 
 a file already standing where a file goes whose hash only its download can learn is in neither `place` nor `replace`, nor in the counts: only that download, listed in `download`, tells whether it holds the pinned bytes.
+
+for `get`, `changes` has the same arrays, `place` and `replace` relative to the current folder and `download` naming each file by its path in what the link lists.
 
 `result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a real run with the project path shortened:
 
