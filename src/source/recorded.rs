@@ -24,6 +24,7 @@ impl Recorded {
             status,
             url: parsed.clone(),
             next: None,
+            total: None,
             region: None,
             keyed: None,
             authorized: None,
@@ -79,6 +80,17 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before its next page"));
         answer.next = Some(Url::parse(next).unwrap());
+        self
+    }
+
+    /// says the answer for `url` counts `total` items in all, as a `Content-Range` header would.
+    pub(crate) fn total(mut self, url: &str, total: u64) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before its total"));
+        answer.total = Some(total);
         self
     }
 

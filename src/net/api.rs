@@ -35,6 +35,9 @@ pub(crate) struct Response {
     pub(crate) url: Url,
     /// the `rel="next"` target of a `Link` header, for listings sent in pages.
     pub(crate) next: Option<Url>,
+    /// how many items a listing sent in parts holds in all, as a `Content-Range` header counts
+    /// them: 47 for `items 0-46/47`.
+    pub(crate) total: Option<u64>,
     /// the `x-amz-bucket-region` header, which names where an S3 bucket lives when a request
     /// reached the wrong region.
     pub(crate) region: Option<String>,
@@ -166,6 +169,7 @@ impl Net {
             .filter_map(|value| value.to_str().ok())
             .filter_map(next_link)
             .find_map(|link| response.url().join(&link).ok());
+        let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
@@ -211,6 +215,7 @@ impl Net {
             status: status.as_u16(),
             url: final_url,
             next,
+            total,
             region,
             keyed,
             authorized,
@@ -267,7 +272,7 @@ fn test_bucket(url: &Url) -> Option<Url> {
 #[cfg(debug_assertions)]
 fn test_source(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
-    if !matches!(host, "datadryad.org") {
+    if !matches!(host, "datadryad.org" | "data.mendeley.com") {
         return None;
     }
     let mut local = local_test_server("FETCHLOOM_TEST_SOURCES")?;
@@ -288,6 +293,13 @@ pub(super) fn local_test_server(variable: &str) -> Option<Url> {
         return None;
     }
     Some(local)
+}
+
+/// the count after the slash of a `Content-Range` header that counts items, as a listing in parts
+/// sends it.
+fn items_total(value: &str) -> Option<u64> {
+    let (_, total) = value.trim().strip_prefix("items ")?.rsplit_once('/')?;
+    total.trim().parse().ok()
 }
 
 /// the target of the `rel="next"` link in a `Link` header.
@@ -587,6 +599,20 @@ mod tests {
     }
 
     #[test]
+    fn a_listings_total_comes_from_its_items_range() {
+        for (value, wanted) in [
+            ("items 0-46/47", Some(47)),
+            ("items 2-2/3", Some(3)),
+            ("items NaN-NaN/0", Some(0)),
+            ("items 0-46/*", None),
+            ("bytes 0-46/47", None),
+            ("items 0-46", None),
+        ] {
+            assert_eq!(items_total(value), wanted, "{value}");
+        }
+    }
+
+    #[test]
     fn pagination_keeps_bracketed_targets_and_relation_lists() {
         for (value, wanted) in [
             (
@@ -611,5 +637,16 @@ mod tests {
         )]);
         let response = block_on(net(&url).get(&url)).unwrap();
         assert_eq!(response.next, Some(url.join("page2").unwrap()));
+    }
+
+    #[test]
+    fn a_listings_total_is_read_from_the_answer() {
+        let (url, _) = serve(vec![reply(
+            "200 OK",
+            &[("Content-Range", "items 0-46/47")],
+            b"[]",
+        )]);
+        let response = block_on(net(&url).get(&url)).unwrap();
+        assert_eq!(response.total, Some(47));
     }
 }

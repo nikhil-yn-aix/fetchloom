@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::auth::with_stdin;
 use crate::buckets::md5;
-use crate::support::{Part, Result, Routes, Sandbox, file, json, ok, reply, text};
+use crate::support::{Part, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text};
 
 const ROWS: &[u8] = b"site,count\na,1\nb,2\n";
 const NOTES: &[u8] = b"collected in 2020\n";
@@ -267,5 +267,149 @@ fn a_dryad_key_is_checked_before_it_is_saved() -> Result {
         .ok_or("no dryad account")?;
     assert_eq!(dryad["signed_in"], true, "{dryad}");
     assert!(!status.to_string().contains("right-key"));
+    Ok(())
+}
+
+const MENDELEY: &str = "/data.mendeley.com";
+
+/// mendeley's answers for rscbjbr9sj at version 2, its top folder holding `(name, bytes, sha256)`
+/// files with the SHA-256 stated, and each file's public download link sending it on to the
+/// storage that serves its bytes.
+fn mendeley(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
+    let api = format!("{MENDELEY}/public-api/datasets/rscbjbr9sj");
+    let listed: Vec<_> = files
+        .iter()
+        .enumerate()
+        .map(|(index, (name, body, sha256))| {
+            let id = format!("00000000-0000-0000-0000-{:012}", index + 1);
+            serde_json::json!({
+                "filename": name,
+                "id": id,
+                "size": body.len(),
+                "status": "COMPLETED",
+                "content_details": {
+                    "sha256_hash": sha256,
+                    "size": body.len(),
+                    "download_url": format!("https://data.mendeley.com/public-files/datasets/rscbjbr9sj/files/{id}/file_downloaded"),
+                },
+            })
+        })
+        .collect();
+    let range = format!("items 0-{}/{}", files.len() - 1, files.len());
+    let mut routes = vec![
+        (
+            format!("{api}?version=2"),
+            answer(&fixture("mendeley/dataset.json")?)?,
+        ),
+        (format!("{api}/folders/2"), answer(&serde_json::json!([]))?),
+        (
+            format!("{api}/files?folder_id=root&version=2&$start=0"),
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Content-Range", &range),
+                ],
+                &serde_json::to_vec(&listed)?,
+            ),
+        ),
+    ];
+    for (index, (_, body, _)) in files.iter().enumerate() {
+        let id = format!("00000000-0000-0000-0000-{:012}", index + 1);
+        let stored = format!("/storage/{id}");
+        routes.push((
+            format!("{MENDELEY}/public-files/datasets/rscbjbr9sj/files/{id}/file_downloaded"),
+            reply("302 Found", &[("Location", &stored)], b""),
+        ));
+        routes.push((stored, file(body, &format!("\"{id}\""))));
+    }
+    Routes::start(routes)
+}
+
+/// a pasted version link is pinned with the SHA-256 mendeley states for each file, its download
+/// link followed on to its storage, and a teammate's empty cache gets the same bytes from the lock.
+#[test]
+fn a_mendeley_version_is_pinned_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (rows, notes) = (sha256_hex(ROWS), sha256_hex(NOTES));
+    let routes = mendeley(&[("rows.csv", ROWS, &rows), ("notes.txt", NOTES, &notes)])?;
+    let page = "https://data.mendeley.com/datasets/rscbjbr9sj/2";
+    let output = command(&sandbox, &routes, &["--json", "add", page, "--as", "oct"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.oct]\nref = \"mendeley:rscbjbr9sj@2\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    for expected in [
+        "resolved = \"mendeley:rscbjbr9sj@2\"",
+        "license = \"CC BY 4.0\"",
+        "doi = \"10.17632/rscbjbr9sj.2\"",
+        "access = \"public\"",
+        "url = \"https://data.mendeley.com/public-files/datasets/rscbjbr9sj/files/00000000-0000-0000-0000-000000000001/file_downloaded\"",
+    ] {
+        assert!(lock.contains(expected), "{expected}\n{lock}");
+    }
+    assert_eq!(fs::read(work.join("data/oct/rows.csv"))?, ROWS);
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/oct/notes.txt"))?, NOTES);
+    assert!(
+        routes.targets()[listed..]
+            .iter()
+            .all(|target| !target.contains("public-api")),
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// `get` takes a mendeley id as `add` does.
+#[test]
+fn get_downloads_a_mendeley_version_into_a_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let rows = sha256_hex(ROWS);
+    let routes = mendeley(&[("rows.csv", ROWS, &rows)])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["get", "mendeley:rscbjbr9sj@2", "--dir", "oct"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("oct/rows.csv"))?, ROWS);
+    Ok(())
+}
+
+/// the SHA-256 mendeley states checks the bytes its storage sends: other bytes are never placed.
+#[test]
+fn bytes_that_differ_from_mendeleys_sha256_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let stated = sha256_hex(NOTES);
+    let routes = mendeley(&[("rows.csv", ROWS, &stated)])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "mendeley:rscbjbr9sj@2", "--as", "oct"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "integrity.mismatch",
+        "{document}"
+    );
+    assert!(!sandbox.work().join("data/oct/rows.csv").exists());
     Ok(())
 }

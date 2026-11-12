@@ -112,7 +112,7 @@ when a split download remains incomplete, a terminal stream failure keeps priori
 
 `Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. a response that omits a known policy still spends one of its remembered requests. waits remain cancellable.
 
-metadata pagination reads every `Link` header field. angle-bracketed targets and quoted parameters keep their commas and semicolons; the first `rel` parameter may name several relations. links with an `anchor` are skipped because their context is not the requested page.
+metadata pagination reads every `Link` header field. angle-bracketed targets and quoted parameters keep their commas and semicolons; the first `rel` parameter may name several relations. links with an `anchor` are skipped because their context is not the requested page. a `Content-Range: items <first>-<last>/<total>` header gives `Response.total`, the count of a listing sent in parts.
 
 ### trust boundaries
 

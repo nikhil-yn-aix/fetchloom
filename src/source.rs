@@ -13,6 +13,7 @@ mod figshare;
 mod hf;
 pub(crate) mod kaggle;
 pub(crate) mod local;
+mod mendeley;
 mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
@@ -96,6 +97,7 @@ pub(crate) enum Reference {
     Doi(doi::Doi),
     Zenodo(zenodo::Record),
     Dryad(dryad::Dataset),
+    Mendeley(mendeley::Dataset),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -290,6 +292,7 @@ impl Reference {
             "doi" => whole(Reference::Doi(doi::Doi::parse(rest)?)),
             "zenodo" => whole(Reference::Zenodo(zenodo::Record::parse(rest)?)),
             "dryad" => whole(Reference::Dryad(dryad::Dataset::parse(rest)?)),
+            "mendeley" => whole(Reference::Mendeley(mendeley::Dataset::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -390,6 +393,7 @@ impl Reference {
             .help("open the DOI in a browser and use the dataset page or a direct file link")),
             Reference::Zenodo(record) => record.resolve(api).await,
             Reference::Dryad(dataset) => dataset.resolve(api).await,
+            Reference::Mendeley(dataset) => dataset.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -411,6 +415,7 @@ impl fmt::Display for Reference {
             Reference::Doi(doi) => write!(f, "{doi}"),
             Reference::Zenodo(record) => write!(f, "{record}"),
             Reference::Dryad(dataset) => write!(f, "{dataset}"),
+            Reference::Mendeley(dataset) => write!(f, "{dataset}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -546,6 +551,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
             dryad::Dataset::from_link(&url).map(|dataset| parsed(Reference::Dryad(dataset), None))
         })
         .or_else(|| {
+            mendeley::Dataset::from_link(&url)
+                .map(|dataset| parsed(Reference::Mendeley(dataset), None))
+        })
+        .or_else(|| {
             figshare::Article::from_link(&url)
                 .map(|article| parsed(Reference::Figshare(article), None))
         });
@@ -627,6 +636,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
     Some(match url.host_str()? {
         "zenodo.org" | "www.zenodo.org" => "zenodo",
         "datadryad.org" | "www.datadryad.org" => "dryad",
+        "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
         host if figshare::is_portal(host) && !url.path().starts_with("/ndownloader/") => "figshare",
         "osf.io" | "www.osf.io" => "osf",
         "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
@@ -985,6 +995,15 @@ mod tests {
                 "https://datadryad.org/stash/dataset/doi:10.5061/dryad.j1fd7",
                 "dryad:10.5061/dryad.j1fd7",
             ),
+            ("mendeley:rscbjbr9sj@2", "mendeley:rscbjbr9sj@2"),
+            (
+                "https://data.mendeley.com/datasets/rscbjbr9sj/2",
+                "mendeley:rscbjbr9sj@2",
+            ),
+            (
+                "https://data.mendeley.com/datasets/rscbjbr9sj",
+                "mendeley:rscbjbr9sj",
+            ),
         ];
         for (text, canonical) in cases {
             assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
@@ -1158,6 +1177,7 @@ mod tests {
                 status,
                 url: url.clone(),
                 next: None,
+                total: None,
                 region: None,
                 keyed: None,
                 authorized: None,

@@ -50,6 +50,12 @@ fn every_real_handle_url_routes_without_getting_the_landing_page() {
             "doi/dryad.json",
             "dryad:10.5061/dryad.j1fd7",
         ),
+        (
+            "10.17632/rscbjbr9sj.2",
+            "https://doi.org/api/handles/10.17632%2Frscbjbr9sj.2",
+            "doi/mendeley.json",
+            "mendeley:rscbjbr9sj@2",
+        ),
     ];
     for (doi, url, fixture, target) in cases {
         let recorded = Recorded::default().fixture(url, fixture);
