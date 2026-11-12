@@ -123,9 +123,12 @@ fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
         stderr.contains("2 files could not be downloaded"),
         "{stderr}"
     );
+    assert_eq!(stderr.matches("has nothing at").count(), 1, "{stderr}");
     for (label, server) in [("iris/iris.csv", &iris), ("cows/cows.csv", &cows)] {
         assert!(
-            stderr.contains(&format!("{label}: 127.0.0.1 has nothing at {}", server.url)),
+            stderr
+                .lines()
+                .any(|line| line.contains(label) && line.contains(&server.url)),
             "{stderr}"
         );
     }

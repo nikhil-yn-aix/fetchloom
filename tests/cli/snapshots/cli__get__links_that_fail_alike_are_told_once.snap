@@ -1,0 +1,14 @@
+---
+source: tests/cli/get.rs
+assertion_line: 1829
+expression: stderr
+---
+error: 4 of 4 links could not be fetched
+  127.0.0.1 has nothing at http://127.0.0.1:[port]/gone/a.csv (404)
+  the same for:
+    http://127.0.0.1:[port]/gone/b.csv
+    http://127.0.0.1:[port]/gone/d.csv
+  help: check the link in a browser. if it moved, run get with the new link
+  127.0.0.1 refused access to http://127.0.0.1:[port]/denied.csv (403)
+  help: check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`
+  help: fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run `fetchloom get -i links.txt` again

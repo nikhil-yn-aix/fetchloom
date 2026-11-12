@@ -971,50 +971,114 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
         .all(|(_, error)| error.help == first.help)
         .then(|| first.help.clone())
         .flatten();
+    let told: Vec<Told<'_>> = failed
+        .iter()
+        .map(|(index, failure)| {
+            let label = labels.get(*index).cloned().unwrap_or_default();
+            Told {
+                alone: if failure.message.starts_with(&label) {
+                    failure.message.clone()
+                } else {
+                    format!("{label}: {}", failure.message)
+                },
+                label,
+                error: failure,
+            }
+        })
+        .collect();
     let mut error = Error::new(
         first.kind,
         format!("{} files could not be downloaded", failed.len()),
     );
+    error.details = alike(&told, shared_help.is_some());
     error.failures = failures;
     error.need = failed.iter().find_map(|(_, error)| error.need.clone());
-    // files that failed the same way share one line, in the order the first of each failed
-    let mut groups: Vec<(&Error, Vec<usize>)> = Vec::new();
-    let mut group_of: HashMap<(&str, Option<&str>), usize> = HashMap::new();
-    for (index, failure) in &failed {
-        let key = (failure.message.as_str(), failure.help.as_deref());
-        if let Some(&group) = group_of.get(&key) {
-            groups[group].1.push(*index);
-        } else {
-            group_of.insert(key, groups.len());
-            groups.push((failure, vec![*index]));
-        }
-    }
-    for (failure, indexes) in groups.iter().take(NAMED) {
-        let label = labels.get(indexes[0]).map_or("", String::as_str);
-        error = error.detail(if indexes.len() > 1 {
-            format!("{} files: {}", indexes.len(), failure.message)
-        } else if failure.message.starts_with(label) {
-            failure.message.clone()
-        } else {
-            format!("{label}: {}", failure.message)
-        });
-        if shared_help.is_none()
-            && let Some(help) = &failure.help
-        {
-            error = error.detail(format!("help: {help}"));
-        }
-    }
-    if groups.len() > NAMED {
-        let rest: usize = groups[NAMED..]
-            .iter()
-            .map(|(_, indexes)| indexes.len())
-            .sum();
-        error = error.detail(format!("and {rest} more"));
-    }
     Some(error.help(shared_help.unwrap_or_else(|| {
         "downloaded files stay in the cache. fix the errors above, then run the same command again"
             .into()
     })))
+}
+
+/// one of several failures as their one error tells it: `alone` is its whole line, naming what
+/// failed, and `label` names what failed in the list under a failure alike.
+pub(super) struct Told<'a> {
+    pub(super) alone: String,
+    pub(super) label: String,
+    pub(super) error: &'a Error,
+}
+
+/// the lines one error gives for `failed`, in their order. failures alike, of one kind with one
+/// help and the same words but for the link or file each names, are told once: the first one's
+/// line, then what the others failed on, each named once, then their help, unless every failure
+/// has the one help the error gives itself, as `shared` says. the first [`NAMED`] failures are
+/// named, and the rest are counted.
+pub(super) fn alike(failed: &[Told<'_>], shared: bool) -> Vec<String> {
+    let mut groups: Vec<Vec<&Told<'_>>> = Vec::new();
+    let mut group_of: HashMap<(&str, Option<&str>, String), usize> = HashMap::new();
+    for told in failed.iter().take(NAMED) {
+        let error = told.error;
+        let key = (
+            error.kind.name(),
+            error.help.as_deref(),
+            cause(&error.message, &told.label),
+        );
+        let next = groups.len();
+        let group = *group_of.entry(key).or_insert(next);
+        if group == next {
+            groups.push(Vec::new());
+        }
+        groups[group].push(told);
+    }
+    let mut lines = Vec::new();
+    for group in &groups {
+        let Some((first, others)) = group.split_first() else {
+            continue;
+        };
+        lines.push(first.alone.clone());
+        if !others.is_empty() {
+            lines.push("the same for:".to_owned());
+            lines.extend(others.iter().map(|told| format!("  {}", listed(told))));
+        }
+        if !shared && let Some(help) = &first.error.help {
+            lines.push(format!("help: {help}"));
+        }
+    }
+    if failed.len() > NAMED {
+        lines.push(format!("and {} more", failed.len() - NAMED));
+    }
+    lines
+}
+
+/// how the list under a failure alike names `told`: what failed, then where it was asked for,
+/// when its message names an address other than that.
+fn listed(told: &Told<'_>) -> String {
+    let mut addresses: Vec<&str> = Vec::new();
+    for word in told.error.message.split(' ') {
+        let address = word.trim_end_matches([':', ',', ';', '.', ')']);
+        if address.contains("://") && address != told.label && !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+    if addresses.is_empty() {
+        told.label.clone()
+    } else {
+        format!("{} \u{b7} {}", told.label, addresses.join(" "))
+    }
+}
+
+/// `message` without what tells one failure from others alike: `label`, the link or file it is
+/// about, and each address in it, such as the one that file was asked for at.
+fn cause(message: &str, label: &str) -> String {
+    let unnamed = if label.is_empty() {
+        message.to_owned()
+    } else {
+        message.replace(label, "\u{0}")
+    };
+    unnamed
+        .split(' ')
+        .map(|word| if word.contains("://") { "\u{0}" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// says which file a failure concerns, and for bytes that changed upstream, the two ways on: the

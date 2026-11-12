@@ -1,11 +1,9 @@
 ---
 source: tests/cli/get.rs
-assertion_line: 809
 expression: stderr
 ---
     Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
          Ok iris/iris.csv is already up to date
-     Failed http://127.0.0.1:[port]/gone.csv · 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
 error: 1 of 2 links could not be fetched
-  http://127.0.0.1:[port]/gone.csv: 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
+  127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
   help: check the link in a browser. if it moved, run get with the new link

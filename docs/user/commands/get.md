@@ -133,15 +133,28 @@ with several links, each must be a link, a DOI or an id; a bare word among them 
 
 batch destination checks use those final folders, after downloads have supplied filenames. rerunning the same ordered batch reuses its suffixed folders. a refused destination can leave downloaded bytes in the cache.
 
-a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a snapshot where the first link is cached and the second answers 404. `[port]` replaces the fixture server's port:
+a link that fails leaves the others to finish; one that fails before the downloads, as one that cannot be resolved, is reported on a `Failed` line at once. the run then ends with one error naming each failed link once, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a snapshot where the first link is cached and the second answers 404. `[port]` replaces the fixture server's port:
 
 ```text
     Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
          Ok iris/iris.csv is already up to date
-     Failed http://127.0.0.1:[port]/gone.csv · 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
 error: 1 of 2 links could not be fetched
-  http://127.0.0.1:[port]/gone.csv: 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
+  127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
   help: check the link in a browser. if it moved, run get with the new link
+```
+
+links that fail alike, of one kind with one help and the same words but for the link, are told once: the first one's sentence, the others listed under it, then their help. the first ten failed links are named and the rest counted; `--json` keeps every link's own failure under `failures`. stderr from a snapshot of a list where three links answer 404 and one 403:
+
+```text
+error: 4 of 4 links could not be fetched
+  127.0.0.1 has nothing at http://127.0.0.1:[port]/gone/a.csv (404)
+  the same for:
+    http://127.0.0.1:[port]/gone/b.csv
+    http://127.0.0.1:[port]/gone/d.csv
+  help: check the link in a browser. if it moved, run get with the new link
+  127.0.0.1 refused access to http://127.0.0.1:[port]/denied.csv (403)
+  help: check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`
+  help: fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run `fetchloom get -i links.txt` again
 ```
 
 an interruption, a refused question about the total size or a cache that cannot open still stops the whole run. during placement, ctrl-c stops new files and checks between copy blocks. completed files stay; unfinished copies never take their final names.

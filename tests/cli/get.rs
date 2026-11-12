@@ -1802,6 +1802,51 @@ fn one_failed_link_leaves_the_others_and_fails_the_run() -> Result {
     Ok(())
 }
 
+/// links that fail alike, as three a server has nothing at, are told once: their cause and its
+/// help once, with each link once, while `--json` keeps every link's own failure. `add -i` says
+/// that cause once too.
+#[test]
+fn links_that_fail_alike_are_told_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = crate::support::Routes::start(vec![(
+        "/denied.csv".to_owned(),
+        reply("403 Forbidden", &[("Content-Length", "0")], b""),
+    )])?;
+    sandbox.allow(&site.url);
+    let links: Vec<String> = ["gone/a.csv", "gone/b.csv", "denied.csv", "gone/d.csv"]
+        .iter()
+        .map(|path| format!("{}/{path}", site.url))
+        .collect();
+    fs::write(sandbox.work().join("links.txt"), links.join("\n"))?;
+    let output = sandbox.run(&["get", "-i", "links.txt"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    for link in &links {
+        assert_eq!(stderr.matches(link.as_str()).count(), 1, "{link}\n{stderr}");
+    }
+    assert_eq!(stderr.matches("has nothing at").count(), 1, "{stderr}");
+    assert_eq!(stderr.matches("if it moved").count(), 1, "{stderr}");
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+
+    let document = json(&sandbox.run(&["--json", "get", "-i", "links.txt"])?)?;
+    let failures = document["errors"][0]["failures"]
+        .as_array()
+        .ok_or("each failed link keeps its failure")?;
+    assert_eq!(failures.len(), links.len(), "{document}");
+    for (failure, link) in failures.iter().zip(&links) {
+        assert_eq!(failure["file"], link.as_str(), "{document}");
+        let message = failure["message"].as_str().unwrap_or_default();
+        assert!(message.contains(link.as_str()), "{document}");
+    }
+
+    let added = sandbox.run(&["add", "-i", "links.txt"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(10), "{stderr}");
+    assert_eq!(stderr.matches("has nothing at").count(), 1, "{stderr}");
+    assert_eq!(stderr.matches("if it moved").count(), 1, "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn a_matching_sha256_lets_the_file_in() -> Result {
     let sandbox = Sandbox::new()?;

@@ -460,8 +460,9 @@ fn unlisted_offline(offline: net::Offline, error: Error) -> Error {
 }
 
 /// several links in one run: resolved together, their files downloaded together within the
-/// network's limits, then each placed in a folder of its own. a link that fails is told and
-/// kept in the report while the others go on.
+/// network's limits, then each placed in a folder of its own. a link that fails is kept in the
+/// report while the others go on, told at once when it fails before the downloads, and named in
+/// the run's one error.
 async fn many(
     context: &Context,
     net: &Arc<Net>,
@@ -526,9 +527,9 @@ async fn many(
                 context.output.answer(&done.folder.display().to_string());
                 items.push(Item::done(link, &done));
             }
+            // the run's error, told next, names it
             Err(error) => {
                 let error = unprojected(context.offline, error);
-                tell_failed(context, link, &error);
                 items.push(Item::failed(link, &error));
                 failed.push((index, error));
             }
@@ -1007,15 +1008,17 @@ fn shown(link: &str) -> String {
     net::mask_query(link.trim()).into_owned()
 }
 
-/// says at once that one of several links failed, so the others' story goes on around it.
+/// says at once that one of several links failed before the downloads, so the others' story
+/// goes on around it.
 fn tell_failed(context: &Context, link: &str, error: &Error) {
     context
         .output
         .step("Failed", &format!("{} · {}", shown(link), error.message));
 }
 
-/// one error for the links that failed: the first one's kind, and a line naming each link and
-/// what happened to it, in the order given. every link keeps its own error in the report.
+/// one error for the links that failed: the first one's kind, and lines that name each link
+/// once with what happened to it, in the order given, links that failed alike under one line.
+/// every link keeps its own error in the report.
 fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
     let Some((_, first)) = failed.first() else {
         return Error::new(Kind::LocalIo, "a link failed without a reason");
@@ -1047,17 +1050,22 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
             help: failure.help.as_deref().map(str::to_owned),
         })
         .collect();
-    for (index, failure) in failed.iter().take(fetch::NAMED) {
-        error = error.detail(format!("{}: {}", shown(&links[*index]), failure.message));
-        if shared_help.is_none()
-            && let Some(help) = &failure.help
-        {
-            error = error.detail(format!("help: {help}"));
-        }
-    }
-    if failed.len() > fetch::NAMED {
-        error = error.detail(format!("and {} more", failed.len() - fetch::NAMED));
-    }
+    let told: Vec<fetch::Told<'_>> = failed
+        .iter()
+        .map(|(index, failure)| {
+            let label = shown(&links[*index]);
+            fetch::Told {
+                alone: if failure.message.contains(&label) {
+                    failure.message.clone()
+                } else {
+                    format!("{label}: {}", failure.message)
+                },
+                label,
+                error: failure,
+            }
+        })
+        .collect();
+    error.details = fetch::alike(&told, shared_help.is_some());
     error.help(shared_help.unwrap_or_else(|| {
         "fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run the same command again"
             .into()
