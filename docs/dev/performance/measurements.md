@@ -83,6 +83,7 @@ every change measured with the current harness, one row each: what it gained whe
 | build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | process | mimalloc for libc's own allocations on musl | no-op sync 0.833 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
+| process | a mimalloc purge delay of 10 ms for lean on musl | lean with `MIMALLOC_PURGE_DELAY=10` set before start: peak memory 0.703 to 0.922, time 1.013 to 1.068 | not built: nothing sets it for lean alone without unsafe code | [purge delay](#a-shorter-purge-delay-for-lean-on-musl-2026-11-12) |
 | process | `panic = unwind` for a clean thread error | no faster anywhere; binary 14.5% larger | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept on windows, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
 | process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
@@ -534,6 +535,22 @@ the folders blocking a status were three searches at once, so one experiment bui
 glibc release builds of 50fef54d and of the change, the push and the forced sync on fresh copies each run, the others read only; projects on ext4 over nvme copied from the scale lab's datasets-40000 and files-100000, the edits made with python. rounds were interleaved after a warmup, under the measure lock on cores 12-23, few because each old run took seconds; the add's third round had a load burst. peak memory fell or held on every row but the dry run's, 140.8 to 143.7 MiB, the sets a run with 40,000 blockers builds. ordinary runs build none of them: status of 100,000 files on ext4 1.006 [0.993, 1.017] (30 pairs, under load), a sync placing 40,000 datasets 0.990 [0.963, 1.000], peak memory 0.980 and 0.989.
 
 each change keeps every decision, so the tests pin the decisions and fail when the code is broken on purpose: `a_folder_in_the_way_is_freed_only_when_removing_files_empties_it` with the check for what else a folder holds taken out; `a_changed_copy_skips_names_locked_files_take` with the set ignored; `a_file_set_aside_is_found_by_its_path` with late entries unindexed; `status_names_a_file_in_a_folders_way_once` with every blocker listed; the existing `whatever_stands_in_a_files_way_is_found_from_the_scan_alone` with every folder said to hold nothing; three status tests with the unplaced set inverted; and two of `copied`'s push tests with the refused set inverted.
+
+## a shorter purge delay for lean on musl, 2026-11-12
+
+the static musl build keeps memory mimalloc has freed for 1,000 ms before it hands it back, which is most of why it peaks above glibc. a half-hour spike asked whether lean could hand it back sooner without unsafe code, which the crate forbids.
+
+- a build-time default: mimalloc 3, which libmimalloc-sys 0.1.49 builds unless asked otherwise, writes the 1,000 ms into its table of options with no `#define` around it, so no compiler flag changes it.
+- the crate's features: `v2` builds mimalloc 2, whose delay is 10 ms, but for every level and as another allocator, and the perf audit measured 10 ms costing default 1 to 8% of its time.
+- a safe call: the mimalloc crate's `extended` feature adds `version` and `stats_json` only. setting an option takes `libmimalloc_sys::mi_option_set`, an unsafe foreign function, and `std::env::set_var` is unsafe in the 2024 edition.
+
+none of them sets a delay for lean alone, so nothing was built. the delay can only come from the environment the process starts with: a person's `MIMALLOC_PURGE_DELAY`, or fetchloom starting itself again with the variable through `CommandExt::exec`, which is safe but replaces the process on every lean run, a choice beyond a spike. what lean would gain, measured with the variable set before the start, a stock musl release build with the [tiny commands](#tiny-commands-2026-11-12) changes, interleaved rounds under the measure lock on cores 12-23, against lean as it is:
+
+| run | rounds | 10 ms: time, peak memory | 0 ms: time, peak memory |
+|---|---:|---|---|
+| sync of 40,000 one-file datasets into an empty folder | 15 | 1.068 [1.063, 1.076], 184.8 to 160.0 MiB, 0.867 | 1.125 [1.111, 1.136], 150.5 MiB, 0.815 |
+| `add -i` of 1,000 links of 90 to 110 kB | 20 | 1.013 [0.992, 1.058], 71.3 to 50.6 MiB, 0.703 | 1.106 [1.069, 1.147], 40.5 MiB, 0.568 |
+| status of 100,000 files on ext4 | 20 | 1.027 [1.009, 1.033], 86.1 to 79.3 MiB, 0.922 | 1.067 [1.055, 1.076], 78.2 MiB, 0.908 |
 
 ## pending archive reader budgets, 2026-11-12
 
