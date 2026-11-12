@@ -23,7 +23,7 @@ use crate::work::Work;
 
 mod split;
 
-pub(crate) use split::{SLOW, SMALLEST_PIECE, SPLIT_ABOVE, WINDOW};
+pub(crate) use split::starting;
 
 /// how often to look again while another fetchloom downloads the same URL.
 const POLL: Duration = Duration::from_millis(250);

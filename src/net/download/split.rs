@@ -21,7 +21,7 @@ use crate::cache::{PartialWriter, Validators};
 use crate::error::Kind;
 use crate::net::failure::{self, Failure};
 use crate::net::headers::{self, if_range};
-use crate::net::{Net, Shown, host};
+use crate::net::{Net, Shown, Split, Splitting, host};
 use crate::work::Work;
 
 /// the smallest file split across streams.
@@ -39,6 +39,29 @@ pub(crate) const SLOW: u64 = 1_000_000;
 const GAIN: f64 = 1.15;
 /// failed streams after which a download asks for no more ranges.
 const FAILURES: u32 = 3;
+
+/// the split settings a run starts with. debug builds read `FETCHLOOM_TEST_SPLIT`, which only
+/// tests set: a file then splits from 4 MiB, in pieces from 512 KiB, after a fifth of a second
+/// of measuring, so a test of a slow download needs neither 64 MiB nor seconds.
+pub(crate) fn starting(when: Splitting) -> Split {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("FETCHLOOM_TEST_SPLIT").is_some() {
+        return Split {
+            when,
+            above: 4 << 20,
+            piece: 512 << 10,
+            window: Duration::from_millis(200),
+            slow: SLOW,
+        };
+    }
+    Split {
+        when,
+        above: SPLIT_ABOVE,
+        piece: SMALLEST_PIECE,
+        window: WINDOW,
+        slow: SLOW,
+    }
+}
 
 /// the file being split: where to ask, what identifies its version, and who hears of progress.
 pub(super) struct Job<'a> {

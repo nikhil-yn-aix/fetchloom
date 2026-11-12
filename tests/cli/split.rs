@@ -6,17 +6,26 @@ use std::process::Stdio;
 
 use crate::support::{Ranged, Result, Sandbox, json, partial_files, text, wait_until};
 
-/// the smallest file that may split, 64 MiB.
-const LARGE: u64 = 64 * 1024 * 1024;
+/// the smallest file that splits in a debug build sized for tests, 4 MiB.
+const LARGE: u64 = 4 << 20;
 /// what each connection gets from a slow server: below the 1 MB/s under which one stream splits.
 const SLOW: u64 = 768 * 1024;
+/// what each connection gets from a fast server: far above that, yet slow enough that the first
+/// window of measuring ends before the file does, so the stream is judged and not just done.
+const FAST: u64 = 8 << 20;
+
+/// `fetchloom` with `args`, splitting as a debug build does with `FETCHLOOM_TEST_SPLIT`: from
+/// [`LARGE`], after measuring for a fifth of a second.
+fn split_command(sandbox: &Sandbox, args: &[&str]) -> std::process::Command {
+    let mut command = sandbox.command(args);
+    command.env("FETCHLOOM_TEST_SPLIT", "1");
+    command
+}
 
 /// a file of [`LARGE`] bytes whose every 4 bytes count up, so a byte in the wrong place changes
 /// its hash.
 fn large() -> Vec<u8> {
-    (0..16 * 1024 * 1024u32)
-        .flat_map(u32::to_le_bytes)
-        .collect()
+    (0..1u32 << 20).flat_map(u32::to_le_bytes).collect()
 }
 
 #[test]
@@ -24,8 +33,7 @@ fn a_slow_large_download_splits_across_streams() -> Result {
     let body = large();
     let server = Ranged::start("/large.bin", body.clone(), SLOW)?;
     let sandbox = Sandbox::new()?;
-    let mut child = sandbox
-        .command(&["--json", "get", &server.url])
+    let mut child = split_command(&sandbox, &["--json", "get", &server.url])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -64,9 +72,9 @@ fn a_slow_large_download_splits_across_streams() -> Result {
 #[test]
 fn a_fast_large_download_stays_one_stream() -> Result {
     let body = large();
-    let server = Ranged::start("/large.bin", body.clone(), 0)?;
+    let server = Ranged::start("/large.bin", body.clone(), FAST)?;
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["--json", "get", &server.url])?;
+    let output = split_command(&sandbox, &["--json", "get", &server.url]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = &json(&output)?["work"];
     assert_eq!(work["requests"], 1);
@@ -84,8 +92,7 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
     let body = large();
     let server = Ranged::start("/large.bin", body.clone(), SLOW)?;
     let sandbox = Sandbox::new()?;
-    let mut child = sandbox
-        .command(&["--json", "get", &server.url])
+    let mut child = split_command(&sandbox, &["--json", "get", &server.url])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
@@ -107,7 +114,7 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
 
     server.pace(0);
     let before = server.requests().len();
-    let output = sandbox.run(&["--json", "get", &server.url])?;
+    let output = split_command(&sandbox, &["--json", "get", &server.url]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = &json(&output)?["work"];
     assert_eq!(work["resumes"], 1, "{work}");
