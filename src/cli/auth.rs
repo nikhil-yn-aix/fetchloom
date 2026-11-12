@@ -100,13 +100,13 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             }
             _ => (None, None),
         };
-        let name = title(&account);
+        let name = login_name(&account);
         match &found {
             Some(found) => {
                 let who = user
                     .as_ref()
                     .map_or_else(String::new, |user| format!(" as {user}"));
-                let text = format!("{name}{who} \u{b7} {}", found.origin);
+                let text = format!("to {name}{who} \u{b7} {}", found.origin);
                 if valid == Some(false) {
                     output.mark(
                         "Refused",
@@ -127,7 +127,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
         });
     }
     if !missing.is_empty() {
-        output.faint_step("Signed out", &missing.join(", "));
+        output.faint_step("Signed in", &format!("to none of {}", missing.join(", ")));
     }
     if !accounts.iter().any(|state| state.signed_in) {
         output.hint("public data needs no account. to sign in, run `fetchloom auth login hf`, or another source");
@@ -225,7 +225,7 @@ async fn sign_in(
         .map_or_else(String::new, |user| format!(" as {user}"));
     output.done(
         "Signed in",
-        &format!("to {}{who} \u{b7} {place}", title(account)),
+        &format!("to {}{who} \u{b7} {place}", login_name(account)),
     );
     if saved_to.is_some()
         && let Some(tools) = account.shared_with()
@@ -603,7 +603,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     };
     output.done(
         "Signed out",
-        &format!("of {} \u{b7} removed from {removed}", title(&account)),
+        &format!("of {} \u{b7} removed from {removed}", login_name(&account)),
     );
     // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
@@ -703,6 +703,18 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
         ),
         &fix,
     );
+}
+
+/// the account as `fetchloom auth login` takes it, such as hf or earthdata, so the listing names
+/// what a person types next.
+fn login_name(account: &Account) -> String {
+    match account {
+        Account::Dataverse(_) => title(account),
+        _ => account
+            .command()
+            .trim_start_matches("fetchloom auth login ")
+            .to_owned(),
+    }
 }
 
 fn title(account: &Account) -> String {

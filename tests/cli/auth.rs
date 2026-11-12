@@ -58,9 +58,9 @@ fn auth_alone_lists_every_account() -> Result {
     assert!(plain.status.success(), "{}", text(&plain.stderr)?);
     let story = text(&plain.stderr)?;
     assert!(
-        story
-            .lines()
-            .any(|line| line.starts_with(" Signed out hugging face, kaggle, zenodo")),
+        story.lines().any(|line| line.starts_with(
+            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, earthdata, physionet"
+        )),
         "{story}"
     );
     let status = sandbox.run(&["--json", "auth", "status", "--offline"])?;
@@ -140,7 +140,7 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     )?;
     assert!(again.status.success());
     let told = text(&again.stderr)?;
-    assert!(told.contains("Signed in to hugging face"), "{told}");
+    assert!(told.contains("Signed in to hf · saved to"), "{told}");
     assert!(
         told.contains(&format!("saved to {}", token.display())),
         "{told}"
@@ -148,7 +148,7 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     assert!(!told.contains("hf_example"), "{told}");
     let quiet_logout = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
     assert!(
-        text(&quiet_logout.stderr)?.contains("Signed out of hugging face"),
+        text(&quiet_logout.stderr)?.contains("Signed out of hf · removed from"),
         "{}",
         text(&quiet_logout.stderr)?
     );

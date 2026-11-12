@@ -35,7 +35,7 @@ an account name must be a source name or a plain host name, not a URL, query or 
         key hf_A...x9Qz · 37 characters
     Checked the key works for ada
 save it to /home/ada/.cache/huggingface/token? [Y/n] yes
-  Signed in to hugging face as ada · saved to /home/ada/.cache/huggingface/token
+  Signed in to hf as ada · saved to /home/ada/.cache/huggingface/token
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
@@ -90,11 +90,11 @@ a key saved by signing in is named by its file, and the help says to sign in aga
 fetchloom auth
 ```
 
-it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
+it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line. each is named as `fetchloom auth login` takes it:
 
 ```text
-  Signed in hugging face as ada · /home/ada/.cache/huggingface/token
- Signed out kaggle, zenodo, figshare, osf, nasa earthdata, physionet
+  Signed in to hf as ada · /home/ada/.cache/huggingface/token
+  Signed in to none of kaggle, zenodo, figshare, osf, earthdata, physionet
 ```
 
 a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
