@@ -39,9 +39,9 @@ a step runs in the project folder, so `clean.py` in `run` is the project's own f
 
 a recipe's result is named by a key: the SHA-256 of what it is made from. the key holds
 
-- the content of each dataset in `from`, as `data.lock` pins it: each file's path, size and SHA-256, and for an archive that unpacks, its path and the tree of what it unpacks to, never the archive's own bytes, so a source that zips the same files again keeps the content. a [members table](reference/data-toml.md#files-inside-archives) that keeps or leaves out files inside an archive changes it, since the step finds other files. links, versions and when it was pinned stay out, so a source that moves its files keeps the content. a recipe made from another recipe takes that recipe's result tree, so a rebuild that gives the same files changes nothing after it.
+- the content of each dataset in `from`, as `data.lock` pins it: each file's path, size and SHA-256, and for an archive, the files it unpacks to, less those a [members table](reference/data-toml.md#files-inside-archives) leaves out. links, versions and when a dataset was pinned stay out, so a source that moves or zips again the same files keeps the key. a recipe made from another recipe takes that recipe's result, so a rebuild that gives the same files changes nothing after it.
 - `run` as written, before any folder is put in.
-- the bytes of each file of `code`, a folder as the tree of its files. a text file, one with no NUL byte in its first 8,000 bytes as git decides, counts with each CRLF made LF, since git for windows checks files out with CRLF; a linux and a windows clone get one key. a folder leaves out `.git`, `.hg`, `.svn`, `__pycache__`, `.ipynb_checkpoints`, `.DS_Store` and `Thumbs.db`, and a link or a special file anywhere in `code` is refused.
+- the bytes of each file of `code`, a folder as the tree of its files. a text file counts with each CRLF made LF, so a linux and a windows clone get one key. a folder leaves out `.git`, `.hg`, `.svn`, `__pycache__`, `.ipynb_checkpoints`, `.DS_Store` and `Thumbs.db`, and a link or a special file anywhere in `code` is refused.
 - `env`.
 
 the key holds nothing of the machine: no path, user, system, time or fetchloom version, and not the recipe's own name. a moved project, a renamed data folder or a renamed recipe keeps its key. your environment is in the key only as far as `code` names its lock files, such as `uv.lock`, `requirements.txt` or `environment.yml`.
@@ -68,9 +68,9 @@ error: data.lock is out of date: clean changed since it was built
 
 a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, since `fetchloom lock` must pin it before a build can read it. the JSON `fix` of `build.needed` is always null: building runs the project's code, so a script or an agent asks a person first.
 
-`fetchloom push --inputs <recipe>` copies a recipe's pinned result and every dataset it is made from into a folder [mirror](mirrors.md), so a reviewer whose sources are gone can rebuild it from there.
+no command but `build` runs a step. `sync` places a pinned result like any dataset, also after its recipe changed, and warns what changed; a result no cache or [mirror](mirrors.md) here holds, as in a fresh clone, is left out with a warning naming the build, as [sync](commands/sync.md#recipe-results) shows. `status` lists it under `unbuilt`, `fetchloom path` answers a built recipe's folder and fails with `build.needed` for one never built, and a dataset a recipe is made from cannot be removed while the recipe reads it. `cache gc` keeps the files of every result a project's `data.lock` pins.
 
-no command but `build` runs a step. `sync` places a pinned result from the cache like any dataset, also after its recipe changed, and never builds it; `sync`, `path` and `lock` then warn what changed, naming the build that makes it again and the commit of data.lock and data.lock.d after it; `lock` still exits 0, and its last line names the recipes that need a build. a recipe not built yet gets the same warning from a sync of every dataset. a pinned result neither the cache nor a [mirror](mirrors.md) holds, as in a fresh clone, is left out of a sync of every dataset with a warning naming `fetchloom build` with the recipe, `status` lists it under `unbuilt` with that build as its hint, and `sync <recipe>` and `sync --locked` fail with `build.needed`, exit 60, as [sync](commands/sync.md#recipe-results) shows. `sync <recipe>` and `path <recipe>` work on that recipe alone: they read the pins of what it is made from to tell that one changed, and fetch nothing of them. `lock` keeps a recipe's pin while `data.toml` has the recipe, and `sync` and `lock` drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` answers a built recipe's folder, and fails with `build.needed` for one never built. `fetchloom export` lists a result's files with their SHA-256, and `cache gc` keeps the files of every result a project's `data.lock` pins, and the record of them under `builds/`, while it frees the record of a result no project pins once it is a day old.
+`fetchloom push --inputs <recipe>` copies a recipe's pinned result and every dataset it is made from into a folder [mirror](mirrors.md), so a reviewer whose sources are gone can rebuild it from there.
 
 ## build
 
@@ -84,7 +84,7 @@ no command but `build` runs a step. `sync` places a pinned result from the cache
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
-read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. the dry run decides each step as the build does. in a fresh clone, whose cache holds none of the results `data.lock` pins, it says `Would run clean · its pinned result is not on this machine or a mirror` and shows the command, since the build runs it; with a copy in the data folder or a [mirror](mirrors.md) that holds the result it says `Would fetch`, and nothing runs. [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
+read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. in a fresh clone the dry run says `Would run clean · its pinned result is not on this machine or a mirror`, and `Would fetch` where the data folder or a [mirror](mirrors.md) holds the result, so nothing runs; [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
 
 ```text
       Needs up to 72 B, besides what clean writes, on the disk holding the cache, which has 341.4 GiB free
@@ -95,7 +95,7 @@ read the command before you build: a recipe in a repository you cloned runs as y
          Ok pinned clean's result in data.lock
 ```
 
-the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, and writes its result into `{out}`, plain files whose names every system can store. the copy comes from the cache, never from the data folder, where you may have changed a file. a file the cache lacks is copied in first: from the data folder where it holds the pinned bytes, as in a project [moved to another machine](commands/cache.md#moving-a-project-to-another-machine), else fetched, so a dataset imported from a folder needs `fetchloom add <folder> --as <name>` on a machine whose cache and data folder lack it. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned. in a git repository, a build that succeeds warns of each file of `code` git does not have, such as a new file in a code folder, since a clone without it cannot build the recipe from the same code. [build](commands/build.md) has the details, the errors and the JSON.
+the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, never from the data folder, where you may have changed a file, and writes its result into `{out}`: plain files whose names every system can store. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned; a build warns of each file of `code` git does not have. [build](commands/build.md) has the details, the errors and the JSON.
 
 an edit of a placed file, as [`copy = true`](raw-data.md#editing-raw-files) allows, never reaches a step, and `build` says so, naming the file:
 
@@ -126,7 +126,7 @@ warning: data/mc/measure_clean.csv has changed, so it stays, but it is an edit o
          Ok every step made the files data.lock pins
 ```
 
-a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, or one run with another version of a program or library than the one that built the pin, fails with `build.differs` when a check runs it, or when a build runs it again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
+a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, or one run with another version of a program or library, fails with `build.differs` when a check or a rebuild runs it, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
 
 ```text
        Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
@@ -134,23 +134,11 @@ a step should make the same files from the same inputs. one that does not, as on
   hint: `fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are
 ```
 
-look at them before you choose them. `fetchloom status -v` names each file that differs with the cache file that holds the rebuild's bytes, so you can compare it with the pinned file in the data folder:
-
-```text
-$ fetchloom status -v
-       Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
-            changed vectors.bin: /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
-         Ok everything matches data.lock by size and time
-            5 ms in all
-$ cmp data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
-data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef differ: byte 1, line 1
-```
-
-then `fetchloom build --accept emb` pins and places them without running anything, and the commit of `data.lock` and `data.lock.d` records your choice. [a rebuild that differs](commands/build.md#a-rebuild-that-differs) has the details.
+look at them before you choose them; `fetchloom build --accept emb` then pins and places them without running anything, as [a rebuild that differs](commands/build.md#a-rebuild-that-differs) shows.
 
 ## keep only the result
 
-raw data a recipe reads need not sit in the data folder too. `place = false` on it keeps it pinned in `data.lock` and its files in the cache for builds, and places nothing of it. it is the first-time researcher's setup: the raw table from a source, a cleaned one the project uses. data.toml after `fetchloom add <link> --as raw`:
+raw data a recipe reads need not sit in the data folder too. `place = false` on it keeps it pinned in `data.lock` and its files in the cache for builds, and places nothing of it: the raw table comes from a source, and the project uses the cleaned one. data.toml after `fetchloom add <link> --as raw`:
 
 ```toml
 [datasets.raw]
@@ -190,7 +178,7 @@ a teammate's sync of the same commit places clean from their cache or a mirror a
   hint: `fetchloom build clean` makes it on this machine
 ```
 
-their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, as a sync would; `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
+their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, and `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
 
 raw stays in the cache, since a build that runs clean again reads it. to free the disk it takes, put it on a folder [mirror](mirrors.md), then free the cache's copy, naming that mirror:
 
