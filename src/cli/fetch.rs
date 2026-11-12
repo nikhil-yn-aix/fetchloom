@@ -647,7 +647,7 @@ pub(super) async fn all(
     jobs: Vec<Job>,
 ) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
-    let batched = defer(cache, jobs.len());
+    let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
     let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, false)).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
@@ -663,7 +663,7 @@ pub(super) async fn prepared(
     make: impl Fn(usize, Url) -> Job,
 ) -> Result<Vec<Fetched>, Error> {
     let count = descriptions.len();
-    let batched = defer(cache, count);
+    let batched = defer(cache, count, context.settings.machine.open_files);
     let overall = Arc::new(Overall::described(context, &descriptions));
     let queue = Queue::grouped(urls, |index, _| {
         std::mem::take(&mut descriptions[index].host)
@@ -713,7 +713,7 @@ pub(super) async fn apart(
     cache: &Cache,
     jobs: Vec<Job>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
-    let batched = defer(cache, jobs.len());
+    let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
     let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, true)).await;
     let published = publish(cache, batched);
     let results = results?;
@@ -721,11 +721,12 @@ pub(super) async fn apart(
     Ok(results)
 }
 
-/// whether `downloads` wait for the cache's batch flushes. a few, or any without a batch, flush
-/// one by one, since one flush of the filesystem also waits for everything other programs wrote
-/// there.
-fn defer(cache: &Cache, downloads: usize) -> bool {
-    downloads > crate::cache::MOST_FLUSHED_ALONE && cache.defer_downloads().unwrap_or(false)
+/// whether `downloads` wait for the cache's batch flushes, in a process that may hold
+/// `open_files` files open. a few, or any without a batch, flush one by one, since one flush of
+/// the filesystem also waits for everything other programs wrote there.
+fn defer(cache: &Cache, downloads: usize, open_files: Option<u64>) -> bool {
+    downloads > crate::cache::MOST_FLUSHED_ALONE
+        && cache.defer_downloads(open_files).unwrap_or(false)
 }
 
 /// how often finished downloads that waited long enough for their group take their names.
@@ -1259,8 +1260,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
 
-        assert!(!defer(&cache, MOST_FLUSHED_ALONE));
-        assert!(defer(&cache, MOST_FLUSHED_ALONE + 1));
+        assert!(!defer(&cache, MOST_FLUSHED_ALONE, None));
+        assert!(defer(&cache, MOST_FLUSHED_ALONE + 1, None));
         cache.publish_downloads().unwrap();
     }
 

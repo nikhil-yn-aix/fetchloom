@@ -8,7 +8,7 @@ use crate::digest;
 /// opens a batch: linux's own, or one without its flush elsewhere.
 fn deferring(cache: &Cache) {
     #[cfg(target_os = "linux")]
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     #[cfg(not(target_os = "linux"))]
     cache.defer_unflushed();
 }
@@ -182,7 +182,7 @@ fn without_a_batch_a_download_is_in_place_at_once() {
 #[test]
 fn a_batch_names_its_downloads_only_after_one_flush() {
     let (_dir, cache) = cache();
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     let first = finished(&cache, "https://example.org/first", b"first");
     let second = finished(&cache, "https://example.org/second", b"second");
     let claim = Arc::downgrade(
@@ -222,7 +222,7 @@ fn a_batch_names_its_downloads_only_after_one_flush() {
 #[test]
 fn bytes_thrown_away_after_finishing_never_take_their_hash_in_the_batch() {
     let (_dir, cache) = cache();
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     let url = "https://example.org/again";
     let Claim::Owned(partial) = cache.claim(url).unwrap() else {
         panic!("nothing else holds the download");
@@ -250,7 +250,7 @@ fn bytes_thrown_away_after_finishing_never_take_their_hash_in_the_batch() {
 #[test]
 fn the_same_bytes_twice_in_a_batch_are_new_once() {
     let (_dir, cache) = cache();
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     assert!(finished(&cache, "https://example.org/a", b"same").new);
     assert!(!finished(&cache, "https://example.org/b", b"same").new);
     cache.publish_downloads().unwrap();
@@ -260,7 +260,7 @@ fn the_same_bytes_twice_in_a_batch_are_new_once() {
 #[test]
 fn a_second_download_of_the_same_link_puts_the_first_in_place_instead_of_waiting() {
     let (_dir, cache) = cache();
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     let url = "https://example.org/twice";
     let stored = finished(&cache, url, b"twice");
     let claim = Arc::downgrade(
@@ -391,4 +391,58 @@ fn a_group_takes_its_names_once_its_first_download_waited_long_enough() {
     assert!(!cache.object_path(&third.digest).exists());
     cache.publish_downloads().unwrap();
     assert!(cache.object_path(&third.digest).is_file());
+}
+
+/// each download waiting for its group's flush keeps its claim's file open, so a process that
+/// may open few files waits in smaller groups: a group of 256 ran out of files under a limit of
+/// 256, as `add -i` of 1,000 links did.
+#[cfg(target_os = "linux")]
+#[test]
+fn downloads_wait_in_groups_a_low_open_file_limit_can_hold() {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    const CHILD: &str = "FETCHLOOM_TEST_FEW_OPEN_FILES";
+    if std::env::var_os(CHILD).is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cache::deferred::tests::downloads_wait_in_groups_a_low_open_file_limit_can_hold",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let limits = getrlimit(Resource::Nofile);
+    let open_files = limits.maximum.map_or(256, |hard| hard.min(256));
+    setrlimit(
+        Resource::Nofile,
+        Rlimit {
+            current: Some(open_files),
+            maximum: limits.maximum,
+        },
+    )
+    .unwrap();
+    let (_dir, cache) = cache();
+    assert!(cache.defer_downloads(Some(open_files)).unwrap());
+    let urls: Vec<String> = (0..1_000)
+        .map(|n| format!("https://example.org/{n}"))
+        .collect();
+    let stored: Vec<Stored> = urls
+        .iter()
+        .map(|url| finished(&cache, url, url.as_bytes()))
+        .collect();
+    cache.publish_downloads().unwrap();
+    for (url, stored) in urls.iter().zip(&stored) {
+        assert_eq!(
+            fs::read(cache.object_path(&stored.digest)).unwrap(),
+            url.as_bytes()
+        );
+    }
 }

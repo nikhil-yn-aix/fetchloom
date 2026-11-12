@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use super::{Cache, Stored};
 use crate::digest::{Md5, Sha256};
 
-/// how many finished downloads wait for one flush before they take their names. each keeps its
-/// claim's file open until then, and linux lets a process open 1,024 files by default.
+/// the most finished downloads that wait for one flush before they take their names. each keeps
+/// its claim's file open until then, and linux lets a process open 1,024 files by default.
 const GROUP: usize = 256;
 
 /// how long the first download waiting in a group waits for the group to fill before the group
@@ -52,6 +52,8 @@ struct Pending {
     #[cfg(target_os = "linux")]
     batch: Arc<super::object::Batch>,
     finished: Vec<Finished>,
+    /// how many finished downloads wait for one flush.
+    group: usize,
     /// the digest of every download in this batch, so a large batch is not searched once for
     /// each download.
     digests: HashSet<Sha256>,
@@ -126,6 +128,19 @@ impl Group {
     }
 }
 
+/// how many finished downloads wait for one flush in a process that may hold `open_files` files
+/// open: a quarter of them, at most [`GROUP`], which leaves the rest to the downloads still
+/// running, the cache's own files and placing.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(dead_code, reason = "only linux flushes a group of downloads at once")
+)]
+fn group(open_files: Option<u64>) -> usize {
+    open_files.map_or(GROUP, |open| {
+        usize::try_from(open / 4).map_or(GROUP, |quarter| quarter.clamp(1, GROUP))
+    })
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -137,12 +152,13 @@ impl Cache {
     #[cfg_attr(
         not(target_os = "linux"),
         expect(
+            unused_variables,
             clippy::unused_self,
             clippy::unnecessary_wraps,
             reason = "only linux flushes a whole filesystem at once"
         )
     )]
-    pub(crate) fn defer_downloads(&self) -> io::Result<bool> {
+    pub(crate) fn defer_downloads(&self, open_files: Option<u64>) -> io::Result<bool> {
         #[cfg(target_os = "linux")]
         if let Some(batch) = self.batch()? {
             let mut pending = lock(&self.deferred.pending);
@@ -150,6 +166,7 @@ impl Cache {
             *pending = Some(Pending {
                 batch: Arc::new(batch),
                 finished: Vec::new(),
+                group: group(open_files),
                 digests: HashSet::new(),
                 since: None,
             });
@@ -164,6 +181,7 @@ impl Cache {
     pub(super) fn defer_unflushed(&self) {
         *lock(&self.deferred.pending) = Some(Pending {
             finished: Vec::new(),
+            group: GROUP,
             digests: HashSet::new(),
             since: None,
         });
@@ -199,7 +217,7 @@ impl Cache {
             batch.since = Some(Instant::now());
         }
         batch.finished.push(finished);
-        if batch.finished.len() >= GROUP {
+        if batch.finished.len() >= batch.group {
             let group = batch.take();
             // taken before the batch is let go, so bytes thrown away meanwhile wait for the group
             let mut publishing = lock(&self.deferred.publishing);

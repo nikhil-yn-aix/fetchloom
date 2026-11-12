@@ -109,7 +109,7 @@ fn a_partial_record_copied_to_another_url_cannot_resume() {
 #[test]
 fn a_secret_url_keeps_its_in_memory_deferred_publication_identity() {
     let (_folder, cache) = cache();
-    assert!(cache.defer_downloads().unwrap());
+    assert!(cache.defer_downloads(None).unwrap());
     let partial = checkpoint(&cache);
     let (received, validators) = partial.resumable().unwrap();
     let mut writer = partial

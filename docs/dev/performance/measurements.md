@@ -28,6 +28,7 @@ every change measured with the current harness, one row each: what it gained whe
 | flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| flushing | flush groups of finished downloads sized to a quarter of the open-file limit, at most 256 | `add -i` of 1,000 links under a hard limit of 256 open files: exit 50 to 0, at most 117 files open; at the default limit groups of 256 as before, 1.000 glibc, 0.987 musl | kept, for correctness | [low open-file limit](#flush-groups-under-a-low-open-file-limit-2026-11-12) |
 | flushing | the first 64 files of every batch flushed on their own | ext4 s1 1.078, peak memory 1.151 | dropped | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | archives | budget an explicit thread cap only for pending readers | xfs time 0.689 glibc / 0.703 musl; small musl +2.03 MiB, within the default budget | kept, reported memory cost | [reader budgets](#pending-archive-reader-budgets-2026-11-12) |
 | archives | archive staging spread over 16 folders | ext4 s4 0.798, xfs s4 0.830 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -428,6 +429,22 @@ then the clean release build of the batch this change came in, with the flush gr
 `--version` and `help` run none of the changed code, yet they moved by 1 to 5% between builds and batches: on commands this short, where the binary's code lands and what else the machine does weigh as much as the work. what is left of `path` on glibc is of that kind: a8f9dad7 and the change run the same number of user instructions within 0.5% (288.6 and 289.9 million, `perf stat -r 10`) in the loop that passes over the state's 24 MB, but the binary is 1.2 MB larger, with 15 more page faults and 1.0 MiB more peak memory, and its user time is 1.2 ms longer. the voluntary context switches of `path` fell from 21 to 15, a8f9dad7's 14. the settled sync's peak memory fell 0.1 to 0.3 MiB on glibc; musl's was 16.1 to 16.5 MiB with or without the change, 2.0 to 2.4 MiB above a8f9dad7, which this change did not look into.
 
 the change is kept: it is faster where it aimed, 0.929 to 0.981 on the settled sync, flat on `path`, slower nowhere it runs, and the settled sync is back within 1.02 of a8f9dad7 on both libcs, as is `path` on musl. `path` on glibc is not, at 1.019 to 1.025, for the reason above, which none of the three changes touches. `the_run_ends_without_waiting_for_threads_still_exiting` failed on the old end, and on the new one with `cfg!(unix)` put in place of `cfg!(windows)`; `a_network_that_sends_nothing_looks_for_no_keys` failed on the old search and with the search forced when the network is built.
+
+## flush groups under a low open-file limit, 2026-11-12
+
+a run of more than 64 downloads names its finished downloads in groups after one flush, and each download waiting for its group keeps its claim's file open. groups were 256 whatever the process could open, so under a hard limit of 256 open files `add -i` of 1,000 links failed with exit 50, "could not write to the cache: too many open files", on a8f9dad7 and efbf3adf alike, glibc and musl. a soft limit alone is raised at start, so only a hard one this low fails. a group is now a quarter of `Machine::open_files`, at most 256.
+
+one run each of `add -i` of 1,000 links of 90 to 110 kB from a local server, glibc, on tmpfs, under the measure lock; open files sampled from `/proc/<pid>/fd`, flushes counted with `strace -f -c`:
+
+| build | open-file limit | exit | most files open | `syncfs` | `fsync` |
+|---|---:|---:|---:|---:|---:|
+| efbf3adf | 1,048,576 | 0 | 320 | 4 | 18 |
+| the change | 1,048,576 | 0 | 325 | 4 | 18 |
+| the change | 1,024 | 0 | 329 | 4 | 18 |
+| the change | 256 | 0 | 117 | 16 | 18 |
+| a8f9dad7, efbf3adf, glibc and musl | 256 | 50 | | | |
+
+a limit of 1,024 or more keeps groups of 256, so ordinary runs do what they did: efbf3adf against the clean release build of this batch, 1,000 links in interleaved rounds, 1.000 [0.992, 1.021] on glibc (30 pairs) and 0.987 [0.973, 1.006] on musl (28 pairs), peak memory 1.008 and 1.025 [0.971, 1.049]. under a low limit a run flushes four times as often, which costs a busy disk more; tmpfs could not time that. `downloads_wait_in_groups_a_low_open_file_limit_can_hold` holds 1,000 finished downloads in a batch under a soft limit of 256: with groups of 256 it failed with "too many open files", and again with the quarter taken out.
 
 ## pending archive reader budgets, 2026-11-12
 
