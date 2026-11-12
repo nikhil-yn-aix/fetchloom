@@ -52,15 +52,24 @@ fn a_dropbox_html_answer_is_not_a_file() {
     assert!(error.help.unwrap().contains("browser"));
 }
 
+/// each page dropbox answers a download with instead of the file keeps the kind its status
+/// means and says why, and a status no case handles names it.
 #[test]
-fn dropbox_access_and_missing_pages_keep_their_error_kinds() {
+fn each_dropbox_refusal_page_keeps_its_kind_and_says_why() {
     let url = Url::parse("https://www.dropbox.com/s/abc/data.csv?dl=1").unwrap();
     let divert = crate::source::fetch_plan(&url).divert;
-    for (status, kind) in [
-        (401, Kind::AuthRequired),
-        (403, Kind::AuthRequired),
-        (404, Kind::ReferenceUnresolved),
-        (410, Kind::ReferenceUnresolved),
+    let refused = "dropbox refused access to the shared file or folder";
+    let missing = "dropbox could not find the shared file or folder";
+    for (status, kind, message) in [
+        (401, Kind::AuthRequired, refused),
+        (403, Kind::AuthRequired, refused),
+        (404, Kind::ReferenceUnresolved, missing),
+        (410, Kind::ReferenceUnresolved, missing),
+        (
+            418,
+            Kind::NetworkStatus,
+            "dropbox answered 418 instead of the shared file or folder",
+        ),
     ] {
         let recorded = Recorded::default().on(
             url.as_str(),
@@ -69,7 +78,8 @@ fn dropbox_access_and_missing_pages_keep_their_error_kinds() {
         );
         let response = block_on(recorded.get(&url)).unwrap();
         let error = divert.unwrap()(&response.url, response.status, &response.text()).unwrap_err();
-        assert_eq!(error.kind, kind);
+        assert_eq!(error.kind, kind, "{status}");
+        assert_eq!(error.message, message);
         assert!(error.help.is_some());
     }
 }

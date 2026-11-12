@@ -754,6 +754,28 @@ fn missing_buckets_are_unresolved() {
     assert!(error.details[0].contains("notFound"));
 }
 
+/// a listing answered with a status no case handles, such as 418, names it and keeps what the
+/// service said, rather than reading as a refusal or a missing bucket.
+#[test]
+fn a_listing_answered_with_another_status_names_it_and_what_the_service_said() {
+    let url = STATES
+        .replace("cloud-samples-data", "test")
+        .replace("bigquery%2Fus-states%2F", "x%2F");
+    let teapot =
+        br#"{"error":{"code":418,"message":"I'm a teapot","errors":[{"reason":"teapot"}]}}"#;
+    let recorded = Recorded::default().on(&url, 418, teapot.to_vec());
+    let error = resolve("gs://test/x/", &recorded).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkStatus);
+    assert_eq!(
+        error.message,
+        "storage.googleapis.com answered 418 for gs://test/x/"
+    );
+    assert_eq!(
+        error.details,
+        ["storage.googleapis.com said teapot: I'm a teapot"]
+    );
+}
+
 #[test]
 fn escaped_keys_are_decoded_and_linked_escaped_again() {
     let url = listing_url("https://bucket.s3.amazonaws.com/", "d/");
