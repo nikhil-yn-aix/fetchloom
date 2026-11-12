@@ -387,15 +387,30 @@ mod tests {
 
     #[test]
     fn a_path_longer_than_4096_bytes_is_refused() {
-        let longest = vec!["x"; 2048].join("/");
-        assert!(add_all(&[&longest]).is_ok());
-        let err = add_all(&[&format!("{longest}/y")]).unwrap_err();
+        let longest = format!("{}x", vec!["x"; 2048].join("/"));
+        assert_eq!(longest.len(), 4096);
+        assert!(add_all(&[&longest]).is_ok(), "4,096 bytes fit");
+        let err = add_all(&[&format!("{longest}y")]).unwrap_err();
         assert!(err.contains("longer than 4,096 bytes"), "{err}");
         let dotted = format!("{}a", "./".repeat(2048));
         assert!(
             add_all(&[&dotted]).is_err(),
             "the name as the archive spells it"
         );
+    }
+
+    /// the limit holds for a name as it unpacks too: U+0958 takes 3 bytes as spelled and 6 once
+    /// NFC splits it in two, so 33 parts of 40 fit as spelled, in 3,992 bytes, and unpacked, in
+    /// 7,952, do not.
+    #[test]
+    fn a_path_that_nfc_lengthens_past_4096_bytes_is_refused() {
+        let part = "\u{958}".repeat(40);
+        let grows = vec![part.as_str(); 33].join("/");
+        assert_eq!(grows.len(), 3992);
+        let Err(err) = add_all(&[&grows]) else {
+            panic!("a path of 7,952 bytes once unpacked was taken");
+        };
+        assert!(err.contains("longer than 4,096 bytes"), "{err}");
     }
 
     #[test]
