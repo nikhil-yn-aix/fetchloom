@@ -802,6 +802,7 @@ dependencies = [
  "process-wrap",
  "reflink-copy",
  "reqwest",
+ "ring",
  "rustix",
  "rustls",
  "rustls-native-certs",

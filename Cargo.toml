@@ -55,6 +55,9 @@ liblzma = { version = "0.4.9", default-features = false, features = ["static"] }
 md-5 = "0.11"
 percent-encoding = "2.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["cookies", "http2", "rustls-no-provider", "system-proxy"] }
+# signs the token requests of a google service account with its RSA key. it is already in the
+# tree under rustls, with these features
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # std keeps windows file ids unstable, and the crate forbids unsafe code, so this tells a placed
 # hardlink from a copy
