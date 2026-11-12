@@ -67,7 +67,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [OSF](docs/user/sources/osf.md): osfstorage files and folders
 - [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
 - [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions
-- [google drive](docs/user/sources/google-drive.md): shared files and folders
+- [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones read through drive's api with google application default credentials once `drive_folders` lists them, with a service account or a login through an oauth client of your own
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
 - [github and gitlab releases](docs/user/sources/releases.md): the files of a release at its tag, and github's limit of 60 requests an hour without a key
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private S3 buckets read with AWS keys once `s3_buckets` lists them, and private cloud storage buckets read with google application default credentials once `gcs_buckets` lists them

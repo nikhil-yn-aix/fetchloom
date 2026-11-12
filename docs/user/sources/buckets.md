@@ -119,6 +119,8 @@ a service account asks for the read-only storage scope, `devstorage.read_only`; 
 
 `fetchloom auth` names the file and whose credentials it holds. no key, token or login reaches data.toml, data.lock, the cache, logs or `--json` output. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, and never what it signs with.
 
+the same credentials read the [private google drive folders and files](google-drive.md#private-files-and-folders) that `drive_folders` lists, with a scope of their own.
+
 ## access and limits
 
 a refused listing (401 or 403, such as S3's `AccessDenied`) fails with `auth.required` and exit code 40, saying whether a key went with the request and what to do. a bucket `s3_buckets` does not list:

@@ -39,7 +39,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
 | [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
 | [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
-| [google drive](sources/google-drive.md) | use shared files or folders and exclude google docs |
+| [google drive](sources/google-drive.md) | use shared files or folders, read private ones you list, and exclude google docs |
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |
 | [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [cloud buckets](sources/buckets.md) | list and pin S3 and google cloud storage prefixes, private S3 buckets with your AWS keys and private cloud storage buckets with your google credentials |
