@@ -50,7 +50,7 @@ a sync registers its project with the cache, so `cache gc` keeps what the projec
 | hardlink | another name for the cache file itself | no |
 | copy | independent bytes | yes, with `copy = true` |
 
-sync tries a reflink, then a hardlink, then a copy, as the disk allows. it never makes symlinks. a folder synced by onedrive, dropbox, icloud or google drive gets no hardlinks, but may get reflinks.
+sync tries a reflink, then a hardlink, then a copy, as the disk allows. it never makes symlinks. a folder fetchloom recognizes as synced, such as onedrive, dropbox or icloud drive, gets no hardlinks, but may get reflinks; [windows](windows.md#onedrive-and-synced-folders) and [macos](macos.md#icloud-drive-and-cloud-storage) list the folders.
 
 files are read-only by default. for an analysis that writes into its inputs:
 

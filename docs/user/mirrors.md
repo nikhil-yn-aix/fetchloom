@@ -169,4 +169,4 @@ a mirror is asked only for files the cache lacks, by their SHA-256 alone: no pro
 
 ## a mirror is not an archive
 
-a mirror keeps bytes, not their licences, versions, retention or access rules: anyone who can read it can take what was pushed there. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. so `cache gc --inputs` names the mirror it relies on before it frees anything: once that mirror and the source have lost a file, no build can make its result again. to preserve data, deposit it where it gets a DOI.
+a mirror keeps bytes, not their licenses, versions, retention or access rules: anyone who can read it can take what was pushed there. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. so `cache gc --inputs` names the mirror it relies on before it frees anything: once that mirror and the source have lost a file, no build can make its result again. to preserve data, deposit it where it gets a DOI.
