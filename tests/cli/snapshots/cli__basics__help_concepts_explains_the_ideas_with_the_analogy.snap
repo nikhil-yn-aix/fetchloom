@@ -14,7 +14,9 @@ it works like a kitchen:
 
 a dataset is one entry in data.toml: a name, such as iris, and a reference to
 where it is published, such as zenodo:3608990, a DOI or a link. --select and
---exclude choose which of its files to keep.
+--exclude choose which of its files to keep. an archive, such as a .tar shard,
+is unpacked; a members table in data.toml keeps some of the files inside it,
+and extract = false keeps it packed, as webdataset reads shards.
 
 a fingerprint is a file's SHA-256 hash. to pin a dataset, fetchloom records
 the fingerprint of each of its files in data.lock, so every machine gets the

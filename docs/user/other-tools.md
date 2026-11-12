@@ -101,7 +101,7 @@ for each file `dvc import-url` brought in, run `fetchloom add` with the link its
 
 | tool | keep it for | with fetchloom |
 |---|---|---|
-| hugging face datasets, torchvision, tfds, webdataset, litdata | loading and streaming | give them the folder `fetchloom path <name>` prints and turn their own download off |
+| hugging face datasets, torchvision, tfds, webdataset, litdata | loading and streaming | give them the folder `fetchloom path <name>` prints and turn their own download off; webdataset reads [packed shards](#webdataset-shards) |
 | make, snakemake, nextflow, airflow, dvc pipelines | running steps | run `fetchloom sync --locked` before the first step, which stops rather than changes a pin, and find inputs with `fetchloom path`. a short step can be a [recipe](recipes.md): `fetchloom build` runs it, pins what it made and places it, and in a job `fetchloom build --locked` makes what no cache or mirror holds, as [CI](ci.md#recipes) shows |
 | git, git lfs, datalad, dvc remotes | versions of files you change | commit data.toml and data.lock with your code, and data.lock.d once a recipe or a big dataset keeps its file list there; `add` keeps `data/` out of git. [dvc, git-lfs and datalad](#dvc-git-lfs-and-datalad) says how each works beside fetchloom |
 | rclone, s5cmd, aws cli | copying files you own to and from storage | fetchloom reads buckets and never writes to one |
@@ -109,6 +109,54 @@ for each file `dvc import-url` brought in, run `fetchloom add` with the link its
 | uv, pixi, conda, docker | environments | data.lock sits beside uv.lock or the environment file; a container keeps the cache on a volume, as [notebooks and containers](notebooks.md) shows |
 
 fetchloom hosts no data and keeps no accounts. [limits](limits.md) lists what else it leaves to other tools.
+
+### webdataset shards
+
+`add` unpacks a `.tar` shard into its dataset's folder, where a [members table](reference/data-toml.md#files-inside-archives) in data.toml keeps only some of its files, one table for each shard. webdataset reads shards packed, as `--no-extract` keeps them, but then nothing is unpacked to choose from, so sync refuses a members table:
+
+```text
+error: members in datasets.speech chooses files inside archives, but extract = false keeps them packed
+  data.toml:5   [datasets.speech.members."shard-000000.tar"]
+  help: remove the members tables, or remove extract = false
+```
+
+to give webdataset packed shards of only some members, unpack them with their members table and `place = false`, and pack the kept files again in a [recipe](recipes.md). from a real run with a shard served from this machine:
+
+```toml
+[datasets.speech]
+ref = "http://127.0.0.1:19357/shard-000000.tar"
+place = false
+
+[datasets.speech.members."shard-000000.tar"]
+select = ["*.flac", "*.txt"]
+
+[datasets.wds]
+from = ["speech"]
+run = ["python3", "repack.py", "{speech}", "{out}"]
+code = ["repack.py"]
+```
+
+`repack.py` packs every file it is given into one tar, with fixed times and owners so the same files make the same bytes:
+
+```python
+import sys, tarfile
+from pathlib import Path
+
+source, out = Path(sys.argv[1]), Path(sys.argv[2])
+
+
+def plain(info):
+    info.mtime, info.uid, info.gid, info.uname, info.gname = 0, 0, 0, "", ""
+    return info
+
+
+with tarfile.open(out / "speech-000000.tar", "w", format=tarfile.USTAR_FORMAT) as tar:
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            tar.add(path, path.relative_to(source).as_posix(), filter=plain)
+```
+
+`fetchloom build` placed `data/wds/speech-000000.tar` holding `000000.flac`, `000000.txt`, `000001.flac` and `000001.txt`, retired the unpacked files from `data/speech`, and `fetchloom build --check` made the same bytes again. give webdataset the folder `fetchloom path wds` prints.
 
 ## dvc, git-lfs and datalad
 
