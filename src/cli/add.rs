@@ -2,6 +2,7 @@
 //! project. every byte goes into the cache before data.toml or data.lock is written, and a failure
 //! after that puts back what the add wrote.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -417,7 +418,8 @@ async fn add_held(
     };
     let mut addition = resolve_add(context, &net, &args, link, &parsed).await?;
     if args.name.is_none()
-        && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
+        && let Some(name) =
+            Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing)
     {
         let work = Loop::new(context, project, net, cache);
         let present = Present {
@@ -442,7 +444,13 @@ async fn add_held(
     }
     let name = match args.name.take() {
         Some(asked) => asked,
-        None => choose_name(&context.output, &addition.listing, &parsed, manifest, AS)?,
+        None => choose_name(
+            &context.output,
+            &addition.listing,
+            &parsed,
+            &|name| manifest.datasets.contains_key(name),
+            AS,
+        )?,
     };
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
@@ -532,7 +540,12 @@ async fn import_held(
         let name = if supplying || args.name.is_some() {
             own
         } else {
-            free_name(&context.output, own, manifest, AS)?
+            free_name(
+                &context.output,
+                own,
+                &|name| manifest.datasets.contains_key(name),
+                AS,
+            )?
         };
         let work = Loop::new(context, project, net, cache).telling(&name);
         let found = (&walked, shown, supplying);
@@ -564,7 +577,12 @@ async fn import_held(
     let name = if args.name.is_some() {
         own
     } else {
-        free_name(&context.output, own, manifest, AS)?
+        free_name(
+            &context.output,
+            own,
+            &|name| manifest.datasets.contains_key(name),
+            AS,
+        )?
     };
     context.output.step("Imported", &format!("{name} · {told}"));
     let work = Loop::new(context, project, net, cache).telling(&name);
@@ -984,40 +1002,23 @@ async fn add_list_held(
         .await
         .map_err(|error| on_lines(error, &lines))?;
     }
-    let mut text = adding.text.clone().unwrap_or_default();
-    let mut manifest = adding.manifest.clone();
-    let (mut names, mut given, mut promised, mut already) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for ((((line, parsed), listing), listed), from) in
-        list.lines.iter().zip(listings).zip(entries).zip(&mut lines)
-    {
-        let at = line.named(&list.name);
-        if let Some(name) = present(&adding.manifest, old.as_ref(), &listed.entry, &listing) {
-            same_settings(&adding.manifest.datasets[&name], &listed.entry, &name, &at)?;
-            already.push(name);
-            continue;
-        }
-        let name = choose_name(&context.output, &listing, parsed, &manifest, RENAME)?;
-        text = manifest::with_dataset(
-            &text,
-            &name,
-            &listed.reference,
-            &listed.select,
-            &[],
-            extract,
-        )?;
-        manifest = Manifest::parse(&text)?;
-        if let Some(sha256) = line.sha256 {
-            promised.push(Promised {
-                dataset: name.clone(),
-                sha256,
-                line: at,
-            });
-        }
-        given.push(Given::Listing(name.clone(), listing));
-        from.dataset = Some(name.clone());
-        names.push(name);
-    }
+    let found = listings.into_iter().zip(entries).collect();
+    let NewDatasets {
+        text,
+        manifest,
+        names,
+        given,
+        promised,
+        already,
+    } = new_datasets(
+        &context.output,
+        adding,
+        old.as_ref(),
+        &list,
+        found,
+        &mut lines,
+        extract,
+    )?;
     let work = Loop::new(context, project, net, cache);
     if dry_run {
         let nothing = format!("each link of {} is in data.toml already", list.name);
@@ -1044,6 +1045,90 @@ async fn add_list_held(
         lock_changed: outcome.lock_changed,
         placement: Some(outcome.placed),
         ..Report::default()
+    })
+}
+
+/// what the lines of a list add to data.toml: its text and datasets with them, each new dataset
+/// with its listing and any SHA-256 its line gave, and the datasets it has already.
+struct NewDatasets {
+    text: String,
+    manifest: Manifest,
+    names: Vec<String>,
+    given: Vec<Given>,
+    promised: Vec<Promised>,
+    already: Vec<String>,
+}
+
+/// the datasets the lines of `list` add to data.toml, `found` holding each line's listing and how
+/// data.toml records it. a line naming a dataset data.toml has already stays as it is; each other
+/// line becomes a dataset named apart from data.toml's datasets and from each other's, noted on
+/// its line of `lines`. data.toml's text is read and written once however long the list.
+fn new_datasets(
+    output: &Output,
+    adding: &AddProject,
+    old: Option<&Lock>,
+    list: &List,
+    found: Vec<(Listing, Listed)>,
+    lines: &mut [FromLine],
+    extract: bool,
+) -> Result<NewDatasets, Error> {
+    let sources = Sources::new(&adding.manifest, old);
+    let mut taken: HashSet<String> = adding.manifest.datasets.keys().cloned().collect();
+    let mut written = Vec::new();
+    let (mut names, mut given, mut promised, mut already) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (((line, parsed), (listing, listed)), from) in list.lines.iter().zip(found).zip(lines) {
+        let at = line.named(&list.name);
+        if let Some(name) = sources.present(&listed.entry, &listing) {
+            same_settings(&adding.manifest.datasets[&name], &listed.entry, &name, &at)?;
+            already.push(name);
+            continue;
+        }
+        let name = choose_name(
+            output,
+            &listing,
+            parsed,
+            &|name| taken.contains(name),
+            RENAME,
+        )?;
+        taken.insert(name.clone());
+        if let Some(sha256) = line.sha256 {
+            promised.push(Promised {
+                dataset: name.clone(),
+                sha256,
+                line: at,
+            });
+        }
+        written.push((name.clone(), listed));
+        given.push(Given::Listing(name.clone(), listing));
+        from.dataset = Some(name.clone());
+        names.push(name);
+    }
+    let text = adding.text.clone().unwrap_or_default();
+    let (text, manifest) = if written.is_empty() {
+        (text, adding.manifest.clone())
+    } else {
+        let added: Vec<manifest::NewDataset<'_>> = written
+            .iter()
+            .map(|(name, listed)| manifest::NewDataset {
+                name,
+                reference: &listed.reference,
+                select: &listed.select,
+                exclude: &[],
+                extract,
+            })
+            .collect();
+        let text = manifest::with_datasets(&text, &added)?;
+        let manifest = Manifest::parse(&text)?;
+        (text, manifest)
+    };
+    Ok(NewDatasets {
+        text,
+        manifest,
+        names,
+        given,
+        promised,
+        already,
     })
 }
 
@@ -1759,38 +1844,72 @@ fn restore(
     }
 }
 
-/// the dataset in data.toml that already pins what was just resolved, under any spelling of its
-/// reference.
-fn present(
-    manifest: &Manifest,
-    old: Option<&Lock>,
-    wanted: &manifest::Entry,
-    listing: &Listing,
-) -> Option<String> {
-    let wanted = wanted.source()?;
-    let resolved = listing.resolved.to_string();
-    manifest
-        .datasets
-        .iter()
-        .filter_map(|(name, entry)| Some((name, entry.source()?)))
-        .filter(|(name, source)| {
-            source.reference == wanted.reference
-                || old.and_then(|old| old.get(name)).is_some_and(|locked| {
-                    locked.reference == source.reference && locked.resolved == resolved
-                })
-        })
-        .min_by_key(|(_, source)| {
-            (
-                source.select != wanted.select
-                    || source.exclude != wanted.exclude
-                    || source.extract != wanted.extract,
-                source.reference != wanted.reference,
-            )
-        })
-        .map(|(name, _)| name.clone())
+/// data.toml's datasets fetched from a source, by the reference data.toml gives each and by what
+/// data.lock resolved that reference to, so a link finds the dataset pinning it without a look
+/// at every other.
+struct Sources<'a> {
+    by_reference: HashMap<&'a str, Vec<(&'a str, &'a Source)>>,
+    by_resolved: HashMap<&'a str, Vec<(&'a str, &'a Source)>>,
 }
 
-/// `add` of a dataset data.toml already has, as `present`. with the same settings nothing
+impl<'a> Sources<'a> {
+    fn new(manifest: &'a Manifest, old: Option<&'a Lock>) -> Sources<'a> {
+        let mut sources = Sources {
+            by_reference: HashMap::new(),
+            by_resolved: HashMap::new(),
+        };
+        for (name, entry) in &manifest.datasets {
+            let Some(source) = entry.source() else {
+                continue;
+            };
+            sources
+                .by_reference
+                .entry(&source.reference)
+                .or_default()
+                .push((name, source));
+            if let Some(locked) = old
+                .and_then(|old| old.get(name))
+                .filter(|locked| locked.reference == source.reference)
+            {
+                sources
+                    .by_resolved
+                    .entry(&locked.resolved)
+                    .or_default()
+                    .push((name, source));
+            }
+        }
+        sources
+    }
+
+    /// the dataset in data.toml that already pins what was just resolved, under any spelling of
+    /// its reference: of those, one with the same settings, then one with the same reference,
+    /// then the first by name.
+    fn present(&self, wanted: &manifest::Entry, listing: &Listing) -> Option<String> {
+        let wanted = wanted.source()?;
+        let resolved = listing.resolved.to_string();
+        let found: BTreeMap<&str, &Source> = self
+            .by_reference
+            .get(wanted.reference.as_str())
+            .into_iter()
+            .chain(self.by_resolved.get(resolved.as_str()))
+            .flatten()
+            .copied()
+            .collect();
+        found
+            .into_iter()
+            .min_by_key(|(_, source)| {
+                (
+                    source.select != wanted.select
+                        || source.exclude != wanted.exclude
+                        || source.extract != wanted.extract,
+                    source.reference != wanted.reference,
+                )
+            })
+            .map(|(name, _)| name.to_owned())
+    }
+}
+
+/// `add` of a dataset data.toml already has, as [`Sources::present`] finds it. with the same settings nothing
 /// changes, so running the same `add` twice is safe; other settings need a choice only the person
 /// can make. paths are told from `here`.
 async fn again(
@@ -1990,13 +2109,13 @@ const AS: &str = "choose a name with --as <name>";
 /// how to name a dataset of a list yourself, which takes no `--as`.
 const RENAME: &str = "to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name";
 
-/// the name a new dataset gets without `--as`: one made from its file or its title. `rename` is
-/// how a person names it otherwise, should that name be taken.
+/// the name a new dataset gets without `--as`: one made from its file or its title, unless
+/// `is_taken`. `rename` is how a person names it otherwise, should that name be taken.
 fn choose_name(
     output: &Output,
     listing: &Listing,
     parsed: &Parsed,
-    manifest: &Manifest,
+    is_taken: &dyn Fn(&str) -> bool,
     rename: &str,
 ) -> Result<String, Error> {
     let single = match (listing.files.as_slice(), &parsed.file) {
@@ -2015,25 +2134,25 @@ fn choose_name(
         .or_else(|| listing.naming_title().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
-    free_name(output, name, manifest, rename)
+    free_name(output, name, is_taken, rename)
 }
 
-/// `name`, a name fetchloom chose, made usable: the next number when data.toml has it already,
-/// told with `rename`. a chosen name never names a windows device, as [`name::dataset_name`]
-/// makes it.
+/// `name`, a name fetchloom chose, made usable: the next number when `is_taken` says it is
+/// taken, told with `rename`. a chosen name never names a windows device, as
+/// [`name::dataset_name`] makes it.
 fn free_name(
     output: &Output,
     name: String,
-    manifest: &Manifest,
+    is_taken: &dyn Fn(&str) -> bool,
     rename: &str,
 ) -> Result<String, Error> {
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number
-    if !manifest.datasets.contains_key(&name) {
+    if !is_taken(&name) {
         return Ok(name);
     }
     let numbered = (2..100)
         .map(|number| format!("{name}-{number}"))
-        .find(|numbered| !manifest.datasets.contains_key(numbered));
+        .find(|numbered| !is_taken(numbered));
     let Some(numbered) = numbered else {
         return Err(taken(&name));
     };
@@ -2083,6 +2202,8 @@ mod tests {
             "https://raw.githubusercontent.com/org/repo/main/iris.csv"
         );
     }
+
+    use std::fmt::Write as _;
 
     use super::*;
     use crate::cache::Cache;
@@ -2283,6 +2404,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// an add of `count` links listed in links.txt, each to one file whose hash its source
+    /// states, as `add -i` has them once every line resolved: the list, each line's listing and
+    /// how data.toml records it.
+    fn resolved_list(count: usize) -> (List, Vec<(Listing, Listed)>) {
+        let text = (0..count).fold(String::new(), |mut text, index| {
+            let _ = writeln!(text, "https://example.org/f{index:05}.bin");
+            text
+        });
+        let lines = links::parse("links.txt", &text).unwrap();
+        let list = List {
+            name: "links.txt".to_owned(),
+            lines: links::checked("links.txt", lines, true).unwrap(),
+        };
+        let found = list
+            .lines
+            .iter()
+            .map(|(line, parsed)| {
+                let file = line.link.rsplit('/').next().unwrap();
+                let listing = listed(
+                    &line.link,
+                    vec![stated(file, &line.link, line.link.as_bytes())],
+                );
+                let entry = listed_entry(&list.name, line, parsed, &listing, true).unwrap();
+                (listing, entry)
+            })
+            .collect();
+        (list, found)
+    }
+
+    /// `add -i` reads data.toml's text as often for a long list as for a short one. reading it
+    /// again for each link made 4,000 links take a minute.
+    #[test]
+    fn a_list_reads_data_toml_as_often_however_many_links_it_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let adding = AddProject {
+            project: Project {
+                root: dir.path().to_path_buf(),
+            },
+            held: None,
+            text: None,
+            manifest: Manifest::parse("").unwrap(),
+            old: None,
+            lock_text: None,
+            unrestored: AtomicBool::new(false),
+        };
+        let context = offline_context();
+        let reads = |count| {
+            let (list, found) = resolved_list(count);
+            let mut lines = FromLine::each(&list);
+            let before = manifest::tests::reads();
+            let new = new_datasets(
+                &context.output,
+                &adding,
+                None,
+                &list,
+                found,
+                &mut lines,
+                true,
+            )
+            .unwrap();
+            let reads = manifest::tests::reads() - before;
+            assert_eq!(new.manifest.datasets.len(), count);
+            assert_eq!(new.names.len(), count);
+            reads
+        };
+        assert_eq!(reads(30), reads(3), "data.toml is read again for each link");
     }
 
     /// a project whose data.toml and data.lock pin dataset a, as an add of dataset b holds and

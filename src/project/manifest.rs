@@ -2,7 +2,7 @@
 //! place, keeping comments, order and spacing.
 
 use std::collections::BTreeMap;
-use std::ops::Range;
+use std::ops::{Bound, Range};
 
 use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlError, Value};
 
@@ -264,6 +264,8 @@ impl Entry {
 
 impl Manifest {
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
+        #[cfg(test)]
+        tests::reading();
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
         let root = document.as_table();
@@ -1176,6 +1178,46 @@ fn shorthand(folder: &str) -> bool {
             .any(|after| after.starts_with(|c: char| c.is_ascii_alphabetic() || "_{".contains(c)))
 }
 
+/// a dataset `add` writes into data.toml.
+#[derive(Clone, Copy)]
+pub(crate) struct NewDataset<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) reference: &'a str,
+    pub(crate) select: &'a [String],
+    pub(crate) exclude: &'a [String],
+    pub(crate) extract: bool,
+}
+
+impl NewDataset<'_> {
+    /// the dataset's table, as data.toml writes it.
+    fn table(&self) -> Table {
+        let mut table = Table::new();
+        table.insert("ref", toml_edit::value(self.reference));
+        for (key, patterns) in [("select", self.select), ("exclude", self.exclude)] {
+            if !patterns.is_empty() {
+                table.insert(key, toml_edit::value(patterns.iter().collect::<Array>()));
+            }
+        }
+        if !self.extract {
+            table.insert("extract", toml_edit::value(false));
+        }
+        table
+    }
+
+    /// the refusal of a data.toml whose datasets are written inline, where no table can go.
+    fn refused_inline(&self) -> Error {
+        let reference = crate::net::mask_query(self.reference);
+        Error::new(
+            Kind::ProjectInvalid,
+            "data.toml writes its datasets inline, so fetchloom cannot add to them",
+        )
+        .help(format!(
+            "add [datasets.{}] with ref = \"{reference}\" by hand",
+            self.name
+        ))
+    }
+}
+
 /// data.toml's text with one more dataset, or a new file holding just that dataset. it goes
 /// before the dataset whose name follows its own, so two people adding different datasets rarely
 /// change the same lines.
@@ -1187,28 +1229,147 @@ pub(crate) fn with_dataset(
     exclude: &[String],
     extract: bool,
 ) -> Result<String, Error> {
+    let added = NewDataset {
+        name,
+        reference,
+        select,
+        exclude,
+        extract,
+    };
     let mut document = editable(text)?;
-    let mut table = Table::new();
-    table.insert("ref", toml_edit::value(reference));
-    for (key, patterns) in [("select", select), ("exclude", exclude)] {
-        if !patterns.is_empty() {
-            table.insert(key, toml_edit::value(patterns.iter().collect::<Array>()));
-        }
-    }
-    if !extract {
-        table.insert("extract", toml_edit::value(false));
-    }
-    if !put(&mut document, name, table) {
-        let reference = crate::net::mask_query(reference);
-        return Err(Error::new(
-            Kind::ProjectInvalid,
-            "data.toml writes its datasets inline, so fetchloom cannot add to them",
-        )
-        .help(format!(
-            "add [datasets.{name}] with ref = \"{reference}\" by hand"
-        )));
+    if !put(&mut document, name, added.table()) {
+        return Err(added.refused_inline());
     }
     Ok(document.to_string())
+}
+
+/// data.toml's text with each of `added`, placed as [`with_dataset`] places one, and read and
+/// written once however many there are. datasets that go before the same one go in name order.
+pub(crate) fn with_datasets(text: &str, added: &[NewDataset<'_>]) -> Result<String, Error> {
+    let Some(first) = added.first() else {
+        return Ok(text.to_owned());
+    };
+    let mut document = editable(text)?;
+    let blank_line_first = !document.as_table().is_empty();
+    let datasets = match document.get("datasets") {
+        None => None,
+        Some(item) => Some(item.as_table().ok_or_else(|| first.refused_inline())?),
+    };
+    // the datasets written with a header, which a new one can go before, and where each is
+    let placed: BTreeMap<String, isize> = datasets
+        .into_iter()
+        .flat_map(Table::iter)
+        .filter_map(|(name, item)| {
+            let table = item.as_table().filter(|table| !table.is_dotted())?;
+            Some((name.to_owned(), table.position()?))
+        })
+        .collect();
+    let mut sorted: Vec<&NewDataset<'_>> = added.iter().collect();
+    sorted.sort_by_key(|added| added.name);
+    let mut last = Vec::new();
+    let mut before: BTreeMap<isize, (&str, Vec<&NewDataset<'_>>)> = BTreeMap::new();
+    for added in sorted {
+        let next = placed
+            .range::<str, _>((Bound::Excluded(added.name), Bound::Unbounded))
+            .next();
+        match next {
+            Some((next, position)) => {
+                before
+                    .entry(*position)
+                    .or_insert((next.as_str(), Vec::new()))
+                    .1
+                    .push(added);
+            }
+            None => last.push(added),
+        }
+    }
+    // each new dataset's blank line or note above it, and the comments of the one it goes
+    // before, as `insert_before` gives them
+    let has_values = document.iter().any(|(_, item)| item.is_value());
+    let first_table = first_position(document.as_table());
+    let notes: Vec<(String, String)> = before
+        .iter()
+        .map(|(position, (next, _))| {
+            let following = datasets
+                .and_then(|datasets| datasets.get(next))
+                .and_then(Item::as_table)
+                .map_or("", prefix);
+            let (note, theirs) = split_note(following);
+            let is_first = !has_values && first_table.is_none_or(|first| first >= *position);
+            let above = if note.is_empty() && !is_first {
+                "\n"
+            } else {
+                note
+            };
+            (above.to_owned(), format!("\n{theirs}"))
+        })
+        .collect();
+    let mut room = Vec::with_capacity(before.len());
+    let mut going = 0;
+    for (position, (_, tables)) in &before {
+        going += tables.len();
+        room.push((*position, going));
+    }
+    make_room(document.as_table_mut(), &room);
+    let datasets = document.entry("datasets").or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    let Some(datasets) = datasets.as_table_mut() else {
+        return Err(first.refused_inline());
+    };
+    // the last go first, so each takes the place after the datasets there are, as a table
+    // without a place of its own follows the one before it
+    for (index, added) in last.into_iter().enumerate() {
+        let mut table = added.table();
+        let above = if index > 0 || blank_line_first {
+            "\n"
+        } else {
+            ""
+        };
+        table.decor_mut().set_prefix(above);
+        datasets.insert(added.name, Item::Table(table));
+    }
+    let mut moved = 0;
+    for ((position, (next, tables)), (above, theirs)) in before.into_iter().zip(notes) {
+        let first = position.saturating_add_unsigned(moved);
+        for (at, (index, added)) in (first..).zip(tables.iter().enumerate()) {
+            let mut table = added.table();
+            table.set_position(Some(at));
+            table
+                .decor_mut()
+                .set_prefix(if index == 0 { above.as_str() } else { "\n" });
+            datasets.insert(added.name, Item::Table(table));
+        }
+        moved += tables.len();
+        if let Some(following) = datasets.get_mut(next).and_then(Item::as_table_mut) {
+            following.decor_mut().set_prefix(theirs);
+        }
+    }
+    Ok(document.to_string())
+}
+
+/// moves every table later by as many places as tables go before it, `room` holding each place
+/// tables go before, in order, with how many go there and before it.
+fn make_room(table: &mut Table, room: &[(isize, usize)]) {
+    let later = |position: isize| {
+        let at = room.partition_point(|(place, _)| *place <= position);
+        at.checked_sub(1).map_or(0, |at| room[at].1)
+    };
+    let mut shift = |table: &mut Table| {
+        if let Some(position) = table.position() {
+            table.set_position(Some(position.saturating_add_unsigned(later(position))));
+        }
+        make_room(table, room);
+    };
+    for (_, item) in table.iter_mut() {
+        match item {
+            Item::Table(table) => shift(table),
+            Item::ArrayOfTables(array) => array.iter_mut().for_each(&mut shift),
+            _ => {}
+        }
+    }
 }
 
 /// puts `table` among the datasets as `name`, before the dataset whose name follows it, or after
@@ -1727,6 +1888,8 @@ fn next_table(document: &mut DocumentMut, position: isize) -> Option<&mut Table>
 }
 
 fn editable(text: &str) -> Result<DocumentMut, Error> {
+    #[cfg(test)]
+    tests::reading();
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     text.parse::<DocumentMut>()
         .map_err(|err| not_toml(text, &err))
@@ -1748,8 +1911,22 @@ fn not_toml(text: &str, err: &TomlError) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    thread_local! {
+        static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn reading() {
+        READS.set(READS.get() + 1);
+    }
+
+    /// how many times this thread has read a data.toml's text whole, to edit it or to read its
+    /// datasets.
+    pub(crate) fn reads() -> usize {
+        READS.get()
+    }
 
     fn parse(text: &str) -> Manifest {
         Manifest::parse(text).unwrap()
@@ -2130,6 +2307,67 @@ mod tests {
         assert_eq!(parse(&added).datasets.len(), 2);
         let fresh = with_dataset("", "iris", "zenodo:3608990", &[], &[], true).unwrap();
         assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
+    }
+
+    /// datasets added together land where each would land added alone, one after another, in
+    /// any order: comments, notes and blank lines included, and those that go before the same
+    /// dataset in name order.
+    #[test]
+    fn datasets_added_together_land_as_each_would_alone() {
+        let texts = [
+            "",
+            "[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.delta]\nref = \"zenodo:delta\"\n",
+            "# inputs\n\n# the core set\n[datasets.core]\nref = \"zenodo:core\"\n",
+            "[datasets.core]\nref = \"zenodo:core\"\n\n[project]\ndata_dir = \"in\"\n",
+            "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.core]\nref = \"zenodo:2\"\n",
+            "[datasets.mid]\nref = \"zenodo:mid\"\n\n[datasets.alpha]\nref = \"zenodo:alpha\"\n# about zulu\n[datasets.zulu]\nref = \"zenodo:zulu\"\n",
+            "[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.core.members.\"a.zip\"]\nselect = [\"*.csv\"]\n\n# kilo\n\n[datasets.kilo]\nref = \"zenodo:kilo\"\n",
+            "datasets.dot.ref = \"zenodo:dot\"\n",
+            "datasets = { x = { ref = \"zenodo:9\" } }\n",
+        ];
+        let select = ["*.csv".to_owned()];
+        let names = [
+            "beta", "aaa", "echo", "zzz", "core-2", "mid-a", "alpha-0", "kilo-z", "dot-1",
+        ];
+        let references: Vec<String> = names.iter().map(|name| format!("zenodo:{name}")).collect();
+        let added: Vec<NewDataset<'_>> = names
+            .iter()
+            .zip(&references)
+            .enumerate()
+            .map(|(index, (name, reference))| NewDataset {
+                name,
+                reference,
+                select: if index % 3 == 0 { &select } else { &[] },
+                exclude: &[],
+                extract: index % 4 != 1,
+            })
+            .collect();
+        let mut sorted: Vec<&NewDataset<'_>> = added.iter().collect();
+        sorted.sort_by_key(|added| added.name);
+        for text in texts {
+            for order in [
+                added.iter().collect::<Vec<_>>(),
+                added.iter().rev().collect(),
+                sorted.clone(),
+            ] {
+                let alone = order.iter().try_fold(text.to_owned(), |text, added| {
+                    with_dataset(
+                        &text,
+                        added.name,
+                        added.reference,
+                        added.select,
+                        added.exclude,
+                        added.extract,
+                    )
+                });
+                let order: Vec<NewDataset<'_>> = order.into_iter().copied().collect();
+                assert_eq!(
+                    with_datasets(text, &order).map_err(|err| (err.message, err.help)),
+                    alone.map_err(|err| (err.message, err.help)),
+                    "{text:?}"
+                );
+            }
+        }
     }
 
     /// a new dataset goes before the one whose name follows it, so two people adding different

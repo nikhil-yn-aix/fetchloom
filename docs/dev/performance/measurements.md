@@ -170,6 +170,18 @@ on hugging face, kaggle and figshare, fetchloom's slowest run was faster than th
 
 one file is under the batch rule's 64, so both ways flush it on its own; its row measures reading it back through a new handle after closing the one that wrote it, which cost nothing measurable. system cpu time was 2.91 s against 3.05 s for the small files, and the same for the large ones. built as committed, at a load average of 47, a first push of the 10,000 files took 2.58 to 2.93 s in three runs, and a second push, which finds each file with one look at its name and writes nothing, 0.02 s in nine.
 
+## adding a list of links, 2026-11-12
+
+`add -i` of a list of links, each to one file of 90,000 to 110,000 bytes on a server on this machine, each run into an empty project and an empty cache on tmpfs. the old code wrote data.toml's text again and read it back for each link, to add the link's dataset and name the next one; the change writes and reads it once for the whole list. release builds of c9da2d6 (before) and of the change (after) took turns, the order swapped each round, on the shared 24-core machine at a load average of 9 to 14.
+
+| links | rounds | before, median and range | after, median and range | after/before |
+|---:|---:|---|---|---:|
+| 500 | 5 | 0.94 s, 0.92 to 1.10 | 0.24 s, 0.23 to 0.25 | 0.247 |
+| 2,000 | 5 | 13.29 s, 13.23 to 14.89 | 1.37 s, 0.79 to 1.43 | 0.096 |
+| 10,000 | 2 | 415.3 s, 410.3 to 420.3 | 4.64 s, 4.58 to 4.70 | 0.011 |
+
+before's time was cpu, growing with the square of the list: 12.8 s of user time for 2,000 links, 414 s for 10,000. a trace of after's 10,000 links shows 3.1 s of downloads, 0.64 s relocking and 0.61 s placing, and at a terminal no gap of more than 0.85 s without a new line or bar. tmpfs leaves out the disk's flushes, which the change does not touch.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
