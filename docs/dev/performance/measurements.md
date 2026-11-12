@@ -48,6 +48,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
 | project state | indexed selected-folder ranges | 40,000 named datasets: ratios 0.1312 glibc and 0.0687 musl; musl stress peak +0.75 MiB | kept | [folder ranges](#searching-selected-folder-ranges-2026-11-12) |
 | project state | the data folder walk looks at the run's stop before each folder | a stop asked before the walk ends it at once; status of 100,000 files on ext4 0.996 glibc, 1.003 musl, peak memory +0.5 and +0.6 MiB | kept, for stopping | [stop during the walk](#a-stop-during-the-data-folder-walk-2026-11-12) |
+| project state | the state indexed by blocks of records, so a command that names datasets reads only theirs | `path` of 1 file beside 100,000 records 0.090 glibc, 0.144 musl; beside 1,000,000 0.013 and 0.021; peak memory 0.04 to 0.40; whole reads flat, a sync that writes the state +0.7% on musl | kept | [state index](#an-indexed-project-state-2026-11-12) |
 | project state | reuse an intact racy hash within one survey | `status --verify` of 32 MiB: musl 0.544, glibc 0.563; controls and memory within noise | kept | [racy hashes](#reusing-racy-hashes-within-a-survey-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -346,6 +347,39 @@ all of them, b3b182a against the changes, median times:
 | `sync` and `status` of all, in either project, and `--version` | 0.967 to 0.999 | 0.990 to 1.004 |
 
 no peak memory interval started above 1.001. beside 100,000 files, `path` of 3 still reads all of the state's 24 MB of json to pass over its records: 25 ms on musl and 45 ms on glibc, nearly all of what is left. going further needs a state that keeps each dataset's records apart.
+
+## an indexed project state, 2026-11-12
+
+the state is now one json document whose records are cut into blocks of 64 KiB, each block's first path and byte range listed after them, and where the records end written in its first 48 bytes ([state reading](../architecture/project.md#state-reading)). a read within the named folders, as a ready `path` and a settled `sync <name>` make, reads those 48 bytes, what follows the records and the blocks that can hold paths in the folders: 81,422 of 24,719,656 bytes for `path tiny` beside 100,000 records, in the `read_state` span of a trace, where the release before read all 24,700,438. whole reads parse the document as before. the version went to 2, so a version 1 state counts as empty.
+
+builds: the release builds of efbf3adf and of the change, glibc and musl, one build per arm. each arm had its own copy of every fixture: the base's state in version 1, the change's the same records rewritten into version 2 by a script that rewrote a 3,000-file project's state byte for byte as the change's own writer did, both states with the same modification time. on tmpfs: scale `named-100000`, a 1-file dataset beside 100,000 records of a dataset whose files are not on disk, and `files-100000` with its cache. on ext4: hardlinked trees of scale `files-1000001` with the 1-file dataset added. every batch held the measure lock on cores 12-23, ran a warmup round and then rounds with every arm once in a seeded shuffled order; peak memory is gnu time's `%M`; a ratio is the median of change over base with its 95% paired bootstrap interval from `bench/ab.py`. the change stays if its target intervals end below 0.90 and no other interval starts above 1.02.
+
+| case | libc | n | median, base to change | time ratio [95%] | peak memory, base to change | memory ratio [95%] |
+|---|---|---:|---|---|---|---|
+| `path tiny` beside 100,000 records | glibc | 30 | 55.8 to 5.1 ms | 0.090 [0.089, 0.091] | 32.2 to 8.9 MiB | 0.279 [0.276, 0.281] |
+| | musl | 30 | 34.6 to 5.0 ms | 0.144 [0.138, 0.147] | 36.5 to 14.5 MiB | 0.396 [0.395, 0.398] |
+| settled `sync tiny` beside 100,000 records | glibc | 30 | 56.7 to 5.4 ms | 0.094 [0.093, 0.097] | 32.4 to 9.8 MiB | 0.302 [0.301, 0.304] |
+| | musl | 30 | 34.8 to 5.2 ms | 0.148 [0.144, 0.153] | 37.1 to 15.1 MiB | 0.406 [0.405, 0.408] |
+| `path tiny` beside 1,000,001 records | glibc | 20 | 464.3 to 5.9 ms | 0.013 [0.013, 0.013] | 243.3 to 9.2 MiB | 0.038 [0.037, 0.038] |
+| | musl | 20 | 258.6 to 5.4 ms | 0.021 [0.020, 0.022] | 248.5 to 16.5 MiB | 0.066 [0.066, 0.067] |
+| settled `sync tiny` beside 1,000,001 records | glibc | 20 | 468.0 to 7.0 ms | 0.015 [0.014, 0.016] | 243.7 to 9.8 MiB | 0.040 [0.040, 0.040] |
+| | musl | 20 | 261.6 to 6.5 ms | 0.024 [0.023, 0.026] | 251.1 to 17.1 MiB | 0.068 [0.068, 0.069] |
+| `--json status`, 100,000 files | glibc | 20 | 432.4 to 436.0 ms | 1.004 [0.983, 1.050] | 76.8 to 76.7 MiB | 0.999 [0.997, 1.000] |
+| | musl | 20 | 376.9 to 378.5 ms | 0.999 [0.961, 1.027] | 94.5 to 94.2 MiB | 0.997 [0.981, 0.999] |
+| settled sync, 100,000 files | glibc | 20 | 409.9 to 417.0 ms | 1.010 [0.997, 1.038] | 77.0 to 77.0 MiB | 1.000 [0.999, 1.001] |
+| | musl | 20 | 369.9 to 374.5 ms | 0.995 [0.987, 1.013] | 92.9 to 92.9 MiB | 1.001 [0.999, 1.001] |
+| a sync that places one deleted file and writes the 100,000-record state | glibc | 25 | 773.3 to 766.7 ms | 0.992 [0.976, 1.002] | 132.9 to 132.9 MiB | 0.999 [0.997, 1.002] |
+| | musl | 25 | 730.5 to 736.1 ms | 1.007 [1.002, 1.013] | 153.9 to 154.0 MiB | 1.000 [0.999, 1.001] |
+| sync of 40,000 one-file datasets into an empty folder | glibc | 10 | 1.219 to 1.209 s | 0.993 [0.973, 1.007] | 140.5 to 140.2 MiB | 1.000 [0.997, 1.001] |
+| | musl | 10 | 988.2 to 994.2 ms | 1.005 [0.998, 1.016] | 200.4 to 201.4 MiB | 1.000 [0.990, 1.011] |
+| settled sync of 3 files | glibc | 40 | 4.8 to 4.8 ms | 1.006 [0.997, 1.013] | 9.3 to 9.3 MiB | 1.006 [0.996, 1.014] |
+| | musl | 40 | 4.5 to 4.5 ms | 0.990 [0.966, 1.001] | 14.7 to 14.7 MiB | 1.002 [0.999, 1.004] |
+| `--json status`, 1,000,001 files | glibc | 15 | 5.943 to 5.780 s | 0.961 [0.953, 1.004] | 690.4 to 690.5 MiB | 1.000 [1.000, 1.000] |
+| | musl | 15 | 4.553 to 4.580 s | 1.001 [0.989, 1.011] | 668.2 to 668.3 MiB | 1.000 [1.000, 1.000] |
+| settled sync, 1,000,001 files | glibc | 15 | 5.404 to 5.464 s | 0.998 [0.989, 1.022] | 690.7 to 690.8 MiB | 1.000 [1.000, 1.000] |
+| | musl | 15 | 4.488 to 4.455 s | 0.998 [0.966, 1.005] | 668.8 to 668.8 MiB | 1.000 [1.000, 1.000] |
+
+the first build of the change started its writer's buffer empty, and its doublings ended a 24.7 MB state's buffer at 38 MiB, where serde_json's start of 128 bytes ends at 32. on the sync that writes the 100,000-record state, heaptrack showed peak heap 101.7 to 108.0 MB, and gnu time 1.1 MiB more on glibc, [1.005, 1.021], and 1.9 MiB more on musl, [1.011, 1.015]. the change now starts at 128 bytes (peak heap 101.7 MB again), and the rows above are its build, except the two 1,000,001-file whole reads, which ran on the first build: they never write the state. other load on the machine flagged most rounds of the 100,000-file status (17 of 20) and of the first run of the writing sync, which ran again unflagged for its row. the one cost left is 0.7% on musl for a sync that writes a large state; glibc's interval for it holds 1.
 
 ## the end of a run, 2026-11-12
 
