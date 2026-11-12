@@ -529,6 +529,7 @@ fn test_source(url: &Url) -> Option<Url> {
             | "ftp.sra.ebi.ac.uk"
             | "ftp.ncbi.nlm.nih.gov"
             | "api.dandiarchive.org"
+            | "openneuro.org"
     ) {
         return None;
     }

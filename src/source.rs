@@ -19,6 +19,7 @@ mod hf;
 pub(crate) mod kaggle;
 pub(crate) mod local;
 mod mendeley;
+mod openneuro;
 mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
@@ -113,6 +114,7 @@ pub(crate) enum Reference {
     Ena(ena::Accession),
     Geo(geo::Accession),
     Dandi(dandi::Dandiset),
+    OpenNeuro(openneuro::Dataset),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -317,6 +319,7 @@ impl Reference {
             "ena" => whole(Reference::Ena(ena::Accession::parse(rest)?)),
             "geo" => whole(Reference::Geo(geo::Accession::parse(rest)?)),
             "dandi" => whole(Reference::Dandi(dandi::Dandiset::parse(rest)?)),
+            "openneuro" => whole(Reference::OpenNeuro(openneuro::Dataset::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -427,6 +430,7 @@ impl Reference {
             Reference::Ena(accession) => accession.resolve(api).await,
             Reference::Geo(accession) => accession.resolve(api).await,
             Reference::Dandi(dandiset) => dandiset.resolve(api).await,
+            Reference::OpenNeuro(dataset) => dataset.resolve(api, folders).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -454,6 +458,7 @@ impl fmt::Display for Reference {
             Reference::Ena(accession) => write!(f, "{accession}"),
             Reference::Geo(accession) => write!(f, "{accession}"),
             Reference::Dandi(dandiset) => write!(f, "{dandiset}"),
+            Reference::OpenNeuro(dataset) => write!(f, "{dataset}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -668,6 +673,9 @@ fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
             dandi::Dandiset::from_link(url)
                 .map(|(dandiset, folder)| (Reference::Dandi(dandiset), folder))
         })
+        .or_else(|| {
+            openneuro::Dataset::from_link(url).map(|dataset| whole(Reference::OpenNeuro(dataset)))
+        })
 }
 
 /// repository file pages have a stable raw endpoint, unlike their HTML view.
@@ -711,6 +719,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
         "www.ncbi.nlm.nih.gov" | "ncbi.nlm.nih.gov" if url.path().starts_with("/geo/") => "geo",
         "dandiarchive.org" | "www.dandiarchive.org" => "dandi",
+        "openneuro.org" | "www.openneuro.org" if !url.path().starts_with("/crn/") => "openneuro",
         "www.ebi.ac.uk" | "ebi.ac.uk"
             if ["/ena/browser/view/", "/ena/data/view/"]
                 .iter()
@@ -1129,6 +1138,39 @@ mod tests {
             "dandi:0000271",
             "dandi:000027@",
             "dandi:000027@1.0",
+        ] {
+            let error = Reference::parse(bad).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");
+        }
+    }
+
+    /// an openneuro dataset is its accession, at a snapshot or the newest, and a pasted page of
+    /// it or of one of its snapshots, where its DOI leads, is read as that.
+    #[test]
+    fn openneuro_datasets_and_their_pages_find_their_source() {
+        for (text, canonical) in [
+            ("openneuro:ds000001", "openneuro:ds000001"),
+            ("openneuro:DS000001@1.0.0", "openneuro:ds000001@1.0.0"),
+            (
+                "https://openneuro.org/datasets/ds000001",
+                "openneuro:ds000001",
+            ),
+            (
+                "https://openneuro.org/datasets/ds000001/versions/1.0.0",
+                "openneuro:ds000001@1.0.0",
+            ),
+            (
+                "https://openneuro.org/datasets/ds000001/versions/1.0.0/download",
+                "openneuro:ds000001@1.0.0",
+            ),
+        ] {
+            assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
+        }
+        for bad in [
+            "openneuro:ds1",
+            "openneuro:ds000001@",
+            "openneuro:ds000001@1.0\"0",
+            "openneuro:sub000001",
         ] {
             let error = Reference::parse(bad).unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");

@@ -65,6 +65,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [ENA](docs/user/sources/ena.md): the read files of runs, experiments, samples and studies, by accession, including runs from NCBI's SRA
 - [GEO](docs/user/sources/geo.md): the files GEO keeps for a series, a sample or a platform, pinned by their bytes since NCBI states no checksums
 - [DANDI](docs/user/sources/dandi.md): a dandiset's assets at one version, by number, page link or DOI, checked against the SHA-256 dandi states; embargoed dandisets are refused
+- [OpenNeuro](docs/user/sources/openneuro.md): a dataset's files at one snapshot, by accession, page link or DOI, checked against the SHA-256 or MD5 their git-annex keys state; private datasets are refused
 - [OSF](docs/user/sources/osf.md): osfstorage files and folders
 - [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
 - [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions

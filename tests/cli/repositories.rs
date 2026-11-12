@@ -1172,3 +1172,192 @@ fn get_takes_the_folder_a_pasted_dandi_page_names() -> Result {
     assert!(!rats.join("sub-RAT123").exists());
     Ok(())
 }
+
+const OPENNEURO: &str = "/openneuro.org/crn/graphql";
+const OPENNEURO_TREE: &str = "db72baeb3665a309db35d6ef649e117eb45a8a87";
+const OPENNEURO_README: &str = "b6aff27bdd11bd66b06f01339be7cd794c56f586";
+const OPENNEURO_SCAN: &str = "/s3.amazonaws.com/openneuro.org/ds000001/sub-01/sub-01_T1w.nii.gz?versionId=SHOhSfza0LCFpgctRH3sMZ8iwAGSUwIy";
+
+/// the link of a GraphQL query to openneuro's API at the stand-in, as fetchloom sends it.
+fn graphql(query: &str) -> String {
+    let encoded = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("query", query)
+        .finish();
+    format!("{OPENNEURO}?{encoded}")
+}
+
+/// the query for snapshot 1.0.0 of ds000001: its description and its top folder.
+fn openneuro_top() -> String {
+    graphql(
+        r#"query{snapshot(datasetId:"ds000001",tag:"1.0.0"){tag deprecated{reason} description{Name License DatasetDOI} files{id filename size directory annexed urls}}}"#,
+    )
+}
+
+/// the query for one folder of snapshot 1.0.0 of ds000001.
+fn openneuro_folder(tree: &str) -> String {
+    graphql(&format!(
+        r#"query{{snapshot(datasetId:"ds000001",tag:"1.0.0"){{files(tree:"{tree}"){{id filename size directory annexed urls}}}}}}"#
+    ))
+}
+
+/// openneuro's answers for snapshot 1.0.0 of ds000001: a README kept in git, `DataLad`'s own
+/// folder, and a folder holding one scan in git-annex under `key`, whose bytes are `scan`.
+fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
+    let objects = format!(
+        "https://openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
+    );
+    let top = serde_json::json!({"data": {"snapshot": {
+        "tag": "1.0.0",
+        "deprecated": null,
+        "description": {"Name": "Balloon Analog Risk-taking Task", "License": "CC0", "DatasetDOI": "10.18112/openneuro.ds000001.v1.0.0"},
+        "files": [
+            {"id": OPENNEURO_README, "filename": "README", "size": NOTES.len(), "directory": false, "annexed": false, "urls": [objects]},
+            {"id": "37e92e55882570ffb064bcb64423481b98e68da3", "filename": ".datalad", "size": 0, "directory": true, "annexed": false, "urls": []},
+            {"id": OPENNEURO_TREE, "filename": "sub-01", "size": 0, "directory": true, "annexed": false, "urls": []},
+        ],
+    }}});
+    let folder = serde_json::json!({"data": {"snapshot": {"files": [
+        {"id": key, "filename": "sub-01_T1w.nii.gz", "size": scan.len(), "directory": false, "annexed": true,
+         "urls": [format!("https://s3.amazonaws.com{}", OPENNEURO_SCAN.trim_start_matches("/s3.amazonaws.com"))]},
+    ]}}});
+    Routes::start(vec![
+        (openneuro_top(), answer(&top)?),
+        (openneuro_folder(OPENNEURO_TREE), answer(&folder)?),
+        (
+            format!(
+                "/openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
+            ),
+            file(NOTES, &format!("\"{OPENNEURO_README}\"")),
+        ),
+        (
+            OPENNEURO_SCAN.to_owned(),
+            file(scan, &format!("\"{}\"", md5(scan))),
+        ),
+    ])
+}
+
+/// a command whose requests to openneuro's API and its S3 bucket go to `routes`.
+fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+    let mut command = command(sandbox, routes, args);
+    command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command
+}
+
+/// a snapshot is pinned with the SHA-256 its git-annex keys state, from the S3 links pinned to
+/// it, every query carrying the header openneuro's API asks of a query sent by GET. `DataLad`'s
+/// own folder is not asked for, and a teammate's sync reads only the files data.lock names.
+#[test]
+fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
+    let routes = openneuro(&key, ROWS)?;
+    let output = openneuro_command(
+        &sandbox,
+        &routes,
+        &["add", "openneuro:ds000001@1.0.0", "--as", "bart"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("resolved = \"openneuro:ds000001@1.0.0\"")
+            && lock.contains(&format!("sha256 = \"{}\"", sha256_hex(ROWS)))
+            && lock.contains("url = \"https://s3.amazonaws.com/openneuro.org/ds000001/sub-01/sub-01_T1w.nii.gz?versionId=SHOhSfza0LCFpgctRH3sMZ8iwAGSUwIy\""),
+        "{lock}"
+    );
+    assert_eq!(fs::read(work.join("data/bart/README"))?, NOTES);
+    assert_eq!(
+        fs::read(work.join("data/bart/sub-01/sub-01_T1w.nii.gz"))?,
+        ROWS
+    );
+    let queries: Vec<String> = routes
+        .requests()
+        .into_iter()
+        .filter(|head| head.contains(OPENNEURO))
+        .collect();
+    assert_eq!(
+        queries.len(),
+        2,
+        "the top folder and sub-01, not .datalad: {queries:?}"
+    );
+    assert!(
+        queries.iter().all(|head| head
+            .to_ascii_lowercase()
+            .contains("apollo-require-preflight: true")),
+        "{queries:?}"
+    );
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    let mut fetched = routes.targets()[listed..].to_vec();
+    fetched.sort();
+    assert_eq!(
+        fetched,
+        [
+            format!(
+                "/openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
+            ),
+            OPENNEURO_SCAN.to_owned(),
+        ],
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// bytes whose MD5 is not the one an old dataset's git-annex key states are refused, and
+/// nothing is placed.
+#[test]
+fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = format!("MD5E-s{}--{}.nii.gz", ROWS.len(), md5(NOTES));
+    let routes = openneuro(&key, ROWS)?;
+    let output = openneuro_command(
+        &sandbox,
+        &routes,
+        &["add", "openneuro:ds000001@1.0.0", "--as", "bart"],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("MD5"), "{stderr}");
+    assert!(
+        !sandbox
+            .work()
+            .join("data/bart/sub-01/sub-01_T1w.nii.gz")
+            .exists()
+    );
+    Ok(())
+}
+
+/// a dataset openneuro shows to no one without an account is refused with what that means, and
+/// no data.toml is written.
+#[test]
+fn a_private_openneuro_dataset_is_refused_and_says_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        graphql(r#"query{dataset(id:"ds004999"){latestSnapshot{tag}}}"#),
+        answer(&serde_json::json!({
+            "errors": [{"message": "You do not have access to read this dataset.", "path": ["dataset"]}],
+            "data": {"dataset": null},
+        }))?,
+    )])?;
+    let output =
+        openneuro_command(&sandbox, &routes, &["--json", "add", "openneuro:ds004999"]).output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let said = json(&output)?;
+    assert_eq!(said["errors"][0]["kind"], "auth.required");
+    let message = said["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("openneuro:ds004999"), "{message}");
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}

@@ -37,6 +37,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [ENA](sources/ena.md) | list the read files of runs, experiments, samples and studies |
 | [GEO](sources/geo.md) | list the files GEO keeps for a series, a sample or a platform |
 | [DANDI](sources/dandi.md) | list the assets of a dandiset at one version, checked against the SHA-256 dandi states |
+| [OpenNeuro](sources/openneuro.md) | list the files of a dataset's snapshot, checked against the digests their git-annex keys state |
 | [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
 | [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
 | [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
