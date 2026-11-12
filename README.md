@@ -15,7 +15,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 `data.toml` lists the datasets you want, and `data.lock` pins their exact files, each with its SHA-256 and size. commit both, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock. `fetchloom add iris` finds a dataset by name on hugging face, kaggle and zenodo, and `fetchloom get <link>` downloads once, without a project.
 
-it reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](docs/user/sources/README.md) shows how to write each, and [signing in](docs/user/signing-in.md) covers private data.
+it reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md) shows how to write each, and [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) covers private data.
 
 ## install
 
@@ -26,7 +26,7 @@ cargo install --locked --git https://github.com/nikhil-yn-aix/fetchloom
 fetchloom --version
 ```
 
-[getting started](docs/user/getting-started.md) walks through installing rust on windows, macos and linux, a first project and how to undo it.
+[getting started](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/getting-started.md) walks through installing rust on windows, macos and linux, a first project and how to undo it.
 
 after the first release, these installers will install a prebuilt `fetchloom` and check it against the release's `SHA256SUMS`:
 
@@ -45,7 +45,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetc
 pip install fetchloom
 ```
 
-the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_PATH=1` to keep them out of your shell profiles. they and the python package also make `fl`, a short name for `fetchloom`, unless another program already answers to it. [getting started](docs/user/getting-started.md#uninstall) says how to uninstall.
+the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_PATH=1` to keep them out of your shell profiles. they and the python package also make `fl`, a short name for `fetchloom`, unless another program already answers to it. [getting started](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/getting-started.md#uninstall) says how to uninstall.
 
 ## quick start
 
@@ -68,20 +68,20 @@ learn more: `fetchloom --help` lists the commands;
 `fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
 ```
 
-that is what bare `fetchloom` prints outside a project, after its version line. inside a project it shows the project's status. [scripting](docs/user/scripting.md) covers JSON output and the [python helper](docs/user/scripting.md#python-helper).
+that is what bare `fetchloom` prints outside a project, after its version line. inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md#python-helper).
 
 ## docs
 
 | need | read |
 |---|---|
-| install, try it and uninstall | [getting started](docs/user/getting-started.md) |
-| understand data.toml, data.lock, the cache and sync | [concepts](docs/user/concepts.md) |
-| look up a command or option | [commands](docs/user/commands/README.md) |
-| use a supported site, or sign in for private data | [sources](docs/user/sources/README.md), [signing in](docs/user/signing-in.md) |
-| fix a failed download or a local conflict | [troubleshooting](docs/user/troubleshooting.md) |
-| every other topic: scripts, CI, clusters, agents, windows, macos | [user guide](docs/user/README.md) |
-| work on the code | [developer guide](docs/dev/README.md) |
+| install, try it and uninstall | [getting started](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/getting-started.md) |
+| understand data.toml, data.lock, the cache and sync | [concepts](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/concepts.md) |
+| look up a command or option | [commands](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/commands/README.md) |
+| use a supported site, or sign in for private data | [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md), [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) |
+| fix a failed download or a local conflict | [troubleshooting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/troubleshooting.md) |
+| every other topic: scripts, CI, clusters, agents, windows, macos | [user guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/README.md) |
+| work on the code | [developer guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/dev/README.md) |
 
 ## license
 
-apache-2.0. see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+apache-2.0. see [LICENSE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE) and [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE).

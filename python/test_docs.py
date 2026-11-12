@@ -61,6 +61,12 @@ class DocumentationLinks(unittest.TestCase):
                         "SUMMARY.md is not a rendered page; link to its repository URL",
                     )
 
+    def test_the_readme_links_only_to_absolute_addresses(self):
+        """pypi shows README.md without the repository around it, so a relative link breaks there."""
+        relative = [f"{number}: {link}" for number, link in links(ROOT / "README.md")
+                    if not re.match(r"[a-z]+:", link)]
+        self.assertEqual(relative, [])
+
     def test_links_reach_their_files_and_headings(self):
         pages = [ROOT / "README.md", ROOT / "CONTRIBUTING.md", ROOT / "llms.txt"]
         for folder in ("docs", "bench", "skills", "python"):
@@ -76,7 +82,7 @@ class DocumentationLinks(unittest.TestCase):
                     target = (page.parent / unquote(path)).resolve() if path else page
                 with self.subTest(page=page.relative_to(ROOT).as_posix(), line=number, link=link):
                     self.assertTrue(target.exists(), "the link names no file")
-                    if fragment and target.suffix == ".md" and not link.startswith(BLOB):
+                    if fragment and target.suffix == ".md":
                         self.assertIn(fragment, anchors(target), "the link names no heading")
 
     def test_every_user_page_is_listed(self):

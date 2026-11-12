@@ -11,6 +11,7 @@ write for a researcher retrieving data or a contributor opening the code for the
 - open each page with one plain sentence about its subject. cut announcements about the document itself.
 - describe current behavior. keep pending code and publishing work in [roadmap](roadmap.md).
 - keep facts with their owning component and link from other pages. link text names its destination.
+- README.md is also the description pypi and crates.io show, without the repository around it, so its links are absolute github links; a python test refuses a relative one.
 - attach conditions to measurements and link claims to source, tests or recorded results.
 
 | cut | use |
