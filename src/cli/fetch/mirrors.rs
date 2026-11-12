@@ -71,10 +71,10 @@ impl Mirrored {
     }
 
     /// what each mirror said of the file pinned to `digest`, in order, or that none can be asked
-    /// for a file whose SHA-256 is not known yet.
+    /// for a new file, whose SHA-256 is not known yet.
     fn said(&self, digest: Option<&Sha256>) -> String {
         let Some(digest) = digest else {
-            return "its SHA-256 is not known yet, so only its source can give it".to_owned();
+            return "new, so no mirror can be asked for it".to_owned();
         };
         let answers = self.answers();
         self.mirrors
@@ -264,6 +264,15 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
 /// the error for what only a source gives, `what`, while `mirrors_only` lets fetchloom ask its
 /// mirrors alone.
 pub(in crate::cli) fn refused(context: &Context, what: &str) -> Error {
+    refusal(
+        context,
+        what,
+        "ask whoever keeps the mirrors to add what is missing",
+    )
+}
+
+/// [`refused`], with `remedy` as what to do short of asking sources too.
+fn refusal(context: &Context, what: &str, remedy: &str) -> Error {
     let off = if context.settings.mirrors_only.origin == Origin::File {
         "set mirrors_only = false in the settings file"
     } else {
@@ -273,13 +282,12 @@ pub(in crate::cli) fn refused(context: &Context, what: &str) -> Error {
         Kind::NetworkRefused,
         format!("{what}, and mirrors_only lets fetchloom ask its mirrors alone"),
     )
-    .help(format!(
-        "ask whoever keeps the mirrors to add what is missing, or {off} to ask sources too"
-    ))
+    .help(format!("{remedy}, or {off} to ask sources too"))
 }
 
 /// refuses, in mirror-only mode, to download `files` from their sources: each by its name and
-/// its SHA-256, when known, and named with what each mirror said of it.
+/// its SHA-256, when known, and named with what each mirror said of it. a file without one is
+/// new, so no mirror can be asked for it, and data.lock does not name it yet.
 ///
 /// # Errors
 ///
@@ -291,15 +299,38 @@ pub(in crate::cli) fn sources_allowed(
     if !context.mirrors.mirrors.only || files.is_empty() {
         return Ok(());
     }
-    let count = files.len();
-    let error = refused(
-        context,
-        &format!(
-            "{} data.lock names {} on no mirror",
-            units::count(count as u64, "file", "files"),
-            if count == 1 { "is" } else { "are" }
-        ),
+    let new = files.iter().filter(|(_, digest)| digest.is_none()).count() as u64;
+    let pinned = files.len() as u64 - new;
+    let named = format!(
+        "{} data.lock names {} on no mirror",
+        units::count(pinned, "file", "files"),
+        if pinned == 1 { "is" } else { "are" }
     );
+    let unknown = format!(
+        "{} {} no SHA-256 yet",
+        units::count(new, "new file", "new files"),
+        if new == 1 { "has" } else { "have" }
+    );
+    let error = if new == 0 {
+        refused(context, &named)
+    } else if pinned == 0 {
+        let (it, its) = if new == 1 {
+            ("it", "its source")
+        } else {
+            ("them", "their sources")
+        };
+        refusal(
+            context,
+            &format!("{unknown}, so only {its} can give {it}"),
+            &format!("pin {it} on a machine that may ask {its}, then push {it} to a mirror"),
+        )
+    } else {
+        refusal(
+            context,
+            &format!("{named} and {unknown}"),
+            "ask whoever keeps the mirrors to add what is missing, and pin new files on a machine that may ask their sources",
+        )
+    };
     Err(lacked(context, files)
         .into_iter()
         .fold(error, Error::detail))
@@ -749,5 +780,43 @@ mod tests {
         }))
         .unwrap();
         assert!(!listed.load(Ordering::Relaxed));
+    }
+
+    /// in mirror-only mode, files data.lock pins that no mirror gave and new files whose SHA-256
+    /// is not known yet are refused together, each counted for what it is.
+    #[test]
+    fn mirror_only_mode_tells_pinned_files_from_new_ones() {
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let lab = Location::Folder(std::path::PathBuf::from("/mnt/lab"));
+        context.mirrors = Mirrored::new(Mirrors::new(Vec::new(), &[lab], true));
+        let pinned = (
+            "iris/iris.csv".to_owned(),
+            Some(crate::digest::sha256(b"iris")),
+        );
+        let new = ("iris2/iris.csv".to_owned(), None);
+        let error = sources_allowed(&context, &[pinned, new]).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkRefused);
+        assert_eq!(
+            error.message,
+            "1 file data.lock names is on no mirror and 1 new file has no SHA-256 yet, and mirrors_only lets fetchloom ask its mirrors alone"
+        );
+        assert_eq!(
+            error.details,
+            [
+                "iris/iris.csv: not asked on /mnt/lab",
+                "iris2/iris.csv: new, so no mirror can be asked for it"
+            ]
+        );
     }
 }

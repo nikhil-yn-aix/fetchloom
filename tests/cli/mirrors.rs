@@ -612,6 +612,43 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     Ok(())
 }
 
+/// in mirror-only mode a link data.lock does not pin yet is refused before any request, as one
+/// whose SHA-256 is not known, which no mirror can be asked for, never as a file data.lock names.
+#[test]
+fn a_new_link_in_mirror_only_mode_is_not_called_a_pinned_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let asked = source.requests().len();
+    let link = format!("{}/files/iris.csv", source.url);
+    let output = sandbox
+        .command(&["--json", "add", &link, "--as", "iris2"])
+        .env("FETCHLOOM_MIRRORS", &root)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        "1 new file has no SHA-256 yet, so only its source can give it, and mirrors_only lets fetchloom ask its mirrors alone"
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["iris2/iris.csv: new, so no mirror can be asked for it"])
+    );
+    assert_eq!(
+        error["help"],
+        "pin it on a machine that may ask its source, then push it to a mirror, or unset FETCHLOOM_MIRRORS_ONLY to ask sources too"
+    );
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(source.requests().len(), asked);
+    assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("iris2"));
+    Ok(())
+}
+
 /// an archive a mirror holds is copied before its link in data.lock is read, so a link no
 /// machine can follow, as an imported dataset's, does not stop a mirror from giving it.
 #[test]

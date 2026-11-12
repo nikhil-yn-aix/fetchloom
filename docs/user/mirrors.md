@@ -125,7 +125,7 @@ error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom a
 | command | in mirror-only mode |
 |---|---|
 | `sync`, `path`, `lock` | work from the cache and the mirrors; a dataset data.lock does not pin yet is refused, since only its source can list it |
-| `add` of a link, `get`, `search` | refused before any request, naming `mirrors_only` |
+| `add` of a link, `get`, `search` | refused before any request, naming `mirrors_only`. a link data.lock does not pin yet has no SHA-256 to ask a mirror by, so only its source can give it, even when a mirror holds the same bytes |
 | `auth` | lists keys without checking them with their sites |
 
 `mirrors_only` needs a mirror: set alone it stops every command with kind `usage`. offline mode is stricter: no network at all, so it reads folder mirrors and no web mirror.
