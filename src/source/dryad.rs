@@ -173,7 +173,9 @@ impl Dataset {
             .map_err(|_| self.invalid("the files URL is invalid"))?;
         let mut files = Vec::new();
         let (mut seen, mut total) = (0, 0);
+        let mut pages = super::Pages::new();
         for page in 1.. {
+            pages.next(page).map_err(|reason| self.invalid(&reason))?;
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
             let response = api.get(&url).await?;
             let answer: Page<Files> = super::json(self, &response)?;

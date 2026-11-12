@@ -156,8 +156,10 @@ impl Article {
             .push("files");
         let mut files = Vec::new();
         let mut seen = HashSet::new();
+        let mut pages = super::Pages::new();
         let mut page = 1_u32;
         loop {
+            pages.next(page).map_err(|reason| self.invalid(&reason))?;
             url.query_pairs_mut()
                 .clear()
                 .append_pair("page", &page.to_string())

@@ -104,13 +104,13 @@ pub(super) async fn files(node: &Node, api: &impl Api, root: Url) -> Result<Vec<
         url: root,
         path: String::new(),
     });
-    let mut pages = HashSet::new();
+    let mut pages = crate::source::Pages::new();
     while let Some(folder) = walk.folders.pop_front() {
         let mut url = folder.url;
         loop {
-            if !pages.insert(url.clone()) {
-                return Err(node.invalid("the files API repeated a page or folder"));
-            }
+            pages
+                .next(url.clone())
+                .map_err(|reason| node.invalid(&reason))?;
             let response = api.get(&url).await?;
             let page: Page = crate::source::json(node, &response)?;
             if page.data.is_empty() && page.links.next.is_some() {

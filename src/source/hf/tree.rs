@@ -10,10 +10,6 @@ use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Remote, most_files, too_many};
 
-/// the most pages followed, so a server that keeps sending pages cannot keep fetchloom busy
-/// forever. the hub sends 1,000 entries a page.
-const MOST_PAGES: usize = 1_000;
-
 /// one entry of a tree listing: a file or a folder.
 #[derive(Deserialize)]
 struct Entry {
@@ -80,20 +76,21 @@ impl Repo {
     ) -> Result<bool, Error> {
         first.query_pairs_mut().append_pair("recursive", "true");
         let mut next = Some(first);
-        let mut pages = 0;
+        let mut pages = crate::source::Pages::new();
+        let mut first = true;
         while let Some(url) = next {
-            pages += 1;
-            if pages > MOST_PAGES {
-                return Err(Error::new(
+            pages.next(url.clone()).map_err(|reason| {
+                Error::new(
                     Kind::SourceInvalid,
-                    format!("huggingface.co sent more than {MOST_PAGES} pages listing {self}"),
+                    format!("huggingface.co sent an invalid listing of {self}: {reason}"),
                 )
-                .help("ask the dataset's owner to pack the files into archives, or use a smaller dataset"));
-            }
+                .help(crate::error::report_answer())
+            })?;
             let response = api.get(&url).await?;
-            if folder && pages == 1 && response.status == 404 {
+            if folder && first && response.status == 404 {
                 return Ok(false);
             }
+            first = false;
             let entries: Vec<Entry> = crate::source::json(self, &response)?;
             for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
                 files.push(self.remote(commit, entry)?);
@@ -194,14 +191,16 @@ mod tests {
     }
 
     #[test]
-    fn cyclic_pagination_stops_before_requesting_page_one_thousand_and_one() {
+    fn cyclic_pagination_stops_before_asking_a_page_again() {
         let recorded = Recorded::default().on(FIRST, 200, "[]").next(FIRST, FIRST);
         let repo = Repo::parse("datasets/org/data").unwrap();
         let error = block_on(repo.tree(&recorded, "abc123", None)).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(error.message.contains("1000 pages"));
-        assert!(error.help.unwrap().contains("smaller dataset"));
-        assert_eq!(recorded.asked().len(), 1_000);
+        assert_eq!(
+            error.message,
+            "huggingface.co sent an invalid listing of hf:datasets/org/data: it repeated an earlier page"
+        );
+        assert_eq!(recorded.asked(), [FIRST]);
     }
 
     #[test]

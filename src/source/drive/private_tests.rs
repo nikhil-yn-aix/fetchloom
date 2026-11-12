@@ -197,7 +197,7 @@ fn a_private_folder_takes_in_at_most_the_files_and_folders_allowed() {
     assert_eq!(
         error.message,
         format!(
-            "drive's api sent a listing of https://drive.google.com/drive/folders/{ROOT} that fetchloom cannot read: drive kept sending pages"
+            "drive's api sent a listing of https://drive.google.com/drive/folders/{ROOT} that fetchloom cannot read: it repeated an earlier page"
         )
     );
 }

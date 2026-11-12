@@ -77,7 +77,7 @@ fn a_page_that_would_mislead_the_walk_is_refused_before_another_request() {
         (
             "a next page that repeats the first",
             |value| value["links"]["next"] = FIRST.into(),
-            "repeated a page or folder",
+            "sent an invalid listing: it repeated an earlier page",
         ),
         (
             "a next page on another site",

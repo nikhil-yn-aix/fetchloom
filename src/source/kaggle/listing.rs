@@ -1,8 +1,6 @@
 //! a dataset listed at one version: the view endpoint names the dataset and its newest version,
 //! and the list endpoint sends its files page by page.
 
-use std::collections::HashSet;
-
 use serde::Deserialize;
 use url::Url;
 
@@ -113,7 +111,7 @@ impl Dataset {
     async fn files(&self, api: &impl Api, version: u32, newest: u32) -> Result<Vec<Remote>, Error> {
         let version = version.to_string();
         let mut files = Vec::new();
-        let mut tokens = HashSet::new();
+        let mut pages = crate::source::Pages::new();
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&version, &token)?).await?;
@@ -153,9 +151,9 @@ impl Dataset {
             if page.next_page_token.is_empty() {
                 return Ok(files);
             }
-            if !tokens.insert(page.next_page_token.clone()) {
-                return Err(unusable(self, "the listing sent the same page twice"));
-            }
+            pages
+                .next(page.next_page_token.clone())
+                .map_err(|reason| unusable(self, &reason))?;
             token = page.next_page_token;
         }
     }

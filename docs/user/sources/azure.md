@@ -28,7 +28,7 @@ Downloading mnist-labels/t10k-labels-idx1-ubyte.gz · 4.4 KiB
 
 ## listing
 
-fetchloom asks azure's `List Blobs` for the prefix, a page of up to 5,000 blobs at a time, and follows each page's marker, up to 1,000 pages and the `most_files` limit. every request to a blob host asks for version 2020-10-02 of azure's API. without a version, azure answers an anonymous request in the account's default, which can be as old as 2009-09-19, and a container holding newer kinds of blob then refuses to list.
+fetchloom asks azure's `List Blobs` for the prefix, a page of up to 5,000 blobs at a time, and follows each page's marker, never one it followed before, up to the `most_files` limit. every request to a blob host asks for version 2020-10-02 of azure's API. without a version, azure answers an anonymous request in the account's default, which can be as old as 2009-09-19, and a container holding newer kinds of blob then refuses to list.
 
 an empty blob named like a folder that other blobs are in is a mark some tools leave for the folder, not a file, so it is left out: `processedManifest/` lists 4 files, not the 5 blobs under it.
 

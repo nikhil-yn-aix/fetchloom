@@ -3,7 +3,7 @@
 //! embargoed dandiset, which dandi shows to no one without an account, is refused; no key goes to
 //! dandi.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 
 use serde::Deserialize;
@@ -140,13 +140,13 @@ impl Dandiset {
         ))?;
         let pages_at = self.url("assets/")?;
         let mut next = Some(first);
-        let mut asked = HashSet::new();
+        let mut pages = super::Pages::new();
         let mut files = Vec::new();
         let mut unavailable = Vec::new();
         while let Some(url) = next.take() {
-            if !asked.insert(url.to_string()) {
-                return Err(self.invalid("a page names an earlier page as the next"));
-            }
+            pages
+                .next(url.to_string())
+                .map_err(|reason| self.invalid(&reason))?;
             let page: Page = self.answer(&api.get(&url).await?)?;
             if page
                 .count

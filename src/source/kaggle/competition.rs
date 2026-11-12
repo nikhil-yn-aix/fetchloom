@@ -2,7 +2,6 @@
 //! signed-in account that accepted the competition's rules. competitions have no versions, so a
 //! listing records what kaggle sends today and the downloaded bytes pin it.
 
-use std::collections::HashSet;
 use std::fmt;
 
 use serde::Deserialize;
@@ -151,7 +150,7 @@ impl Competition {
     /// every data file, following the pages kaggle sends.
     async fn files(&self, api: &impl Api) -> Result<Vec<Remote>, Error> {
         let mut files = Vec::new();
-        let mut tokens = HashSet::new();
+        let mut pages = crate::source::Pages::new();
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&token)?).await?;
@@ -183,9 +182,9 @@ impl Competition {
             if page.next_page_token.is_empty() {
                 return Ok(files);
             }
-            if !tokens.insert(page.next_page_token.clone()) {
-                return Err(unusable(self, "the listing sent the same page twice"));
-            }
+            pages
+                .next(page.next_page_token.clone())
+                .map_err(|reason| unusable(self, &reason))?;
             token = page.next_page_token;
         }
     }

@@ -158,7 +158,9 @@ impl Dataset {
         let mut url = self.url(&["files"])?;
         let mut seen: u64 = 0;
         let mut ids = HashSet::new();
+        let mut pages = super::Pages::new();
         loop {
+            pages.next(seen).map_err(|reason| self.invalid(&reason))?;
             url.set_query(Some(&format!(
                 "folder_id={folder}&version={version}&$start={seen}"
             )));

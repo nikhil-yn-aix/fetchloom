@@ -75,6 +75,44 @@ pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
     too_many_of(subject, most_files(), instead)
 }
 
+/// the pages of one listing, which a source names one after another by a token, a link or a
+/// number. a page named again would loop, and more pages than a listing of the most files it may
+/// hold needs would never end, so the pages of every source are refused for either in one
+/// wording, which the source's own error carries.
+pub(crate) struct Pages<K> {
+    asked: HashSet<K>,
+    most: usize,
+}
+
+impl<K: Eq + std::hash::Hash> Pages<K> {
+    /// the pages of a listing of at most [`most_files`] files.
+    pub(crate) fn new() -> Pages<K> {
+        Pages::most(most_files())
+    }
+
+    /// the pages of a listing of at most `most` files.
+    pub(crate) fn most(most: usize) -> Pages<K> {
+        Pages {
+            asked: HashSet::new(),
+            most,
+        }
+    }
+
+    /// counts the page `key` names before it is asked for, or says why it is not.
+    pub(crate) fn next(&mut self, key: K) -> Result<(), String> {
+        if self.asked.len() >= self.most {
+            return Err(format!(
+                "it sent more than {} pages",
+                crate::units::grouped(self.most as u64)
+            ));
+        }
+        if !self.asked.insert(key) {
+            return Err("it repeated an earlier page".to_owned());
+        }
+        Ok(())
+    }
+}
+
 /// [`too_many`] for a listing that allows `most` files.
 pub(crate) fn too_many_of(subject: impl fmt::Display, most: usize, instead: &str) -> Error {
     Error::new(
@@ -1058,6 +1096,20 @@ mod tests {
                 "leave key out of the link: sign in once with `fetchloom auth login dataverse --host demo.dataverse.org`, and fetchloom sends your key to demo.dataverse.org itself"
             )
         );
+    }
+
+    /// a page named again would loop, and more pages than a listing needs would never end, so
+    /// both are refused, in the words every source's error carries.
+    #[test]
+    fn pages_refuse_a_page_named_again_and_more_than_a_listing_needs() {
+        let mut pages = Pages::most(2);
+        assert_eq!(pages.next("a"), Ok(()));
+        assert_eq!(
+            pages.next("a"),
+            Err("it repeated an earlier page".to_owned())
+        );
+        assert_eq!(pages.next("b"), Ok(()));
+        assert_eq!(pages.next("c"), Err("it sent more than 2 pages".to_owned()));
     }
 
     /// a commit, a dataset's version and a snapshot fix their bytes. a branch, a dataset without

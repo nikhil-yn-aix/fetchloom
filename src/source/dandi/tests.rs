@@ -242,7 +242,7 @@ fn a_listing_that_cannot_be_trusted_says_why() {
         (
             ours,
             page(&format!("\"{}\"", assets(VERSION)), blob),
-            "a page names an earlier page as the next",
+            "it repeated an earlier page",
         ),
         (
             ours,
