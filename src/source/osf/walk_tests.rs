@@ -66,63 +66,59 @@ fn server_pages_control_the_walk_and_folders_keep_their_names() {
     );
 }
 
+/// a page the files API sends that would make the walk repeat itself, leave the OSF API or a
+/// project's folders, or go on with nothing to read, is refused for its reason before the walk
+/// asks for anything it points to.
 #[test]
-fn repeated_pages_stop_before_another_request() {
-    let body = changed_page(|value| value["links"]["next"] = FIRST.into());
-    let recorded = paged(body);
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
-}
-
-#[test]
-fn pages_cannot_leave_the_osf_api() {
-    let body = changed_page(|value| value["links"]["next"] = "https://other.example/files".into());
-    let recorded = paged(body);
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
-}
-
-#[test]
-fn empty_pages_cannot_continue_forever() {
-    let body = changed_page(|value| value["data"] = serde_json::json!([]));
-    let recorded = paged(body);
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
-}
-
-#[test]
-fn folders_must_provide_a_files_relationship() {
-    let body = changed_page(|value| {
-        value["data"][0]["relationships"]
-            .as_object_mut()
-            .unwrap()
-            .remove("files");
-    });
-    let recorded = paged(body);
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
-}
-
-#[test]
-fn escaping_folder_names_are_refused_before_descending() {
-    let body = changed_page(|value| value["data"][0]["attributes"]["name"] = "../outside".into());
-    let recorded = paged(body);
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
-}
-#[test]
-fn paging_links_cannot_request_other_api_resources() {
-    let target = "https://api.osf.io/v2/users/";
-    let body = changed_page(|value| value["links"]["next"] = target.into());
-    let recorded = paged(body).on(target, 200, b"{}".to_vec());
-    let error = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert_eq!(recorded.asked(), [NODE, FIRST]);
+fn a_page_that_would_mislead_the_walk_is_refused_before_another_request() {
+    type Change = fn(&mut serde_json::Value);
+    let users = "https://api.osf.io/v2/users/";
+    let rows: [(&str, Change, &str); 6] = [
+        (
+            "a next page that repeats the first",
+            |value| value["links"]["next"] = FIRST.into(),
+            "repeated a page or folder",
+        ),
+        (
+            "a next page on another site",
+            |value| value["links"]["next"] = "https://other.example/files".into(),
+            "leaves the OSF API",
+        ),
+        (
+            "a next page elsewhere in the API",
+            |value| value["links"]["next"] = "https://api.osf.io/v2/users/".into(),
+            "leaves the OSF API",
+        ),
+        (
+            "an empty page with a next one",
+            |value| value["data"] = serde_json::json!([]),
+            "an empty file page points to another page",
+        ),
+        (
+            "a folder without its files",
+            |value| {
+                value["data"][0]["relationships"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("files");
+            },
+            "a folder has no files relationship",
+        ),
+        (
+            "a folder named to climb out",
+            |value| value["data"][0]["attributes"]["name"] = "../outside".into(),
+            "the path \"../outside\"",
+        ),
+    ];
+    for (row, change, reason) in rows {
+        let recorded = paged(changed_page(change)).on(users, 200, b"{}".to_vec());
+        let Err(error) = block_on(Node::parse("ytpuq").unwrap().resolve(&recorded)) else {
+            panic!("{row}: the walk went on");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
+        assert!(error.message.contains(reason), "{row}: {}", error.message);
+        assert_eq!(recorded.asked(), [NODE, FIRST], "{row}");
+    }
 }
 
 #[test]

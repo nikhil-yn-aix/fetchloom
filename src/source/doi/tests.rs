@@ -134,26 +134,26 @@ fn resolving_the_result_skips_the_handle_and_keeps_the_record() {
     assert_eq!(recorded.asked(), [HANDLE, RECORD, RECORD]);
 }
 
+/// a handle is asked for with the DOI's punctuation encoded as text, and the link it holds
+/// decides the source, not the registrant the DOI's prefix names.
 #[test]
-fn the_landing_url_chooses_the_source_instead_of_the_registrant() {
-    let doi = "10.1234/another-registrant";
-    let url = "https://doi.org/api/handles/10.1234%2Fanother-registrant";
-    let body = changed(|value| value["handle"] = doi.into());
-    let recorded = Recorded::default().on(url, 200, body);
-    let target = block_on(Doi::parse(doi).unwrap().locate(&recorded)).unwrap();
-    assert_eq!(target.to_string(), "zenodo:3608990");
-    assert_eq!(recorded.asked(), [url]);
-}
-
-#[test]
-fn doi_punctuation_is_encoded_as_identifier_text() {
-    let doi = "10.1234/a?b#c%d/e";
-    let url = "https://doi.org/api/handles/10.1234%2Fa%3Fb%23c%25d%2Fe";
-    let body = changed(|value| value["handle"] = doi.into());
-    let recorded = Recorded::default().on(url, 200, body);
-    let target = block_on(Doi::parse(doi).unwrap().locate(&recorded)).unwrap();
-    assert_eq!(target.to_string(), "zenodo:3608990");
-    assert_eq!(recorded.asked(), [url]);
+fn a_doi_is_asked_for_as_written_and_goes_where_its_handle_points() {
+    for (doi, handle) in [
+        (
+            "10.1234/another-registrant",
+            "https://doi.org/api/handles/10.1234%2Fanother-registrant",
+        ),
+        (
+            "10.1234/a?b#c%d/e",
+            "https://doi.org/api/handles/10.1234%2Fa%3Fb%23c%25d%2Fe",
+        ),
+    ] {
+        let body = changed(|value| value["handle"] = doi.into());
+        let recorded = Recorded::default().on(handle, 200, body);
+        let target = block_on(Doi::parse(doi).unwrap().locate(&recorded)).unwrap();
+        assert_eq!(target.to_string(), "zenodo:3608990", "{doi}");
+        assert_eq!(recorded.asked(), [handle], "{doi}");
+    }
 }
 
 #[test]
@@ -194,37 +194,41 @@ fn access_refusals_use_the_shared_error() {
     }
 }
 
+/// a handle answer fetchloom cannot use is refused for its reason, with help to report it.
 #[test]
-fn handles_without_url_values_are_invalid() {
-    let body = changed(|value| value["values"] = serde_json::json!([]));
-    let recorded = Recorded::default().on(HANDLE, 200, body);
-    let error = block_on(Doi::parse(DOI).unwrap().locate(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert!(error.help.is_some());
-}
-
-#[test]
-fn unexpected_handle_codes_are_invalid() {
-    let body = changed(|value| value["responseCode"] = 2.into());
-    let recorded = Recorded::default().on(HANDLE, 200, body);
-    let error = block_on(Doi::parse(DOI).unwrap().locate(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-}
-
-#[test]
-fn handles_for_another_doi_are_invalid() {
-    let body = changed(|value| value["handle"] = "10.1234/another-doi".into());
-    let recorded = Recorded::default().on(HANDLE, 200, body);
-    let error = block_on(Doi::parse(DOI).unwrap().locate(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-}
-
-#[test]
-fn url_values_must_be_strings_in_string_format() {
-    let body = changed(|value| value["values"][1]["data"]["format"] = "base64".into());
-    let recorded = Recorded::default().on(HANDLE, 200, body);
-    let error = block_on(Doi::parse(DOI).unwrap().locate(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
+fn a_handle_answer_that_cannot_be_used_says_why() {
+    type Change = fn(&mut serde_json::Value);
+    let rows: [(&str, Change, &str); 4] = [
+        (
+            "no URL value",
+            |value| value["values"] = serde_json::json!([]),
+            "the handle has no URL value",
+        ),
+        (
+            "a failed lookup",
+            |value| value["responseCode"] = 2.into(),
+            "the handles API did not report success",
+        ),
+        (
+            "another DOI's handle",
+            |value| value["handle"] = "10.1234/another-doi".into(),
+            "the handle names another DOI",
+        ),
+        (
+            "a URL value in base64",
+            |value| value["values"][1]["data"]["format"] = "base64".into(),
+            "the URL value is not in string format",
+        ),
+    ];
+    for (row, change, reason) in rows {
+        let recorded = Recorded::default().on(HANDLE, 200, changed(change));
+        let Err(error) = block_on(Doi::parse(DOI).unwrap().locate(&recorded)) else {
+            panic!("{row}: the handle was used");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
+        assert!(error.message.contains(reason), "{row}: {}", error.message);
+        assert!(error.help.is_some(), "{row}");
+    }
 }
 
 #[test]

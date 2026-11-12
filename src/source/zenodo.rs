@@ -354,22 +354,43 @@ mod tests {
         assert_eq!(listing.files.len(), 1);
     }
 
+    /// a record answer fetchloom cannot trust is refused for its reason, with help.
     #[test]
-    fn malformed_checksums_are_not_silently_discarded() {
-        let body = changed(|value| value["files"][0]["checksum"] = "md5:broken".into());
-        let recorded = Recorded::default().on(IRIS, 200, body);
-        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::SourceInvalid);
-    }
-
-    #[test]
-    fn missing_file_lists_are_not_empty_datasets() {
-        let body = changed(|value| {
-            value.as_object_mut().unwrap().remove("files");
-        });
-        let recorded = Recorded::default().on(IRIS, 200, body);
-        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::SourceInvalid);
+    fn a_record_that_cannot_be_trusted_says_why() {
+        type Change = fn(&mut serde_json::Value);
+        let rows: [(&str, Change, &str); 4] = [
+            (
+                "a checksum that is no MD5",
+                |value| value["files"][0]["checksum"] = "md5:broken".into(),
+                "is not an MD5",
+            ),
+            (
+                "no file list",
+                |value| {
+                    value.as_object_mut().unwrap().remove("files");
+                },
+                "missing field `files`",
+            ),
+            (
+                "an unknown access condition",
+                |value| value["metadata"]["access_right"] = "unknown".into(),
+                "the access condition is not recognized",
+            ),
+            (
+                "a zero record id",
+                |value| value["id"] = 0.into(),
+                "the record has no concrete id",
+            ),
+        ];
+        for (row, change, reason) in rows {
+            let recorded = Recorded::default().on(IRIS, 200, changed(change));
+            let Err(error) = block_on(Record::parse("3608990").unwrap().resolve(&recorded)) else {
+                panic!("{row}: the record was used");
+            };
+            assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
+            assert!(error.message.contains(reason), "{row}: {}", error.message);
+            assert!(error.help.is_some(), "{row}");
+        }
     }
 
     #[test]
@@ -381,23 +402,6 @@ mod tests {
             block_on(reference.resolve(&recorded)).unwrap_err().kind,
             Kind::SourceInvalid
         );
-    }
-
-    #[test]
-    fn unknown_access_conditions_are_invalid_answers() {
-        let body = changed(|value| value["metadata"]["access_right"] = "unknown".into());
-        let recorded = Recorded::default().on(IRIS, 200, body);
-        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(error.help.is_some());
-    }
-
-    #[test]
-    fn a_zero_record_id_cannot_be_a_version_pin() {
-        let body = changed(|value| value["id"] = 0.into());
-        let recorded = Recorded::default().on(IRIS, 200, body);
-        let error = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::SourceInvalid);
     }
 
     #[test]

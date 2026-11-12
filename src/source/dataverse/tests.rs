@@ -129,17 +129,54 @@ fn restricted_files_are_all_named_instead_of_skipped() {
     assert_eq!(listing.files.len(), 3);
 }
 
+/// a listing fetchloom cannot trust is refused for its reason, with help to choose another
+/// version.
 #[test]
-fn missing_original_sizes_cannot_be_replaced_with_ingested_sizes() {
-    let body = changed(|value| {
-        value["data"]["files"][0]["dataFile"]
-            .as_object_mut()
-            .unwrap()
-            .remove("originalFileSize");
-    });
-    let recorded = Recorded::default().on(LATEST, 200, body);
-    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
+fn a_listing_that_cannot_be_trusted_says_why() {
+    type Change = fn(&mut serde_json::Value);
+    let rows: [(&str, Change, &str); 5] = [
+        (
+            "a tabular file without its original size",
+            |value| {
+                value["data"]["files"][0]["dataFile"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("originalFileSize");
+            },
+            "the original name or size for",
+        ),
+        (
+            "a broken checksum",
+            |value| value["data"]["files"][1]["dataFile"]["checksum"]["value"] = "broken".into(),
+            "an MD5 is 32 hex digits",
+        ),
+        (
+            "a draft",
+            |value| value["data"]["versionState"] = "DRAFT".into(),
+            "the version is not published",
+        ),
+        (
+            "an answer for another dataset",
+            |value| value["data"]["datasetPersistentId"] = "doi:10.7910/DVN/OTHER".into(),
+            "the persistent id does not match",
+        ),
+        (
+            "no file list",
+            |value| {
+                value["data"].as_object_mut().unwrap().remove("files");
+            },
+            "the dataset version has no file list",
+        ),
+    ];
+    for (row, change, reason) in rows {
+        let recorded = Recorded::default().on(LATEST, 200, changed(change));
+        let Err(error) = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)) else {
+            panic!("{row}: the listing was used");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
+        assert!(error.message.contains(reason), "{row}: {}", error.message);
+        assert!(error.help.is_some(), "{row}");
+    }
 }
 
 #[test]
@@ -167,25 +204,6 @@ fn unknown_checksum_algorithms_are_not_treated_as_md5() {
 }
 
 #[test]
-fn malformed_known_checksums_are_refused() {
-    let body = changed(|value| {
-        value["data"]["files"][1]["dataFile"]["checksum"]["value"] = "broken".into();
-    });
-    let recorded = Recorded::default().on(LATEST, 200, body);
-    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-}
-
-#[test]
-fn drafts_cannot_be_pinned_as_published_versions() {
-    let body = changed(|value| value["data"]["versionState"] = "DRAFT".into());
-    let recorded = Recorded::default().on(LATEST, 200, body);
-    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert!(error.help.is_some());
-}
-
-#[test]
 fn requested_versions_cannot_silently_change() {
     let url = "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/4.0?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP";
     let recorded = Recorded::default().fixture(url, "dataverse/version.json");
@@ -195,16 +213,6 @@ fn requested_versions_cannot_silently_change() {
             .resolve(&recorded),
     )
     .unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-}
-
-#[test]
-fn a_response_for_another_dataset_is_refused() {
-    let body = changed(|value| {
-        value["data"]["datasetPersistentId"] = "doi:10.7910/DVN/OTHER".into();
-    });
-    let recorded = Recorded::default().on(LATEST, 200, body);
-    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
 }
 
@@ -279,16 +287,6 @@ fn live_dataverse() {
         "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0"
     );
     assert_eq!(work.counts().requests, 1);
-}
-
-#[test]
-fn a_dataset_without_file_metadata_is_not_empty() {
-    let body = changed(|value| {
-        value["data"].as_object_mut().unwrap().remove("files");
-    });
-    let recorded = Recorded::default().on(LATEST, 200, body);
-    let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
 }
 
 #[test]

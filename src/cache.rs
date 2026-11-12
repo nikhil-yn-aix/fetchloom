@@ -1411,45 +1411,35 @@ pub(crate) mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    /// bytes stored again replace an object whose bytes changed, whether its size changed, which
+    /// the size alone shows, or only its bytes did, which only hashing it shows.
     #[test]
-    fn bytes_stored_again_replace_an_object_whose_size_changed() {
-        for (_dir, cache) in [cache(), fat()] {
-            let first = store(&cache, b"abc");
-            let object = cache.object_path(&first.digest);
-            rewrite(&object, b"abcX");
-            let again = store(&cache, b"abc");
-            assert_eq!(
-                String::from_utf8(fs::read(&object).unwrap()).unwrap(),
-                "abc"
-            );
-            assert!(again.new);
-            assert!(fs::metadata(&object).unwrap().permissions().readonly());
-            assert_eq!(
-                cache.changed().into_keys().collect::<Vec<_>>(),
-                [first.digest],
-                "projects linking to the changed bytes can learn it"
-            );
-        }
-    }
-
-    #[test]
-    fn bytes_stored_again_replace_an_object_whose_bytes_changed_in_place() {
-        for (_dir, cache) in [cache(), fat()] {
-            let first = store(&cache, b"abc");
-            let object = cache.object_path(&first.digest);
-            rewrite(&object, b"abX");
-            let again = store(&cache, b"abc");
-            assert_eq!(
-                String::from_utf8(fs::read(&object).unwrap()).unwrap(),
-                "abc"
-            );
-            assert!(again.new);
-            assert!(fs::metadata(&object).unwrap().permissions().readonly());
-            assert_eq!(
-                cache.changed().into_keys().collect::<Vec<_>>(),
-                [first.digest],
-                "projects linking to the changed bytes can learn it"
-            );
+    fn bytes_stored_again_replace_an_object_whose_bytes_changed() {
+        for (rewritten, how) in [
+            (&b"abcX"[..], "its size changed"),
+            (b"abX", "its bytes changed in place"),
+        ] {
+            for (_dir, cache) in [cache(), fat()] {
+                let first = store(&cache, b"abc");
+                let object = cache.object_path(&first.digest);
+                rewrite(&object, rewritten);
+                let again = store(&cache, b"abc");
+                assert_eq!(
+                    String::from_utf8(fs::read(&object).unwrap()).unwrap(),
+                    "abc",
+                    "{how}"
+                );
+                assert!(again.new, "{how}");
+                assert!(
+                    fs::metadata(&object).unwrap().permissions().readonly(),
+                    "{how}"
+                );
+                assert_eq!(
+                    cache.changed().into_keys().collect::<Vec<_>>(),
+                    [first.digest],
+                    "{how}: projects linking to the changed bytes can learn it"
+                );
+            }
         }
     }
 
