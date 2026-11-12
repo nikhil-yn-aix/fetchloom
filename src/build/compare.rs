@@ -1,5 +1,4 @@
-//! a rerun of a step beside the result data.lock pins for it, file by file: how many files hold
-//! the same bytes, which changed, which the rerun no longer makes and which it makes anew.
+//! a rerun of a step compared file by file with the result data.lock pins for it.
 
 use std::cmp::Ordering;
 
@@ -85,8 +84,7 @@ mod tests {
         }
     }
 
-    /// a file at the same path with other bytes is changed, one the rerun lacks is missing and
-    /// one data.lock lacks is extra, whatever order either list comes in.
+    /// each kind is named whatever order either list comes in.
     #[test]
     fn changed_missing_and_extra_are_named() {
         let pinned = [

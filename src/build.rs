@@ -1,6 +1,5 @@
-//! running a recipe's step and taking in what it wrote. a step runs in a folder of its own in the
-//! cache: it finds a private copy of each dataset it reads in `in/<name>` and writes its result
-//! into `out`. only `fetchloom build` runs one, since a step is the project's code.
+//! running a recipe's step in a folder of its own in the cache, reading `in/<name>` and writing
+//! `out`, and taking in its result. only `fetchloom build` runs one: a step is the project's code.
 
 pub(crate) mod capture;
 pub(crate) mod compare;
@@ -13,9 +12,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cache::Cache;
 
-/// the folder one step runs in, `tmp/<16 hex>.build` in the cache, which only its owner may
-/// enter. the lock it holds tells a sweep that the step's build still runs, and it is cleared
-/// when dropped, so a step fetchloom saw end leaves nothing behind.
+/// the step's folder, `tmp/<16 hex>.build` in the cache, open to its owner alone. its lock keeps a
+/// sweep away while the build runs, and dropping it clears the folder.
 pub(crate) struct Staging {
     folder: PathBuf,
     lock: Option<File>,
@@ -23,10 +21,6 @@ pub(crate) struct Staging {
 
 impl Staging {
     /// a new folder for a step in `cache`, with `in` and `out` made and empty.
-    ///
-    /// # Errors
-    ///
-    /// the cache's `tmp` folder cannot be written.
     pub(crate) fn new(cache: &Cache) -> io::Result<Staging> {
         let (folder, lock) = cache.build_folder()?;
         let staging = Staging { folder, lock };
@@ -35,12 +29,10 @@ impl Staging {
         Ok(staging)
     }
 
-    /// the folder the step finds its private copy of the dataset `name` in.
     pub(crate) fn input(&self, name: &str) -> PathBuf {
         self.folder.join("in").join(name)
     }
 
-    /// the folder the step writes its result into.
     pub(crate) fn out(&self) -> PathBuf {
         self.folder.join("out")
     }
@@ -93,8 +85,7 @@ impl Drop for Staging {
 mod tests {
     use super::*;
 
-    /// a step's folder is gone once it is dropped, whatever the step left in it: read-only
-    /// files, a folder it took its owner's access from, and a link, which is never followed.
+    /// read-only files, a folder its owner lost access to and a link, never followed, all go.
     #[test]
     fn a_dropped_folder_leaves_nothing_and_follows_no_link() {
         let (dir, cache) = crate::cache::tests::cache();
@@ -120,8 +111,6 @@ mod tests {
         assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"mine");
     }
 
-    /// a folder a build left behind is swept once no build holds its lock, and kept while one
-    /// does.
     #[test]
     fn a_left_folder_is_swept_only_once_free() {
         let (_dir, cache) = crate::cache::tests::cache();

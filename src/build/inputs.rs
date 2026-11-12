@@ -1,7 +1,5 @@
-//! the private copy of each dataset a step reads: its files as data.lock pins them, made from the
-//! cache's objects as reflinks where the disk clones and copies elsewhere, never hardlinks and
-//! never from the data folder. every file is read-only, and a step that writes one anyway
-//! changes only its own copy.
+//! the private copy of each dataset a step reads, made from the cache, never the data folder, as
+//! read-only reflinks or copies, never hardlinks, so a step writing one changes only its own copy.
 
 use std::io;
 use std::path::Path;
@@ -21,11 +19,8 @@ pub(crate) struct File {
     pub(crate) size: u64,
 }
 
-/// makes `folder` hold `files`, each from its object in `cache`, read-only.
-///
-/// # Errors
-///
-/// an object the cache lacks, a disk that refuses the copy, or `Interrupted` when `stop` asks.
+/// makes `folder` hold `files`, each read-only from its object in `cache`. it fails on an object
+/// the cache lacks, a disk that refuses the copy, or a stop.
 pub(crate) fn make(
     cache: &Cache,
     folder: &Path,
@@ -58,8 +53,7 @@ mod tests {
     use super::*;
     use crate::cache::tests::{cache, store};
 
-    /// an input is a copy of the cache's object, never the object under another name, so a step
-    /// that makes it writable and changes it leaves the cache as it was.
+    /// a step that makes its input writable and changes it leaves the cache as it was.
     #[test]
     fn an_input_is_a_read_only_copy_never_the_object() {
         let (dir, cache) = cache();

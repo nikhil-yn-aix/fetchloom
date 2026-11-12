@@ -1,8 +1,6 @@
-//! finding a step's program on windows as a shell there finds it. std looks in fetchloom.exe's
-//! own folder and in the windows folders before PATH, and gives a bare name `.exe` alone, so
-//! `npm` would miss `npm.cmd` and a program beside fetchloom.exe would stand in for the one on
-//! PATH. the program found goes to std as a full path, and std still quotes a `.bat` or `.cmd`
-//! program's arguments for cmd.exe and refuses one it cannot pass safely.
+//! finding a step's program on windows as a shell there finds it. std adds only `.exe` and looks
+//! beside fetchloom.exe and in the windows folders before PATH, so `npm` would miss `npm.cmd` and
+//! a program beside fetchloom.exe would win. std still quotes or refuses a `.bat`'s arguments.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -11,9 +9,8 @@ use std::path::{Path, PathBuf};
 /// `.cmd` through cmd.exe.
 const STARTABLE: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
 
-/// the program `name`, the step's first word, names: its full path when a shell in `folder`, the
-/// step's folder, finds it, else `name` as written, which std then looks for as it does. the
-/// step's own `env` may set PATH and PATHEXT.
+/// the full path of the program `name` when a shell in the step's `folder` finds it, else `name`
+/// as written for std to look up. the step's own `env` may set PATH and PATHEXT.
 #[cfg(windows)]
 pub(super) fn find(
     name: &OsStr,
@@ -40,11 +37,9 @@ pub(super) fn find(
     .map_or_else(|| name.to_owned(), PathBuf::into_os_string)
 }
 
-/// where a shell in `folder` finds the program `name`: a name with a folder in it, such as
-/// `tools\prep`, from `folder`, and a bare name in each folder of `path` in turn, a relative one
-/// taken from `folder`, but never in `folder` itself. in each folder it is the name as written
-/// when that ends with an extension of `pathext` that windows starts, else the name with each of
-/// those added, in `pathext`'s order. `is_file` says whether a path names a file.
+/// where a shell in `folder` finds `name`: a name with a folder from `folder`, a bare one in each
+/// folder of `path` but never `folder` itself, as written when its extension is in `pathext`,
+/// else with each of those added in order. `is_file` tells files apart.
 fn search(
     name: &OsStr,
     folder: &Path,
@@ -108,11 +103,8 @@ mod tests {
 
     use super::*;
 
-    /// a bare name is found through PATH's folders in order, trying PATHEXT's extensions in each,
-    /// so a `.cmd` shim in an earlier folder wins over an `.exe` in a later one. a name that ends
-    /// with one of them is taken as written, and one with a folder in it comes from the step's
-    /// folder. types windows cannot start, the step's folder and an empty PATH entry are passed
-    /// over.
+    /// an earlier PATH folder's `.cmd` beats a later `.exe`, a name with an extension or folder is
+    /// used as written, and types windows cannot start, `folder` and empty entries are skipped.
     #[test]
     fn windows_lookup_follows_path_order_and_pathext() {
         let folder = Path::new("/project");

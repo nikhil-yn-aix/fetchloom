@@ -1,13 +1,6 @@
-//! running one step: its program and arguments, never read by a shell, in the project folder,
-//! with nothing on stdin and both outputs read into a log only its owner may read. the log keeps
-//! the latest 16 MiB, and the last lines stay in memory for the error a failed step gives.
-//!
-//! the step and every process it starts run in a group of their own, which fetchloom ends whole:
-//! when asked to stop, when the step ends, so nothing it started still writes while its result
-//! is taken in, and when a second ctrl-c quits. on unix that is a process group, which the
-//! terminal's ctrl-c does not reach. on windows it is a job object, which also ends when
-//! fetchloom does, however it ends, and the console's ctrl-c reaches the step there too. there
-//! the `program` module finds the step's program as a shell would.
+//! running one step, with no shell, in the project folder, its outputs in a log only its owner
+//! may read. fetchloom ends the step's whole group when a stop is asked and once it ends, so
+//! nothing it started still writes. a terminal's ctrl-c reaches that group on windows alone.
 
 #[cfg(any(windows, test))]
 mod program;
@@ -48,7 +41,6 @@ const DRAIN: Duration = Duration::from_secs(2);
 /// how often a running step's watch looks at the free space on the disk holding the cache.
 const FLOOR_EVERY: Duration = Duration::from_secs(2);
 
-/// what to run for a step.
 pub(crate) struct Command<'a> {
     /// the program and its arguments, each folder in place.
     pub(crate) words: Vec<OsString>,
@@ -58,8 +50,7 @@ pub(crate) struct Command<'a> {
     pub(crate) env: &'a BTreeMap<String, String>,
 }
 
-/// the least free space a running step may leave on the disk holding the cache, and how to learn
-/// what that disk has free.
+/// the least free space a running step may leave on the cache's disk, and how to read it.
 pub(crate) struct Floor<'a> {
     pub(crate) bytes: u64,
     /// the bytes free now, none when the system does not say.
@@ -73,13 +64,11 @@ impl Floor<'_> {
     }
 }
 
-/// whether the watch looks at the free space again at `now`, after it last looked at `looked`:
-/// at once, then every [`FLOOR_EVERY`].
+/// whether the watch looks at the free space at `now`: at once, then every [`FLOOR_EVERY`].
 fn due(looked: Option<Instant>, now: Instant) -> bool {
     looked.is_none_or(|looked| now.saturating_duration_since(looked) >= FLOOR_EVERY)
 }
 
-/// how a step ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ended {
     /// it exited with this code.
@@ -89,16 +78,13 @@ pub(crate) enum Ended {
     Signaled(i32),
     /// a stop was asked, so fetchloom ended it.
     Stopped,
-    /// the disk holding the cache had less free than the floor, `free` bytes, so fetchloom
-    /// ended it.
+    /// the cache's disk had less free than the floor, `free` bytes, so fetchloom ended it.
     Low { free: u64 },
 }
 
 impl Ended {
-    /// how a step that ended so counts when `stopping` says a stop was asked by then: a failure
-    /// then most likely came from the stop, since the console's ctrl-c reaches a windows step as
-    /// it reaches fetchloom, and a scheduler may send its SIGTERM to every process of a job. a
-    /// step that exited with 0 keeps its result.
+    /// how a step that ended counts once `stopping`: a failure then likely came from the stop, as a
+    /// windows ctrl-c or a scheduler's SIGTERM reaches the step too, while exit 0 keeps its result.
     fn or_stopped(self, stopping: bool) -> Ended {
         match self {
             Ended::Exited(code) if stopping && code != 0 => Ended::Stopped,
@@ -109,7 +95,6 @@ impl Ended {
     }
 }
 
-/// a step that ran.
 #[derive(Debug)]
 pub(crate) struct Ran {
     pub(crate) ended: Ended,
@@ -126,15 +111,10 @@ pub(crate) fn words(run: &[Template], folder: &dyn Fn(Slot<'_>) -> OsString) -> 
     run.iter().map(|word| word.expand(folder)).collect()
 }
 
-/// runs `command` until it ends, `stop` asks or the disk holding the cache falls below `floor`,
-/// its outputs read into a new log at `log` and, with `forward`, each line handed to it. what the
-/// step started that is left in its group ends with it. `building` is the project the build works
-/// in, which the step gets as `FETCHLOOM_BUILDING`.
-///
-/// # Errors
-///
-/// the program cannot start, as when no program of its name is on PATH, which is `NotFound`, or
-/// the log cannot be written.
+/// runs `command` until it ends, `stop` asks or the cache's disk falls below `floor`, its outputs
+/// in a new log at `log`, each line handed to `forward`, and its group ended with it. the step gets
+/// `building` as `FETCHLOOM_BUILDING`. it fails when the program cannot start, `NotFound` when none
+/// of its name is on PATH, or the log cannot be written.
 pub(crate) fn run(
     command: &Command<'_>,
     building: &Path,
@@ -195,8 +175,7 @@ pub(crate) fn run(
     })
 }
 
-/// the process for `command`: its program and arguments, in its folder, with stdin closed, both
-/// outputs piped and its variables set.
+/// the process for `command`, with stdin closed and both outputs piped.
 fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::Command> {
     let (program, arguments) = command
         .words
@@ -216,9 +195,8 @@ fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::C
     Ok(process)
 }
 
-/// waits for the step of `group` to end, handing on its lines meanwhile, and ends the group when
-/// `stop` asks or the disk holding the cache falls below `floor`. it looks often at first, so a
-/// short step costs little waiting, then every 200 ms.
+/// waits for the step of `group` to end, handing on its lines, and ends the group when `stop`
+/// asks or the disk falls below `floor`, looking often at first so a short step waits little.
 fn watch(
     group: &mut Group,
     lines: &Mutex<Lines>,
@@ -394,8 +372,7 @@ impl Log {
         })
     }
 
-    /// appends `bytes`, first dropping the older half of the log when they would take it past
-    /// [`LOG_MOST`].
+    /// appends `bytes`, first dropping the log's older half when they would pass [`LOG_MOST`].
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         if self.written + bytes.len() as u64 > LOG_MOST {
             self.keep_latest(LOG_MOST / 2)?;
@@ -427,12 +404,10 @@ mod group {
 
     use rustix::process::{Pid, Signal, kill_process_group};
 
-    /// the process groups of the steps running now, which a second ctrl-c ends before fetchloom
-    /// quits.
+    /// the process groups of running steps, which a second ctrl-c ends before fetchloom quits.
     static RUNNING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-    /// a step's process in a process group of its own, named by its process id, which
-    /// [`end_running`] knows while this lives.
+    /// a step's process in a group of its own, its id known to [`end_running`] while this lives.
     pub(super) struct Group(Child);
 
     impl Group {
@@ -495,7 +470,6 @@ mod group {
         }
     }
 
-    /// ends the group of every step running now.
     pub(crate) fn end_running() {
         for group in RUNNING
             .lock()
@@ -516,10 +490,9 @@ mod group {
 
     use process_wrap::tokio::{ChildWrapper, CommandWrap, JobObject, KillOnDrop};
 
-    /// a step's process in a job object of its own, which takes in every process the step
-    /// starts. the job ends them all when told, and when its last handle closes, as when
-    /// fetchloom ends, however it ends. process-wrap asks for that close only through its tokio
-    /// wrapper, so the step is tokio's child, though only calls that need no runtime touch it.
+    /// a step's process in a job object that takes in every process the step starts, ending them
+    /// all when told and when fetchloom ends, however it ends. process-wrap sets that up only
+    /// through tokio, so the step is tokio's child, touched only by calls that need no runtime.
     pub(super) struct Group {
         child: Box<dyn ChildWrapper>,
         outputs: Vec<File>,
@@ -564,7 +537,6 @@ mod group {
             }
         }
 
-        /// ends every process in the job.
         pub(super) fn end(&mut self) {
             if let Err(err) = self.child.start_kill() {
                 tracing::debug!(%err, "the step's job had ended");
@@ -584,8 +556,7 @@ pub(crate) use group::end_running;
 mod tests {
     use super::*;
 
-    /// the watch looks at the free space at once, then every two seconds, and stops a step only
-    /// once the disk has less free than the floor; a disk that does not say never stops one.
+    /// at once, then every two seconds; a disk that does not say what is free never stops one.
     #[test]
     fn the_floor_check_stops_below_its_bytes() {
         let breached = |free: Option<u64>| {
@@ -605,8 +576,7 @@ mod tests {
         assert!(due(Some(start), start + FLOOR_EVERY));
     }
 
-    /// a step that failed once a stop was asked counts as stopped, as the stop most likely ended
-    /// it; one that exited with 0 keeps its result, and one that failed with no stop failed.
+    /// exit 0 keeps its result, and a failure with no stop asked stays a failure.
     #[test]
     fn a_step_that_fails_after_a_stop_is_stopped() {
         assert_eq!(Ended::Exited(1).or_stopped(true), Ended::Stopped);
@@ -621,8 +591,7 @@ mod tests {
         }
     }
 
-    /// a folder with spaces stays inside its one argument, and the step gets its variables and
-    /// the project it is built in.
+    /// a folder with spaces stays one argument, and the step gets its variables and project.
     #[test]
     fn templates_expand_to_single_arguments() {
         let run: Vec<Template> = ["tool", "--in={raw}", "{out}", "{{literal}}"]
@@ -655,8 +624,7 @@ mod tests {
         }
     }
 
-    /// the log keeps the latest output once a step writes more than it holds, and the tail its
-    /// last lines.
+    /// once a step writes more than the log holds; the tail keeps the last lines.
     #[test]
     fn the_log_keeps_the_latest_output() {
         let dir = tempfile::tempdir().unwrap();

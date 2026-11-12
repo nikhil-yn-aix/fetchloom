@@ -1,10 +1,5 @@
-//! taking in what a step wrote into its result folder. every entry is looked at without following
-//! a link: a link, a device, a fifo or a socket is refused by name, and so is a name some disk
-//! fetchloom supports cannot store, or two names one disk would take for one. each file is
-//! hashed on the placement threads and looked at again after, so one that changed while it was
-//! read stops the build. only then does the result enter the cache: a file with no other name
-//! moves into `objects/`, and any other is copied, so a step that linked a person's own file
-//! into its result never makes that file the cache's.
+//! taking in what a step wrote, never following a link. a file with another name is copied rather
+//! than moved, so a step that linked a person's own file never makes it the cache's.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -83,12 +78,8 @@ struct Taken {
     seen: Seen,
 }
 
-/// reads everything `out` holds, checks every name and hashes every file on `threads`. a result
-/// of more than `most` files is refused.
-///
-/// # Errors
-///
-/// what the result cannot hold, a failed read, or `Interrupted` when `stop` asks.
+/// reads everything `out` holds, checks every name and hashes every file on `threads`. it fails on
+/// what a result cannot hold, as more than `most` files, on a failed read, or with a stop.
 pub(crate) fn read(out: &Path, most: usize, threads: Threads, stop: &Stop) -> Result<Found, Fault> {
     read_with(out, most, threads, stop, &|_| {})
 }
@@ -122,9 +113,8 @@ fn read_with(
     })
 }
 
-/// every file under `out`, each with its path in the folder as the disk spells it, found without
-/// following a link. a folder the step took its owner's access from gets it back, so its files
-/// can be read and moved out.
+/// every file under `out` with its path as the disk spells it, found without following a link. a
+/// folder the step took its owner's access from gets it back, so its files can be read and moved.
 fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, Fault> {
     let mut files = Vec::new();
     let mut folders = vec![(out.to_path_buf(), String::new())];
@@ -158,9 +148,8 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
     Ok(files)
 }
 
-/// each file's path in NFC, the form data.lock records, once every name passed: none reaches
-/// out of the folder or names repository metadata, every disk can store it, and no two are one
-/// file on a disk that ignores case or how an accent is written, or a file and a folder.
+/// each file's path in NFC, as data.lock records it, once every name passed: none leaves the
+/// folder, names repository metadata, fails to store on some disk or clashes with another.
 fn names(paths: &[(PathBuf, String)]) -> Result<Vec<(PathBuf, String)>, Refused> {
     let nfc = ComposingNormalizerBorrowed::new_nfc();
     let mut files: HashMap<String, &str> = HashMap::with_capacity(paths.len());
@@ -196,8 +185,7 @@ fn names(paths: &[(PathBuf, String)]) -> Result<Vec<(PathBuf, String)>, Refused>
     Ok(named)
 }
 
-/// hashes the file at `disk`, never following a link, and makes sure it looked the same before
-/// and after.
+/// hashes the file at `disk` unfollowed, checking it looked the same before and after.
 fn take(
     disk: &Path,
     path: &str,
@@ -237,14 +225,9 @@ fn take(
     })
 }
 
-/// puts every file of `found` in `cache`: past `MOST_FLUSHED_ALONE` files they reach the disk with
-/// one flush where the system can, before any takes its name in `objects/`. `work` counts each
-/// object the cache did not hold before.
-///
-/// # Errors
-///
-/// a file that changed since it was read, a cache that cannot take it, or `Interrupted` when
-/// `stop` asks.
+/// puts every file of `found` in `cache`, each on the disk before any takes its name in
+/// `objects/`, counting new objects in `work`. it fails on a file changed since it was read, a
+/// cache that cannot take it, or a stop.
 pub(crate) fn publish(
     cache: &Cache,
     found: &Found,
@@ -367,8 +350,7 @@ mod tests {
         }
     }
 
-    /// a result is plain files: a link is refused as itself, never followed, and so is anything
-    /// else that is no file, by its path in the result.
+    /// each is refused by its path in the result, a link as itself, never followed.
     #[cfg(unix)]
     #[test]
     fn links_and_special_files_are_refused() {
@@ -379,7 +361,7 @@ mod tests {
         std::os::unix::fs::symlink("real.csv", out.join("sub").join("latest")).unwrap();
         assert_eq!(refused(&out), Refused::Link("sub/latest".to_owned()));
         fs::remove_file(out.join("sub").join("latest")).unwrap();
-        // sockets limit the path length, and rustix cannot make a fifo on macos.
+        // sockets limit the path length, and rustix cannot make a fifo on macos
         let made = std::process::Command::new("mkfifo")
             .arg(out.join("queue"))
             .status()
@@ -388,8 +370,7 @@ mod tests {
         assert_eq!(refused(&out), Refused::Special("queue".to_owned()));
     }
 
-    /// what no disk could store, or two names one disk takes for one, stops a result here rather
-    /// than on a teammate's machine.
+    /// a name some disk cannot store, or a clash, stops a result here, not on a teammate's machine.
     #[test]
     fn names_every_disk_can_store_and_tell_apart() {
         let file = |path: &str| (PathBuf::from(path), path.to_owned());
@@ -423,8 +404,7 @@ mod tests {
         assert_eq!(decomposed[0].1, "caf\u{e9}.csv", "data.lock records NFC");
     }
 
-    /// a file the step linked from elsewhere has another name, so the cache gets a copy and the
-    /// other name keeps its bytes and its write access.
+    /// the cache gets a copy, and the file's other name keeps its bytes and its write access.
     #[cfg(unix)]
     #[test]
     fn a_file_with_two_names_is_copied_not_moved() {
@@ -465,8 +445,7 @@ mod tests {
         );
     }
 
-    /// a file that changed while it was hashed, or after, never enters the cache under a hash
-    /// that is not its bytes'.
+    /// changed while hashed or after, a file never enters the cache under a hash not its bytes'.
     #[test]
     fn a_file_changed_while_read_stops_capture() {
         let (dir, cache) = cache();
@@ -498,8 +477,7 @@ mod tests {
         assert!(cache.find(&found.members[0].sha256, None).is_none());
     }
 
-    /// a step that took write access from its folders, as `chmod -R a-w` does, still has its
-    /// files taken in and moved out.
+    /// as `chmod -R a-w` leaves them: their files are still taken in and moved out.
     #[cfg(unix)]
     #[test]
     fn folders_the_step_made_read_only_are_taken_in() {
