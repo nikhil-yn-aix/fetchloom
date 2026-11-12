@@ -39,7 +39,7 @@ every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | `-v`, `--verbose` | add details, error kinds and work counters |
 | `-vv` | also enable debug logs, which name local paths, dataset references and the queries sent to sources; read them before you share them, as [what leaves your machine](../concepts.md#what-leaves-your-machine) says |
 | `--json` | print one result document on stdout, including failures; never prompt |
-| `--progress` | with `--json`, keep the plain progress lines a long run prints on stderr where no bar shows: what it does after 2 s, then how far it got every 10 s. stdout still holds the one document; `-q` hides the lines |
+| `--progress` | with `--json`, keep the plain progress lines a long run prints on stderr where no bar shows: what it does, at once for a download or a lookup and after 2 s for other work, then how far it got every 10 s. stdout still holds the one document; `-q` hides the lines |
 | `--offline` | prevent HTTP and DNS requests by fetchloom |
 | `-y`, `--yes` | answer yes to questions, but never pick a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |

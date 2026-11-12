@@ -35,7 +35,7 @@ project commands look for `data.toml` from the current folder up to the top of i
 
 every document has `schema` (1), `command`, `status` (`ok` or `error`), `result`, `warnings` (strings), `errors` and `work` (counters). on failure, `errors[0]` has `kind`, `message`, `details`, `help` and `fix`: a runnable `fetchloom` command, or null when the next step is the user's call. check that a `fix` fits what the user wants before running it.
 
-never parse stderr. `-q`, `-v`, `--color` and `--progress` change only what a person reads there; `--progress` prints a plain line now and then during a long download. `fetchloom help --json` lists every command and option.
+never parse stderr. `-q`, `-v`, `--color` and `--progress` change only what a person reads there; `--progress` prints a plain line as a download or a lookup starts, then now and then during a long one. `fetchloom help --json` lists every command and option.
 
 a `status` that finds differences and a `sync` that keeps edits both exit 0, so read the arrays and `result.placement.kept` before using the data. a successful `path` does not prove the bytes match the lock. `cache gc` and `cache verify` keep partial results in `result.not_removed` and `result.unreadable`, each with a path and its cause.
 

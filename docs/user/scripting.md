@@ -24,7 +24,7 @@ stop when the lock check fails. after sync, inspect kept conflicts before using 
 
 JSON appears on stdout on success and failure, including usage errors and help: `fetchloom help --json` describes every command and option. a killed process may leave no valid JSON, so treat missing or invalid JSON as failure.
 
-a long job that a person watches can still show how it goes: `--progress` keeps plain progress lines on stderr, after 2 s and then every 10 s, while stdout holds the one document. the lines are for a person, so read stdout and stderr apart and never parse them.
+a long job that a person watches can still show how it goes: `--progress` keeps plain progress lines on stderr: a download or a lookup says what it does at once, other work after 2 s, then each says how far it got every 10 s, while stdout holds the one document. the lines are for a person, so read stdout and stderr apart and never parse them.
 
 ```sh
 fetchloom --json --progress get https://example.org/big.bin

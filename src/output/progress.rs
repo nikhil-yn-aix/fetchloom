@@ -30,13 +30,36 @@ const RERATE: Duration = Duration::from_secs(1);
 /// 20 s of the transfer and follows a link that speeds up or slows down.
 const WINDOW: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_millis(100);
-/// how long a batch runs before its first plain line, so a quick one adds no line at all.
+/// how long a batch runs before its first plain line, unless it waits on the network, so quick
+/// work on this machine adds no line at all.
 const MOMENT: Duration = Duration::from_secs(2);
 /// the same for a test that waits on that line, so it waits a tenth of a second, not two.
 #[cfg(debug_assertions)]
 const TEST_MOMENT: Duration = Duration::from_millis(100);
 /// how often a batch that is still running says how far it got.
 const EVERY: Duration = Duration::from_secs(10);
+
+/// when a batch first says what it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum First {
+    /// as it begins: a wait on the network, such as a source looking up a link.
+    Now,
+    /// as soon as it knows every file's size, which a download may learn only from the answer,
+    /// or after a moment.
+    Sized,
+    /// after a moment.
+    Moment,
+}
+
+/// when a batch of `verb` first says what it does: one that waits on the network at once, so a
+/// person reading plain lines hears that it began, and other work after a moment.
+fn first(verb: &str) -> First {
+    match verb {
+        "Downloading" => First::Sized,
+        "Resolving" | "Searching" => First::Now,
+        _ => First::Moment,
+    }
+}
 
 /// one download's bar, or nothing when bars are off. it clears itself when dropped.
 pub(crate) struct Bar {
@@ -733,20 +756,52 @@ pub(crate) struct Wait {
 }
 
 /// a batch of work told in plain lines where no bar shows it, as in a log or a pipe: what it
-/// does once it has run for a moment, then how far it got every 10 s, never a line per file.
-/// it stops when dropped.
+/// does, as [`first`] says when, then how far it got every 10 s, never a line per file. it stops
+/// when dropped.
 pub(crate) struct Ticker {
     shared: Option<Arc<Shared>>,
     thread: Option<JoinHandle<()>>,
 }
 
+/// how a batch tells a line: its verb, then the rest.
+type Say = Box<dyn Fn(&str, &str) + Send + Sync>;
+
 struct Shared {
+    verb: &'static str,
+    what: String,
+    first: First,
     done: AtomicU64,
     total: AtomicU64,
     /// files whose size only their download tells, so the total is not known until they start.
     unknown: AtomicUsize,
+    /// whether the batch said what it does, which it says once.
+    begun: AtomicBool,
     finished: Mutex<bool>,
     wake: Condvar,
+    say: Say,
+}
+
+impl Shared {
+    /// the total of the batch's sizes, once every one is known.
+    fn total(&self) -> Option<u64> {
+        (self.unknown.load(Ordering::Relaxed) == 0).then(|| self.total.load(Ordering::Relaxed))
+    }
+
+    /// says what the batch does, unless it has. whether it said so now.
+    fn begin(&self) -> bool {
+        if self.begun.swap(true, Ordering::Relaxed) {
+            return false;
+        }
+        let (verb, text) = report(
+            self.verb,
+            &self.what,
+            (0, self.total()),
+            Duration::ZERO,
+            true,
+        );
+        (self.say)(verb, &text);
+        true
+    }
 }
 
 /// how long a batch runs before its first plain line, or none for no lines. debug builds read
@@ -783,7 +838,7 @@ impl Ticker {
         what: String,
         (total, unknown): (u64, usize),
         moment: Duration,
-        say: impl Fn(&str, &str) + Send + 'static,
+        say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
         Ticker::paced(verb, what, (total, unknown), (moment, EVERY), say)
     }
@@ -793,20 +848,29 @@ impl Ticker {
         what: String,
         (total, unknown): (u64, usize),
         pace: (Duration, Duration),
-        say: impl Fn(&str, &str) + Send + 'static,
+        say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
         let shared = Arc::new(Shared {
+            verb,
+            what,
+            first: first(verb),
             done: AtomicU64::new(0),
             total: AtomicU64::new(total),
             unknown: AtomicUsize::new(unknown),
+            begun: AtomicBool::new(false),
             finished: Mutex::new(false),
             wake: Condvar::new(),
+            say: Box::new(say),
         });
+        // said before the work starts, so even a batch that ends at once has said it began
+        if shared.first == First::Now || (shared.first == First::Sized && unknown == 0) {
+            shared.begin();
+        }
         let watched = shared.clone();
         // without a thread the batch runs on untold, which costs nothing but the lines
         let thread = std::thread::Builder::new()
             .name("ticker".to_owned())
-            .spawn(move || tick(&watched, verb, &what, pace, &say))
+            .spawn(move || tick(&watched, pace))
             .ok();
         Ticker {
             shared: Some(shared),
@@ -820,7 +884,9 @@ impl Ticker {
         }
     }
 
-    /// adds the size of a file whose download just told it.
+    /// adds the size of a file whose download just told it. a download that knows its whole
+    /// batch's size now says what it does, unless it told none, as one refused before its body,
+    /// which then never began.
     pub(crate) fn sized(&self, bytes: u64) {
         if let Some(shared) = &self.shared
             && shared
@@ -835,6 +901,9 @@ impl Ticker {
                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
                     Some(total.saturating_add(bytes))
                 });
+            if shared.first == First::Sized && bytes > 0 && shared.total().is_some() {
+                shared.begin();
+            }
         }
     }
 }
@@ -854,17 +923,11 @@ impl Drop for Ticker {
     }
 }
 
-/// waits out the batch, saying what it does after `moment` and how far it got every `every`.
-fn tick(
-    shared: &Shared,
-    verb: &'static str,
-    what: &str,
-    (moment, every): (Duration, Duration),
-    say: &dyn Fn(&str, &str),
-) {
+/// waits out the batch, saying what it does after `moment` unless it said so sooner, and how
+/// far it got every `every`.
+fn tick(shared: &Shared, (moment, every): (Duration, Duration)) {
     let started = Instant::now();
     let mut next = moment;
-    let mut told = false;
     loop {
         let finished = shared
             .finished
@@ -879,17 +942,21 @@ fn tick(
             return;
         }
         drop(finished);
-        let total = (shared.unknown.load(Ordering::Relaxed) == 0)
-            .then(|| shared.total.load(Ordering::Relaxed));
-        let done = shared.done.load(Ordering::Relaxed);
-        let (verb, text) = report(verb, what, (done, total), started.elapsed(), !told);
-        say(verb, &text);
-        if told {
-            next += every;
-        } else {
-            told = true;
+        // a batch that said what it does before its moment next says how far it got
+        if shared.begin() || next == moment {
             next = every;
+            continue;
         }
+        let done = shared.done.load(Ordering::Relaxed);
+        let (verb, text) = report(
+            shared.verb,
+            &shared.what,
+            (done, shared.total()),
+            started.elapsed(),
+            false,
+        );
+        (shared.say)(verb, &text);
+        next += every;
     }
 }
 
@@ -1329,12 +1396,47 @@ mod tests {
         }
     }
 
+    /// a batch that waits on the network says what it does before its moment, even one too
+    /// quick for any later line, so plain output tells at once that it began: a download as
+    /// soon as it knows its size, a lookup as it starts.
+    #[test]
+    fn a_network_batch_tells_its_start_at_once() {
+        let pace = (Duration::from_mins(1), Duration::from_mins(2));
+        let (heard, _reported, say) = ear();
+        drop(Ticker::paced(
+            "Downloading",
+            "3 files".to_owned(),
+            (300, 0),
+            pace,
+            say,
+        ));
+        assert_eq!(*heard.lock().unwrap(), ["Downloading 3 files · 300 B"]);
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
+        assert!(heard.lock().unwrap().is_empty());
+        ticker.sized(32);
+        assert_eq!(*heard.lock().unwrap(), ["Downloading iris.csv · 32 B"]);
+        drop(ticker);
+        // a download refused before its body tells no size, and never began
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
+        ticker.sized(0);
+        drop(ticker);
+        assert!(heard.lock().unwrap().is_empty());
+        for verb in ["Resolving", "Searching"] {
+            let (heard, _reported, say) = ear();
+            drop(Ticker::paced(verb, "iris".to_owned(), (0, 1), pace, say));
+            assert_eq!(*heard.lock().unwrap(), [format!("{verb} iris")]);
+        }
+    }
+
+    /// work on this machine says nothing until it lasts a moment, so a quick batch adds no line.
     #[test]
     fn a_quick_batch_adds_no_line() {
         let (heard, _reported, say) = ear();
         let pace = (Duration::from_secs(5), Duration::from_secs(10));
         drop(Ticker::paced(
-            "Downloading",
+            "Checking",
             "3 files".to_owned(),
             (300, 0),
             pace,
