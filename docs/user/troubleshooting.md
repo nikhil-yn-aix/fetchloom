@@ -91,7 +91,7 @@ fetchloom places nothing it cannot check, so the clone stays without the file. t
 | `error: the archive is cut short: a zip lists its files at its end, and that list is missing` | the zip the source serves ends early, as an upload stopped part way leaves one | ask the dataset's authors for a whole copy; until then `extract = false` on the dataset, or `--no-extract`, keeps the bytes as they are |
 | `error: the archive is damaged: it ends in the middle of a file` | a tar, compressed or not, ends early, as an upload stopped part way leaves one | ask the dataset's authors for a whole copy; until then `extract = false` on the dataset, or `--no-extract`, keeps the bytes as they are |
 | an archive has no dataset folder | it contains no regular files | use `extract = false` and sync to keep the packed archive |
-| a source returns an access refusal | access is unavailable or unsupported | check the source's [credentials and limits](sources/README.md) |
+| a source returns an access refusal | access is unavailable or unsupported | [sign in](signing-in.md) where the source takes a key, or check its page under [sources](sources/README.md) |
 | sync warns it could not add the project to the cache's list of projects | the cache folder could not be written | fix the cache folder's permissions and sync again before relying on `cache gc` to keep the project's files |
 | `cache gc` exits 50 after partial cleanup | some paths could not be removed or inspected | inspect `result.not_removed` causes; fix access or storage before retrying |
 | `cache verify` exits 30 | cached bytes changed | allow a later online sync to replace damaged objects, then sync affected projects |

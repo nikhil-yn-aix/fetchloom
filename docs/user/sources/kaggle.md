@@ -34,14 +34,7 @@ competition downloads have no `raw=true` option, and [kaggle's CLI](https://gith
 
 ## credentials
 
-public dataset downloads need no token. competitions and other access use existing kaggle credentials:
-
-| preference | location |
-|---|---|
-| token | `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
-| fallback account credentials | `KAGGLE_USERNAME` and `KAGGLE_KEY`, or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle` |
-
-credentials stay out of the manifest, lock, logs and JSON output.
+public datasets need no key. competitions take a key from `fetchloom auth login kaggle`, or the kaggle command's own credentials, `KAGGLE_API_TOKEN`, `~/.kaggle/access_token` or `kaggle.json`, in the [order environment gives](../reference/environment.md#credentials).
 
 ## limits
 

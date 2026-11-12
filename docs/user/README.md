@@ -27,7 +27,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [settings](commands/settings.md) | see each setting and where it came from |
 | [auth](commands/auth.md) | sign in for private, restricted or gated data with one key |
 | [completions](commands/completions.md) | let your shell complete commands, options and dataset names |
-| [sources](sources/README.md) | compare accepted references, pins, credentials and limits |
+| [sources](sources/README.md) | see every source, how to write its references and when it needs an account |
 | [URLs and DOIs](sources/urls-and-dois.md) | fetch a direct link or resolve a persistent handle |
 | [zenodo](sources/zenodo.md) | choose records or individual record files |
 | [figshare](sources/figshare.md) | pin article versions, including institutional articles |
@@ -46,6 +46,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [cloud buckets](sources/buckets.md) | list and pin S3 and google cloud storage prefixes, private S3 buckets with your AWS keys and private cloud storage buckets with your google credentials |
 | [azure blob storage](sources/azure.md) | list and pin azure containers and folders, private ones with a SAS you keep out of the project |
+| [signing in](signing-in.md) | get at private, restricted or gated data: which sources need an account, how to sign in, and keys for private buckets and folders |
 | [data.toml](reference/data-toml.md) | edit datasets, paths and selection patterns |
 | [data.lock](reference/data-lock.md) | inspect pins, spec hashes and archive tree hashes |
 | [JSON output](reference/json-output.md) | parse result fields, warnings and work counters |

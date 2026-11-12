@@ -59,7 +59,7 @@ error: azure:sentinel2l2a01/sentinel2-l2/01/C/CV/ is private, or does not exist:
   help: if you trust azure:sentinel2l2a01/sentinel2-l2 with a SAS, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN
 ```
 
-azure refuses a container that does not exist as it refuses a private one, so the error says both. a SAS azure refuses, as an expired one or one for another container, fails with `auth.required`, exit 40, naming where the SAS came from and the expiry it states. no SAS appears in `data.toml`, `data.lock`, the cache, logs or `--json` output: `add` refuses a link that carries one, and `sig`, `se` and `sp` are masked wherever a link is shown. `fetchloom get` downloads a SAS link once without keeping it.
+azure refuses a container that does not exist as it refuses a private one, so the error says both. a SAS azure refuses, as an expired one or one for another container, fails with `auth.required`, exit 40, naming where the SAS came from and the expiry it states. `add` refuses a link that carries a SAS, and `sig`, `se` and `sp` are masked wherever a link is shown; `fetchloom get` downloads a SAS link once without keeping it.
 
 ## access and limits
 

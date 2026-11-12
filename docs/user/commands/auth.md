@@ -1,6 +1,6 @@
 # auth
 
-`auth` signs you in to sources that require an account, including restricted data and kaggle competitions.
+`auth` signs you in to sources that need an account, such as for restricted data or kaggle competitions. [signing in](../signing-in.md) says which do, and how private buckets get their keys.
 
 ```sh
 fetchloom auth
@@ -48,7 +48,7 @@ when a key is already saved, it asks before replacing it; `--yes` answers both q
 
 a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
 
-each key is sent over https to its own host only, never after a redirect leaves that host. two exceptions follow how those sites work: a `.netrc` login answers at `urs.earthdata.nasa.gov`, where earthdata's archives send you to sign in, as curl does too, and an osf key goes to both `osf.io` and `files.osf.io`.
+[where a key goes](../signing-in.md#where-a-key-goes) lists the hosts each key is sent to.
 
 ## scripts and CI
 
@@ -102,10 +102,10 @@ it lists each account with a key, where the key came from and, online, who the s
 
 ```text
   Signed in to hf as ada · ~/.cache/huggingface/token
-  Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet
+  Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google
 ```
 
-buckets are read with the keys the AWS tools and google's libraries keep, so `auth` names those too, from the files and variables alone: it never runs a program, asks a server or shows a secret. for `aws`, that is the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each shown by the last four characters of its id, else the program that would give them: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role. each program is named, and runs only once a bucket needs keys. for `google`, it is the application default credentials file, as a service account with its email or a person's login. keys your AWS settings send to another endpoint are listed for it, as `s3 at https://minio.lab.example:9000`, and AWS has none. settings fetchloom cannot use, such as an `AWS_PROFILE` neither AWS file has, get a warning with what would fix them. [cloud buckets](../sources/buckets.md) says how each is used:
+`aws` and `google` are the keys [private buckets](../signing-in.md#private-buckets-and-folders) and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret. for `aws`, that is the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each shown by the last four characters of its id, else the program that would give them: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role. each program is named, and runs only once a bucket needs keys. for `google`, it is the application default credentials file, as a service account with its email or a person's login. keys your AWS settings send to another endpoint are listed for it, as `s3 at https://minio.lab.example:9000`, and AWS has none. settings fetchloom cannot use, such as an `AWS_PROFILE` neither AWS file has, get a warning with what would fix them:
 
 ```text
   Signed in to aws with key …MPLE · profile default in ~/.aws/credentials

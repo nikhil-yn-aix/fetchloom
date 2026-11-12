@@ -30,7 +30,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [cloud buckets](buckets.md) | S3, services that speak its API, and google cloud storage | `s3://<bucket>/<prefix>/`, `gs://<bucket>/<prefix>/` | private buckets |
 | [azure blob storage](azure.md) | azure containers | `azure:<account>/<container>/<prefix>/` | private containers |
 
-[auth](../commands/auth.md) says how to sign in. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts.md#recovery) can find a file's new link while keeping its pinned hashes.
+[signing in](../signing-in.md) says how to give fetchloom a key. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts.md#recovery) can find a file's new link while keeping its pinned hashes.
 
 ## references and paths
 

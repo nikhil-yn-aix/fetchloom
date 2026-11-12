@@ -47,6 +47,7 @@
     - [github and gitlab releases](user/sources/releases.md)
     - [cloud buckets](user/sources/buckets.md)
     - [azure blob storage](user/sources/azure.md)
+  - [signing in](user/signing-in.md)
   - [data.toml](user/reference/data-toml.md)
   - [data.lock](user/reference/data-lock.md)
   - [JSON output](user/reference/json-output.md)

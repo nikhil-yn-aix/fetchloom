@@ -54,7 +54,7 @@ a kubernetes job or another container keeps its cache on a volume instead; [note
 
 ## keys
 
-a private, gated or competition dataset needs its source's key in the job's environment, from the CI system's secrets: `HF_TOKEN` for hugging face, `KAGGLE_API_TOKEN` for kaggle, and the others in [environment](reference/environment.md#credentials). never write a key into the cache folder or the repository; fetchloom keeps keys out of its cache, logs and output.
+a private, gated or competition dataset needs its source's key in the job's environment, from the CI system's secrets: `HF_TOKEN` for hugging face, `KAGGLE_API_TOKEN` for kaggle, and the others [signing in](signing-in.md#sources-with-an-account) lists. never write a key into the cache folder or the repository; fetchloom keeps keys out of its cache, logs and output.
 
 ## a mirror for runners
 

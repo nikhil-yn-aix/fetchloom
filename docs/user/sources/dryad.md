@@ -37,6 +37,6 @@ dryad lets anyone list a dataset, but downloads only for an [API account](https:
 2. on your account page, https://datadryad.org/account, make an API account and get a token.
 3. run `fetchloom auth login dryad` and paste it, or set `DRYAD_TOKEN`.
 
-a token lasts 10 hours; after that, get a new one the same way. a download without a working token stops with `auth.required`, exit 40, saying how to get one. the token goes over https to datadryad.org only, never to a host a download is sent on to, and never into data.toml, data.lock, logs or `--json` output.
+a token lasts 10 hours; after that, get a new one the same way. a download without a working token stops with `auth.required`, exit 40, saying how to get one.
 
 dryad allows 30 requests a minute without a token and 240 with one. dryad is not in [search](../commands/search.md), since most of what it would find cannot be downloaded without an account.

@@ -27,8 +27,6 @@ a reference that names a version keeps it under `lock --upgrade`; to move to ano
 
 ## credentials and limits
 
-`fetchloom auth login figshare` or `FIGSHARE_TOKEN` supplies the source credential. tokens are not written to project files, logs or JSON.
-
-embargoed and download-disabled articles are refused. obtain an accessible publication from the owner instead of trying to filter around the restriction.
+public articles need no account; [signing in](../signing-in.md) says how to give fetchloom a figshare key. an embargoed article, or one whose owner turned downloads off, is refused with `auth.required`, exit 40, and no filter gets around that; ask the owner for a copy you may download.
 
 follow [offline preparation](../concepts.md#offline) before disconnecting.

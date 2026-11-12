@@ -202,6 +202,6 @@ fetchloom sends nothing on its own: it has no telemetry, no account and no updat
 | search words, given to `search`, or to `add` or `get` in place of a link | the search of hugging face, kaggle and zenodo, or of the sites `--source` names |
 | a reference | the site it names: a DOI to doi.org, which says where it points, an id such as `zenodo:3608990` to that site, a link to its host |
 | a download | the file's host, or a [mirror](mirrors.md#privacy) you named, which is asked by SHA-256 alone |
-| a key | its own host only, over https, as [auth](commands/auth.md) describes |
+| a key | its own host only, over https, as [where a key goes](signing-in.md#where-a-key-goes) says |
 
 each request names fetchloom and its version, as `fetchloom/0.1.0`, in its `User-Agent` header. a path on this machine never leaves it: `add` copies the files a path names into the cache with no request, `get` and `search` refuse a path before any request, and data.lock records no path for an import. what your repository shares is `data.toml` and `data.lock`: each dataset's reference, links, file names, sizes and SHA-256. a `-vv` log names local paths and every link fetchloom asked for, so read it before you share it.

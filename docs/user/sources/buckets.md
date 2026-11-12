@@ -74,13 +74,13 @@ keys come from where the AWS tools keep them, in this order:
    3. `credential_process`, a program that prints the keys.
    4. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/config`.
 
-`fetchloom auth` names where the keys would come from, a program by name, without running it. a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
+a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
 
 the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`. a signed listing names the bucket's region in its object links, so a later run signs them for it. cloudflare r2 signs for `auto`, and backblaze and wasabi take the region in their host.
 
 keys reach another service only where your AWS settings send them: `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` sends the keys above to that endpoint, and so does a profile's `endpoint_url`, set in the profile or for `s3` in the `services` section it names. a bucket there takes the keys of the one profile whose endpoint names it, so `AWS_PROFILE` can stay on your AWS profile. keys sent to an endpoint are never sent to AWS. `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` turns endpoint settings off. a plain `http` service is signed only when your settings name its `http` link.
 
-the secret never leaves the machine: a request carries the key id and a signature made with the secret. messages show the key id by its last four characters, such as `…WXYZ`. no key or session token reaches data.toml, data.lock, logs or `--json` output.
+the secret never leaves the machine: a request carries the key id and a signature made with the secret. messages show the key id by its last four characters, such as `…WXYZ`.
 
 ### keys from a program
 
@@ -110,14 +110,7 @@ gcs_buckets = ["gs://lab-private"]
 
 each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom asks google for an access token, asks again once with it, and sends it with that bucket's later requests from the start. this costs one extra request for each such bucket in each run, or one for each download already on its way when the first refusal came, and one request to google's token endpoint, `https://oauth2.googleapis.com/token`, for all of them. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
 
-the credentials are google's application default credentials, found as google's own libraries find them:
-
-1. the file `GOOGLE_APPLICATION_CREDENTIALS` names: a service account's JSON key, which signs a request for a token.
-2. else the login `gcloud auth application-default login` saved, in `application_default_credentials.json` in gcloud's folder: `CLOUDSDK_CONFIG`, else `~/.config/gcloud`, or `%APPDATA%\gcloud` on windows.
-
-a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. fetchloom keeps a token until 5 minutes before it expires, then asks for a new one, and a token cloud storage refuses with 401, as an expired or revoked one, is replaced once. it never asks a metadata server for the identity of the machine it runs on, so on a google cloud virtual machine use a key file or a login. files of other kinds, for workload identity federation or service account impersonation, are refused with `auth.required`, never passed over for another identity; so is a file that names a token endpoint other than google's, or a `GOOGLE_APPLICATION_CREDENTIALS` file that cannot be read, which fails with `usage`, exit 2.
-
-`fetchloom auth` names the file and whose credentials it holds. no key, token or login reaches data.toml, data.lock, the cache, logs or `--json` output. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, and never what it signs with.
+the credentials are google's [application default credentials](../reference/environment.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. fetchloom keeps a token until 5 minutes before it expires, then asks for a new one, and a token cloud storage refuses with 401, as an expired or revoked one, is replaced once. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
 
 the same credentials read the [private google drive folders and files](google-drive.md#private-files-and-folders) that `drive_folders` lists, with a scope of their own.
 
@@ -163,4 +156,4 @@ a request with a token cloud storage still refuses says `google cloud storage re
 
 requester-pays buckets bill the reader for each request, and fetchloom never agrees to pay: they fail with `auth.required`, with or without a key or a token, since fetchloom never names a project to bill. use the AWS CLI with `--request-payer requester`, or `gcloud storage cp` with `--billing-project`, for them. a bucket that allows reading objects but not listing them still works one object at a time through plain object links, `https://storage.googleapis.com/<bucket>/<key>` for cloud storage.
 
-AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read, nor google credentials from a metadata server, workload identity federation or impersonation, and azure blob storage is not a bucket source; an object link that needs no key still works as a plain URL.
+AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read; an object link that needs no key still works as a plain URL.

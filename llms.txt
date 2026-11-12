@@ -74,6 +74,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [github and gitlab releases](docs/user/sources/releases.md): the files of a release at its tag, and github's limit of 60 requests an hour without a key
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private S3 buckets read with AWS keys once `s3_buckets` lists them, and private cloud storage buckets read with google application default credentials once `gcs_buckets` lists them
 - [azure blob storage](docs/user/sources/azure.md): `azure:<account>/<container>/<prefix>` and container links, checked against the MD5 azure states, and private containers read with a SAS once `azure_containers` lists them
+- [signing in](docs/user/signing-in.md): which sources need a key and how to give one, `fetchloom auth login` or the source's variable, and the settings that let AWS keys, google credentials or a SAS reach private buckets, containers and drive folders
 
 ## reference
 

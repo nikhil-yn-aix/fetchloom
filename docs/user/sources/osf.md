@@ -27,7 +27,7 @@ a storage link OSF says has expired is asked for again. a pinned download that a
 
 ## credentials and limits
 
-`fetchloom auth login osf` or `OSF_TOKEN` supplies the source credential. it is not stored in the manifest, lock, logs or JSON output.
+public projects need no account. a private one needs a key whose account may read it, from `fetchloom auth login osf` or `OSF_TOKEN`.
 
 the walk reads osfstorage only, and refuses an unsafe name before it enters a folder, with control characters escaped in the error.
 

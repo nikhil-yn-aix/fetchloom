@@ -24,8 +24,4 @@ when every select pattern starts with a folder, as `sample/10BT/**` or `data/tra
 
 ## credentials
 
-use the [credential precedence](../reference/environment.md#credentials) for `HF_TOKEN` and existing token files. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
-
-## limits
-
-sign in with `fetchloom auth login hf`, or reuse a token the hf tools saved. gated data requires approval from the repository owner before a token can download it. fetchloom cannot grant that approval.
+public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/environment.md#credentials). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
