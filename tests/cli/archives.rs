@@ -1243,6 +1243,27 @@ mod shards {
         Ok(())
     }
 
+    /// a dataset whose shards a members table covers, under a glob key or a shard's own path,
+    /// chose to unpack them, which extract = false would refuse, so its sync gives no shard hint.
+    #[test]
+    fn no_hint_when_a_members_table_covers_the_shards() -> Result {
+        let routes = bucket()?;
+        for key in ["train-*.tar", "train-000003.tar"] {
+            let sandbox = Sandbox::new()?;
+            fs::write(
+                sandbox.work().join("data.toml"),
+                format!(
+                    "[datasets.shards]\nref = \"{LINK}\"\n\n[datasets.shards.members.\"{key}\"]\nselect = [\"*.txt\"]\n"
+                ),
+            )?;
+            let synced = run(&sandbox, &routes, &["sync"])?;
+            ok(&synced)?;
+            let stderr = text(&synced.stderr)?;
+            assert!(!stderr.contains("webdataset"), "{key}: {stderr}");
+        }
+        Ok(())
+    }
+
     /// a select over the files inside shards matches none the bucket lists, and its help moves
     /// the pattern to one members table for every shard, not a table for the first.
     #[test]

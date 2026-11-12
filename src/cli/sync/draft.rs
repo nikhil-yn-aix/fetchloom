@@ -52,6 +52,8 @@ struct DraftFile {
     /// the pin data.lock had for a file an upgrade asks about again, since no checksum tells
     /// whether its bytes changed. only a dry run, which cannot ask, plans with it.
     was: Option<LockedFile>,
+    /// whether a members table of the dataset chooses files inside it.
+    tabled: bool,
 }
 
 impl Draft {
@@ -126,6 +128,7 @@ impl Draft {
                     },
                     _ => remote,
                 };
+                let tabled = source.members.get(&path).is_some();
                 DraftFile {
                     remote,
                     path,
@@ -133,6 +136,7 @@ impl Draft {
                     known,
                     unpacks_to,
                     was,
+                    tabled,
                 }
             })
             .collect();
@@ -237,6 +241,7 @@ impl Draft {
                     known: Some((file.sha256, file.size)),
                     unpacks_to: None,
                     was: None,
+                    tabled: source.members.get(&file.path).is_some(),
                 })
             })
             .collect::<Result<_, Error>>()?;
@@ -432,12 +437,20 @@ impl Draft {
             .collect()
     }
 
-    /// the numbered tar shards among the dataset's files, while its archives unpack.
+    /// the numbered tar shards among the dataset's files, while its archives unpack and no
+    /// members table covers one of them: such a table chooses to unpack them, which keeping them
+    /// packed would refuse.
     pub(super) fn shards(&self) -> Option<archive::Shards<'_>> {
         if !self.extract {
             return None;
         }
-        archive::shards(self.files.iter().map(|file| file.path.as_str()))
+        let shards = archive::shards(self.files.iter().map(|file| file.path.as_str()))?;
+        let key = Glob::new(&shards.key()).ok();
+        let tabled = self
+            .files
+            .iter()
+            .any(|file| file.tabled && key.as_ref().is_some_and(|key| key.matches(&file.path)));
+        (!tabled).then_some(shards)
     }
 
     /// the entry a dry run plans with: [`Draft::finish`], with a stand-in for each hash only a
