@@ -177,6 +177,55 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     Ok(())
 }
 
+/// a sync's last line follows what it did: taking files that already hold the pinned bytes as
+/// placed is work, and a dataset with `place = false` has no files in the data folder to be in
+/// place, so neither ends with all files in place and nothing to do.
+#[test]
+fn a_sync_that_adopts_or_places_nothing_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    // a copy of the pinned bytes nothing records as placed, as one downloaded by hand
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, IRIS)?;
+    delete(&sandbox.work().join(".fetchloom").join("state"))?;
+    let adopted = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(
+        adopted.contains("    Adopted data/iris · 1 file "),
+        "{adopted}"
+    );
+    assert!(
+        adopted.ends_with("     Synced 1 dataset into data\n"),
+        "{adopted}"
+    );
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
+    )?;
+    let retired = sandbox.run(&["sync"])?;
+    assert_eq!(retired.status.code(), Some(0), "{}", text(&retired.stderr)?);
+    for (args, said) in [
+        (
+            &["sync", "iris"][..],
+            "         Ok iris is not placed · place = false in data.toml, nothing to do\n",
+        ),
+        (
+            &["sync"][..],
+            "         Ok nothing to place in data, nothing to do\n",
+        ),
+        (
+            &["sync", "--dry-run", "iris"][..],
+            "         Ok iris is not placed · place = false in data.toml; dry run, nothing was changed\n",
+        ),
+    ] {
+        assert_eq!(text(&sandbox.run(args)?.stderr)?, said, "{args:?}");
+    }
+    Ok(())
+}
+
 #[test]
 fn a_fresh_clone_gets_the_same_bytes_without_downloading_them_again() -> Result {
     let sandbox = Sandbox::new()?;

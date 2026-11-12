@@ -78,7 +78,7 @@ a file someone put at a pinned path before fetchloom placed it, such as one down
     Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
 ```
 
-datasets that share a folder share its line, so three datasets with `path = "raw"` whose files were already in `data/raw` give one line, `Adopted data/raw · 3 files already held the pinned bytes, so they are now linked to the cache`. `status` lists such files before the sync as untracked files that hold the pinned bytes, which sync adopts. a file in a dataset with `copy = true`, a file with another name, and a file whose bytes the cache does not hold stay as they are, and the line says so: `so it stays as it is`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there. a dry run lists adoptions under `Would adopt`, and a file whose hash only its download can tell under `Would check`.
+datasets that share a folder share its line, so three datasets with `path = "raw"` whose files were already in `data/raw` give one line, `Adopted data/raw · 3 files already held the pinned bytes, so they are now linked to the cache`. `status` lists such files before the sync as untracked files that hold the pinned bytes, which sync adopts. a file in a dataset with `copy = true`, a file with another name, and a file whose bytes the cache does not hold stay as they are, and the line says so: `so it stays as it is`. a sync that adopts files ends with `Synced`, as `Synced 1 dataset into data`, never with `nothing to do`, since it took them as placed. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there. a dry run lists adoptions under `Would adopt`, and a file whose hash only its download can tell under `Would check`.
 
 a file sync must place whose bytes the cache lacks comes from another file that holds them in place, kept or adopted, at a path data.lock places them at too, as when two datasets hold one file, or a recipe copies one, in a project [moved to another machine](cache.md#moving-a-project-to-another-machine). the cache gets a clone or a copy of that file, never a link, and keeps it only when it hashes to the pin, so nothing is downloaded and a recipe's result needs no build. stderr from a real run in such a project, after `data/squares/table.csv` was deleted:
 
@@ -184,6 +184,14 @@ a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes
 ```text
     Retired data/raw · 1 file, since raw has place = false
 ```
+
+after that, a sync with nothing to do names such a dataset as not placed rather than saying its files are in place, as `fetchloom sync raw` does:
+
+```text
+         Ok raw is not placed · place = false in data.toml, nothing to do
+```
+
+and a sync of every dataset when each has `place = false` says `Ok nothing to place in data, nothing to do`.
 
 ## dry run
 

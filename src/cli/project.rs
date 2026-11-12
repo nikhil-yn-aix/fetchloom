@@ -528,8 +528,9 @@ fn tell_synced(
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
         && placement.unbuilt.is_empty()
+        && placement.adopted.is_empty()
     {
-        let found = in_place(scope, verified);
+        let found = in_place(manifest, scope, verified);
         context.output.done(
             "Ok",
             &if verified {
@@ -631,16 +632,37 @@ fn synced(
 }
 
 /// what a sync of `scope` with nothing to do found in place: every pinned file, or the named
-/// datasets' files, by size and time or, `verified`, byte for byte.
-fn in_place(scope: &Scope, verified: bool) -> String {
-    let files = match scope {
-        Scope::All => "all pinned files".to_owned(),
-        Scope::Only(names) => format!("the pinned files of {}", named(names)),
+/// datasets' files, by size and time or, `verified`, byte for byte. a dataset with `place = false`
+/// has no files in the data folder, so it is named as not placed instead.
+fn in_place(manifest: &Manifest, scope: &Scope, verified: bool) -> String {
+    let placed = |name: &String| manifest.datasets.get(name).is_some_and(|entry| entry.place);
+    let (files, unplaced) = match scope {
+        Scope::All if !manifest.datasets.keys().any(placed) => {
+            return format!("nothing to place in {}", manifest.data_dir);
+        }
+        Scope::All => ("all pinned files".to_owned(), None),
+        Scope::Only(names) => {
+            let (shown, unplaced): (BTreeSet<String>, BTreeSet<String>) =
+                names.iter().cloned().partition(placed);
+            let unplaced = (!unplaced.is_empty()).then(|| {
+                let are = if unplaced.len() == 1 { "is" } else { "are" };
+                format!("{} {are} not placed", named(&unplaced))
+            });
+            if shown.is_empty() {
+                let unplaced = unplaced.unwrap_or_default();
+                return format!("{unplaced} · place = false in data.toml");
+            }
+            (format!("the pinned files of {}", named(&shown)), unplaced)
+        }
     };
-    if verified {
+    let found = if verified {
         format!("{files} are in place, checked byte for byte")
     } else {
         format!("{files} are in place by size and time")
+    };
+    match unplaced {
+        Some(unplaced) => format!("{found} · {unplaced}, place = false in data.toml"),
+        None => found,
     }
 }
 
@@ -684,7 +706,7 @@ async fn preview_sync(
         dry_run_done(
             &context.output,
             nothing
-                .then(|| in_place(&work.scope, args.verify))
+                .then(|| in_place(manifest, &work.scope, args.verify))
                 .as_deref(),
         );
     }
