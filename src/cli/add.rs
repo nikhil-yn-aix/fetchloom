@@ -2888,8 +2888,8 @@ mod tests {
         (adding, cache, updated, listing)
     }
 
-    /// runs the add of b that [`adding_b`] readies, with `edit` made at `point` of it, and says
-    /// how it ended.
+    /// runs the add of b that [`adding_b`] readies, with `edit` made at `point` of it, or at
+    /// `start` before it runs, and says how it ended.
     fn add_b_editing(dir: &Path, point: &'static str, edit: fn(&Path)) -> (AddProject, Error) {
         let (mut adding, cache, updated, listing) = adding_b(dir);
         let context = offline_context();
@@ -2897,6 +2897,7 @@ mod tests {
         let old = adding.old.take();
         let work = Loop::new(&context, &adding.project, Arc::new(context.net()), cache);
         EDIT_AT.set(Some((point, edit)));
+        reached("start", &adding.project.root);
         let names = ["b".to_owned()];
         let outcome = block_on(sync_add(
             &work,
@@ -2934,6 +2935,43 @@ mod tests {
             adding.lock_text.clone().unwrap()
         );
         assert_eq!(error.kind, Kind::ProjectChanged, "{error:?}");
+        assert!(!root.join("data").join("b").exists());
+    }
+
+    /// an add whose recovery copies cannot be written stops before it writes data.toml or
+    /// data.lock, here because the metadata folder takes no new files.
+    #[cfg(unix)]
+    #[test]
+    fn an_add_that_cannot_save_its_recovery_copies_writes_neither_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root writes into a read-only folder");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (adding, error) = add_b_editing(dir.path(), "start", |root| {
+            let folder = root.join(".fetchloom");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        });
+        let root = &adding.project.root;
+        std::fs::set_permissions(
+            root.join(".fetchloom"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
+        assert_eq!(
+            error.message,
+            "could not save a recovery copy of data.toml: permission was denied"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(manifest::FILE)).unwrap(),
+            adding.text.clone().unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(lock::FILE)).unwrap(),
+            adding.lock_text.clone().unwrap()
+        );
         assert!(!root.join("data").join("b").exists());
     }
 
