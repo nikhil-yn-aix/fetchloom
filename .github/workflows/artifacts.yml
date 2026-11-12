@@ -385,12 +385,14 @@ jobs:
               echo "| $(basename "$file") | $(wc -c < "$file") |"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      # the inventory and the release's attestation read these in the same run
       - &packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 7
 
       - &receipts
         name: retain check receipts
