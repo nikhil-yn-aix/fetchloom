@@ -22,7 +22,31 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 
 for direct downloads, a safe `Content-Disposition` filename, including one received after redirects, can replace the name guessed from the URL. selection patterns match the source path before that replacement. recognized archive names [unpack by default](../concepts.md#archives).
 
-a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with an HTML page and the server names no file and no pinned hash proves the bytes: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead. a response with HTML content type warns when its filename looks like data rather than HTML. check the saved file and use a download or raw link if the server returned a page.
+a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with an HTML page and the server names no file and no pinned hash proves the bytes: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead. to share a folder of files as one dataset, publish it packed, as `tar czf many.tar.gz many`, and add the archive's link: fetchloom unpacks it into the dataset's folder. a response with HTML content type warns when its filename looks like data rather than HTML. check the saved file and use a download or raw link if the server returned a page.
+
+## names
+
+a link's file is named after the last part of its path, decoded. a character windows cannot hold in a name, such as `?` or `:`, becomes `_`, and a `\` counts as a folder, so only what follows it stays. the dataset takes that name without its last extension, in lowercase letters, digits, `-` and `_`. from real runs of `fetchloom add` with links to a server on this machine:
+
+| link ends in | dataset | file |
+|---|---|---|
+| `corpus-a.jsonl.gz` | `corpus-a-jsonl` | `data/corpus-a-jsonl/corpus-a.jsonl.gz` |
+| `q%3Fmark.txt` | `q_mark` | `data/q_mark/q_mark.txt` |
+| `back%5Cslash.txt` | `slash` | `data/slash/slash.txt` |
+| `Data%20Set.CSV` | `data-set` | `data/data-set/Data Set.CSV` |
+
+`--as` names the dataset. `add -i` cannot, so rename a table in data.toml afterwards: the next sync moves its pin to the new name. a link to a folder answers with a web page, which is refused as [above](#accepted-references); its archive is one dataset. stderr from real runs against a server on this machine that `allowed_origins` names:
+
+```sh
+$ fetchloom add http://127.0.0.1:19353/many/
+error: http://127.0.0.1:19353/many/ answered with a web page, such as a folder listing, not a file
+  help: open it in a browser, copy the link of each file you want, and give fetchloom those links
+$ fetchloom add http://127.0.0.1:19353/many.tar.gz
+ Downloaded many.tar.gz · 215 B in 8 ms
+   Unpacked many/many.tar.gz · 3 files · 9 B in 94 ms
+      Added many, its files are in data/many
+  hint: scripts can find it with `fetchloom path many`
+```
 
 ## pins
 
