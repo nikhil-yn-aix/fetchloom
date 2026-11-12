@@ -79,7 +79,7 @@ no command but `build` runs a step. `sync` places a pinned result like any datas
 ```text
       Would run clean · not built yet
             python3 clean.py <build>/in/iris <build>/out
-            reads iris and clean.py; writes data/clean
+            reads iris and clean.py, with SOURCE_DATE_EPOCH=315532800; writes data/clean
          Ok dry run, nothing was run or changed
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
