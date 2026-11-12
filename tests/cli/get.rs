@@ -1021,6 +1021,52 @@ fn fetchloom_retries_sets_how_often_a_request_is_tried_again() -> Result {
     Ok(())
 }
 
+/// a server still refusing at the last try is named in json by whose side the trouble is on,
+/// as scripts match it: a busy server's 503 as `network.status`, a 429 as `network.rate_limited`.
+/// neither answer says when to come back, so each spends a try.
+#[test]
+fn giving_up_names_a_busy_or_limiting_server_by_its_kind() -> Result {
+    for (status, kind, help) in [
+        (
+            "503 Service Unavailable",
+            "network.status",
+            "127.0.0.1 is having trouble",
+        ),
+        (
+            "429 Too Many Requests",
+            "network.rate_limited",
+            "127.0.0.1 is limiting requests",
+        ),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let refused = || reply(status, &[("Content-Length", "0")], b"");
+        let server = Server::start(PATH, vec![refused(), refused()])?;
+        let output = sandbox
+            .command(&["--json", "get", &server.url])
+            .env("FETCHLOOM_RETRIES", "1")
+            .output()?;
+        assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], kind);
+        assert_eq!(
+            error["message"],
+            format!(
+                "gave up on 127.0.0.1 after 2 tries: 127.0.0.1 answered {}",
+                &status[..3]
+            )
+        );
+        assert_eq!(
+            error["help"],
+            format!(
+                "{help}; run `fetchloom --json get {}` again later",
+                server.url
+            )
+        );
+        assert_eq!(server.requests().len(), 2);
+    }
+    Ok(())
+}
+
 /// zenodo's answer once its limit is used up: a 429 that says when the limit resets, by the
 /// host's clock in `Date`, which is fixed here so the machine's own clock decides nothing.
 fn rate_limited(reset: u64, retry_after: u64) -> Vec<Part> {
