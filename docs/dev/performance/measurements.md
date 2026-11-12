@@ -76,6 +76,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | a merge's data.toml edits made on one reading of each side | merge of 2,000 datasets 18.0 to 0.33 s, of 1,000 4.0 to 0.10 s; 1 and 10 flat | kept | [merge](#a-merge-of-many-datasets-2026-11-12) |
 | lock and names | a drop across datasets written in one edit, its planned files counted once | drop of a file from each of 2,000 datasets 8.8 to 0.07 s; 1 and 10 flat | kept | [drop](#a-drop-across-many-datasets-2026-11-12) |
 | lock and names | `list` builds only the view it shows | `--json list <name>` of 100,000 files 0.815, peak memory 0.746; `list` of them 0.899; 1 and 10 flat | kept | [list](#listing-only-what-is-shown-2026-11-12) |
+| cache | bounded name discovery and checked-open metadata during verification | 100,000 objects up to 22% faster, but retry at 1,000 objects 1.343 ext4 / 1.323 xfs | dropped, control time | [verification pipeline](#pipelining-cache-verification-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
@@ -1276,3 +1277,39 @@ native RSS and instructions ran separately on cores 0–11 at nice 10 without th
 | musl | plain sync, no selector | 40,000 | 2105.640 → 2105.638 | 32 | 0 |
 
 `selected_folders_keep_separator_boundaries_and_shared_paths` and the extended `a_survey_within_folders_lists_and_keeps_only_them` passed on the old algorithm first. they cover nested roots, shared/duplicate paths, `a` versus `a-` and `ab`, unicode, the data root, empty selection, links, missing folders and a file blocking a folder. `folder_order_matches_a_terminal_separator` independently checks the custom comparison against explicit suffixed strings. replacing it with ordinary string order made the new assertions fail; restoring it passed. the existing partial-state test still verifies that selected records, candidates and sync flags round-trip. after switch removal, the full survey characterization exercises the indexed path itself. the old paths and experiment switch are removed; raw fixtures, binaries, counters, paired runs and mutation logs remain with the sweep outside the repository.
+
+
+## pipelining cache verification, 2026-11-12
+
+dropped. a bounded name walk and checked-open metadata saved one metadata lookup per object and much of the eager scan's memory, but slower small and medium caches failed the keep rule. no pipeline, switch or changed progress behavior remains in the product.
+
+both arms ran `fetchloom --json --yes cache verify` in one release executable per libc, with `FETCHLOOM_EXP_CACHE_VERIFY_PIPE` read once. the baseline scanned names and metadata before hashing. the candidate discovered names while workers opened each object without following a link, reused the metadata checked on that handle, and hashed it. only hashing workers held object descriptors. the exact progress total was set once discovery and pending metadata checks finished; unreadable objects retained the old counts, errors and remaining progress share.
+
+the first version shared the walk and results under one mutex. 44 comparisons covered ext4 and xfs caches of 0, 1, 50, 1,000, 10,000 and 100,000 distinct 32-byte objects, two 16 MiB objects, an ext4 cache of 10,000 distinct 4 KiB objects, and one-thread controls. each comparison has 12 clean interleaved pairs, both libc builds from source `ca82974c` over `066a6416`. a flagged pair was retained and excluded as a whole. the mandated harness ran at nice 0 on cores 12–23 under the shared lock, in turns below five minutes. the intervals below use 20,000 paired log-ratio bootstrap resamples. RSS is GNU time's child `wait4` peak; the harness's parent-inherited peak is retained separately.
+
+| first version, 100,000 objects | old s | new s | ratio [95%] | median RSS MiB |
+|---|---:|---:|---|---|
+| ext4, glibc | 0.40381 | 0.34912 | 0.861 [0.843, 0.868] | 32.46 to 10.20 |
+| ext4, musl | 0.45951 | 0.36464 | 0.796 [0.786, 0.816] | 40.55 to 18.52 |
+| xfs, glibc | 0.38652 | 0.35614 | 0.932 [0.897, 0.939] | 41.79 to 10.06 |
+| xfs, musl | 0.46715 | 0.36129 | 0.775 [0.767, 0.778] | 48.55 to 18.52 |
+
+that gain did not generalize. at 1,000 objects the first version's ratios were 1.383/1.295 on ext4 and 1.421/1.271 on xfs, glibc/musl. a 50-object musl cache slowed about 8%. even the faster 100,000-object runs used more cpu: ext4 glibc cpu time was 1.586 [1.560, 1.620] of baseline. one-thread 100,000-object ratios of about 0.73–0.77 were not a reason to ship a default-path regression.
+
+one bounded retry prefetched at most 64 names on the caller, kept worker-local results, and shared only name discovery and enumeration errors. atomics reported the exact total after both enumeration and outstanding metadata completed. empty caches needed no hashing workers. this was built anew on `88f914e3` over `03b26b75`; no rounds from different versions were pooled. seven previously regressing glibc controls each received 12 clean pairs, with none excluded:
+
+| retry control | old s | new s | ratio [95%] |
+|---|---:|---:|---|
+| ext4-1000 | 0.01055 | 0.01416 | 1.344 [1.306, 1.376] |
+| xfs-1000 | 0.01026 | 0.01364 | 1.323 [1.296, 1.370] |
+| ext4-10000 | 0.04677 | 0.05463 | 1.167 [1.106, 1.201] |
+| xfs-10000 | 0.04416 | 0.04461 | 1.000 [0.978, 1.032] |
+| ext4-4k | 0.04862 | 0.04926 | 1.002 [0.986, 1.035] |
+| ext4-50 | 0.00549 | 0.00542 | 0.985 [0.967, 0.998] |
+| xfs-50 | 0.00539 | 0.00534 | 0.983 [0.971, 1.001] |
+
+`ext4-4k` holds 10,000 4 KiB objects; the other suffixes are 32-byte object counts. the retry still slowed 1,000-object caches by 32–34%, and ext4 at 10,000 objects by about 17%. it stopped there: no retry musl build or remaining large-cache qualification was run after this failure. a syscall-only retry comparison at 1,000 objects counted `statx` 2,039 to 1,039, reads unchanged at 2,055, and futex calls 29 to 1,650. those counters expose coordination work; their instrumented elapsed times are not performance evidence.
+
+functional CLI checks compared all errors, totals, changed marks and bytes for a damaged object, a link, a directory and an unreadable fan: eight comparisons in the first version and four glibc comparisons in the retry. the streaming regression failed against the eager scan. deliberately collecting the full name walk and disabling the one-shot total guard then failed both `verification_reads_before_finishing_the_name_walk` and `discovered_total_waits_for_metadata_and_is_reported_once`. after restoration, 91 upkeep, partial and link tests and all-target clippy passed.
+
+reproduction records stay under `/datadisk/fl-perf/io/impl2/`: immutable `bin/p8-*` builds, both source patches and base identities, `results/p8-ab/` and `p8-v2-ab/`, the corresponding analysis JSON, syscall counts, contract outputs and red/restored logs. `scripts/run_p8.py`, `ab_p8.py` and `analyze_p8.py` select `--experiment v1` or `v2`; the unchanged sweep harness's identity is recorded with each batch.
