@@ -1487,17 +1487,26 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
 }
 
 /// the lines a person reads for the detail `line`, shown `indent` columns in: a comparison of
-/// two whole SHA-256 values, as `expected sha256 <a>, got <b>`, with every digit, one value
-/// under the other, since a person checks them against a published checksum. a label leads its
-/// value, without the `sha256` that 64 hex digits make plain, where both lines fit in 80
-/// columns, at which a terminal would wrap through a hash, else stands on a line of its own
-/// above it. any other line as [`hashes_apart`] shows it.
+/// two whole SHA-256 values, as `expected sha256 <a>, got <b>`, or MD5 values, as
+/// `stated md5 <a>, got <b>`, with every digit, one value under the other, since a person checks
+/// them against a published checksum. a label leads its value, without the `sha256` that 64 hex
+/// digits make plain, where both lines fit in 80 columns, at which a terminal would wrap through
+/// a hash, else stands on a line of its own above it. any other line as [`hashes_apart`] shows
+/// it.
 fn readable(line: &str, indent: usize) -> Vec<Cow<'_, str>> {
     const COLUMNS: usize = 80;
-    if let [(first, a), (second, b)] = whole_hashes(line)[..]
-        && line[first + a.len()..second].starts_with(", ")
-        && second + b.len() == line.len()
-    {
+    let pair = [64, 32]
+        .into_iter()
+        .find_map(|digits| match whole_hashes(line, digits)[..] {
+            [(first, a), (second, b)]
+                if line[first + a.len()..second].starts_with(", ")
+                    && second + b.len() == line.len() =>
+            {
+                Some((first, a, second, b))
+            }
+            _ => None,
+        });
+    if let Some((first, a, second, b)) = pair {
         let labels = [&line[..first], &line[first + a.len() + 2..second]].map(|label| {
             let label = label.trim_end();
             label.strip_suffix(" sha256").unwrap_or(label)
@@ -1521,8 +1530,8 @@ fn readable(line: &str, indent: usize) -> Vec<Cow<'_, str>> {
     vec![hashes_apart(line)]
 }
 
-/// each whole SHA-256 on `line`, a word of 64 hex digits, with where it starts.
-fn whole_hashes(line: &str) -> Vec<(usize, &str)> {
+/// each whole hash of `digits` hex digits on `line`, a word of its own, with where it starts.
+fn whole_hashes(line: &str, digits: usize) -> Vec<(usize, &str)> {
     let bytes = line.as_bytes();
     let digit = |byte: &u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
     let mut hashes: Vec<(usize, &str)> = Vec::new();
@@ -1535,7 +1544,7 @@ fn whole_hashes(line: &str) -> Vec<(usize, &str)> {
         let closes = bytes
             .get(end)
             .is_none_or(|byte| matches!(byte, b' ' | b',' | b';' | b'.' | b')'));
-        if run == 64 && opens && closes {
+        if run == digits && opens && closes {
             hashes.push((start, &line[start..end]));
         }
         start = end + 1;
@@ -1549,7 +1558,7 @@ fn whole_hashes(line: &str) -> Vec<(usize, &str)> {
 fn hashes_apart(line: &str) -> Cow<'_, str> {
     const WHOLE: usize = 64;
     const SHORT: usize = 12;
-    let hashes = whole_hashes(line);
+    let hashes = whole_hashes(line, WHOLE);
     if hashes.is_empty() {
         return Cow::Borrowed(line);
     }
@@ -2179,14 +2188,20 @@ mod tests {
         );
     }
 
-    /// a comparison of two hashes shows both whole, one under the other, in 80 columns with
-    /// its indent: each label leads its hash where both fit, else stands on a line above it. a
-    /// lone hash reads as [`super::hashes_apart`] cuts it.
+    /// a comparison of two hashes, SHA-256 or MD5, shows both whole, one under the other, in 80
+    /// columns with its indent: each label leads its hash where both fit, else stands on a line
+    /// above it. a lone hash reads as [`super::hashes_apart`] cuts it.
     #[test]
     fn a_hash_comparison_reads_whole_one_value_under_the_other() {
         let wrong = "0".repeat(64);
         let got = "492d5ea49605a5bb7e1c3c4d8b1f0f6c2a9d3e7b5c1a0f9e8d7c6b5a49382716";
+        let (stated, md5) = ("6eff3450105497cc2ce22ea267f564ba", &got[..32]);
         let cases = [
+            (
+                format!("stated md5 {stated}, got {md5}"),
+                2,
+                vec![format!("stated md5 {stated}"), format!("got        {md5}")],
+            ),
             (
                 format!("expected sha256 {wrong}, got {got}"),
                 2,
