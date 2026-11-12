@@ -29,7 +29,7 @@ memory     4.0 GiB                       this machine   FETCHLOOM_MEMORY
 
 | origin | where the value came from |
 |---|---|
-| `environment` | a nonempty `FETCHLOOM_*` variable, or an empty `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` or `FETCHLOOM_PUSH_TO`, which clears the mirrors, mirror-only mode or push folder the settings file names |
+| `environment` | a nonempty `FETCHLOOM_*` variable, or an empty `FETCHLOOM_ALLOWED_ORIGINS`, `FETCHLOOM_S3_BUCKETS`, `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` or `FETCHLOOM_PUSH_TO`, which clears what the settings file names there |
 | `settings file` | the [settings file](../reference/environment.md#settings-file) |
 | `this machine` | sized from this machine: its processors, the memory it has available, or for `build_floor` the disk holding the cache |
 | `default` | fetchloom's own default |

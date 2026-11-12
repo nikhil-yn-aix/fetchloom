@@ -131,14 +131,15 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
             server.url
         ),
     )?;
-    let refused = |command: &str, allowed: &str, cache: &std::path::Path| -> Result<_> {
-        let output = sandbox
-            .command(&["--json", command])
-            .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
-            .env("FETCHLOOM_CACHE", cache)
-            .output()?;
+    let refused = |command: &str, allowed: Option<&str>, cache: &std::path::Path| -> Result<_> {
+        let mut run = sandbox.command(&["--json", command]);
+        match allowed {
+            Some(allowed) => run.env("FETCHLOOM_ALLOWED_ORIGINS", allowed),
+            None => run.env_remove("FETCHLOOM_ALLOWED_ORIGINS"),
+        };
+        let output = run.env("FETCHLOOM_CACHE", cache).output()?;
         let document = json(&output)?;
-        assert_eq!(output.status.code(), Some(20), "{allowed}: {document}");
+        assert_eq!(output.status.code(), Some(20), "{allowed:?}: {document}");
         assert_eq!(document["errors"][0]["kind"], "network.refused");
         Ok(document["errors"][0].clone())
     };
@@ -146,9 +147,14 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         "if you trust that server, put `allowed_origins = [\"{origin}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run",
         settings_file(&sandbox)?
     );
-    assert_eq!(refused("sync", "", &sandbox.cache())?["help"], untrusted);
+    assert_eq!(refused("sync", None, &sandbox.cache())?["help"], untrusted);
+    // an empty variable clears what the file allows, so the file is no remedy while it is set
+    assert_eq!(
+        refused("sync", Some(""), &sandbox.cache())?["help"],
+        format!("if you trust that server, set `FETCHLOOM_ALLOWED_ORIGINS={origin}`")
+    );
     // another port of the host is another origin, which the refusal tells apart
-    let error = refused("sync", "http://127.0.0.1:9", &sandbox.cache())?;
+    let error = refused("sync", Some("http://127.0.0.1:9"), &sandbox.cache())?;
     assert_eq!(
         error["details"][0],
         trusted_alone("http://127.0.0.1:9", "127.0.0.1")
@@ -168,7 +174,7 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     // as in a fresh clone, the build must download what the recipe reads
     crate::support::delete(&placed)?;
     assert_eq!(
-        refused("build", "", &sandbox.folder("empty")?)?["help"],
+        refused("build", None, &sandbox.folder("empty")?)?["help"],
         untrusted
     );
     assert_eq!(server.requests().len(), 1, "only the allowed sync asked");

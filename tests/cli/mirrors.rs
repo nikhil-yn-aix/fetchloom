@@ -267,6 +267,39 @@ fn empty_variables_clear_the_mirrors_and_push_folder_the_file_names() -> Result 
     Ok(())
 }
 
+/// an empty `FETCHLOOM_ALLOWED_ORIGINS` clears the origins the settings file allows, so a sync is
+/// refused the project's private address before any request, as with no origin allowed.
+#[test]
+fn an_empty_allowed_origins_variable_clears_the_origins_the_file_allows() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let lab = sandbox.folder("lab")?;
+    let settings = lab.join("settings.toml");
+    fs::write(
+        &settings,
+        format!("allowed_origins = [\"{}\"]\n", source.url),
+    )?;
+    let asked = source.requests().len();
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let sync = || {
+        let mut command = sandbox.command_in(&folder, &["--json", "sync", "--locked"]);
+        command
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_SETTINGS", &settings);
+        command
+    };
+    let output = sync().env("FETCHLOOM_ALLOWED_ORIGINS", "").output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "network.refused");
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(source.requests().len(), asked);
+    // the file alone allows the origin
+    ok(&sync().env_remove("FETCHLOOM_ALLOWED_ORIGINS").output()?)?;
+    holds_the_project(&folder)?;
+    Ok(())
+}
+
 #[test]
 fn a_cold_clone_syncs_from_a_folder_mirror_without_asking_the_source() -> Result {
     let sandbox = Sandbox::new()?;

@@ -1084,15 +1084,18 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
         "{stderr}"
     );
     let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
-    let sync = |allowed: &str| {
-        sandbox
-            .command_in(&clone, &["--json", "sync"])
+    let sync = |allowed: Option<&str>| {
+        let mut command = sandbox.command_in(&clone, &["--json", "sync"]);
+        command
             .env("FETCHLOOM_CACHE", &cache)
-            .env("FETCHLOOM_SETTINGS", &settings)
-            .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
-            .output()
+            .env("FETCHLOOM_SETTINGS", &settings);
+        match allowed {
+            Some(allowed) => command.env("FETCHLOOM_ALLOWED_ORIGINS", allowed),
+            None => command.env_remove("FETCHLOOM_ALLOWED_ORIGINS"),
+        };
+        command.output()
     };
-    let refused = sync("")?;
+    let refused = sync(None)?;
     assert_eq!(
         refused.status.code(),
         Some(20),
@@ -1111,7 +1114,7 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     assert_eq!(error["help"], format!("if you trust that server, {line}"));
     assert_eq!(error["fix"], serde_json::Value::Null);
     assert_eq!(server.requests().len(), 1, "the clone asked nothing");
-    let allowed = sync(&origin)?;
+    let allowed = sync(Some(&origin))?;
     assert_eq!(allowed.status.code(), Some(0), "{}", text(&allowed.stdout)?);
     assert_eq!(server.requests().len(), 2);
     Ok(())

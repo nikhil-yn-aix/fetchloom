@@ -62,9 +62,16 @@ const KEYS: [(&str, &str); 17] = [
 const LISTS: [&str; 3] = ["allowed_origins", "s3_buckets", "mirrors"];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 1] = ["mirrors_only"];
-/// the keys an empty variable clears rather than leaving to the settings file: where requests go
-/// and where push writes, so blanking one for a run cannot leave the file's choice in force.
-const CLEARED: [&str; 3] = ["mirrors", "mirrors_only", "push_to"];
+/// the keys an empty variable clears rather than leaving to the settings file: who may be
+/// reached, which buckets keys sign for, where requests go and where push writes, so blanking one
+/// for a run cannot leave the file's choice in force.
+const CLEARED: [&str; 5] = [
+    "allowed_origins",
+    "s3_buckets",
+    "mirrors",
+    "mirrors_only",
+    "push_to",
+];
 /// the variables fetchloom reads besides those of the settings file's keys.
 const OTHERS: [&str; 11] = [
     "FETCHLOOM_SETTINGS",
@@ -1528,6 +1535,29 @@ mod tests {
                     value: 32,
                     origin: Origin::File
                 }
+            );
+        }
+    }
+
+    /// an empty or blank `FETCHLOOM_S3_BUCKETS` clears the buckets the settings file lists, so no
+    /// request is signed for them.
+    #[test]
+    fn an_empty_variable_clears_the_files_s3_buckets() {
+        let filed = file("s3_buckets = [\"s3://lab-raw\"]\n").unwrap();
+        for empty in ["", " "] {
+            let set = Settings::read(
+                &env(&[("FETCHLOOM_S3_BUCKETS", empty)]),
+                filed.clone(),
+                machine(None),
+            )
+            .unwrap();
+            assert_eq!(
+                set.s3_buckets,
+                Set {
+                    value: Vec::new(),
+                    origin: Origin::Environment
+                },
+                "{empty:?}"
             );
         }
     }
