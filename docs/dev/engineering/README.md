@@ -21,9 +21,13 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo clippy --release --locked -- -D warnings
 cargo test --locked
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 python3 -m unittest discover -s python
 python3 -m unittest discover -s bench
+typos
 ```
+
+CI runs the same checks, the tests through nextest, as [CI](ci.md) describes.
 
 ## commands
 
