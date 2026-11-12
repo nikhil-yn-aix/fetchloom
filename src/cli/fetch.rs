@@ -459,7 +459,6 @@ impl<'a> Watch<'a> {
         if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
             crate::space::cache_holds(cache, [(self.job.label.as_str(), total)])?;
         }
-        self.overall.begin(self.output);
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
         let free = self.approval.cache.as_deref().map(crate::space::free);
@@ -483,6 +482,8 @@ impl<'a> Watch<'a> {
                 self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
             }
         }
+        // only once a person said yes, so a no never follows a line saying the download began
+        self.overall.begin(self.output);
         if unknown {
             if let Some(total) = total
                 && !self.sized.swap(true, Ordering::Relaxed)
@@ -1614,6 +1615,44 @@ mod tests {
             })
             .unwrap();
         assert!(overall.ticker.get().is_some());
+    }
+
+    /// a download its question stops never begins the batch's plain lines, so a person who
+    /// answers no, however long they took, never hears that it started.
+    #[test]
+    fn a_download_its_question_stops_never_says_it_began() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: true,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/titanic.csv").unwrap()),
+            label: "titanic.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = Overall::new(&context, std::slice::from_ref(&job));
+        let approval = Approval::new(1024);
+        let held = Held::default();
+        let watch = Watch::new(&job, &context.output, &overall, &approval, false, &held);
+        let refused = watch
+            .on(&Event::Started {
+                total: Some(57_000),
+                resumed: 0,
+                resumable: Resumable::Maybe,
+            })
+            .unwrap_err();
+        assert_eq!(refused.kind, Kind::Unconfirmed);
+        assert!(overall.ticker.get().is_none());
     }
 
     /// a batch whose sizes are not all known has no total to fill to, so its bar promises no
