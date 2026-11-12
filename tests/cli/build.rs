@@ -1826,6 +1826,47 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     Ok(())
 }
 
+/// a step that reads a file outside its code, as a program or library of the machine it runs on,
+/// makes other files where that file differs, and the same ones each time. the build keeps the
+/// pin and the rebuild, and its help asks for a look at the versions and `status -v` before
+/// `--accept`, rather than calling the step random.
+#[test]
+fn a_rebuild_with_another_tool_version_is_compared_before_it_is_accepted() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let tool = sandbox.work().join("tool");
+    fs::create_dir(&tool)?;
+    fs::write(tool.join("version.txt"), "1.0\n")?;
+    let versioned = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"tool\", \"{iris}\", \"{out}\"]\n";
+    with(&sandbox, &server, versioned)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(tool.join("version.txt"), "2.0\n")?;
+    crate::support::delete(&object(&sandbox, b"1.0\n"))?;
+    crate::support::delete(&placed(&sandbox, "clean", "version.txt"))?;
+    let pinned = pins(&sandbox.work())?;
+    let mut kept = Vec::new();
+    for _ in 0..2 {
+        let output = build(&sandbox, &["--json", "build"])?;
+        assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        let (kind, _, details, help, _) = error(&document);
+        assert_eq!(kind, "build.differs");
+        assert_eq!(details, ["changed version.txt"]);
+        assert!(!help.contains("not reproducible"), "{help}");
+        assert!(
+            help.contains("another version of a program or library"),
+            "{help}"
+        );
+        let compare = help.find("`fetchloom status -v`").ok_or(help)?;
+        let accept = help.find("`fetchloom build --accept clean`").ok_or(help)?;
+        assert!(compare < accept, "{help}");
+        kept.push(document["result"]["steps"][0]["candidate"].clone());
+    }
+    assert_eq!(kept[0], kept[1], "the step made the same files twice");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    Ok(())
+}
+
 /// the recipes with a kept rebuild in the `--json` document of a status.
 fn kept_names(status: &Value) -> Vec<&str> {
     status["result"]["candidates"]
@@ -2034,7 +2075,7 @@ fn checks_report_every_step() -> Result {
         ]
     );
     assert!(
-        help.contains("the rebuilds are kept: `fetchloom build --accept clean noise` pins them"),
+        help.contains("once you choose them, `fetchloom build --accept clean noise` pins them"),
         "{help}"
     );
     let status = json(&sandbox.run(&["--json", "status"])?)?;

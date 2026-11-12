@@ -152,7 +152,7 @@ error: clean failed: python3 exited with code 1 after 32 ms
 
 the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
 
-a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from the data folder or a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files is not reproducible, as [a rebuild that differs](#a-rebuild-that-differs) describes.
+a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from the data folder or a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files fails, as [a rebuild that differs](#a-rebuild-that-differs) describes.
 
 code a recipe names that the project lacks, as in a clone of a commit that left it out, stops the build with `project.invalid`, exit 50, before its step runs. the help asks for the code first, since taking it out of `code` would change the recipe, and its key, for everyone. the end of the output (stderr):
 
@@ -166,7 +166,7 @@ error: clean cannot be built: its code clean.py is not in the project
 `fetchloom build --check` asks whether each step still makes what `data.lock` pins. it runs every step the named recipes need, each from the inputs `data.lock` pins, a recipe it reads as its pinned result rather than as its own check made it, so each step is checked on its own. it compares what each makes with the files `data.lock` and `data.lock.d` list, so it needs no pinned result on the machine, and reports every step, not only the first that differs. this output is from a project with `clean`, which keeps rows of a table, and `emb`, whose step writes random bytes:
 
 ```text
-      Needs up to 159 B on the disk holding the cache, which has 329.1 GiB free
+      Needs up to 135 B on the disk holding the cache, which has 320.4 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
     Checked clean · 1 of 1 files match data.lock
@@ -175,7 +175,7 @@ error: clean cannot be built: its code clean.py is not in the project
     Differs emb · 0 of 1 files match data.lock
 error: emb differs from data.lock: 0 of 1 files match
   changed vectors.bin
-  help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
+  help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```
 
 a check changes neither `data.lock` nor the data folder. when every step matches, it ends with `Ok every step made the files data.lock pins`, exit 0. the files of a step that matches enter the cache as its pinned result, so a check on a fresh clone leaves the results there for `sync` to place. one that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check, as it stops a build. a step that reads a recipe whose check made other files, and whose pinned result neither the cache, the data folder nor a mirror holds, cannot be checked: it is `Skipped`, and the error says so.
@@ -223,15 +223,17 @@ when every step is up to date, or fetched from a mirror, no step would run, and 
 a step that runs again for a key `data.lock` pins, and makes other files than the ones it pins, stops the build with `build.differs`, exit 60. `data.lock`, `data.lock.d` and the data folder stay as they were, and the error says which files differ. this output is from a project where `emb` writes random bytes with `python3 embed.py`, built again after its file left the cache:
 
 ```text
-      Needs up to 96 B on the disk holding the cache, which has 329.1 GiB free
+      Needs up to 85 B on the disk holding the cache, which has 320.4 GiB free
  Up to date clean
     Running emb · python3 embed.py <build>/in/iris <build>/out
             embedded 3 rows
     Differs emb · 0 of 1 files match data.lock
 error: emb differs from data.lock: 0 of 1 files match
   changed vectors.bin
-  help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
+  help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```
+
+the help does not guess why the files differ. the time or an unseeded random number can change what a step writes, and so can another version of a program or library it uses, as on a machine whose environment was set up apart from the lock files `code` names. look at the versions and the files before you choose: `--accept` pins these files for everyone who takes the commit.
 
 the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses: only you choose them over the pinned files. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the file `data.lock` pins, placed in the data folder; `status --json` gives the cache file of both. this run had the cache in its usual place on linux:
 

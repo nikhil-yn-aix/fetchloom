@@ -126,7 +126,7 @@ warning: data/mc/measure_clean.csv has changed, so it stays, but it is an edit o
          Ok every step made the files data.lock pins
 ```
 
-a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, fails with `build.differs` when a check runs it, or when a build runs it again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
+a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, or one run with another version of a program or library than the one that built the pin, fails with `build.differs` when a check runs it, or when a build runs it again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
 
 ```text
        Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it

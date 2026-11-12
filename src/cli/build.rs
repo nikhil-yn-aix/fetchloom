@@ -614,8 +614,8 @@ impl<'a> Building<'a> {
     /// builds the recipe `name`: up to date when data.lock pins what building it now would make
     /// and the cache holds it, fetched when a mirror holds what the cache lacks of it, reused
     /// when an earlier build of its key made a result the cache holds whole, and otherwise run. a
-    /// pin whose key is still the recipe's keeps its files: a step that makes others for it is
-    /// not reproducible, and data.lock stays as it is.
+    /// pin whose key is still the recipe's keeps its files: other files a step makes for it are
+    /// kept for a person to choose, and data.lock stays as it is.
     async fn step(&mut self, name: &str) -> Result<Done, Error> {
         let project = self.work.project;
         let output = &self.context.output;
@@ -1496,11 +1496,11 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
     let accept = format!("`fetchloom build --accept {}`", names.join(" "));
     error.help(match names.as_slice() {
         [name] => format!(
-            "the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and {} are as they were. the rebuild is kept: {accept} pins it",
+            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and {} are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, {accept} pins it",
             plan::folder(manifest, name)
         ),
         _ => format!(
-            "the steps are not reproducible, as ones that use the time or an unseeded random number are; data.lock and the data folder are as they were. the rebuilds are kept: {accept} pins them"
+            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, {accept} pins them"
         ),
     })
 }
@@ -1581,6 +1581,38 @@ mod tests {
                 format!("clean cannot start: there is no program at {absolute} on this machine"),
                 "install it there, or change run in data.toml to a program PATH finds or a path from the project folder, since a full path works on one machine only".to_owned()
             )
+        );
+    }
+
+    /// a rebuild that differs is told without a guess at why: the help names another version of
+    /// what a step uses beside the time and random numbers, then `status -v` to compare the
+    /// files, and `--accept` last, for one step and for several.
+    #[test]
+    fn a_differing_rebuild_is_compared_before_it_is_accepted() {
+        let manifest = Manifest::parse("").unwrap();
+        let differing = |name: &str| {
+            let key = digest::sha256(name.as_bytes());
+            let mut step = done(Did::Ran, name, key, key, &[]);
+            step.check = Some(Compared {
+                changed: vec!["vectors.bin".to_owned()],
+                ..Compared::default()
+            });
+            step.candidate = Some(format!("sha256:{key}"));
+            step
+        };
+        let help = |steps: &[Done]| {
+            differs(&manifest, steps)
+                .help
+                .unwrap_or_default()
+                .into_string()
+        };
+        assert_eq!(
+            help(&[differing("emb")]),
+            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it"
+        );
+        assert_eq!(
+            help(&[differing("emb"), differing("tok")]),
+            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, `fetchloom build --accept emb tok` pins them"
         );
     }
 }
