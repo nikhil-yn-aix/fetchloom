@@ -422,7 +422,7 @@ fn build_names_only_recipes() -> Result {
         (
             &["build", "--dry-run", "claen"],
             2,
-            "data.toml has no dataset called claen",
+            "data.toml has no dataset called \"claen\"",
         ),
         (&["build", "iris"], 2, "iris is fetched, not built"),
     ] {

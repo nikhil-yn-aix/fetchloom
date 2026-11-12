@@ -59,15 +59,18 @@ class HelperOptions(unittest.TestCase):
             if "-h" in options:
                 document = {"status": "ok", "command": "help", "result": {"commands": [], "options": []}, "warnings": []}
                 return subprocess.CompletedProcess(argv, 0, json.dumps(document), "")
-            error = {"kind": "usage", "message": f"data.toml has no dataset called {argv[-1]}", "details": [], "help": None}
+            error = {"kind": "usage", "message": f'data.toml has no dataset called "{argv[-1]}"', "details": [], "help": None}
             return subprocess.CompletedProcess(argv, 2, json.dumps({"status": "error", "errors": [error], "warnings": []}), "")
 
-        with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", side_effect=program) as run:
-                with self.assertRaises(fetchloom.Error) as raised:
-                    fetchloom.path("-h", "p", yes=True)
-        self.assertEqual(raised.exception.message, "data.toml has no dataset called -h")
-        self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "p", "path", "--yes", "--", "-h"])
+        # a quoted name stays as typed, even one spelled as a flag the helper names for python
+        for name in ["-h", "--yes"]:
+            with self.subTest(name=name):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", side_effect=program) as run:
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            fetchloom.path(name, "p", yes=True)
+                self.assertEqual(raised.exception.message, f'data.toml has no dataset called "{name}"')
+                self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "p", "path", "--yes", "--", name])
 
     def test_sync_verify_hashes_every_placed_file_as_the_cli_does(self):
         response = subprocess.CompletedProcess(

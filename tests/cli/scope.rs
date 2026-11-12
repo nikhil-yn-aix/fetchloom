@@ -206,7 +206,7 @@ fn an_unknown_name_is_refused_before_any_request() -> Result {
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "usage");
-    assert_eq!(error["message"], "data.toml has no dataset called smal");
+    assert_eq!(error["message"], "data.toml has no dataset called \"smal\"");
     assert_eq!(error["help"], "did you mean `fetchloom --json sync small`?");
     assert_eq!(document["work"]["requests"], 0);
     assert!(!fresh.folder.join("data").exists());

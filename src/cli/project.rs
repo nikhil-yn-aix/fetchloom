@@ -1516,7 +1516,7 @@ pub(super) fn known_with_rest(
     let error = Error::new(
         Kind::Usage,
         format!(
-            "data.toml has no dataset called {}",
+            "data.toml has no dataset called \"{}\"",
             crate::net::mask_query(name)
         ),
     );

@@ -64,7 +64,7 @@ a [folder mirror](../mirrors.md) that holds the pinned bytes gives them back; fo
 `--force small` replaces edits in small's files only, and the warning about a file a named sync keeps names that command with the dataset of that file alone, so following it replaces nothing in the other datasets. a build places what it made the same way, so its warning about an edit it keeps names only that file's dataset, as `fetchloom sync --force clean`. `--verify small` hashes small's files only, `--locked small` checks only small's entry in data.lock, so a job needing small passes while another entry is stale, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
 
 ```text
-error: data.toml has no dataset called smal
+error: data.toml has no dataset called "smal"
   help: did you mean `fetchloom sync small`?
 ```
 

@@ -7,7 +7,7 @@ extend-ignore-re = [
     '"(?:--verison|sycn|verfiy|smal|claen|selct|exlcude|authenticat|seach|sarch|serach|saerch|serch|stauts|settigns|snyc|fasion mnist|--yse|--limt(?:=5)?|--sorce)"',
     '`(?:fetchloom Serach iris|seach|--limt=5)`',
     '\\"sycn\\"',
-    'no dataset called (?:smal|claen)',
+    'no dataset called \\?"?(?:smal|claen)',
     '\b(?:selct|datsets|exculde)\s*=',
     '"(?:abd|ond|fo|ba)"',
     '(?i)caf(?:\\u\{e9\}|\\xe9|%c3%a9|%e9)',
