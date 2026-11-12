@@ -100,21 +100,63 @@ fn no_hints_keeps_the_story_and_drops_the_hints() -> Result {
     Ok(())
 }
 
+/// the same add again, with or without the name it gave, as a script run twice does, changes
+/// nothing and asks no server.
 #[test]
 fn adding_the_same_dataset_again_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let before = fs::read(sandbox.work().join("data.toml"))?;
-    let output = sandbox.run(&["add", &server.url])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert_eq!(
-        stderr,
-        "         Ok iris is already in data.toml, its files are in data/iris\n"
-    );
-    assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before);
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    for args in [
+        &["add", &server.url][..],
+        &["add", &server.url, "--as", "iris"],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(
+            stderr,
+            "         Ok iris is already in data.toml, its files are in data/iris\n"
+        );
+        assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before);
+        assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    }
     assert_eq!(server.requests().len(), 1, "nothing is downloaded twice");
+    Ok(())
+}
+
+/// a name data.toml has refuses another link, or the same link with other patterns, which only
+/// a person can choose between, so json hands no command to run: the one an agent once ran
+/// removed the dataset that had the name.
+#[test]
+fn a_name_data_toml_has_refuses_another_dataset_with_no_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let before = fs::read(sandbox.work().join("data.toml"))?;
+    let other = server.url.replace("iris.csv", "wine.csv");
+    for args in [
+        &["--json", "add", &other, "--as", "iris"][..],
+        &[
+            "--json",
+            "add",
+            &server.url,
+            "--as",
+            "iris",
+            "--select",
+            "*.csv",
+        ],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "usage", "{args:?}");
+        assert_eq!(error["fix"], serde_json::Value::Null, "{args:?}: {error}");
+        assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before);
+    }
+    assert_eq!(server.requests().len(), 1, "a refused name asks nothing");
     Ok(())
 }
 

@@ -73,7 +73,7 @@ error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
 
 a link data.toml has already keeps the help that names its `ref` there, whether you add it again or another add syncs it.
 
-adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry. with other settings it fails unless you give an unused `--as` name; edit `data.toml` to change an existing entry.
+adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry, and so does the same add with the `--as` name it already has, so a setup script can run twice. with other settings, or another link under a name data.toml has, it fails with `usage`, exit 2, and changes nothing: give an unused `--as` name, edit `data.toml` to change the entry, or run `fetchloom remove <name>` first to replace it. removing is your choice, so the JSON `fix` is null.
 
 if the add fails, it puts `data.toml` and `data.lock` back as they were, or removes them if it made them, and removes the files it placed. what it downloaded stays cached, so running the add again reuses it. before it changes either file it saves a copy under `.fetchloom/`, readable only by you on unix; if putting a file back fails, the error names that copy, which stays, without printing it, since it may hold credentials.
 
@@ -185,6 +185,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom drop`](drop.md) |
 | a shell expands a pattern | the glob was not quoted | use `--select "**/*.csv"` |
 | the same reference rejects new filters | the existing entry has different settings | edit its manifest entry, or use an unused `--as` name |
+| `data.toml already has a dataset called notes` | `--as` names a dataset the project has, for another link | give an unused `--as` name, or run `fetchloom remove notes` first if the new link should replace it. the same link with the same name changes nothing |
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |

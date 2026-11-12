@@ -566,10 +566,12 @@ async fn add_held(
         open_cache()?
     };
     let mut addition = resolve_typed(context, &net, &args, (link, &parsed), manifest).await?;
-    if args.name.is_none()
-        && let Some(name) =
-            Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing)
-    {
+    // a name --as gives that data.toml has got this far only for the same link
+    let present = match &args.name {
+        Some(asked) => manifest.datasets.contains_key(asked).then(|| asked.clone()),
+        None => Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing),
+    };
+    if let Some(name) = present {
         let work = Loop::new(context, project, net, cache);
         let present = Present {
             name: &name,
@@ -1747,8 +1749,15 @@ fn validate_add(
     let parsed = Reference::parse(link)?;
     engine::tell_raw(&context.output, link, &parsed.reference);
     parsed.check_shareable()?;
-    // no answer from the source changes whether the name --as gives is usable
-    if let Some(asked) = args.name.as_deref() {
+    // no answer from the source changes whether the name --as gives is usable. the dataset of
+    // that name added again from the same link is a repeat, which `again` checks
+    if let Some(asked) = args.name.as_deref()
+        && manifest
+            .datasets
+            .get(asked)
+            .and_then(manifest::Entry::source)
+            .is_none_or(|source| source.reference != stored_reference(link, &parsed))
+    {
         usable(asked, manifest)?;
     }
     // the origin the person typed, such as a dataverse install on a university network

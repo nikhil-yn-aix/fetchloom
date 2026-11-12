@@ -88,7 +88,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 | task | run |
 |---|---|
 | several datasets at once | `fetchloom add <ref> <ref> --json`, or `fetchloom add -i links.txt --json` for a list, one link a line with an optional SHA-256 of its one file. any failure writes nothing. `--as`, `--select` and `--exclude` are for one dataset and are refused with several |
-| choose a dataset's files and name | `fetchloom add <ref> --as <name> --select "**/*.csv" --exclude "raw/**" --no-extract --dry-run --json`; `--dry-run` (`-n`) lists the changes in `result.changes` and changes nothing |
+| choose a dataset's files and name | `fetchloom add <ref> --as <name> --select "**/*.csv" --exclude "raw/**" --no-extract --dry-run --json`; `--dry-run` (`-n`) lists the changes in `result.changes` and changes nothing. the same add again, `--as` included, exits 0 and changes nothing; a name the project has for another link exits 2, and only the user decides whether to remove that dataset |
 | files only on this machine | `fetchloom add ./folder --json` pins them with `ref = "local"`. a clone whose cache lacks them exits 10 with `reference.unresolved`; ask the user where they are, then `fetchloom add <folder> --as <name> --json` checks them against data.lock |
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json` |
 | leave bad samples out for good | `fetchloom drop <path>... --dry-run --json`, then without `--dry-run`: paths in data/, never patterns. `result.dropped` names each file, its dataset, its archive and the pattern written to data.toml. tell the user to commit data.toml, and data.lock when `result.lock_changed` |
