@@ -43,4 +43,4 @@ JSON returns `result.settings`, an array of `name`, `value`, `origin` and `varia
 
 ## exit codes
 
-0 means the settings were shown. a bad value in a variable or in the settings file fails with kind `usage` and exit 2, naming it.
+0 means the settings were shown. a bad value in a variable or in the settings file fails with kind `usage` and exit 2, naming it. a settings file that is not TOML is named with the line and column where reading it stopped, without quoting that line, and a key one typo from a setting, such as `jbos`, is told the setting it is near.

@@ -111,10 +111,7 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
             path.display()
         )
     );
-    assert_eq!(
-        document["errors"][0]["help"],
-        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
-    );
+    assert_eq!(document["errors"][0]["help"], "did you mean `jobs`?");
     for arguments in [
         &["--version"][..],
         &["-v", "--version"],

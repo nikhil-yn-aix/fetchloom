@@ -220,7 +220,8 @@ enum Value {
 }
 
 /// the settings file's values, refusing a key it does not take, so a mistyped key is told rather
-/// than quietly ignored.
+/// than quietly ignored. a message names where the file stops being TOML but never quotes it,
+/// since a value may hold a login.
 fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
     let invalid = |message: String| {
         Error::new(Kind::Usage, message).help(format!(
@@ -229,8 +230,12 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
         ))
     };
     let table: toml::Table = toml::from_str(text).map_err(|err| {
+        let at = err.span().map_or_else(String::new, |span| {
+            let (line, column) = line_and_column(text, span.start);
+            format!(" at line {line}, column {column}")
+        });
         invalid(format!(
-            "the settings file {} is not valid TOML: {}",
+            "the settings file {} is not valid TOML{at}: {}",
             path.display(),
             err.message()
         ))
@@ -239,10 +244,14 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
         .into_iter()
         .map(|(key, value)| {
             if !KEYS.iter().any(|(known, _)| *known == key) {
-                return Err(invalid(format!(
+                let error = invalid(format!(
                     "the settings file {} has \"{key}\", which is not a setting",
                     path.display()
-                )));
+                ));
+                return Err(match crate::name::closest(&key, KEYS.map(|(key, _)| key)) {
+                    Some(meant) => error.help(format!("did you mean `{meant}`?")),
+                    None => error,
+                });
             }
             let value = match value {
                 toml::Value::String(text) => Value::Text(text),
@@ -490,6 +499,22 @@ impl Given<'_> {
     fn file_path(&self) -> &Path {
         self.file.path.as_deref().unwrap_or(Path::new(FILE))
     }
+}
+
+/// the line and column, each from one, of byte `offset` in `text`.
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let mut end = offset.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let before = &text[..end];
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .map_or(0, |last| last.chars().count())
+        + 1;
+    (line, column)
 }
 
 /// text separated by commas, as a list's variable holds it, each item trimmed and empty ones
@@ -977,6 +1002,42 @@ mod tests {
             "jobs in the settings file /home/ada/.config/fetchloom/settings.toml is a boolean, not a whole number or text in quotes"
         );
         assert!(self::file("jobs = [").is_err());
+    }
+
+    /// a settings file that is not TOML names the line and column where reading stopped, and
+    /// never the text there, which may hold a login.
+    #[test]
+    fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {
+        let error = file("jobs = 16\n[extra\n").unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            "the settings file /home/ada/.config/fetchloom/settings.toml is not valid TOML at line 2, column 7: unclosed table, expected `]`"
+        );
+        let error =
+            file("jobs = 16\nmirrors = [\"https://ada:hunter2@lab.example/m\"\n").unwrap_err();
+        assert!(error.message.contains(" at line "), "{}", error.message);
+        assert!(!error.message.contains("hunter2"), "{}", error.message);
+    }
+
+    /// a key one typo away from a setting is told that setting; any other key gets the list of
+    /// settings.
+    #[test]
+    fn a_mistyped_key_is_told_the_setting_it_is_near() {
+        let typo = file("jbos = 16\n").unwrap_err();
+        assert_eq!(
+            typo.message,
+            "the settings file /home/ada/.config/fetchloom/settings.toml has \"jbos\", which is not a setting"
+        );
+        assert_eq!(typo.help.as_deref(), Some("did you mean `jobs`?"));
+        let unknown = file("colour = \"red\"\n").unwrap_err();
+        assert_eq!(unknown.kind, Kind::Usage);
+        assert_eq!(
+            unknown.help.as_deref(),
+            Some(
+                "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+            )
+        );
     }
 
     #[test]
