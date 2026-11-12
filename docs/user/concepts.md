@@ -149,7 +149,7 @@ a [mirror](mirrors.md) you name is asked for a pinned file before its source, so
 
 successful downloads stay cached when another file fails. retries can reuse saved partial bytes when hashes or server validators allow it. unsupported ranges, changed validators or damaged saved bytes can require a restart.
 
-transfers retry transient failures, 4 more times by default or as `FETCHLOOM_RETRIES` sets, and respect announced rate limits within bounded waits. several files download at once. eligible files of at least 64 MiB can split into parallel range requests after one stream stays below 1 MB/s over 2 seconds, with at least 16 MiB left. a configured rate cap turns off that adaptive split; `FETCHLOOM_SPLIT=1` and a resumed download whose later ranges are kept still split. [environment settings](reference/environment.md) controls network work and rate limits.
+transfers retry transient failures, 4 more times by default or as `FETCHLOOM_RETRIES` sets, and respect announced rate limits within bounded waits. while a download waits to try again, its bar says which try comes next and when, as in `try 3 of 5 · next in 2 s`, or `waiting for 127.0.0.1's rate limit · try 6 of 15 · next in 3 s` when the server limits requests. several files download at once. eligible files of at least 64 MiB can split into parallel range requests after one stream stays below 1 MB/s over 2 seconds, with at least 16 MiB left. a configured rate cap turns off that adaptive split; `FETCHLOOM_SPLIT=1` and a resumed download whose later ranges are kept still split. [environment settings](reference/environment.md) controls network work and rate limits.
 
 ## approval
 

@@ -311,3 +311,41 @@ fn a_second_ctrl_c_quits_at_once_and_leaves_a_fresh_folder_as_it_was() -> Result
     assert!(left.is_empty(), "{left:?}");
     Ok(())
 }
+
+/// a download a server rate limits says on its bar which try comes next and when, as it waits
+/// for the limit to reset, in one line that changes in place rather than a line per wait, and
+/// never that no data came, since the server answered each try at once.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_rate_limited_download_counts_its_tries_on_its_bar() -> Result {
+    let sandbox = Sandbox::new()?;
+    let limited = || {
+        reply(
+            "429 Too Many Requests",
+            &[("Retry-After", "1"), ("Content-Length", "0")],
+            b"",
+        )
+    };
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![limited(), limited(), crate::support::file(IRIS, "\"v1\"")],
+    )?;
+    let get = sandbox.command(&["get", &server.url]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &get, "rows 30 cols 120", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen:?}");
+    assert!(
+        screen.contains("waiting for 127.0.0.1's rate limit · try 3 of 15 · next in 1 s"),
+        "{screen:?}"
+    );
+    assert!(!screen.contains("no data for"), "{screen:?}");
+    assert_eq!(
+        screen.matches("which asked for a pause").count(),
+        1,
+        "{screen:?}"
+    );
+    Ok(())
+}

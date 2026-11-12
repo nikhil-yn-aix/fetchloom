@@ -173,6 +173,14 @@ pub(crate) enum Event {
     Bytes(u64),
     /// every byte is in, and the disk keeps the file now.
     Arrived,
+    /// a try failed, and try `next` of at most `of` goes out after `wait`, once the rate limit of
+    /// the host `limit` names resets when it names one.
+    Retrying {
+        next: u32,
+        of: u32,
+        wait: Duration,
+        limit: Option<String>,
+    },
 }
 
 /// whether a later run can go on from the bytes a stopped download keeps. that run asks the
@@ -387,7 +395,8 @@ impl Reach {
             | Event::Kept { .. }
             | Event::WebPage { .. }
             | Event::Encoded(_)
-            | Event::Arrived => {}
+            | Event::Arrived
+            | Event::Retrying { .. } => {}
         }
     }
 
@@ -555,7 +564,7 @@ impl Net {
             split: true,
             permits: Some(self.permit(&fetch.from).await?),
         };
-        let mut retry = Retry::new(self, &fetch.url);
+        let mut retry = Retry::new(self, &fetch.url).telling(on);
         let reach = Reach::default();
         let watched = |event: Event| {
             reach.hear(&event);
@@ -620,8 +629,8 @@ impl Net {
                 }
                 Ok(Answer::Divert(next)) => from = self.divert(fetch, next, &mut diversions)?,
                 Err(Failure::Final(err)) => return Err(err),
-                Err(Failure::Limited { reason }) => {
-                    retry.limited(reason, known.is_some()).await?;
+                Err(Failure::Limited { reason, wait }) => {
+                    retry.limited(reason, wait, known.is_some()).await?;
                 }
                 Err(Failure::Transient {
                     reason,

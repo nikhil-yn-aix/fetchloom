@@ -90,7 +90,9 @@ impl Net {
             match self.answer(url, mirror).await {
                 Ok(response) => return Ok(response),
                 Err(Failure::Final(err)) => return Err(err),
-                Err(Failure::Limited { reason }) => retry.limited(reason, false).await?,
+                Err(Failure::Limited { reason, wait }) => {
+                    retry.limited(reason, wait, false).await?;
+                }
                 Err(Failure::Transient {
                     reason,
                     retry_after,
@@ -446,15 +448,16 @@ mod tests {
         let retries = Arc::new(Mutex::new(Vec::new()));
         let seen = retries.clone();
         net.notify = Arc::new(move |notice| {
-            if let Notice::Retrying { next, .. } = notice {
-                seen.lock().unwrap().push(next);
+            if let Notice::Retrying { next, of, .. } = notice {
+                seen.lock().unwrap().push((next, of));
             }
         });
         let response = block_on(net.get(&url)).unwrap();
         assert_eq!(response.json::<Vec<u32>>().unwrap(), Vec::<u32>::new());
         assert_eq!(asked.lock().unwrap().len(), 12);
         assert_eq!(net.work.counts().retries, 11);
-        assert_eq!(*retries.lock().unwrap(), [2]);
+        // the ten waits for the limit count among the tries, so the first retry is the 12th of 15
+        assert_eq!(*retries.lock().unwrap(), [(12, 15)]);
     }
 
     #[test]

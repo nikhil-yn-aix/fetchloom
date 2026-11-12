@@ -558,6 +558,12 @@ impl<'a> Watch<'a> {
                     self.overall.stop.arrived(false);
                 }
             }
+            Event::Retrying {
+                next,
+                of,
+                wait,
+                ref limit,
+            } => self.bar().retrying(next, of, wait, limit.clone()),
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);
                 self.count(self.held.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes);

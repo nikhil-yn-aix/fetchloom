@@ -6,6 +6,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap};
 use url::Url;
 
+use super::download::{Event, Listener};
 use super::{Net, Notice, Offline, Shown, address, host, pace};
 use crate::error::{Error, Kind};
 use crate::units;
@@ -30,10 +31,11 @@ pub(super) enum Failure {
         reason: String,
         retry_after: Option<Duration>,
     },
-    /// the host's rate limit is used up and resets within [`pace::LONGEST`]. the next try waits
-    /// for the reset before it is sent, and spends none of the request's retries.
+    /// the host's rate limit is used up and resets within [`pace::LONGEST`], after `wait`. the
+    /// next try waits for the reset before it is sent, and spends none of the request's retries.
     Limited {
         reason: String,
+        wait: Duration,
     },
 }
 
@@ -46,6 +48,8 @@ pub(super) struct Retry<'a> {
     /// tries in all.
     tries: u32,
     limited: u32,
+    /// told of each wait for another try, as a download's bar shows it.
+    on: Option<Listener<'a>>,
 }
 
 impl<'a> Retry<'a> {
@@ -56,6 +60,40 @@ impl<'a> Retry<'a> {
             attempt: 1,
             tries: 1,
             limited: 0,
+            on: None,
+        }
+    }
+
+    /// tells `on` of each wait for another try.
+    pub(super) fn telling(mut self, on: Listener<'a>) -> Retry<'a> {
+        self.on = Some(on);
+        self
+    }
+
+    /// which try comes next, of how many it may get while none makes progress: the retries
+    /// left, and once the host limited its rate, the waits for its limit left too.
+    fn numbered(&self) -> (u32, u32) {
+        let retries = (self.net.retries + 1).saturating_sub(self.attempt);
+        let waits = if self.limited > 0 {
+            LIMITED.saturating_sub(self.limited)
+        } else {
+            0
+        };
+        let most = (self.tries + retries + waits).min(MOST_TRIES);
+        (self.tries, most.max(self.tries))
+    }
+
+    /// tells the bar that the next try goes out after `wait`, for the rate limit of `limit`'s
+    /// host when it names one.
+    fn tell(&self, wait: Duration, limit: Option<String>) {
+        if let Some(on) = self.on {
+            let (next, of) = self.numbered();
+            let _ = on(Event::Retrying {
+                next,
+                of,
+                wait,
+                limit,
+            });
         }
     }
 
@@ -67,15 +105,38 @@ impl<'a> Retry<'a> {
 
     /// counts a try a rate limit refused. the next one waits for the limit to reset and does not
     /// spend a retry, unless the host keeps refusing, but it is still one of the tries.
-    pub(super) async fn limited(&mut self, reason: String, has_copy: bool) -> Result<(), Error> {
+    pub(super) async fn limited(
+        &mut self,
+        reason: String,
+        wait: Duration,
+        has_copy: bool,
+    ) -> Result<(), Error> {
         if self.limited >= LIMITED {
-            return self.wait(reason, None, has_copy).await;
+            // never sooner than the limit resets, which a try sent earlier would wait for
+            return self.wait(reason, Some(wait), has_copy).await;
         }
         self.limited += 1;
         self.tries += 1;
-        tracing::debug!(%reason, "rate limited, trying again once the limit resets");
+        tracing::debug!(%reason, ?wait, "rate limited, trying again once the limit resets");
         Work::add(&self.net.work.retries, 1);
-        Ok(())
+        if self.on.is_none() {
+            // the next try's request waits for the reset, and tells of it
+            return Ok(());
+        }
+        // a download's bar tells of each wait, so a log hears of the first alone
+        if self.limited == 1 {
+            (self.net.notify)(Notice::Waiting {
+                host: host(self.url).to_owned(),
+                quota: None,
+                window: None,
+                wait,
+            });
+        }
+        self.tell(wait, Some(host(self.url).to_owned()));
+        tokio::select! {
+            () = tokio::time::sleep(wait) => Ok(()),
+            () = self.net.stop.asked() => Err(interrupted(self.url)),
+        }
     }
 
     /// waits before the next try, or says why there is none. `has_copy` says the cache holds an
@@ -107,13 +168,15 @@ impl<'a> Retry<'a> {
         self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
         Work::add(&self.net.work.retries, 1);
+        let (next, of) = self.numbered();
         (self.net.notify)(Notice::Retrying {
             host: host(self.url).to_owned(),
             reason,
             wait,
-            next: self.attempt,
-            of: self.net.retries + 1,
+            next,
+            of,
         });
+        self.tell(wait, None);
         tokio::select! {
             () = tokio::time::sleep(wait) => Ok(()),
             () = self.net.stop.asked() => Err(interrupted(self.url)),
@@ -174,8 +237,8 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
         let reason = format!("{} answered {code}", host(url));
         if status == StatusCode::TOO_MANY_REQUESTS {
             let wait = pace::used_up(&pace::limits(status, headers, SystemTime::now()));
-            if wait.is_some_and(|wait| wait <= pace::LONGEST) {
-                return Failure::Limited { reason };
+            if let Some(wait) = wait.filter(|wait| *wait <= pace::LONGEST) {
+                return Failure::Limited { reason, wait };
             }
             return Failure::Transient {
                 reason,
@@ -379,7 +442,7 @@ pub(super) fn classify(
     if err.is_timeout() {
         transient(format!("the request to {} timed out", host(url)))
     } else if err.is_connect() {
-        transient(format!("could not connect to {}", host(url)))
+        transient(unconnected(url, err))
     } else {
         transient(format!(
             "the request to {} failed: {}",
@@ -387,6 +450,26 @@ pub(super) fn classify(
             without_link(err)
         ))
     }
+}
+
+/// why no connection to `url`'s host and port was made, naming both, since the port is often
+/// the clue: one that refused it has nothing listening there, or a firewall turns it away.
+fn unconnected(url: &Url, err: &reqwest::Error) -> String {
+    let at = match url.port_or_known_default() {
+        Some(port) => format!("{}:{port}", host(url)),
+        None => host(url).to_owned(),
+    };
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = cause {
+        if current
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+        {
+            return format!("{at} refused the connection");
+        }
+        cause = current.source();
+    }
+    format!("could not connect to {at}")
 }
 
 /// a reply that is not valid HTTP, with what the parser `said` of it. a server sends the same
@@ -499,6 +582,11 @@ fn gave_up(
     let status = reason
         .rsplit_once("answered ")
         .and_then(|(_, code)| code.parse::<u16>().ok());
+    if let Some((at, _)) = reason.split_once(" refused the connection") {
+        return Error::new(Kind::NetworkUnreachable, message).help(format!(
+            "nothing is listening at {at}, or a firewall turned the connection away: check that the server runs and the link names its port, then {later}"
+        ));
+    }
     match status {
         Some(429) => {
             return Error::new(Kind::NetworkRateLimited, message)
@@ -750,6 +838,35 @@ mod tests {
         );
     }
 
+    /// a connection refused names the host and port, which tell which server is not there, and
+    /// its help says what a refusal means, where `could not connect to 127.0.0.1` named neither.
+    #[test]
+    fn a_refused_connection_names_its_host_and_port() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/x.csv")).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = runtime
+            .block_on(reqwest::Client::new().get(url.clone()).send())
+            .unwrap_err();
+        let Failure::Transient { reason, .. } = classify(&url, None, &err, Offline::No) else {
+            panic!("a refusal is tried again")
+        };
+        assert_eq!(reason, format!("127.0.0.1:{port} refused the connection"));
+        let error = gave_up(&url, 5, &reason, false, None);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!("nothing is listening at 127.0.0.1:{port}, or a firewall turned the connection away: check that the server runs and the link names its port, then run the same command again later")
+                    .as_str()
+            )
+        );
+    }
+
     #[test]
     fn exhausting_retries_offers_the_copy_or_more_tries() {
         let url = Url::parse("https://example.org/list").unwrap();
@@ -787,7 +904,11 @@ mod tests {
         // a server that answers every request with a 429 whose limit resets at once
         let mut sent = 1;
         let error = loop {
-            match block_on(retry.limited("example.org answered 429".to_owned(), false)) {
+            match block_on(retry.limited(
+                "example.org answered 429".to_owned(),
+                Duration::ZERO,
+                false,
+            )) {
                 Ok(()) => sent += 1,
                 Err(error) => break error,
             }

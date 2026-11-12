@@ -46,6 +46,17 @@ struct Moved {
     /// bytes an earlier run or attempt kept, which count toward how far the bar got but never
     /// toward its speed or time left: indicatif counts only the rest.
     kept: AtomicU64,
+    /// the try a download waits to make after one failed, until a try gets an answer.
+    retry: Mutex<Option<Retrying>>,
+}
+
+/// a download's next try, as its bar tells it.
+struct Retrying {
+    next: u32,
+    of: u32,
+    at: Instant,
+    /// the host whose rate limit the try waits for, if it waits for one.
+    limit: Option<String>,
 }
 
 impl Moved {
@@ -55,7 +66,16 @@ impl Moved {
             at: AtomicU64::new(0),
             stopping,
             kept: AtomicU64::new(0),
+            retry: Mutex::new(None),
         }
+    }
+
+    /// what the bar says of a try it waits to make, if it waits for one.
+    fn retrying(&self) -> Option<String> {
+        let retry = self.retry.lock().unwrap_or_else(PoisonError::into_inner);
+        let retry = retry.as_ref()?;
+        let left = retry.at.saturating_duration_since(Instant::now());
+        Some(next_try(retry.next, retry.of, left, retry.limit.as_deref()))
     }
 
     /// how far the bar got and what it fills to, from indicatif's count of the bytes moved.
@@ -123,9 +143,31 @@ impl Bar {
         }
     }
 
+    /// a failed try, after which try `next` of at most `of` goes out after `wait`, once the rate
+    /// limit of the host `limit` names resets when it names one.
+    pub(crate) fn retrying(&self, next: u32, of: u32, wait: Duration, limit: Option<String>) {
+        if self.drawn.is_some() {
+            *self
+                .moved
+                .retry
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Retrying {
+                next,
+                of,
+                at: Instant::now() + wait,
+                limit,
+            });
+        }
+    }
+
     /// a transfer of `total` bytes that goes on from `resumed`, which it does not rate.
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.drawn {
+            self.moved
+                .retry
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
             self.moved.kept.store(resumed, Ordering::Relaxed);
             if let Some(total) = total {
                 bar.set_length(total.saturating_sub(resumed));
@@ -207,15 +249,21 @@ fn style(
                 };
                 // unpacking and checking read local files, whose pauses mean nothing
                 let quiet = (verb == "Downloading").then(|| moved.quiet());
-                let amount = measure(
-                    done,
-                    total,
-                    state.per_sec(),
-                    state.elapsed(),
-                    state.eta(),
-                    quiet,
-                    moved.stopping.load(Ordering::Relaxed),
-                );
+                let stopping = moved.stopping.load(Ordering::Relaxed);
+                let amount = match moved.retrying().filter(|_| !stopping) {
+                    // a server that refused a try answered at once, so no stall is told
+                    Some(next) if done > 0 => format!("{} · {next}", counted(done, total)),
+                    Some(next) => next,
+                    None => measure(
+                        done,
+                        total,
+                        state.per_sec(),
+                        state.elapsed(),
+                        state.eta(),
+                        quiet,
+                        stopping,
+                    ),
+                };
                 let width = usize::from(console::Term::stderr().size().1);
                 let line = render(&name, &heading, &bar, &amount, width, color);
                 let _ = out.write_str(&super::shown(&line, unicode));
@@ -333,7 +381,7 @@ fn measure(
 ) -> String {
     let mut parts = Vec::new();
     if done > 0 {
-        parts.push(total.map_or_else(|| units::size(done), |total| fraction(done, total)));
+        parts.push(counted(done, total));
     }
     if stopping {
         parts.push("stopping".to_owned());
@@ -363,6 +411,30 @@ fn measure(
     }
     if elapsed >= MOMENT && !foreseen {
         parts.push(units::seconds(elapsed));
+    }
+    parts.join(" · ")
+}
+
+/// how far a bar got: `done` of `total` when it is known.
+fn counted(done: u64, total: Option<u64>) -> String {
+    total.map_or_else(|| units::size(done), |total| fraction(done, total))
+}
+
+/// what a bar says of the try its download waits to make, `left` from now: which try of how
+/// many, and whose rate limit it waits for when `limit` names a host.
+fn next_try(next: u32, of: u32, left: Duration, limit: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(host) = limit {
+        parts.push(format!("waiting for {host}'s rate limit"));
+    }
+    parts.push(format!("try {next} of {of}"));
+    if !left.is_zero() {
+        // rounded up, so a wait under way never reads 0 s
+        let seconds = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+        parts.push(format!(
+            "next in {}",
+            units::seconds(Duration::from_secs(seconds))
+        ));
     }
     parts.join(" · ")
 }
@@ -1085,6 +1157,45 @@ mod tests {
             report("Unpacking", "set/set.tar", (57, Some(57)), ten, true),
             ("Unpacking", "set/set.tar · 57 B".to_owned()),
             "the first line says what the batch does"
+        );
+    }
+
+    /// a download waiting to try again says which try comes next, of how many, and when, and
+    /// whose rate limit it waits for, rather than that no data came: the server answered.
+    #[test]
+    fn a_bar_waiting_to_try_again_says_which_try_and_when() {
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            next_try(3, 5, second * 2 + second / 3, None),
+            "try 3 of 5 · next in 3 s"
+        );
+        assert_eq!(
+            next_try(6, 15, second * 3, Some("127.0.0.1")),
+            "waiting for 127.0.0.1's rate limit · try 6 of 15 · next in 3 s"
+        );
+        assert_eq!(
+            next_try(4, 5, Duration::ZERO, None),
+            "try 4 of 5",
+            "under way"
+        );
+        let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
+        let bar = Bar::add(
+            &bars,
+            "Downloading",
+            "y.csv".to_owned(),
+            (false, false),
+            Arc::default(),
+        );
+        bar.retrying(2, 5, second * 4, None);
+        assert_eq!(
+            bar.moved.retrying().as_deref(),
+            Some("try 2 of 5 · next in 4 s")
+        );
+        bar.start(Some(10), 0);
+        assert_eq!(
+            bar.moved.retrying(),
+            None,
+            "a try that got an answer is no wait"
         );
     }
 
