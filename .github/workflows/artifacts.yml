@@ -491,7 +491,8 @@ jobs:
       - name: package and install the source distribution
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          cargo package --locked
+          # the install below compiles the packaged sources, so cargo's own verify build would repeat it
+          cargo package --locked --no-verify
           mkdir -p .release/source-install
           tar -xzf "target/package/fetchloom-$version.crate" -C .release/source-install
           cargo install --path ".release/source-install/fetchloom-$version" --locked \
