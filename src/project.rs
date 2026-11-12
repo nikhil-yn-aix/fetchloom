@@ -561,16 +561,33 @@ impl Project {
     /// fetchloom's own records, the state among them only once no data folder is left for it to
     /// describe. a folder holding anything else stays, with all it holds.
     pub(crate) fn unstart(&self, mut held: Held, data: Option<&Path>, own: bool) {
+        if self.remove_start(data, own, &mut held.owner) {
+            drop(held);
+            let _ = fs::remove_dir(self.own_folder());
+        }
+    }
+
+    /// [`Project::unstart`] for a run that quits at once, whose hold ends with the process.
+    pub(crate) fn unstart_quitting(&self, data: Option<&Path>) {
+        let mut owner = Some(self.own_folder().join("owner"));
+        if self.remove_start(data, true, &mut owner) {
+            let _ = fs::remove_dir(self.own_folder());
+        }
+    }
+
+    /// removes what a command that started this project made, as [`Project::unstart`] says, all
+    /// but `.fetchloom` itself, and says whether that is left empty. `owner` is taken only then.
+    fn remove_start(&self, data: Option<&Path>, own: bool, owner: &mut Option<PathBuf>) -> bool {
         if let Some(data) = data {
             remove_empty_folders(data);
         }
         if !own {
-            return;
+            return false;
         }
         let folder = self.own_folder();
         let described = data.is_none_or(Path::exists);
         let Ok(entries) = fs::read_dir(&folder) else {
-            return;
+            return false;
         };
         for entry in entries {
             let ours = entry.is_ok_and(|entry| match entry.file_name().to_str() {
@@ -579,10 +596,10 @@ impl Project {
                 _ => false,
             });
             if !ours {
-                return;
+                return false;
             }
         }
-        if let Some(owner) = held.owner.take() {
+        if let Some(owner) = owner.take() {
             let _ = fs::remove_file(owner);
         }
         for name in [".gitignore", "state"] {
@@ -591,8 +608,7 @@ impl Project {
         // the lock goes last and while it is still held. a command that waited for it opens its
         // name again, and finds the lock it takes there to be the only one
         let _ = fs::remove_file(folder.join("lock"));
-        drop(held);
-        let _ = fs::remove_dir(&folder);
+        true
     }
 
     /// the data folder, made sure to be a real folder inside the project with no link on the way,

@@ -62,6 +62,20 @@ impl Running {
         }
     }
 
+    /// sends SIGINT, as ctrl-c at a terminal does.
+    #[cfg(unix)]
+    pub(crate) fn interrupt(&self) -> Result {
+        let child = self.child.as_ref().ok_or("child already finished")?;
+        let sent = Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()?;
+        if sent.success() {
+            Ok(())
+        } else {
+            Err("kill -INT failed".into())
+        }
+    }
+
     pub(crate) fn finish(mut self) -> Result<Output> {
         let status = self
             .child

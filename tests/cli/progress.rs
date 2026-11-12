@@ -225,3 +225,89 @@ fn a_stop_leaves_no_bar_behind() -> Result {
     }
     Ok(())
 }
+
+/// an add of `IRIS` from `server` in a fresh folder whose download holds in its flush, as on a
+/// slow disk, until the file `release` appears, once every byte is in.
+#[cfg(unix)]
+fn add_held_in_flush(
+    sandbox: &Sandbox,
+    server: &Server,
+    release: &std::path::Path,
+) -> Result<Running> {
+    let mut add = sandbox.command(&["add", &server.url, "--as", "iris"]);
+    add.env("FETCHLOOM_TEST_HOLD_FLUSH", release);
+    let running = Running::start(&mut add)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    crate::support::wait_until("the flush to hold", || {
+        Ok(std::path::Path::new(&held).exists())
+    })?;
+    Ok(running)
+}
+
+/// a ctrl-c once every byte of a download is in, while the disk keeps the file, lets the add
+/// finish rather than stop and download it all again next time, and says so first.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_while_the_disk_keeps_a_finished_download_lets_the_add_finish() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![crate::support::file(IRIS, "\"v1\"")],
+    )?;
+    let release = sandbox.folder("hold")?.join("release");
+    let running = add_held_in_flush(&sandbox, &server, &release)?;
+    running.interrupt()?;
+    running.wait_for("Finishing")?;
+    std::fs::write(&release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("  Finishing (the download is complete; ctrl-c again to quit at once)\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("      Added iris, its files are in data/iris"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Stop"), "{stderr}");
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data/iris/iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
+/// a second ctrl-c quits at once, while a thread still waits for the disk to keep a download,
+/// says so in one line, and a first add quit this way leaves its folder as it was.
+#[cfg(unix)]
+#[test]
+fn a_second_ctrl_c_quits_at_once_and_leaves_a_fresh_folder_as_it_was() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![crate::support::file(IRIS, "\"v1\"")],
+    )?;
+    let release = sandbox.folder("hold")?.join("release");
+    let running = add_held_in_flush(&sandbox, &server, &release)?;
+    // only keeps a run that waits for the flush from holding the test for good
+    let deadline = release.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        let _ = std::fs::write(deadline, b"");
+    });
+    running.interrupt()?;
+    running.wait_for("Finishing")?;
+    running.interrupt()?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert!(!release.exists(), "the run waited for the flush: {stderr}");
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert!(stderr.ends_with("       Quit at once\n"), "{stderr}");
+    let left: Vec<_> = std::fs::read_dir(sandbox.work())?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(left.is_empty(), "{left:?}");
+    Ok(())
+}

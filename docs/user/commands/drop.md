@@ -138,7 +138,7 @@ ctrl-c while it plans, in a dry run too, stops it before it writes anything, exi
     Stopped at your request, so nothing changed
 ```
 
-once drop starts writing `data.toml`, ctrl-c no longer stops it: it writes `data.lock`, deletes the files and says what it did, as without the ctrl-c.
+once drop starts writing `data.toml`, ctrl-c no longer stops it: it says `Finishing what it started (ctrl-c again to quit at once)`, writes `data.lock`, deletes the files and says what it did, as without the ctrl-c.
 
 ## JSON
 

@@ -171,6 +171,8 @@ pub(crate) enum Event {
     /// fetchloom keeps them as sent, since a hash published for the file matches those.
     Encoded(String),
     Bytes(u64),
+    /// every byte is in, and the disk keeps the file now.
+    Arrived,
 }
 
 /// whether a later run can go on from the bytes a stopped download keeps. that run asks the
@@ -382,7 +384,11 @@ impl Reach {
                 self.held.fetch_add(*bytes, Ordering::Relaxed);
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
-            Event::Waiting | Event::Kept { .. } | Event::WebPage { .. } | Event::Encoded(_) => {}
+            Event::Waiting
+            | Event::Kept { .. }
+            | Event::WebPage { .. }
+            | Event::Encoded(_)
+            | Event::Arrived => {}
         }
     }
 
@@ -778,6 +784,7 @@ impl Net {
                 .await?
             {
                 Run::Whole(writer) => {
+                    on(Event::Arrived).map_err(Failure::Final)?;
                     return Ok(Answer::Stored {
                         received: self.after_body(&mut state.permits, finish(writer)).await?,
                         validators,
@@ -807,6 +814,7 @@ impl Net {
             split::Streamed::Whole { writer, pieced } => (*writer, pieced),
             split::Streamed::StartOver => return Ok(Answer::StartOver),
         };
+        on(Event::Arrived).map_err(Failure::Final)?;
         Ok(Answer::Stored {
             received: self.after_body(&mut state.permits, finish(writer)).await?,
             validators,
@@ -1455,11 +1463,32 @@ struct Received {
 /// soon as the body ends, it takes that moment as when the last byte arrived.
 async fn finish(writer: PartialWriter) -> Result<Received, Failure> {
     let arrived = Instant::now();
-    let stored = tokio::task::spawn_blocking(move || writer.finish())
-        .await
-        .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
-        .map_err(|err| Failure::Final(local(&err)))?;
+    let stored = tokio::task::spawn_blocking(move || {
+        #[cfg(debug_assertions)]
+        held_flush();
+        writer.finish()
+    })
+    .await
+    .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
+    .map_err(|err| Failure::Final(local(&err)))?;
     Ok(Received { stored, arrived })
+}
+
+/// stands in for a flush a slow disk makes long: with `FETCHLOOM_TEST_HOLD_FLUSH` naming a file,
+/// a finished download writes `<file>.held`, then waits, whatever is asked meanwhile, as a thread
+/// inside a kernel flush does, until that file appears. release builds never read it.
+#[cfg(debug_assertions)]
+fn held_flush() {
+    let Some(release) = std::env::var_os("FETCHLOOM_TEST_HOLD_FLUSH").map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let mut held = release.clone().into_os_string();
+    held.push(".held");
+    let _ = std::fs::write(held, b"");
+    while !release.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[cfg(test)]

@@ -39,7 +39,7 @@ use crate::machine::Machine;
 use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
 use crate::settings::{File, Settings};
-use crate::stop::Stop;
+use crate::stop::{Heard, Stop};
 use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
@@ -954,24 +954,43 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
     if already_stopped {
         context.stop.ask();
     }
+    let late = Arc::clone(&context.output);
+    context.stop.on_late(move || late.finishing());
     let stopping = Arc::clone(context);
     let quitting = Arc::clone(context);
     runtime.spawn(interrupts(
         signal,
         already_stopped,
         tokio::signal::ctrl_c(),
-        move || {
-            stopping.stop.ask();
-            stopping.output.stopping();
-        },
+        move || first_ctrl_c(&stopping.stop, |heard| tell_heard(&stopping.output, heard)),
         move || {
             // a step's process group ends with fetchloom, so nothing it started runs on
             crate::build::step::end_running();
-            quitting.output.abandon();
+            quitting.output.quit();
+            quitting.stop.quitting();
             std::process::exit(130);
         },
     ));
     Ok(runtime)
+}
+
+/// what a first ctrl-c does: stops the run, `tell`ing the person before any task sees the stop,
+/// so no line the stopping work prints comes first, or lets it finish where it has marked its
+/// work as finishing or only the disk is left.
+fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) {
+    let heard = stop.hear();
+    tell(heard);
+    if heard == Heard::Stop {
+        stop.ask();
+    }
+}
+
+fn tell_heard(output: &Output, heard: Heard) {
+    match heard {
+        Heard::Stop => output.stopping(),
+        Heard::Started => output.finishing(),
+        Heard::Downloaded(count) => output.finishing_downloads(count),
+    }
 }
 
 /// what ctrl-c does: at the first press, or at once when one came `already`, `stopping` asks the
@@ -1078,6 +1097,9 @@ fn finish<T: Serialize>(
         .output
         .document(command, outcome.as_ref(), counts, elapsed);
     let outcome = outcome.and_then(|result| printed.map(|()| result));
+    if outcome.is_ok() {
+        context.output.retell();
+    }
     if let Err(error) = &outcome {
         context.output.error(error);
         if let Some(need) = &error.need
@@ -1433,6 +1455,23 @@ mod tests {
             || tell("quitting"),
         ));
         assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
+    }
+
+    /// a first ctrl-c tells the person before any task sees the stop, so a stopped command's
+    /// own last lines never come before `Stopping`, as they did when a busy machine ran the
+    /// stopped work first. a run past its mark is not stopped but told it finishes.
+    #[test]
+    fn a_first_ctrl_c_is_told_before_the_work_sees_it() {
+        let stop = Stop::default();
+        let mut seen = Vec::new();
+        first_ctrl_c(&stop, |heard| seen.push((heard, stop.is_asked())));
+        assert_eq!(seen, [(Heard::Stop, false)]);
+        assert!(stop.is_asked());
+        let finished = Stop::default();
+        finished.finish();
+        first_ctrl_c(&finished, |heard| seen.push((heard, finished.is_asked())));
+        assert_eq!(seen[1..], [(Heard::Started, false)]);
+        assert!(!finished.is_asked());
     }
 
     #[test]

@@ -7,7 +7,7 @@ pub(super) mod data_folder;
 pub(super) mod mirrors;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tokio::task::JoinSet;
@@ -22,6 +22,7 @@ use crate::error::{Error, FileFailure, Kind};
 use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable};
 use crate::output::{Bar, Output, Ticker};
 use crate::source::{self, Remote};
+use crate::stop::Stop;
 use crate::units;
 
 /// a file to download, the name the person watching knows it by, and the dataset it belongs to
@@ -101,6 +102,11 @@ struct Overall {
     /// run on several threads and learn sizes at once, so each addition reads and writes it under
     /// one lock.
     length: std::sync::Mutex<(u64, usize)>,
+    /// the run's stop, told how many downloads still receive and how many the disk keeps, so a
+    /// first ctrl-c with only the disk left lets the run finish. `waiting` counts the downloads
+    /// that have not begun, which it was told of when the batch began.
+    stop: Arc<Stop>,
+    waiting: AtomicUsize,
 }
 
 impl Overall {
@@ -140,12 +146,15 @@ impl Overall {
         });
         let sizes = sized(sizes());
         let length = std::sync::Mutex::new(sizes);
+        context.stop.expect(count);
         Overall {
             bar,
             ticker: OnceLock::new(),
             what,
             sizes,
             length,
+            stop: context.stop.clone(),
+            waiting: AtomicUsize::new(count),
         }
     }
 
@@ -191,6 +200,14 @@ impl Overall {
         }
         if let Some(ticker) = self.ticker.get() {
             ticker.sized(bytes);
+        }
+    }
+}
+
+impl Drop for Overall {
+    fn drop(&mut self) {
+        for _ in 0..*self.waiting.get_mut() {
+            self.stop.ended(false);
         }
     }
 }
@@ -285,6 +302,8 @@ struct Watch<'a> {
     waiting: std::sync::Mutex<Option<Ticker>>,
     /// whether the warning about bytes the server compressed on their way was told.
     encoded: AtomicBool,
+    /// whether every byte is in and the disk keeps the file, as the run's stop counts it.
+    arrived: AtomicBool,
 }
 
 impl<'a> Watch<'a> {
@@ -296,6 +315,11 @@ impl<'a> Watch<'a> {
         yes: bool,
         held: &'a Held,
     ) -> Watch<'a> {
+        let _ = overall
+            .waiting
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |waiting| {
+                waiting.checked_sub(1)
+            });
         Watch {
             job,
             output,
@@ -314,6 +338,7 @@ impl<'a> Watch<'a> {
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
+            arrived: AtomicBool::new(false),
         }
     }
 
@@ -408,6 +433,10 @@ impl<'a> Watch<'a> {
     /// first where its size calls for it, then shows its bar from there.
     fn started(&self, total: Option<u64>, resumed: u64, resumable: Resumable) -> Result<(), Error> {
         self.waited().take();
+        // a try that starts over after every byte was in receives again
+        if self.arrived.swap(false, Ordering::SeqCst) {
+            self.overall.stop.arrived(true);
+        }
         // a size only the server states is checked here, before any byte is written
         if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
             crate::space::cache_holds(cache, [(self.job.label.as_str(), total)])?;
@@ -524,6 +553,11 @@ impl<'a> Watch<'a> {
                     self.output.warn_with(&said, &help);
                 }
             }
+            Event::Arrived => {
+                if !self.arrived.swap(true, Ordering::SeqCst) {
+                    self.overall.stop.arrived(false);
+                }
+            }
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);
                 self.count(self.held.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes);
@@ -537,6 +571,12 @@ impl<'a> Watch<'a> {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for Watch<'_> {
+    fn drop(&mut self) {
+        self.overall.stop.ended(*self.arrived.get_mut());
     }
 }
 
@@ -1127,6 +1167,8 @@ mod tests {
             what: String::new(),
             sizes: (0, 0),
             length: std::sync::Mutex::default(),
+            stop: Arc::default(),
+            waiting: AtomicUsize::new(0),
         }
     }
 

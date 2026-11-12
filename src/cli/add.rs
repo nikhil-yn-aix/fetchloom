@@ -248,6 +248,15 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     // one neither started it nor may take it back
     let starting = starting && adding.text.is_none();
     let fresh = fresh.filter(|_| starting);
+    if let Some(fresh) = fresh.filter(|fresh| fresh.own && adding.held.is_some()) {
+        let project = Project {
+            root: adding.project.root.clone(),
+        };
+        let data = fresh.data.then(|| project.root.join(manifest::DATA_DIR));
+        context
+            .stop
+            .undo_at_quit(move || project.unstart_quitting(data.as_deref()));
+    }
     let added = match (read, request) {
         (Ok(()), Request::Link(link)) => {
             add_held(context, &mut adding, args, &link, &here, starting).await
@@ -1649,6 +1658,8 @@ async fn sync_add(
         return Err(changed_meanwhile(&changed));
     }
     let manifest_text = updated.or(adding.text.as_deref()).unwrap_or_default();
+    // from the first write on, a project folder the add started stays, even if it quits at once
+    work.context.stop.keep_at_quit();
     let committed = (|| -> Result<Outcome<Placement>, Error> {
         if let Some(updated) = updated {
             if let Some(saved) = saved.as_mut() {

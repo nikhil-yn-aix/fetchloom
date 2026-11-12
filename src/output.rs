@@ -59,6 +59,13 @@ pub(crate) struct Output {
     stopping: Arc<AtomicBool>,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
     report_color: bool,
+    /// the last closing line told, such as `Added iris`, and whether a ctrl-c that let the run
+    /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
+    /// a ctrl-c comes, so that line is told once more at the end.
+    closing: Mutex<(Option<String>, bool)>,
+    /// every line told, for tests.
+    #[cfg(test)]
+    said: Mutex<Vec<String>>,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -171,6 +178,9 @@ impl Output {
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
             report_color: Style::stdout_colored(),
+            closing: Mutex::new((None, false)),
+            #[cfg(test)]
+            said: Mutex::new(Vec::new()),
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -267,6 +277,15 @@ impl Output {
         }
     }
 
+    /// every line told so far, for tests.
+    #[cfg(test)]
+    pub(crate) fn said(&self) -> Vec<String> {
+        self.said
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// the warnings told so far, as `--json` lists them.
     #[cfg(test)]
     pub(crate) fn warned(&self) -> Vec<String> {
@@ -279,7 +298,25 @@ impl Output {
     /// the closing line of a run that worked.
     pub(crate) fn done(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            self.line(&verb_line(verb, text, Tone::Done, self.style.color));
+            let line = verb_line(verb, text, Tone::Done, self.style.color);
+            self.closing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .0 = Some(line.clone());
+            self.line(&line);
+        }
+    }
+
+    /// tells the closing line once more when a ctrl-c that let the run finish came after it,
+    /// since the terminal may have dropped it then.
+    pub(crate) fn retell(&self) {
+        let closing = self
+            .closing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let (Some(line), true) = closing {
+            self.line(&line);
         }
     }
 
@@ -792,7 +829,65 @@ impl Output {
     /// stopping from then on.
     pub(crate) fn stopping(&self) {
         self.stopping.store(true, Ordering::Relaxed);
-        self.mark("Stopping", "(press ctrl-c again to quit at once)");
+        self.heard("Stopping", "(press ctrl-c again to quit at once)");
+    }
+
+    /// says that a first ctrl-c was heard once the run had marked its work as finishing, so it
+    /// finishes, and what a second one does. a closing line told before it is told again at the
+    /// end.
+    pub(crate) fn finishing(&self) {
+        {
+            let mut closing = self.closing.lock().unwrap_or_else(PoisonError::into_inner);
+            closing.1 = closing.0.is_some();
+        }
+        self.heard(
+            "Finishing",
+            "what it started (ctrl-c again to quit at once)",
+        );
+    }
+
+    /// says that a first ctrl-c came once every byte of `count` downloads was in and the disk
+    /// only keeps them, so the run finishes rather than download them again next time.
+    pub(crate) fn finishing_downloads(&self, count: usize) {
+        let which = if count == 1 {
+            "the download is"
+        } else {
+            "the downloads are"
+        };
+        self.heard(
+            "Finishing",
+            &format!("({which} complete; ctrl-c again to quit at once)"),
+        );
+    }
+
+    /// a line told as a ctrl-c is heard. the terminal echoes `^C` where its cursor waits, at the
+    /// start of a fresh line unless bars are drawn there, so the line first clears it.
+    fn heard(&self, verb: &str, text: &str) {
+        if self.tells(Level::Normal) {
+            self.line(&self.over_echo(&verb_line(verb, text, Tone::Warn, self.style.color)));
+        }
+    }
+
+    fn over_echo(&self, line: &str) -> String {
+        if self.style.interactive {
+            format!("\r\u{1b}[2K{line}")
+        } else {
+            line.to_owned()
+        }
+    }
+
+    /// ends the story at a second ctrl-c: clears the bars, tells in one line that the run quit
+    /// and shows the cursor again, so it leaves the terminal as it found it.
+    pub(crate) fn quit(&self) {
+        self.abandon();
+        if self.tells(Level::Normal) {
+            let line = verb_line("Quit", "at once", Tone::Warn, self.style.color);
+            // the bars are hidden, and a question may hold its lines back, so this goes out alone
+            write_line(
+                self.style.color,
+                &shown(&self.over_echo(&line), self.style.unicode),
+            );
+        }
     }
 
     /// clears the bars and shows the cursor again, for a run that ends at once, as at a second
@@ -809,6 +904,11 @@ impl Output {
 
     fn line(&self, text: &str) {
         let text = shown(text, self.style.unicode);
+        #[cfg(test)]
+        self.said
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(text.clone().into_owned());
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(waiting) = held.as_mut() {
             waiting.push(text.into_owned());
@@ -2219,6 +2319,63 @@ mod tests {
         fn flush(&self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    fn telling(interactive: bool) -> Output {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive,
+            watched: interactive,
+            links: false,
+        };
+        let mut output = Output::new(style, Level::Normal, false, false);
+        output.bars = None;
+        output
+    }
+
+    /// a terminal drops what a program wrote but had not yet shown when a ctrl-c comes, so a
+    /// closing line told before a ctrl-c that lets the run finish is told again at the end, and
+    /// one told after it, or with no ctrl-c, only once.
+    #[test]
+    fn a_closing_line_before_a_finishing_ctrl_c_is_told_again() {
+        let added = "      Added iris, its files are in data/iris";
+        let finishing = "  Finishing what it started (ctrl-c again to quit at once)";
+        let late = telling(false);
+        late.done("Added", "iris, its files are in data/iris");
+        late.finishing();
+        late.retell();
+        assert_eq!(late.said(), [added, finishing, added]);
+        let early = telling(false);
+        early.finishing();
+        early.done("Added", "iris, its files are in data/iris");
+        early.retell();
+        assert_eq!(early.said(), [finishing, added]);
+        let calm = telling(false);
+        calm.done("Added", "iris, its files are in data/iris");
+        calm.retell();
+        assert_eq!(calm.said(), [added]);
+    }
+
+    /// a terminal echoes ctrl-c as `^C` at the start of the empty line where its cursor waits, so
+    /// the line told then clears it first, keeping the verb column; a pipe gets the line alone.
+    #[test]
+    fn a_line_told_at_a_ctrl_c_clears_the_echo() {
+        let stopping = "   Stopping (press ctrl-c again to quit at once)";
+        let terminal = telling(true);
+        terminal.stopping();
+        terminal.finishing_downloads(1);
+        assert_eq!(
+            terminal.said(),
+            [
+                format!("\r\u{1b}[2K{stopping}"),
+                "\r\u{1b}[2K  Finishing (the download is complete; ctrl-c again to quit at once)"
+                    .to_owned()
+            ]
+        );
+        let piped = telling(false);
+        piped.stopping();
+        assert_eq!(piped.said(), [stopping]);
     }
 
     #[test]
