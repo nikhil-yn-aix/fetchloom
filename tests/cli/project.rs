@@ -2370,6 +2370,53 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
+/// a SIGTERM, which a scheduler sends a job it ends, stops a sync as a first ctrl-c does: it says
+/// what a second SIGTERM does, ends with one `Stopped` line that names the SIGTERM and exits 130,
+/// and with `--json` still prints its one document, an `interrupted` error.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_stops_a_sync_as_a_first_ctrl_c_does() -> Result {
+    for args in [&["sync"][..], &["--json", "sync"]] {
+        let sandbox = Sandbox::new()?;
+        let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+        let slow = Server::held_file("/files/cows.csv", body)?;
+        sandbox.allow(&slow.url);
+        fs::write(
+            sandbox.work().join("data.toml"),
+            format!("[datasets.cows]\nref = \"{}\"\n", slow.url),
+        )?;
+        let running = Running::start(&mut sandbox.command(args))?;
+        wait_until(
+            "bytes to arrive",
+            || Ok(partial_bytes(&sandbox.cache()) > 0),
+        )?;
+        running.signal("-TERM")?;
+        let output = running.finish()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(130), "{args:?}: {stderr}");
+        if args[0] == "--json" {
+            let document = json(&output)?;
+            assert_eq!(document["errors"][0]["kind"], "interrupted", "{document}");
+            assert_eq!(
+                document["errors"][0]["message"],
+                "stopped by a SIGTERM while talking to 127.0.0.1, so nothing changed",
+                "{document}"
+            );
+        } else {
+            let told: Vec<&str> = stderr.lines().collect();
+            for line in [
+                "   Stopping (a second SIGTERM quits at once)",
+                "    Stopped by a SIGTERM while talking to 127.0.0.1, so nothing changed",
+            ] {
+                assert!(told.contains(&line), "{line:?} in\n{stderr}");
+            }
+            assert!(!stderr.contains("error:"), "{stderr}");
+        }
+        assert!(!sandbox.work().join("data.lock").exists(), "{args:?}");
+    }
+    Ok(())
+}
+
 /// a sync stopped while it downloads several files says what all of them keep, which is what the
 /// next sync goes on from, not what one of them keeps.
 #[cfg(unix)]

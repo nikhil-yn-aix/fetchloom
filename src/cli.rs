@@ -1093,14 +1093,21 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
     }
     let late = Arc::clone(&context.output);
     context.stop.on_late(move || late.finishing());
+    let (heard, interrupted) = tokio::sync::mpsc::unbounded_channel();
+    #[cfg(unix)]
+    listen_for_terminate(&runtime, heard.clone());
+    runtime.spawn(pass_on_ctrl_c(signal, already_stopped, heard));
     let stopping = Arc::clone(context);
     let quitting = Arc::clone(context);
     runtime.spawn(interrupts(
-        signal,
-        already_stopped,
-        tokio::signal::ctrl_c(),
-        move || {
-            heard_first(&stopping.stop, &stopping.output, Interrupt::CtrlC);
+        interrupted,
+        move |interrupt| {
+            let heard = heard_first(&stopping.stop, &stopping.output, interrupt);
+            // ctrl-c at a terminal reaches a step's process group too, while a SIGTERM reaches
+            // fetchloom alone, and the SIGKILL a scheduler sends after it would leave the step
+            if interrupt == Interrupt::Terminate && heard == Heard::Stop {
+                crate::build::step::end_running();
+            }
         },
         move || {
             // a step's process group ends with fetchloom, so nothing it started runs on
@@ -1111,6 +1118,39 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
         },
     ));
     Ok(runtime)
+}
+
+/// passes each ctrl-c on to `heard`: the first, which `first` listens for from before the work
+/// started, or at once when it came `already`, then each one after it.
+async fn pass_on_ctrl_c(
+    first: impl Future<Output = std::io::Result<()>>,
+    already: bool,
+    heard: tokio::sync::mpsc::UnboundedSender<Interrupt>,
+) {
+    if already || first.await.is_ok() {
+        while heard.send(Interrupt::CtrlC).is_ok() && tokio::signal::ctrl_c().await.is_ok() {}
+    }
+}
+
+/// passes each SIGTERM, which a scheduler sends a job it ends, on to `heard`, listening from
+/// before the work starts. tokio keeps the handler for the rest of the process, so a SIGTERM no
+/// longer ends it at once: the work stops as at a ctrl-c instead.
+#[cfg(unix)]
+fn listen_for_terminate(
+    runtime: &tokio::runtime::Runtime,
+    heard: tokio::sync::mpsc::UnboundedSender<Interrupt>,
+) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let _entered = runtime.enter();
+    match signal(SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            runtime.spawn(async move {
+                while terminate.recv().await.is_some() && heard.send(Interrupt::Terminate).is_ok() {
+                }
+            });
+        }
+        Err(err) => tracing::debug!(%err, "could not listen for SIGTERM"),
+    }
 }
 
 /// what a first ctrl-c does: stops the run, or lets it finish where it has marked its work as
@@ -1134,18 +1174,16 @@ fn heard_first(stop: &Stop, output: &Output, interrupt: Interrupt) -> Heard {
     })
 }
 
-/// what ctrl-c does: at the first press, or at once when one came `already`, `stopping` asks the
-/// work to wind down; at the `next`, `quitting` ends the run now.
+/// what ctrl-c and SIGTERM do: at the first interrupt `heard`, `stopping` asks the work to wind
+/// down, told as that interrupt; at the next of either, `quitting` ends the run now.
 async fn interrupts(
-    first: impl Future<Output = std::io::Result<()>>,
-    already: bool,
-    next: impl Future<Output = std::io::Result<()>>,
-    stopping: impl FnOnce(),
+    mut heard: tokio::sync::mpsc::UnboundedReceiver<Interrupt>,
+    stopping: impl FnOnce(Interrupt),
     quitting: impl FnOnce(),
 ) {
-    if already || first.await.is_ok() {
-        stopping();
-        if next.await.is_ok() {
+    if let Some(first) = heard.recv().await {
+        stopping(first);
+        if heard.recv().await.is_some() {
             quitting();
         }
     }
@@ -1273,11 +1311,15 @@ fn finish<T: Serialize>(
 }
 
 /// `error`, a stop that the SIGTERM a scheduler sends asked, saying so rather than that a person
-/// asked it. any other error stays as it is.
+/// asked it, as in `stopped by a SIGTERM while talking to zenodo.org`. any other error stays as
+/// it is.
 fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
     if error.kind == Kind::Interrupted
         && by == Some(Interrupt::Terminate)
-        && let Some(rest) = error.message.strip_prefix("stopped at your request")
+        && let Some(rest) = error
+            .message
+            .strip_prefix("stopped at your request")
+            .or_else(|| error.message.strip_prefix("stopped"))
     {
         error.message = format!("stopped by a SIGTERM{rest}");
     }
@@ -1742,45 +1784,64 @@ mod tests {
         assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
     }
 
+    /// the first interrupt, ctrl-c or SIGTERM, stops the work, told as the one it was, and the
+    /// next of either quits.
     #[test]
-    fn the_first_ctrl_c_stops_the_work_and_the_second_quits() {
+    fn the_first_interrupt_stops_the_work_and_the_second_quits() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         let wait = Duration::from_millis(20);
-        let told = std::sync::Mutex::new(Vec::new());
-        let tell = |what: &'static str| told.lock().unwrap().push(what);
-        runtime.block_on(async {
-            let (first, pressed_first) = tokio::sync::oneshot::channel::<()>();
-            let (next, pressed_next) = tokio::sync::oneshot::channel::<()>();
-            let listening = interrupts(
-                async { pressed_first.await.map_err(std::io::Error::other) },
-                false,
-                async { pressed_next.await.map_err(std::io::Error::other) },
-                || tell("stopping"),
-                || tell("quitting"),
+        for (first, next) in [
+            (Interrupt::CtrlC, Interrupt::CtrlC),
+            (Interrupt::Terminate, Interrupt::CtrlC),
+        ] {
+            let told = std::sync::Mutex::new(Vec::new());
+            runtime.block_on(async {
+                let (heard, interrupted) = tokio::sync::mpsc::unbounded_channel();
+                let listening = interrupts(
+                    interrupted,
+                    |interrupt| told.lock().unwrap().push(format!("stopping {interrupt:?}")),
+                    || told.lock().unwrap().push("quitting".to_owned()),
+                );
+                tokio::pin!(listening);
+                assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
+                assert!(told.lock().unwrap().is_empty());
+                heard.send(first).unwrap();
+                assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
+                assert_eq!(*told.lock().unwrap(), [format!("stopping {first:?}")]);
+                heard.send(next).unwrap();
+                listening.await;
+            });
+            assert_eq!(
+                *told.lock().unwrap(),
+                [format!("stopping {first:?}"), "quitting".to_owned()]
             );
-            tokio::pin!(listening);
-            assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
-            assert!(told.lock().unwrap().is_empty());
-            first.send(()).unwrap();
-            assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
-            assert_eq!(*told.lock().unwrap(), ["stopping"]);
-            next.send(()).unwrap();
-            listening.await;
-        });
-        assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
+        }
+    }
 
-        told.lock().unwrap().clear();
-        runtime.block_on(interrupts(
-            std::future::pending(),
-            true,
-            async { Ok(()) },
-            || tell("stopping"),
-            || tell("quitting"),
-        ));
-        assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
+    /// a SIGTERM's stop names it, whatever the work said it stopped doing, since no person asked.
+    #[test]
+    fn a_stop_a_sigterm_asked_names_it() {
+        for (said, named) in [
+            (
+                "stopped at your request, so data.lock and the data folder are as they were",
+                "stopped by a SIGTERM, so data.lock and the data folder are as they were",
+            ),
+            (
+                "stopped while talking to 127.0.0.1, so nothing changed",
+                "stopped by a SIGTERM while talking to 127.0.0.1, so nothing changed",
+            ),
+            ("stopped", "stopped by a SIGTERM"),
+        ] {
+            let stopped = || Error::new(Kind::Interrupted, said);
+            assert_eq!(
+                stop_named(stopped(), Some(Interrupt::Terminate)).message,
+                named
+            );
+            assert_eq!(stop_named(stopped(), Some(Interrupt::CtrlC)).message, said);
+        }
     }
 
     /// a first ctrl-c asks the stop before it tells the person, so once `Stopping` shows, the

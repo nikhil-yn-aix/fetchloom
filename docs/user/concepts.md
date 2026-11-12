@@ -180,6 +180,8 @@ two moments finish instead, since stopping there would throw work away. once eve
 
 a second ctrl-c prints `Quit at once` and exits 130 without waiting for the work to wind down. a first `add` quit this way before it wrote anything leaves its folder as it was. on a slow disk, the process can outlast the `Quit` line until the operating system finishes flushing a file.
 
+on linux and macos, SIGTERM, which `kill`, a container's stop and a scheduler such as slurm send, does what a first ctrl-c does in every command, worded for it: `Stopping (a second SIGTERM quits at once)`, then a `Stopped` line that names it, such as `Stopped by a SIGTERM while talking to zenodo.org, so nothing changed`, and exit 130. with `--json`, the run still prints its one document, with an `interrupted` error. a second SIGTERM, or a ctrl-c after it, quits at once.
+
 ## deleting a dataset from a machine
 
 a data-use agreement can require deleting a dataset's bytes from a machine. fetchloom keeps them in more than one place, and frees only the ones it manages:
