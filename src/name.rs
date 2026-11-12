@@ -52,10 +52,8 @@ pub(crate) fn from_url(url: &Url) -> Option<String> {
     sanitize(&percent_decode_str(segment).decode_utf8_lossy())
 }
 
-/// a dataset name made from free text, such as a title or a file name: lowercase letters,
-/// digits, `-` and `_`, at most 40 characters, ending at a word break when one is near. a letter
-/// with an accent keeps its letter, as `ï` becomes `i`, and a name windows keeps for a device
-/// gets `-data`, as `con` becomes `con-data`.
+/// a dataset name made from free text: lowercase letters, digits, `-` and `_`, at most 40, cut at
+/// a near word break, accents dropped as `ï` becomes `i`, and `-data` after a windows device name.
 pub(crate) fn dataset_name(text: &str) -> Option<String> {
     let mut name = String::with_capacity(text.len());
     for c in plain_letters(text).chars() {
@@ -94,9 +92,8 @@ const DANGLING: [&str; 13] = [
     "a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "the", "to", "with",
 ];
 
-/// a dataset name made from a title: at most its first four words and 32 characters, without
-/// a dangling "and" or "of" at the end. a first word too long for that is cut as
-/// [`dataset_name`] cuts any text, at 40 characters, and a device name gets `-data` as there.
+/// a dataset name made from a title: its first four words at most, 32 characters, no dangling
+/// "and" or "of"; a longer first word is cut as [`dataset_name`] cuts any text.
 pub(crate) fn title_name(title: &str) -> Option<String> {
     let lower = plain_letters(title);
     let words = lower
@@ -142,9 +139,8 @@ pub(crate) fn is_dataset_name(text: &str) -> bool {
     dataset_name_problem(text).is_none()
 }
 
-/// why `text` cannot be a dataset name, in plain words, or none when it can be one. a name is
-/// also a folder on every machine that syncs the project, so it keeps to characters every
-/// filesystem stores alike and is none of the names windows keeps for devices.
+/// why `text` cannot be a dataset name, in plain words. a name is a folder on every machine, so
+/// it keeps to characters every filesystem stores alike and avoids windows' device names.
 pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
     let count = text.chars().count();
     if count == 0 {
@@ -200,9 +196,8 @@ pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
         .then(|| "windows keeps it for a device, so it cannot be a folder there".to_owned())
 }
 
-/// `text` in lowercase with each letter's accents dropped, as `Ï` becomes `i`, and the letters
-/// unicode does not split into a letter and an accent spelled out, as `ß` becomes `ss`. other
-/// characters stay as they are.
+/// `text` in lowercase with accents dropped, as `Ï` becomes `i`, and letters unicode does not
+/// split spelled out, as `ß` becomes `ss`.
 fn plain_letters(text: &str) -> String {
     let lower = text.to_lowercase();
     if lower.is_ascii() {
@@ -289,9 +284,8 @@ pub(crate) fn nearest<'a>(
         .collect()
 }
 
-/// whether one typo turns `a` into `b`, as [`distance`] counts typos: a character added,
-/// dropped or changed, or two neighbours swapped. it compares the two without [`distance`]'s
-/// table, since every run asks it of each variable it starts with.
+/// whether one typo, as [`distance`] counts them, turns `a` into `b`, found without its table since
+/// every run asks it of each variable it starts with.
 pub(crate) fn one_typo(a: &str, b: &str) -> bool {
     if a.chars().count().abs_diff(b.chars().count()) > 1 {
         return false;
@@ -370,8 +364,7 @@ pub(crate) fn is_bidi_control(character: char) -> bool {
     )
 }
 
-/// `name` in `folder`, as listings and data.lock write a path: `folder/name`, or `name` alone
-/// when `folder` is the top.
+/// `folder/name` as listings and data.lock write it, or `name` alone when `folder` is the top.
 pub(crate) fn joined(folder: &str, name: &str) -> String {
     if folder.is_empty() {
         name.to_owned()
@@ -380,10 +373,8 @@ pub(crate) fn joined(folder: &str, name: &str) -> String {
     }
 }
 
-/// why a path inside a dataset or an archive is refused, if it is: it could reach outside its
-/// folder on some platform, it spells a folder a second way, as `a/./b` spells `a/b`, or it holds
-/// a control character that terminals would act on. such a path is refused everywhere, so a
-/// `data.lock` works on every machine.
+/// why a path inside a dataset or an archive is refused on every machine: it could leave its folder
+/// somewhere, spells a folder twice, as `a/./b` does, or holds a control character.
 pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     if path.is_empty() {
         return Some("it is empty");
@@ -498,9 +489,8 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
     None
 }
 
-/// why `path` cannot be stored when its name `part` is longer than disks allow. messages show
-/// the path beside this reason, so the path's own name is not shown again, and a folder's is
-/// shown short.
+/// why `path` cannot be stored when its name `part` is too long, shown beside the path, so a
+/// folder's name is shown short and the path's own name not again.
 fn too_long(path: &str, part: &str) -> String {
     if path.rsplit('/').next() == Some(part) {
         "its name is longer than disks allow".to_owned()
@@ -524,10 +514,8 @@ pub(crate) fn abridged(text: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{head}…{tail}"))
 }
 
-/// why some disk fetchloom supports cannot store `path`, whatever this machine is: a name longer
-/// than 255 bytes, which ext4 refuses, or one windows refuses, with a character it does not
-/// allow, a dot or a space at its end, or a name it keeps for devices. a recipe's result is
-/// checked by it, so files a step wrote on linux place on a teammate's windows too.
+/// why some disk fetchloom supports cannot store `path`, whatever this machine is: a name past 255
+/// bytes or one windows refuses. results are checked by it, so a linux-made file places on windows.
 pub(crate) fn unportable(path: &str) -> Option<String> {
     for part in path.split('/') {
         if part.len() > 255 {
@@ -553,11 +541,9 @@ pub(crate) fn unportable(path: &str) -> Option<String> {
     None
 }
 
-/// a key for portable collision checks and possible filesystem aliases. unicode names are
-/// composed and lowercased first to join both sharp-s forms; the round trip through uppercase
-/// joins letters like the two greek sigmas,
-/// which lowercase alone keeps apart. equal keys still need a filesystem check before two
-/// paths can be treated as the same file.
+/// a key for portable collision checks and possible filesystem aliases: composed and lowercased,
+/// joining both sharp-s forms, then through uppercase and back, joining the two greek sigmas.
+/// equal keys still need a filesystem check before two paths count as one file.
 pub(crate) fn fold(path: &str) -> String {
     if path.is_ascii() {
         return path.to_ascii_lowercase();
@@ -569,9 +555,8 @@ pub(crate) fn fold(path: &str) -> String {
         .to_lowercase()
 }
 
-/// whether `a` and `b` differ at most in how their unicode is composed, as `café` written with
-/// one character or with an `e` and a combining accent. apfs and hfs+ see both as one name, and
-/// hfs+ lists every name decomposed whatever spelling made it.
+/// whether `a` and `b` differ at most in how their unicode is composed, as `café` with one `é` or
+/// `e` and an accent: apfs and hfs+ take both for one name, and hfs+ lists every name decomposed.
 pub(crate) fn same_composed(a: &str, b: &str) -> bool {
     if a == b {
         return true;
@@ -631,10 +616,8 @@ pub(crate) fn is_reserved_on_windows(name: &str) -> bool {
         || numbered("LPT")
 }
 
-/// whether `name`, a file's or folder's own name, is one an operating system writes into folders
-/// by itself: finder's `.DS_Store`, the `._` files a mac leaves beside each file on a disk not
-/// its own, the folders a mac, linux or windows keeps on a removable disk, and windows
-/// explorer's thumbnails and folder settings. none of them is data.
+/// whether `name`, a file's or folder's own, is one an operating system writes by itself: finder's
+/// `.DS_Store`, a mac's `._` files, a removable disk's system folders, explorer's thumbnails.
 pub(crate) fn made_by_system(name: &str) -> bool {
     (name.len() > 2 && name.starts_with("._"))
         || name.starts_with(".Trash-")
@@ -783,8 +766,7 @@ mod tests {
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
     }
 
-    /// what windows or ext4 cannot store is refused on every machine, so a result made on one
-    /// system places on all of them.
+    /// so a result made on one system places on all of them.
     #[test]
     fn unportable_names_are_refused_everywhere() {
         assert_eq!(unportable("data/train.csv"), None);
@@ -1002,7 +984,7 @@ mod tests {
         );
     }
 
-    /// a name joins its folder with one `/`, and stands alone at the top.
+    /// a name at the top stands alone.
     #[test]
     fn a_name_joins_its_folder_with_one_slash() {
         let cases = [
