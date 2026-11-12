@@ -41,6 +41,9 @@ jobs:
   crates:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: crates
+      url: https://crates.io/crates/fetchloom
     permissions:
       contents: read
     steps:
