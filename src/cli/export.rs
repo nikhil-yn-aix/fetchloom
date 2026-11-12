@@ -107,7 +107,14 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     for name in &args.names {
         super::project::known(&manifest, name, "export")?;
     }
-    let lock = project.lock()?.unwrap_or_default();
+    let lock = if args.names.is_empty() {
+        project.lock()?
+    } else {
+        project
+            .lock_only(&|name| args.names.iter().any(|named| named == name))?
+            .map(|(lock, _)| lock)
+    }
+    .unwrap_or_default();
     let mut report = inventory(&manifest, lock, &super::peek_cache()?, &args.names)?;
     report.left_out = left_out(&manifest, &args.names, args.format);
     let output = &context.output;
