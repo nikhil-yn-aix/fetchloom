@@ -1,10 +1,12 @@
 """run the fetchloom program this package installs.
 
-each function runs ``fetchloom --json`` and returns its answer, or raises :class:`Error`
-with the kind and message of the JSON error. the kinds and their exit codes are listed in
-https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
+each function runs ``fetchloom --json --progress`` and returns its answer, or raises
+:class:`Error` with the kind and message of the JSON error. the kinds and their exit codes are
+listed in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md. the
+progress lines a long download prints go to ``sys.stderr`` as they come.
 """
 
+import collections
 import json
 import os
 import re
@@ -12,10 +14,11 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import threading
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 __all__ = ["Error", "get", "path", "sync"]
 
@@ -33,6 +36,8 @@ _VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha
 _QUOTED = re.compile(r'`[^`]*`|"[^"]*"')
 # how fetchloom says that no folder from -C upward holds a project
 _NO_PROJECT = "there is no data.toml in this folder or any folder above it"
+# how many of the last lines fetchloom said on stderr an error without a JSON answer repeats
+_TAIL = 20
 
 
 def __dir__() -> list[str]:
@@ -56,7 +61,8 @@ class Error(Exception):
     ``message`` its summary. ``details`` lists supporting lines, ``help`` names the command
     or flag that fixes the error or is None, and ``code`` is the exit code, or None when the
     helper raised the error itself, with no process to exit. ``kind`` is None
-    when fetchloom stopped without a JSON answer. ``str(error)`` reads like the command
+    when fetchloom stopped without a JSON answer, and ``message`` then ends with the last
+    lines it said on stderr. ``str(error)`` reads like the command
     line's error: the message, then each detail and the help on a line of its own.
     """
 
@@ -228,14 +234,7 @@ def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> li
 
 
 def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[str]) -> Any:
-    finished = subprocess.run(
-        [_program(), "--json", "-C", _local(project), *arguments],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    finished = _call([_program(), "--json", "--progress", "-C", _local(project), *arguments])
     try:
         answer = json.loads(finished.stdout)
     except ValueError:
@@ -255,7 +254,8 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             help = _no_project(project)
         elif help:
             # the program quotes its own command line, which holds the flags this helper adds
-            help = help.replace("`fetchloom --json ", "`fetchloom ")
+            for own in ["--json --progress ", "--json ", "--progress "]:
+                help = help.replace(f"`fetchloom {own}", "`fetchloom ")
             if os.fspath(project) == ".":
                 help = help.replace("`fetchloom -C . ", "`fetchloom ")
             help = _spoken(help, keywords)
@@ -263,6 +263,52 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
         details = [_spoken(detail, keywords) for detail in error["details"]]
         raise Error(error["kind"], message, details, help, finished.returncode)
     return answer["result"]
+
+
+def _call(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """run ``argv`` and return its whole stdout and the last :data:`_TAIL` lines of its stderr.
+
+    each line it writes on stderr, such as a progress line, goes on to ``sys.stderr`` as it
+    comes. as with :func:`subprocess.run`, an interrupt or any other exception while it runs
+    stops the program before the exception goes on.
+    """
+    tail: collections.deque[str] = collections.deque(maxlen=_TAIL)
+    answer: list[str] = []
+    with subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+    ) as process:
+        readers = [
+            threading.Thread(target=lambda: answer.append(process.stdout.read()), daemon=True),
+            threading.Thread(target=_forward, args=(process.stderr, tail), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            process.wait()
+        except BaseException:
+            process.kill()
+            raise
+        finally:
+            for reader in readers:
+                reader.join()
+    return subprocess.CompletedProcess(argv, process.returncode, "".join(answer), "".join(tail))
+
+
+def _forward(stream: IO[str], tail: collections.deque[str]) -> None:
+    """passes each line of ``stream`` to ``sys.stderr`` as it comes, keeping the last in ``tail``."""
+    for line in stream:
+        tail.append(line)
+        try:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+        except (AttributeError, OSError, ValueError):
+            # no stderr, as under pythonw, or a closed one: the program must still be read
+            pass
 
 
 def _no_project(project: str | os.PathLike[str]) -> str:

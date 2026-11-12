@@ -1,9 +1,11 @@
 """the python helper's command arguments and returned paths."""
 
+import io
 import itertools
 import json
 import os
 import pickle
+import socket
 import subprocess
 import sys
 import traceback
@@ -26,7 +28,7 @@ class HelperOptions(unittest.TestCase):
                     )
                     flags = {"yes": yes, "offline": offline, "locked": locked}
                     with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                        with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                        with patch.object(fetchloom, "_call", return_value=response) as run:
                             if command == "path":
                                 actual = fetchloom.path("iris/data.csv", Path("project"), **flags)
                             else:
@@ -41,8 +43,7 @@ class HelperOptions(unittest.TestCase):
                     if command == "path":
                         arguments += ["--", "iris/data.csv"]
                     self.assertEqual(actual, Path("resolved"))
-                    self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "project", *arguments])
-                    self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+                    self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "project", *arguments])
 
     def test_options_are_keyword_only(self):
         with self.assertRaises(TypeError):
@@ -66,11 +67,11 @@ class HelperOptions(unittest.TestCase):
         for name in ["-h", "--yes"]:
             with self.subTest(name=name):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", side_effect=program) as run:
+                    with patch.object(fetchloom, "_call", side_effect=program) as run:
                         with self.assertRaises(fetchloom.Error) as raised:
                             fetchloom.path(name, "p", yes=True)
                 self.assertEqual(raised.exception.message, f'data.toml has no dataset called "{name}"')
-                self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "p", "path", "--yes", "--", name])
+                self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "p", "path", "--yes", "--", name])
 
     def test_sync_verify_hashes_every_placed_file_as_the_cli_does(self):
         response = subprocess.CompletedProcess(
@@ -79,11 +80,11 @@ class HelperOptions(unittest.TestCase):
         for verify, flags in [(False, ["--locked"]), (True, ["--locked", "--verify"])]:
             with self.subTest(verify=verify):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                    with patch.object(fetchloom, "_call", return_value=response) as run:
                         fetchloom.sync("p", names="iris", locked=True, verify=verify)
                 self.assertEqual(
                     run.call_args.args[0],
-                    ["fetchloom", "--json", "-C", "p", "sync", *flags, "--", "iris"],
+                    ["fetchloom", "--json", "--progress", "-C", "p", "sync", *flags, "--", "iris"],
                 )
 
     def test_sync_names_the_datasets_it_asks_for_after_its_flags(self):
@@ -98,11 +99,11 @@ class HelperOptions(unittest.TestCase):
         ]:
             with self.subTest(names=names):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                    with patch.object(fetchloom, "_call", return_value=response) as run:
                         self.assertEqual(fetchloom.sync("p", names=names, yes=True), Path("p"))
                 self.assertEqual(
                     run.call_args.args[0],
-                    ["fetchloom", "--json", "-C", "p", "sync", "--yes", *named],
+                    ["fetchloom", "--json", "--progress", "-C", "p", "sync", "--yes", *named],
                 )
 
     def test_strict_sync_raises_on_kept_files(self):
@@ -112,7 +113,7 @@ class HelperOptions(unittest.TestCase):
             [], 0, json.dumps({"status": "ok", "result": kept, "warnings": [warning]}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertWarns(UserWarning):
                     self.assertEqual(fetchloom.sync("p"), Path("p"))
                 with self.assertWarns(UserWarning), self.assertRaises(fetchloom.Error) as raised:
@@ -128,7 +129,7 @@ class HelperOptions(unittest.TestCase):
             [], 0, json.dumps({"status": "ok", "result": kept, "warnings": []}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.sync(names=["iris", "flowers"], strict=True)
         self.assertEqual(
@@ -150,7 +151,7 @@ class HelperOptions(unittest.TestCase):
         ]:
             with self.subTest(project=project):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                    with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
                             fetchloom.sync(project, names=["plain", "iris"], strict=True)
                 command = raised.exception.help.split("`")[1]
@@ -179,7 +180,7 @@ class HelperOptions(unittest.TestCase):
             [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.sync("p", strict=True)
         self.assertEqual(raised.exception.message, "2 files in the data folder differ from data.lock")
@@ -191,7 +192,7 @@ class GetOptions(unittest.TestCase):
             [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+            with patch.object(fetchloom, "_call", return_value=response) as run:
                 actual = fetchloom.get(*args, **kwargs)
         return actual, run.call_args.args[0]
 
@@ -204,7 +205,7 @@ class GetOptions(unittest.TestCase):
         )
         self.assertEqual(actual, Path("/work/data.csv"))
         self.assertEqual(argv, [
-            "fetchloom", "--json", "-C", ".", "get", "--output=data.csv", f"--sha256={digest}",
+            "fetchloom", "--json", "--progress", "-C", ".", "get", "--output=data.csv", f"--sha256={digest}",
             "--force", "--yes", "--offline", "--", "https://example.org/iris.csv",
         ])
 
@@ -214,26 +215,26 @@ class GetOptions(unittest.TestCase):
             with self.subTest(folder=folder):
                 actual, argv = self.run_get(result, "zenodo:3608990", folder=folder)
                 self.assertEqual(actual, Path("/work/flowers"))
-                self.assertEqual(argv, ["fetchloom", "--json", "-C", ".", "get", *flags, "--", "zenodo:3608990"])
+                self.assertEqual(argv, ["fetchloom", "--json", "--progress", "-C", ".", "get", *flags, "--", "zenodo:3608990"])
 
     def test_a_home_folder_in_a_path_is_expanded_as_pandas_does(self):
         home = str(Path.home())
         result = {"file": "/f", "folder": "/d", "files": [], "items": []}
         _, argv = self.run_get(result, "https://example.org/~iris.csv", "~/data/iris.csv")
-        self.assertEqual(argv[5], f"--output={home}/data/iris.csv")
+        self.assertEqual(argv[6], f"--output={home}/data/iris.csv")
         self.assertEqual(argv[-1], "https://example.org/~iris.csv")
         _, argv = self.run_get(result, "zenodo:3608990", folder=Path("~", "flowers"))
-        self.assertEqual(argv[5], f"--dir={Path(home, 'flowers')}")
+        self.assertEqual(argv[6], f"--dir={Path(home, 'flowers')}")
         response = subprocess.CompletedProcess(
             [], 0, json.dumps({"status": "ok", "result": {"path": "p"}, "warnings": []}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+            with patch.object(fetchloom, "_call", return_value=response) as run:
                 fetchloom.path("~iris", "~/project")
-        self.assertEqual(run.call_args.args[0][3:], [f"{home}/project", "path", "--", "~iris"])
+        self.assertEqual(run.call_args.args[0][4:], [f"{home}/project", "path", "--", "~iris"])
 
     def test_get_takes_a_path_or_a_folder_not_both(self):
-        with patch.object(fetchloom.subprocess, "run") as run:
+        with patch.object(fetchloom, "_call") as run:
             with self.assertRaises(fetchloom.Error) as raised:
                 fetchloom.get("zenodo:3608990", "iris.csv", folder="iris")
         run.assert_not_called()
@@ -242,7 +243,7 @@ class GetOptions(unittest.TestCase):
             fetchloom.get("zenodo:3608990", "iris.csv", "iris")
 
     def test_force_needs_a_path_to_replace(self):
-        with patch.object(fetchloom.subprocess, "run") as run:
+        with patch.object(fetchloom, "_call") as run:
             for folder in [None, "iris"]:
                 with self.subTest(folder=folder):
                     with self.assertRaises(fetchloom.Error) as raised:
@@ -266,7 +267,7 @@ class GetOptions(unittest.TestCase):
         }
         response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.get("https://example.org/iris.csv", "data.csv")
         self.assertEqual((raised.exception.kind, raised.exception.code), ("local.not_empty", 50))
@@ -286,7 +287,7 @@ class Errors(unittest.TestCase):
         }
         response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.path("iris/iris.csv")
         self.assertEqual(
@@ -298,7 +299,7 @@ class Errors(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
 
     def test_hints_show_the_command_a_person_runs(self):
-        typed = "unset FETCHLOOM_OFFLINE, then run `fetchloom --json -C {project} path iris`"
+        typed = "unset FETCHLOOM_OFFLINE, then run `fetchloom --json --progress -C {project} path iris`"
         for project, shown in [
             (".", "unset FETCHLOOM_OFFLINE, then run `fetchloom path iris`"),
             ("analysis", "unset FETCHLOOM_OFFLINE, then run `fetchloom -C analysis path iris`"),
@@ -316,7 +317,7 @@ class Errors(unittest.TestCase):
             response = subprocess.CompletedProcess([], 20, json.dumps(answer), "")
             with self.subTest(project=project):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                    with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
                             fetchloom.path("iris", project)
                 self.assertEqual(raised.exception.help, shown)
@@ -344,7 +345,7 @@ class Errors(unittest.TestCase):
             (
                 lambda: fetchloom.path("processed", "elsewhere"),
                 "data.toml is not valid TOML: unclosed table, expected `]`",
-                "fix that line, then run `fetchloom --json -C elsewhere path -- processed` again",
+                "fix that line, then run `fetchloom --json --progress -C elsewhere path -- processed` again",
                 "fix that line, then run `fetchloom -C elsewhere path -- processed` again",
             ),
         ]:
@@ -356,7 +357,7 @@ class Errors(unittest.TestCase):
             response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
             with self.subTest(message=message):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                    with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
                             call()
                 self.assertEqual((raised.exception.message, raised.exception.help), (message, shown))
@@ -431,7 +432,7 @@ class Errors(unittest.TestCase):
             response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
             with self.subTest(helper=helper, help=help):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                    with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
                             if helper == "get":
                                 fetchloom.get("https://example.org/iris.csv", "data.csv")
@@ -464,7 +465,7 @@ class Errors(unittest.TestCase):
             response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
             with self.subTest(message=message):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                    with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
                             call()
                 self.assertEqual(raised.exception.message, shown)
@@ -482,7 +483,7 @@ class Errors(unittest.TestCase):
         }
         response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "run", return_value=response):
+            with patch.object(fetchloom, "_call", return_value=response):
                 with self.assertWarns(UserWarning) as warned:
                     with self.assertRaises(fetchloom.Error) as raised:
                         fetchloom.get("https://example.org/x.zip", "x.csv", sha256="0" * 64)
@@ -510,6 +511,67 @@ class Errors(unittest.TestCase):
         self.assertEqual((copy.kind, copy.message, copy.details, copy.help, copy.code),
                          ("usage", "no data.toml here", ["looked in /p"], "run `fetchloom add`", 2))
         self.assertEqual(str(copy), str(error))
+
+
+def standing_in(child):
+    """``subprocess.Popen`` running python with the code ``child`` in place of fetchloom, with
+    the arguments the helper gives it."""
+    popen = subprocess.Popen
+
+    def start(argv, **options):
+        return popen([sys.executable, "-c", child, *argv[1:]], **options)
+
+    return start
+
+
+class Progress(unittest.TestCase):
+    def test_progress_reaches_python_stderr_while_fetchloom_runs(self):
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            # it says a progress line, then waits until the test has read that line from
+            # sys.stderr before it answers, which it could not if the line came at the end
+            child = (
+                "import json, socket, sys\n"
+                f"told = socket.create_connection(('127.0.0.1', {listener.getsockname()[1]}), timeout=30)\n"
+                "print('Downloading big.bin - 1.9 MiB', file=sys.stderr, flush=True)\n"
+                "told.recv(1)\n"
+                "result = {'path': ' '.join(sys.argv[1:])}\n"
+                "print(json.dumps({'status': 'ok', 'result': result, 'warnings': []}))\n"
+            )
+
+            class Watched(io.StringIO):
+                def write(self, text):
+                    if "Downloading" in text:
+                        connection, _ = listener.accept()
+                        with connection:
+                            connection.sendall(b"!")
+                    return super().write(text)
+
+            with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                with patch.object(fetchloom.subprocess, "Popen", side_effect=standing_in(child)) as popen:
+                    with patch.object(fetchloom.sys, "stderr", Watched()) as shown:
+                        answer = fetchloom.path("big", "p")
+        self.assertEqual(answer, Path("--json --progress -C p path -- big"))
+        self.assertEqual(shown.getvalue(), "Downloading big.bin - 1.9 MiB\n")
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_a_crash_says_only_the_last_lines_fetchloom_said(self):
+        child = (
+            "import sys\n"
+            "for number in range(1000):\n"
+            "    print(f'line {number}', file=sys.stderr)\n"
+            "sys.exit(101)\n"
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "Popen", side_effect=standing_in(child)):
+                with patch.object(fetchloom.sys, "stderr", io.StringIO()) as shown:
+                    with self.assertRaises(fetchloom.Error) as raised:
+                        fetchloom.sync("p")
+        self.assertEqual(shown.getvalue().splitlines(), [f"line {number}" for number in range(1000)])
+        self.assertEqual((raised.exception.kind, raised.exception.code), (None, 101))
+        message = raised.exception.message
+        self.assertTrue(message.startswith("fetchloom exited with code 101 without a JSON answer. it said: "), message)
+        self.assertTrue(message.endswith("line 999"), message)
+        self.assertNotIn("line 0\n", message)
 
 
 class PublicNames(unittest.TestCase):
