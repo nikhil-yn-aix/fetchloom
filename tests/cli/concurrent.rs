@@ -3,7 +3,7 @@
 use std::fs;
 
 use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::{project::Background, support::wait_until};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -343,8 +343,9 @@ fn processes_place_from_a_full_cache_without_downloading() -> Result {
 
 /// a push stopped with ctrl-c waits for its copies to see the stop and remove the unfinished ones
 /// from the mirror's tmp/, where the run used to end first and leave them there for good, while a
-/// file another push is writing there stays.
-#[cfg(unix)]
+/// file another push is writing there stays. a disk that clones files, as macos's does, ends
+/// each copy before a stop can reach it, so this runs on linux.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -374,10 +375,15 @@ fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     // a push that ends before its stop arrives proves nothing, so it copies again
     for _ in 0..5 {
         let mut pushing = Background::start(sandbox.command(&["push", "--to", &to, "--yes"]))?;
+        let mut ended = false;
         wait_until("a copy in the mirror's tmp/", || {
-            Ok(unfinished()? > 0 || pushing.child.try_wait()?.is_some())
+            ended = pushing.child.try_wait()?.is_some();
+            Ok(ended || unfinished()? > 0)
         })?;
-        pushing.interrupt()?;
+        // a push already reaped has no process left to stop
+        if !ended {
+            pushing.interrupt()?;
+        }
         let (code, stderr) = pushing.finish()?;
         if code == Some(0) {
             fs::remove_dir_all(mirror.join("objects"))?;
