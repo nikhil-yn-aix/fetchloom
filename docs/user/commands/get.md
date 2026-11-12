@@ -63,7 +63,7 @@ when a dataset has several files, the `Fetched` line is followed by the folder's
             README.md              913 B
 ```
 
-a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts.md#interruptions) shows. a slow disk can take a while longer to keep the file: a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`.
+a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts.md#interruptions) shows. a slow disk can take a while longer to keep the file: a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. the time a download waits for your answer to a question, such as whether to download a large file, counts toward neither its time nor its speed.
 
 a plain link whose server answers that the file is unchanged, with a 304, downloads nothing while the cache or the folder holds what it served last. without such validators, the bytes may download again. a later `get` takes changed bytes from the source; use [add](add.md) to pin them.
 

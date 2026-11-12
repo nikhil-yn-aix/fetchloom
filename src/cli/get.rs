@@ -1673,6 +1673,7 @@ mod tests {
             origin: Origin::Network,
             version: None,
             arrived: Some(started + std::time::Duration::from_secs(3)),
+            asked: std::time::Duration::ZERO,
         };
         let remote = Remote {
             path: "iris.csv".to_owned(),

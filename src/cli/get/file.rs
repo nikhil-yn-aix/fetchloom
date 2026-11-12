@@ -1480,6 +1480,7 @@ mod tests {
             origin: Origin::Cache,
             version: None,
             arrived: None,
+            asked: std::time::Duration::ZERO,
         };
         // the path was free when the run looked, before it waited for the other run
         let known = Known {

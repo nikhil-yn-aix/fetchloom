@@ -1718,6 +1718,7 @@ mod tests {
                 origin: crate::net::Origin::Network,
                 version: None,
                 arrived: None,
+                asked: std::time::Duration::ZERO,
             },
             &cache,
         );
@@ -1748,6 +1749,7 @@ mod tests {
             origin: crate::net::Origin::Network,
             version: Some(version.to_owned()),
             arrived: None,
+            asked: std::time::Duration::ZERO,
         };
         let listing = |reference: &str, link: &Url, md5: Option<Md5>| Listing {
             within: Vec::new(),
@@ -1927,6 +1929,7 @@ mod tests {
                 origin: crate::net::Origin::Network,
                 version: None,
                 arrived: None,
+                asked: std::time::Duration::ZERO,
             };
             draft.learn(index, &fetched, &cache);
         }

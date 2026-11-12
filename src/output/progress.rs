@@ -280,6 +280,16 @@ impl Bar {
         }
     }
 
+    /// a wait of `waited` for a person's answer, which the bar counts neither as a pause in the
+    /// data nor toward the transfer's time or rate.
+    pub(crate) fn answered(&self, waited: Duration) {
+        if let Some(bar) = &self.drawn {
+            self.moved.now();
+            bar.set_elapsed(bar.elapsed().saturating_sub(waited));
+            self.moved.mark(Instant::now(), bar.position());
+        }
+    }
+
     /// `bytes` that count toward how far the bar got but were not moved now, as the part an
     /// earlier run kept of one file among several.
     pub(crate) fn kept(&self, bytes: u64) {
@@ -1009,6 +1019,37 @@ fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a bar whose download waited for a person's answer counts that wait neither as data
+    /// that stopped coming nor toward its time: 4 s of waiting in a bar born 5 s ago leave it
+    /// neither quiet nor 2 s old, so it says no `no data for` and shows no time.
+    #[test]
+    fn a_bar_leaves_out_the_wait_for_an_answer() {
+        let five = Duration::from_secs(5);
+        let born = Instant::now()
+            .checked_sub(five)
+            .unwrap_or_else(Instant::now);
+        let moved = Arc::new(Moved {
+            born,
+            ..Moved::new(Arc::default())
+        });
+        let drawn = ProgressBar::hidden();
+        drawn.set_elapsed(five);
+        let bar = Bar {
+            drawn: Some(drawn),
+            color: false,
+            unicode: false,
+            moved,
+        };
+        assert!(bar.moved.quiet() >= STALL, "{:?}", bar.moved.quiet());
+        bar.answered(Duration::from_secs(4));
+        assert!(bar.moved.quiet() < STILL, "{:?}", bar.moved.quiet());
+        let elapsed = bar.drawn.as_ref().map(ProgressBar::elapsed);
+        assert!(
+            elapsed.is_some_and(|elapsed| elapsed < MOMENT),
+            "{elapsed:?}"
+        );
+    }
 
     type Heard = Arc<Mutex<Vec<String>>>;
 

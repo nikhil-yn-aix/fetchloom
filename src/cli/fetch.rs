@@ -304,6 +304,8 @@ struct Watch<'a> {
     encoded: AtomicBool,
     /// whether every byte is in and the disk keeps the file, as the run's stop counts it.
     arrived: AtomicBool,
+    /// nanoseconds the download waited for a person to say whether it may go on.
+    asked: AtomicU64,
 }
 
 impl<'a> Watch<'a> {
@@ -339,6 +341,7 @@ impl<'a> Watch<'a> {
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
             arrived: AtomicBool::new(false),
+            asked: AtomicU64::new(0),
         }
     }
 
@@ -348,20 +351,35 @@ impl<'a> Watch<'a> {
             .get_or_init(|| self.output.bar("Downloading", self.job.label.clone()))
     }
 
-    /// the run's one answer, asking `question` when no download asked before.
+    /// the run's one answer, asking `question` when no download asked before. the time the
+    /// download waits for it, asking or while another download asks, is no time it takes.
     fn approve(&self, question: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
         if let Some(answer) = self.approval.answer.get() {
             return answer.clone();
         }
         let decide = || self.approval.answer.get_or_init(question).clone();
+        let waiting = std::time::Instant::now();
         // a terminal question must not occupy a network worker while it waits for an answer.
-        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+        let answer = if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
             handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
         }) {
             tokio::task::block_in_place(decide)
         } else {
             decide()
+        };
+        let waited = waiting.elapsed();
+        if let Some(bar) = self.bar.get() {
+            bar.answered(waited);
         }
+        let waited = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        self.asked.fetch_add(waited, Ordering::Relaxed);
+        answer
+    }
+
+    /// `fetched` with the time the download waited for a person's answer.
+    fn answered(&self, mut fetched: Fetched) -> Fetched {
+        fetched.asked = std::time::Duration::from_nanos(self.asked.load(Ordering::Relaxed));
+        fetched
     }
 
     /// says once that the download starts over when it goes on from `resumed`, before the bytes
@@ -859,6 +877,7 @@ async fn run_each(
                     fetched => fetched,
                 };
                 watch.ended();
+                let fetched = fetched.map(|found| watch.answered(found));
                 if let Ok(found) = &fetched
                     && found
                         .name

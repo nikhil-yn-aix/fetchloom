@@ -1360,10 +1360,41 @@ fn the_transfer_time_ends_with_the_last_byte() {
         origin: Origin::Network,
         version: None,
         arrived: arrived.map(|seconds| started + Duration::from_secs(seconds)),
+        asked: Duration::ZERO,
     };
     let files = [fetched(Some(3)), fetched(Some(1)), fetched(None)];
     assert_eq!(
         Fetched::transfer(&files, started).arrived,
         Duration::from_secs(3)
     );
+}
+
+/// a download that waited for a person to say whether it may go on leaves that wait out of its
+/// time, so the answer does not make the link look slow. a batch ends with the latest of its
+/// downloads once each leaves out its own wait, and the time until now still holds what the
+/// disk took after the last byte.
+#[test]
+fn the_transfer_time_leaves_out_the_wait_for_an_answer() {
+    let started = Instant::now();
+    let at = |seconds: u64| started + Duration::from_secs(seconds);
+    let fetched = |arrived: u64, asked: u64| Fetched {
+        digest: crate::digest::sha256(b"iris"),
+        size: 57,
+        moved: 57,
+        name: None,
+        origin: Origin::Network,
+        version: None,
+        arrived: Some(at(arrived)),
+        asked: Duration::from_secs(asked),
+    };
+    let took = |files: &[Fetched]| {
+        let took = Fetched::transfer_until(files, started, at(10));
+        (took.arrived.as_secs(), took.all.as_secs())
+    };
+    // its last byte came 6 s in, after 4 s of waiting for the answer
+    assert_eq!(took(&[fetched(6, 4)]), (2, 6));
+    // the download that did not wait ends later than the one that did, once it leaves its out
+    assert_eq!(took(&[fetched(6, 4), fetched(3, 0)]), (3, 7));
+    // one that waited is still the last to end when its own time is the longest
+    assert_eq!(took(&[fetched(9, 1), fetched(3, 0)]), (8, 9));
 }

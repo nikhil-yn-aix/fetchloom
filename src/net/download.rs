@@ -121,6 +121,7 @@ impl Fetch {
             origin: Origin::Cache,
             version,
             arrived: None,
+            asked: Duration::ZERO,
         })
     }
 
@@ -265,23 +266,46 @@ pub(crate) struct Fetched {
     /// when the last byte this run received arrived, before the disk kept the file. none when
     /// nothing was received.
     pub(crate) arrived: Option<Instant>,
+    /// how long the download waited for a person to say whether it may go on, as its size
+    /// asks, which its time leaves out.
+    pub(crate) asked: Duration,
 }
 
 impl Fetched {
     /// how long the downloads among `fetched` took from `started`: until their last byte
     /// arrived, so the time a slow disk takes to keep them does not count against the link, and
-    /// until now, which counts it. with nothing received, the time since `started` for both.
+    /// until now, which counts it. each leaves out the time it waited for a person's answer, so
+    /// the batch ends with the latest of them once that is left out. with nothing received, the
+    /// time since `started` for both.
     pub(crate) fn transfer<'a>(
         fetched: impl IntoIterator<Item = &'a Fetched>,
         started: Instant,
     ) -> units::Took {
-        let all = started.elapsed();
-        let arrived = fetched
+        Fetched::transfer_until(fetched, started, Instant::now())
+    }
+
+    /// [`Fetched::transfer`], with `now` as the moment it ends.
+    fn transfer_until<'a>(
+        fetched: impl IntoIterator<Item = &'a Fetched>,
+        started: Instant,
+        now: Instant,
+    ) -> units::Took {
+        let all = now.saturating_duration_since(started);
+        // the latest last byte without each one's wait for an answer, and the latest that came
+        let latest = fetched
             .into_iter()
-            .filter_map(|fetched| fetched.arrived)
-            .max()
-            .map_or(all, |arrived| arrived.saturating_duration_since(started));
-        units::Took { arrived, all }
+            .filter_map(|fetched| {
+                let arrived = fetched.arrived?.saturating_duration_since(started);
+                Some((arrived.saturating_sub(fetched.asked), arrived))
+            })
+            .reduce(|(own, came), (other, then)| (own.max(other), came.max(then)));
+        match latest {
+            Some((arrived, came)) => units::Took {
+                arrived,
+                all: arrived.saturating_add(all.saturating_sub(came)),
+            },
+            None => units::Took { arrived: all, all },
+        }
     }
 }
 
@@ -1196,6 +1220,7 @@ impl Net {
             origin: Origin::Network,
             version,
             arrived: None,
+            asked: Duration::ZERO,
         }
     }
 }
@@ -1424,6 +1449,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
         origin,
         version: record.validators.version,
         arrived: None,
+        asked: Duration::ZERO,
     }
 }
 
