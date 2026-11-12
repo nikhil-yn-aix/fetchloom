@@ -1237,18 +1237,25 @@ impl<'a> Loop<'a> {
             .iter()
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
             .collect();
+        let import = lacking
+            .iter()
+            .find(|(_, file)| file.url.is_empty())
+            .map(|(dataset, _)| *dataset);
         if self.net.offline().enabled() && !named.is_empty() {
+            if let Some(import) = import {
+                return Err(self.offline_imported(manifest, import, lacking));
+            }
             let labels: Vec<&str> = named.iter().map(|(label, _)| label.as_str()).collect();
             return Err(self.offline_missing(&labels));
         }
         fetch::mirrors::sources_allowed(self.context, &named)?;
-        let Some((import, _)) = lacking.iter().find(|(_, file)| file.url.is_empty()) else {
+        let Some(import) = import else {
             return Ok(());
         };
         let imported: Vec<(String, Option<Sha256>)> = lacking
             .iter()
             .zip(named)
-            .filter(|((dataset, file), _)| dataset == import && file.url.is_empty())
+            .filter(|((dataset, file), _)| *dataset == import && file.url.is_empty())
             .map(|(_, named)| named)
             .collect();
         let error = local::imported_elsewhere(
@@ -1272,6 +1279,30 @@ impl<'a> Loop<'a> {
         );
         error = shown_five(error, missing);
         error.help(self.net.offline().missing_help("them"))
+    }
+
+    /// what an offline run says of the files of `import`, of those `lacking`: missing offline as
+    /// any file is, but with no download or run again to offer, since no link fetches an import.
+    /// what is left is bytes from the folder it came from or a folder mirror, neither of which
+    /// needs the network.
+    fn offline_imported(
+        &self,
+        manifest: &Manifest,
+        import: &str,
+        lacking: &[(&str, &LockedFile)],
+    ) -> Error {
+        let folder = plan::folder(manifest, import);
+        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
+        let message = local::imported_elsewhere(import, &folder, mirrored).message;
+        let labels: Vec<String> = lacking
+            .iter()
+            .filter(|(dataset, file)| *dataset == import && file.url.is_empty())
+            .map(|(dataset, file)| format!("{dataset}/{}", file.path))
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        shown_five(Error::new(Kind::OfflineMissing, message), &labels).help(format!(
+            "no link fetches an import, so going online does not help: copy its files from the folder they came from to {folder} by hand, then run `fetchloom sync`, or sync with `--mirror <folder>` naming a folder mirror that holds them"
+        ))
     }
 }
 

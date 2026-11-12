@@ -336,3 +336,45 @@ fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
     );
     Ok(())
 }
+
+/// no link fetches an import, so offline a clone whose cache lacks one is told where its bytes
+/// can come from without a network, never to download them or to run the same sync again, which
+/// would only fail the same way. copying the files from the folder they came from, as the help
+/// says, then syncing works offline.
+#[test]
+fn an_import_missing_offline_is_never_offered_a_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
+    assert!(sandbox.run(&["add", "../flowers"])?.status.success());
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let cache = sandbox.folder("clone-cache")?;
+    let sync = || {
+        sandbox
+            .command_in(&clone, &["--json", "sync", "--locked"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_OFFLINE", "1")
+            .output()
+    };
+    let output = sync()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = crate::support::json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "offline.missing");
+    assert_eq!(
+        error["message"],
+        "flowers was imported from files, and this machine's cache does not hold them"
+    );
+    assert_eq!(error["details"], serde_json::json!(["flowers/sepals.csv"]));
+    assert_eq!(
+        error["help"],
+        "no link fetches an import, so going online does not help: copy its files from the folder they came from to data/flowers by hand, then run `fetchloom sync`, or sync with `--mirror <folder>` naming a folder mirror that holds them"
+    );
+    assert_eq!(error["fix"], Value::Null);
+    let placed = clone.join("data").join("flowers");
+    fs::create_dir_all(&placed)?;
+    fs::copy(flowers.join("sepals.csv"), placed.join("sepals.csv"))?;
+    let output = sync()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    Ok(())
+}
