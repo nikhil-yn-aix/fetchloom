@@ -17,6 +17,8 @@ pub(crate) enum Warning {
     AuthNoKeyring,
     /// other users of the machine may read a file that holds logins or keys.
     AuthReadable,
+    /// keys or credentials are set up in a way fetchloom cannot use, as the message says.
+    AuthUnusable,
     /// a recipe changed since it was built.
     BuildChanged,
     /// the pinned result of a recipe is on neither this machine nor a mirror, so it is left out.
@@ -116,6 +118,7 @@ impl Warning {
             Warning::AuthKeyUnsendable => "auth.key_unsendable",
             Warning::AuthNoKeyring => "auth.no_keyring",
             Warning::AuthReadable => "auth.readable",
+            Warning::AuthUnusable => "auth.unusable",
             Warning::BuildChanged => "build.changed",
             Warning::BuildLeftOut => "build.left_out",
             Warning::BuildUnbuilt => "build.unbuilt",
@@ -192,6 +195,7 @@ mod tests {
             AuthKeyUnsendable,
             AuthNoKeyring,
             AuthReadable,
+            AuthUnusable,
             BuildChanged,
             BuildLeftOut,
             BuildUnbuilt,

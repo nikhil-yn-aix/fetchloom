@@ -15,12 +15,12 @@ use std::time::Duration;
 use crate::support::{Result, Sandbox, json, text};
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
-const EMAIL: &str = "loader@lab-project.iam.gserviceaccount.com";
+pub(crate) const EMAIL: &str = "loader@lab-project.iam.gserviceaccount.com";
 const KEY: &str = include_str!("../fixtures/sources/google/test-key.pem");
 const PUBLIC_KEY: &[u8] = include_bytes!("../fixtures/sources/google/test-key.public.der");
 const CLIENT_ID: &str = "client-of-the-test.apps.googleusercontent.com";
-const CLIENT_SECRET: &str = "client-secret-of-the-test";
-const REFRESH_TOKEN: &str = "refresh-token-of-the-test";
+pub(crate) const CLIENT_SECRET: &str = "client-secret-of-the-test";
+pub(crate) const REFRESH_TOKEN: &str = "refresh-token-of-the-test";
 /// the token the stand-in gives a service account, and a login.
 const SERVICE_TOKEN: &str = "ya29.service-token-of-the-test";
 const LOGIN_TOKEN: &str = "ya29.login-token-of-the-test";
@@ -321,7 +321,7 @@ fn command(
 }
 
 /// a service account's key in the sandbox, as the google cloud console downloads it.
-fn service_account(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
+pub(crate) fn service_account(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let path = sandbox.folder("keys")?.join("lab.json");
     let key = serde_json::json!({
         "type": "service_account",
@@ -338,7 +338,7 @@ fn service_account(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
 
 /// a person's login in a gcloud folder of the sandbox, as `gcloud auth application-default
 /// login` saves it.
-fn login(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
+pub(crate) fn login(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let folder = sandbox.folder("gcloud")?;
     let login = serde_json::json!({
         "account": "",

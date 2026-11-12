@@ -38,6 +38,23 @@ pub(super) struct State {
     user: Option<String>,
     /// whether the source accepted the key: none when it was not asked
     valid: Option<bool>,
+    /// how keys for buckets come, for AWS and google, which `auth` never asks: `keys`,
+    /// `credential_process`, `sso`, `role`, `service_account` or `authorized_user`
+    kind: Option<&'static str>,
+}
+
+impl State {
+    /// an account with no key on this machine.
+    fn none(account: &str) -> State {
+        State {
+            account: account.to_owned(),
+            signed_in: false,
+            from: None,
+            user: None,
+            valid: None,
+            kind: None,
+        }
+    }
 }
 
 /// what `auth login` saved.
@@ -127,8 +144,11 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             from: found.as_ref().map(|found| found.origin.to_string()),
             user,
             valid,
+            kind: None,
         });
     }
+    accounts.extend(aws_keys(output, &mut missing));
+    accounts.push(google_credentials(output, &mut missing));
     if !missing.is_empty() {
         output.faint_step("Signed in", &format!("to none of {}", missing.join(", ")));
     }
@@ -136,6 +156,99 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
         output.hint("public data needs no account. to sign in, run `fetchloom auth login hf`, or another source");
     }
     Ok(Report::Status { accounts })
+}
+
+/// the rows of the AWS keys buckets would be signed with: AWS's, or those of the endpoint the
+/// settings send S3 requests to, which leaves AWS with none. a program that gives them is named,
+/// never run, and nothing is asked. settings fetchloom cannot use are warned of.
+fn aws_keys(output: &crate::output::Output, missing: &mut Vec<String>) -> Vec<State> {
+    use crate::auth::aws::How;
+    let described = auth::aws::describe(&auth::env).unwrap_or_else(|error| {
+        unusable(output, &error);
+        None
+    });
+    let Some(described) = described else {
+        missing.push("aws".to_owned());
+        return vec![State::none("aws")];
+    };
+    let mut rows = Vec::new();
+    let (account, name) = match &described.endpoint {
+        Some(endpoint) => {
+            missing.push("aws".to_owned());
+            rows.push(State::none("aws"));
+            let endpoint = endpoint.ascii_serialization();
+            (format!("s3:{endpoint}"), format!("s3 at {endpoint}"))
+        }
+        None => ("aws".to_owned(), "aws".to_owned()),
+    };
+    let shown = &described.shown;
+    let later = "when a bucket needs keys";
+    output.step(
+        "Signed in",
+        &match &described.how {
+            How::Keys(key) => format!("to {name} with key {key} \u{b7} {shown}"),
+            How::Process => format!("to {name} \u{b7} {shown}, which runs {later}"),
+            How::Cli { signs_in: true } => {
+                format!("to {name} \u{b7} {shown}, which signs in to IAM identity center {later}")
+            }
+            How::Cli { signs_in: false } => {
+                format!("to {name} \u{b7} {shown}, which takes on a role {later}")
+            }
+        },
+    );
+    rows.push(State {
+        account,
+        signed_in: true,
+        from: Some(described.origin),
+        user: None,
+        valid: None,
+        kind: Some(described.how.name()),
+    });
+    rows
+}
+
+/// the row of google's application default credentials, which buckets ask a token with: the
+/// file, and a service account's email or a person's login. nothing is asked.
+fn google_credentials(output: &crate::output::Output, missing: &mut Vec<String>) -> State {
+    let found = auth::google::find(&auth::env).unwrap_or_else(|error| {
+        unusable(output, &error);
+        None
+    });
+    let Some(credentials) = found else {
+        missing.push("google".to_owned());
+        return State::none("google");
+    };
+    let (path, email) = credentials.described();
+    let file = units::path(path);
+    output.step(
+        "Signed in",
+        &match email {
+            Some(email) => format!("to google as {email} \u{b7} {file}"),
+            None => format!("to google with a person's login \u{b7} {file}"),
+        },
+    );
+    State {
+        account: "google".to_owned(),
+        signed_in: true,
+        from: Some(path.display().to_string()),
+        user: email.map(str::to_owned),
+        valid: None,
+        kind: Some(if email.is_some() {
+            "service_account"
+        } else {
+            "authorized_user"
+        }),
+    }
+}
+
+/// warns of keys or credentials set up in a way fetchloom cannot use, as `error` says.
+fn unusable(output: &crate::output::Output, error: &Error) {
+    output.warn_detailed(
+        Warning::AuthUnusable,
+        &error.message,
+        error.help.as_deref(),
+        std::iter::empty::<&str>(),
+    );
 }
 
 /// signs in to `account`: shows where to get a key, takes it, checks it with the source, and

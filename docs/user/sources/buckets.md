@@ -74,7 +74,7 @@ keys come from where the AWS tools keep them, in this order:
    3. `credential_process`, a program that prints the keys.
    4. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/config`.
 
-a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
+`fetchloom auth` names where the keys would come from, a program by name, without running it. a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
 
 the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`. a signed listing names the bucket's region in its object links, so a later run signs them for it. cloudflare r2 signs for `auto`, and backblaze and wasabi take the region in their host.
 
@@ -117,7 +117,7 @@ the credentials are google's application default credentials, found as google's 
 
 a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. fetchloom keeps a token until 5 minutes before it expires, then asks for a new one, and a token cloud storage refuses with 401, as an expired or revoked one, is replaced once. it never asks a metadata server for the identity of the machine it runs on, so on a google cloud virtual machine use a key file or a login. files of other kinds, for workload identity federation or service account impersonation, are refused with `auth.required`, never passed over for another identity; so is a file that names a token endpoint other than google's, or a `GOOGLE_APPLICATION_CREDENTIALS` file that cannot be read, which fails with `usage`, exit 2.
 
-no key, token or login reaches data.toml, data.lock, the cache, logs or `--json` output. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, and never what it signs with.
+`fetchloom auth` names the file and whose credentials it holds. no key, token or login reaches data.toml, data.lock, the cache, logs or `--json` output. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, and never what it signs with.
 
 ## access and limits
 

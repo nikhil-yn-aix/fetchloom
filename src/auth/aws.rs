@@ -173,6 +173,86 @@ pub(crate) fn find(
     }
 }
 
+/// where the keys that sign S3 requests would come from, as `auth` lists them: found as [`find`]
+/// finds them for the endpoint the settings send S3 requests to, none for AWS itself. a program
+/// is named and never run, and written keys show only their id's last four characters.
+pub(crate) struct Described {
+    /// the endpoint the settings send S3 requests to, none for AWS itself.
+    pub(crate) endpoint: Option<url::Origin>,
+    /// where the keys come from, as [`Identity::origin`] words it.
+    pub(crate) origin: String,
+    /// the same, with a file below the home folder written `~/…`.
+    pub(crate) shown: String,
+    pub(crate) how: How,
+}
+
+/// how described keys come.
+pub(crate) enum How {
+    /// written in the environment or a profile, shown by their id's last four characters.
+    Keys(String),
+    /// from the profile's `credential_process`.
+    Process,
+    /// from the AWS CLI, which signs in to IAM identity center when `signs_in`, else takes on a
+    /// role.
+    Cli { signs_in: bool },
+}
+
+impl How {
+    /// the kind `auth --json` names.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            How::Keys(_) => "keys",
+            How::Process => "credential_process",
+            How::Cli { signs_in: true } => "sso",
+            How::Cli { signs_in: false } => "role",
+        }
+    }
+}
+
+/// the keys for the endpoint the settings send S3 requests to, described for `auth`, none when
+/// no keys are there.
+///
+/// # Errors
+///
+/// what [`find`] finds wrong with the settings.
+pub(crate) fn describe(var: Var<'_>) -> Result<Option<Described>, Error> {
+    let files = Files::read(var);
+    let chosen = set(var, "AWS_PROFILE");
+    let profile = chosen.as_deref().unwrap_or("default");
+    let endpoint = if files.ignores_endpoints(var, profile) {
+        None
+    } else {
+        files.sends_to(var, profile)?.map(|(origin, _)| origin)
+    };
+    let Some(identity) = find(var, endpoint.as_ref())? else {
+        return Ok(None);
+    };
+    let how = match &identity.source {
+        Source::Keys(keys) => How::Keys(keys.shown()),
+        Source::Program { program, .. } => match program.by {
+            program::By::Process => How::Process,
+            program::By::Cli { signs_in } => How::Cli { signs_in },
+        },
+    };
+    // the file a profile's origin names whole reads below the home folder as `~/…`
+    let shown = [&files.credentials_path, &files.config_path]
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            identity
+                .origin
+                .strip_suffix(&path.display().to_string())
+                .map(|head| format!("{head}{}", crate::units::path(path)))
+        })
+        .unwrap_or_else(|| identity.origin.clone());
+    Ok(Some(Described {
+        endpoint,
+        origin: identity.origin,
+        shown,
+        how,
+    }))
+}
+
 /// the environment's keys, else the profile's, and where they came from.
 fn own(var: Var<'_>, files: &Files, profile: &str) -> Result<Option<(Source, String)>, Error> {
     let id = set(var, "AWS_ACCESS_KEY_ID");

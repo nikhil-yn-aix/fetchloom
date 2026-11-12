@@ -116,6 +116,16 @@ fn gcloud_file(var: Var<'_>, windows: bool) -> Option<PathBuf> {
 }
 
 impl Credentials {
+    /// the file the credentials came from and, for a service account, its email, as `auth`
+    /// lists them. a person's login names no email.
+    pub(crate) fn described(&self) -> (&Path, Option<&str>) {
+        let email = match &self.identity {
+            Identity::Service { email, .. } => Some(email.as_str()),
+            Identity::Person { .. } => None,
+        };
+        (&self.path, email)
+    }
+
     /// who the credentials sign in as, as messages name them.
     pub(crate) fn shown(&self) -> String {
         match &self.identity {

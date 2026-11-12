@@ -105,6 +105,14 @@ it lists each account with a key, where the key came from and, online, who the s
   Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet
 ```
 
+buckets are read with the keys the AWS tools and google's libraries keep, so `auth` names those too, from the files and variables alone: it never runs a program, asks a server or shows a secret. for `aws`, that is the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each shown by the last four characters of its id, else the program that would give them: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role. each program is named, and runs only once a bucket needs keys. for `google`, it is the application default credentials file, as a service account with its email or a person's login. keys your AWS settings send to another endpoint are listed for it, as `s3 at https://minio.lab.example:9000`, and AWS has none. settings fetchloom cannot use, such as an `AWS_PROFILE` neither AWS file has, get a warning with what would fix them. [cloud buckets](../sources/buckets.md) says how each is used:
+
+```text
+  Signed in to aws with key …MPLE · profile default in ~/.aws/credentials
+  Signed in to google as loader@lab-project.iam.gserviceaccount.com · ~/keys/lab.json
+  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet
+```
+
 a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. a key is never printed, in any output. a key that holds a character no request can carry, such as a line break, is never sent, and `auth` and the offer to sign in after a refusal warn about it, naming where the key is. on linux and macos, `auth` also warns when other users can open the `.netrc` it reads.
 
 ## signing out
@@ -113,4 +121,4 @@ a key the source refuses is marked `Refused` with the command to sign in again. 
 
 ## JSON
 
-`auth` returns `result.accounts`, each with `account`; `signed_in`, true when a key was found, even a refused one; `from` and `user`, or null; and `valid`, true or false after a source checked the key, else null. `auth login` returns `account`, `user` and `saved_to`, and `auth logout` returns `account` and `removed_from`, null when nothing was saved or removed. keys never appear.
+`auth` returns `result.accounts`, each with `account`; `signed_in`, true when a key was found, even a refused one; `from` and `user`, or null; and `valid`, true or false after a source checked the key, else null. the rows `aws`, or `s3:<endpoint>` for keys your AWS settings send to another endpoint, and `google` add `kind`: `keys`, `credential_process`, `sso` or `role` for AWS, and `service_account` or `authorized_user` for google, whose `user` is a service account's email. nothing checks them, so their `valid` is null, and every other account's `kind` is null. `auth login` returns `account`, `user` and `saved_to`, and `auth logout` returns `account` and `removed_from`, null when nothing was saved or removed. keys never appear.

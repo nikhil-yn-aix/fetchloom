@@ -46,6 +46,12 @@ fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
             .any(|a| a["account"] == "login:urs.earthdata.nasa.gov")
     );
     assert!(accounts.iter().all(|a| a["signed_in"] == false));
+    for account in ["aws", "google"] {
+        assert!(
+            accounts.iter().any(|a| a["account"] == account),
+            "{account}: {document}"
+        );
+    }
     Ok(())
 }
 
@@ -58,9 +64,8 @@ fn auth_alone_lists_every_account() -> Result {
     assert!(plain.status.success(), "{}", text(&plain.stderr)?);
     let story = text(&plain.stderr)?;
     assert!(
-        story.lines().any(|line| line.starts_with(
-            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet"
-        )),
+        story.lines().any(|line| line
+            == "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google"),
         "{story}"
     );
     let status = sandbox.run(&["--json", "auth", "status", "--offline"])?;
@@ -776,5 +781,267 @@ fn a_ctrl_c_past_a_sign_ins_mark_lets_it_save_the_key() -> Result {
         .join("huggingface")
         .join("token");
     assert_eq!(std::fs::read_to_string(token)?, "hf_example\n");
+    Ok(())
+}
+
+/// the accounts `auth --json` lists, and the lines `auth` tells a person, run with `env`, after
+/// checking that neither shows any of `secrets`.
+fn auth_says(
+    sandbox: &Sandbox,
+    env: &[(&str, String)],
+    secrets: &[&str],
+) -> Result<(Vec<serde_json::Value>, String)> {
+    let run = |args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.envs(env.iter().map(|(name, value)| (name, value)));
+        command.output()
+    };
+    let document = run(&["auth", "--json"])?;
+    let person = run(&["auth"])?;
+    assert!(person.status.success(), "{}", text(&person.stderr)?);
+    let story = text(&person.stderr)?;
+    let said = format!("{}{story}", text(&document.stdout)?);
+    for secret in secrets {
+        assert!(!said.contains(secret), "{secret} shown: {said}");
+    }
+    let accounts = json(&document)?["result"]["accounts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    Ok((accounts, story))
+}
+
+/// the row of `account` among `accounts`, or null.
+fn row(accounts: &[serde_json::Value], account: &str) -> serde_json::Value {
+    accounts
+        .iter()
+        .find(|row| row["account"] == account)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// the secrets of the AWS settings these tests write, and the parts of their key ids no output may
+/// show.
+const AWS_SECRETS: [&str; 4] = [
+    "environment-secret-never-shown",
+    "file-secret-never-shown",
+    "AKIAENVIRONMENT",
+    "AKIAFILEKEY",
+];
+
+/// AWS settings in the sandbox's home: keys for `default` in the credentials file, and in the
+/// config file a profile of each kind that gets keys from a program, `process`, `sso` and
+/// `role`. the programs, in the folder this returns, leave the file `ran` if they ever run.
+fn aws_settings(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
+    let aws = home(sandbox).join(".aws");
+    std::fs::create_dir_all(&aws)?;
+    std::fs::write(
+        aws.join("credentials"),
+        "[default]\naws_access_key_id = AKIAFILEKEYABCD\naws_secret_access_key = file-secret-never-shown\n",
+    )?;
+    let bin = sandbox.folder("bin")?;
+    #[cfg(unix)]
+    for name in ["aws", "keys"] {
+        let ran = sandbox.work().join("ran");
+        crate::buckets::program(&bin.join(name), &format!(": > '{}'", ran.display()))?;
+    }
+    #[cfg(windows)]
+    for name in ["aws.exe", "keys.exe"] {
+        std::fs::write(bin.join(name), b"not a program")?;
+    }
+    std::fs::write(
+        aws.join("config"),
+        format!(
+            "[profile process]\ncredential_process = \"{}\" --quiet\n[profile sso]\nsso_session = lab\nsso_account_id = 123456789012\nsso_role_name = reader\n[profile role]\nrole_arn = arn:aws:iam::123456789012:role/reader\nsource_profile = default\n",
+            bin.join("keys").display()
+        ),
+    )?;
+    Ok(bin)
+}
+
+/// `auth` names where the AWS keys a bucket would be signed with come from, as the AWS tools
+/// find them: the environment's, a profile's written keys, or a program a profile names, which
+/// it never runs. a key shows only by its id's last four characters, and keys the settings send
+/// to another endpoint are that endpoint's, which leaves AWS with none.
+#[test]
+fn auth_names_where_aws_keys_would_come_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let bin = aws_settings(&sandbox)?;
+    let aws = home(&sandbox).join(".aws");
+    let file = |name: &str| aws.join(name).display().to_string();
+    let files = [
+        ("AWS_SHARED_CREDENTIALS_FILE", file("credentials")),
+        ("AWS_CONFIG_FILE", file("config")),
+    ];
+    let keys = [
+        ("AWS_ACCESS_KEY_ID", "AKIAENVIRONMENTWXYZ".to_owned()),
+        (
+            "AWS_SECRET_ACCESS_KEY",
+            "environment-secret-never-shown".to_owned(),
+        ),
+    ];
+    let and = |base: &[(&'static str, String)], more: &[(&'static str, &str)]| {
+        let more = more
+            .iter()
+            .map(|(name, value)| (*name, (*value).to_owned()));
+        base.iter().cloned().chain(more).collect::<Vec<_>>()
+    };
+    let bin = bin.display().to_string();
+    let shown = "~/.aws/credentials".replace('/', std::path::MAIN_SEPARATOR_STR);
+    let later = "when a bucket needs keys";
+    let minio = "https://minio.lab.example:9000";
+    for (env, account, from, kind, said) in [
+        (
+            keys.to_vec(),
+            "aws",
+            "AWS_ACCESS_KEY_ID".to_owned(),
+            "keys",
+            "aws with key \u{2026}WXYZ \u{b7} AWS_ACCESS_KEY_ID".to_owned(),
+        ),
+        (
+            files.to_vec(),
+            "aws",
+            format!("profile default in {}", file("credentials")),
+            "keys",
+            format!("aws with key \u{2026}ABCD \u{b7} profile default in {shown}"),
+        ),
+        (
+            and(&files, &[("AWS_PROFILE", "process")]),
+            "aws",
+            "the credential_process of profile process".to_owned(),
+            "credential_process",
+            format!("aws \u{b7} the credential_process of profile process, which runs {later}"),
+        ),
+        (
+            and(&files, &[("AWS_PROFILE", "sso"), ("PATH", &bin)]),
+            "aws",
+            "the AWS CLI's profile sso".to_owned(),
+            "sso",
+            format!(
+                "aws \u{b7} the AWS CLI's profile sso, which signs in to IAM identity center {later}"
+            ),
+        ),
+        (
+            and(&files, &[("AWS_PROFILE", "role"), ("PATH", &bin)]),
+            "aws",
+            "the AWS CLI's profile role".to_owned(),
+            "role",
+            format!("aws \u{b7} the AWS CLI's profile role, which takes on a role {later}"),
+        ),
+        (
+            and(&keys, &[("AWS_ENDPOINT_URL_S3", minio)]),
+            "s3:https://minio.lab.example:9000",
+            "AWS_ACCESS_KEY_ID".to_owned(),
+            "keys",
+            format!("s3 at {minio} with key \u{2026}WXYZ \u{b7} AWS_ACCESS_KEY_ID"),
+        ),
+    ] {
+        let (accounts, story) = auth_says(&sandbox, &env, &AWS_SECRETS)?;
+        assert_eq!(
+            row(&accounts, account),
+            serde_json::json!({
+                "account": account,
+                "signed_in": true,
+                "from": from,
+                "user": null,
+                "valid": null,
+                "kind": kind,
+            }),
+            "{said}"
+        );
+        assert!(
+            story.contains(&format!("  Signed in to {said}\n")),
+            "{story}"
+        );
+        assert_eq!(
+            row(&accounts, "aws")["signed_in"],
+            account == "aws",
+            "{said}"
+        );
+        assert!(!sandbox.work().join("ran").exists(), "{said} ran a program");
+    }
+    Ok(())
+}
+
+/// a profile fetchloom cannot take keys from is said in a warning of its own kind, with what
+/// would fix it, and AWS counts as having no keys.
+#[test]
+fn auth_warns_of_aws_settings_it_cannot_use() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["auth", "--json"])
+        .env("AWS_PROFILE", "nope")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let warning = &document["warnings"][0];
+    assert_eq!(warning["kind"], "auth.unusable", "{document}");
+    assert_eq!(
+        warning["message"],
+        "AWS_PROFILE names the profile nope, which the AWS credentials and config files do not have"
+    );
+    let aws = document["result"]["accounts"]
+        .as_array()
+        .and_then(|accounts| accounts.iter().find(|a| a["account"] == "aws"))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(aws["signed_in"], false, "{document}");
+    Ok(())
+}
+
+/// `auth` names google's application default credentials by their file and kind: a service
+/// account with its email, or a person's login, and nothing they sign with.
+#[test]
+fn auth_names_googles_credentials_by_file_and_kind() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = crate::google::service_account(&sandbox)?;
+    let gcloud = crate::google::login(&sandbox)?;
+    let saved = gcloud.join("application_default_credentials.json");
+    let secrets = [
+        "PRIVATE KEY",
+        crate::google::CLIENT_SECRET,
+        crate::google::REFRESH_TOKEN,
+    ];
+    for (variable, folder, from, user, kind, said) in [
+        (
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            key.clone(),
+            key.display().to_string(),
+            serde_json::json!(crate::google::EMAIL),
+            "service_account",
+            format!(
+                "Signed in to google as {} \u{b7} {}",
+                crate::google::EMAIL,
+                key.display()
+            ),
+        ),
+        (
+            "CLOUDSDK_CONFIG",
+            gcloud.clone(),
+            saved.display().to_string(),
+            serde_json::Value::Null,
+            "authorized_user",
+            format!(
+                "Signed in to google with a person's login \u{b7} {}",
+                saved.display()
+            ),
+        ),
+    ] {
+        let env = [(variable, folder.display().to_string())];
+        let (accounts, story) = auth_says(&sandbox, &env, &secrets)?;
+        assert_eq!(
+            row(&accounts, "google"),
+            serde_json::json!({
+                "account": "google",
+                "signed_in": true,
+                "from": from,
+                "user": user,
+                "valid": null,
+                "kind": kind,
+            }),
+            "{said}"
+        );
+        assert!(story.contains(&format!("  {said}\n")), "{story}");
+    }
     Ok(())
 }

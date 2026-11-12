@@ -928,7 +928,7 @@ const PRINTED_SESSION: &str = "printed-session-never-shown";
 /// writes a program at `path` that runs `script` in sh, as a `credential_process` or the AWS
 /// CLI.
 #[cfg(unix)]
-fn program(path: &std::path::Path, script: &str) -> Result {
+pub(crate) fn program(path: &std::path::Path, script: &str) -> Result {
     use std::os::unix::fs::PermissionsExt;
     fs::write(path, format!("#!/bin/sh\n{script}\n"))?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
