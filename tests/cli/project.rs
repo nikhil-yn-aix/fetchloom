@@ -246,6 +246,53 @@ fn hand_edits_survive_sync_until_forced() -> Result {
     Ok(())
 }
 
+/// the folder a suggested `fetchloom -C <folder> ...` names, unquoted, from the help `told`
+/// gives before `then`.
+fn named_folder(told: &str, then: &str) -> Option<std::path::PathBuf> {
+    let (_, after) = told.split_once("`fetchloom -C ")?;
+    let (quoted, _) = after.split_once(then)?;
+    let unquoted = quoted
+        .strip_prefix(['"', '\''])
+        .and_then(|inner| inner.strip_suffix(['"', '\'']))
+        .unwrap_or(quoted);
+    Some(std::path::PathBuf::from(unquoted))
+}
+
+/// a run that reached its project with -C suggests a force that names the same project, so a
+/// person who pastes it into the folder they ran fetchloom from never forces another project's
+/// files. a run inside the project keeps the plain command.
+#[test]
+fn a_force_after_a_run_with_c_names_its_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    // editors save by writing a new file in place of the old one
+    delete(&placed)?;
+    fs::write(&placed, "my own notes\n")?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let work = sandbox.work();
+    let project = fs::canonicalize(&work)?;
+    let typed = work.to_string_lossy();
+    for (args, then) in [
+        (["-C", &typed, "sync"], " sync --force` replaces it"),
+        (["-C", &typed, "status"], " sync --force` to replace"),
+    ] {
+        let output = sandbox.command_in(&elsewhere, &args).output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let told = text(&output.stderr)?;
+        let named = named_folder(&told, then).ok_or_else(|| format!("no -C in {told}"))?;
+        assert_eq!(fs::canonicalize(named)?, project, "{told}");
+    }
+    let inside = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(
+        inside.contains("`fetchloom sync --force` replaces it"),
+        "{inside}"
+    );
+    assert_eq!(fs::read_to_string(&placed)?, "my own notes\n");
+    Ok(())
+}
+
 /// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
 /// made in place through it is damage to that copy: status says so, and sync puts the pinned file
 /// back and keeps the changed copy beside it. a reflink or a copy is the project's own, and its

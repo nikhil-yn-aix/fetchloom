@@ -168,6 +168,23 @@ pub(super) fn committed(project: &Project) -> &'static str {
     }
 }
 
+/// `fetchloom`, then `-C` and the folder the run worked in when its command line gave `-C`, then
+/// `words`: a command a help names, which then finds the same project from whatever folder a
+/// person runs it in. the folder is quoted for a shell as typed commands are.
+pub(super) fn command(words: &str) -> String {
+    static DIRECTORY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    // the run changed into the folder -C named, so only the command line still says it did
+    let directory = DIRECTORY.get_or_init(|| {
+        let typed = args::read().ok()?.global.directory?;
+        let folder = std::env::current_dir().unwrap_or(typed);
+        Some(super::shell_word(&folder.to_string_lossy()).into_owned())
+    });
+    match directory {
+        Some(directory) => format!("fetchloom -C {directory} {words}"),
+        None => format!("fetchloom {words}"),
+    }
+}
+
 /// the most files of recipe code a warning names in its `git add`; `-v` names each one.
 const NAMED_CODE: usize = 5;
 

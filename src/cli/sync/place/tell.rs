@@ -652,10 +652,11 @@ fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) 
 
 /// the command that replaces what a sync of `scope` kept of `datasets`: after a sync of named
 /// datasets, or a build, with the names of those datasets alone, so it replaces nothing in the
-/// others, or with every name it placed when it does not know whose the files are.
+/// others, or with every name it placed when it does not know whose the files are. it names the
+/// project as the run's `-C` did.
 fn forcing(manifest: &Manifest, scope: &Scope, datasets: &BTreeSet<&str>) -> String {
     let Scope::Only(names) = scope else {
-        return "fetchloom sync --force".to_owned();
+        return crate::cli::project::command("sync --force");
     };
     let placed = |name: &&str| {
         manifest
@@ -671,7 +672,7 @@ fn forcing(manifest: &Manifest, scope: &Scope, datasets: &BTreeSet<&str>) -> Str
     if chosen.is_empty() {
         chosen = names.iter().map(String::as_str).filter(placed).collect();
     }
-    format!("fetchloom sync --force {}", chosen.join(" "))
+    crate::cli::project::command(&format!("sync --force {}", chosen.join(" ")))
 }
 
 /// what clears an entry in the way that is a file of `dataset`, or a folder of its files, which

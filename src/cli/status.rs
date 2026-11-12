@@ -173,7 +173,10 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
             );
         }
         if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
-            output.hint("save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock");
+            output.hint(&format!(
+                "save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
+                super::project::command("sync --force")
+            ));
         }
         if !status.building.is_empty() {
             output.hint("`fetchloom build --dry-run` shows the commands that would build them");
