@@ -92,11 +92,35 @@ a gc dry run shows the same hint. `cache gc` JSON reports these young unneeded o
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
-`cache gc` removes a registration when its manifest is missing, as when a project folder moved, and then frees what only that project needed. it names each project it forgets this way, in a `Forgot` line and in `result.forgotten`; a dry run names them with `-v` and in `result.forgotten`. run `fetchloom sync` in a project's new folder to register it again. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection skips that project but keeps its registration, in case its drive is disconnected. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
+`cache gc` removes a registration when its manifest is missing, as when a project folder moved, and then frees what only that project needed. it names each project it forgets this way, in a `Forgot` line and in `result.forgotten`; a dry run names them with `-v` and in `result.forgotten`. run `fetchloom sync` in a project's new folder to register it again; that does not put back what gc freed, as [below](#old-pins-and-moved-projects). a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection skips that project but keeps its registration, in case its drive is disconnected. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
 
 removing a cache object leaves placed files intact. an object that a file outside the cache still links keeps its bytes on the disk, so the bytes gc removes can be more than the space it frees; `fetchloom cache` tells the two apart beforehand, as `unneeded` and `freeable`.
 
 gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failure records in `result.not_removed`, alongside the error. each record has `path`, `kind`, `os_code` and `message`. follow the cause-specific advice: fix access for permission errors, or check storage for I/O errors, then retry. already absent paths do not count as failed removals.
+
+### old pins and moved projects
+
+gc reads each registered project's data.lock as it is now, not its git history. after `fetchloom lock --upgrade`, no project needs the bytes older commits pin, so gc frees them, and their source may serve only the new bytes by then. to keep a way back, push the old pins to a folder mirror before the upgrade or gc: `fetchloom push --to <folder>`. a checkout of an older commit then gets the exact bytes with `--mirror`. from a real run after `push --to ../mirror`, `lock --upgrade`, `cache gc --now` and `git checkout` of the older commit, with the source serving the new bytes:
+
+```sh
+$ fetchloom sync
+error: corpus/corpus.csv is not the file data.lock records
+  expected 24 bytes, got 26
+  help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade corpus`
+$ fetchloom sync --mirror ../mirror
+     Copied 1 file · 24 B from ../mirror
+     Placed data/corpus · 1 file linked to the cache
+     Synced 1 dataset into data
+```
+
+a project gc forgot, as one whose folder was moved away during gc, loses from the cache what only it needed. the sync that registers it again finds every file in place and puts nothing back, so its data folder then holds the only copy on this machine of those files; a hardlink keeps its bytes when the cache's name for them goes. `fetchloom cache` counts only what the cache holds, so it still ends `Ok every cached file is needed by a project`. before you delete or move that data folder, push it to a folder mirror, which takes the files from the data folder; for the files inside an archive it downloads the archive from its source again, to learn what it holds. stderr of `fetchloom push --to ../mirror --yes` in such a project from a real run, the path shortened:
+
+```text
+     Copied 1 file · 8 B from data into the cache
+    Started a mirror in /home/me/mirror
+     Pushed 1 file · 8 B to /home/me/mirror
+         Ok every file two needs is on the mirror
+```
 
 ### runs that use the cache
 
