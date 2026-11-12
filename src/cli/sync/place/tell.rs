@@ -32,7 +32,7 @@ pub(super) fn tell(
         output.step(
             "Replaced",
             &format!(
-                "{} · {}",
+                "{} · discarding {}",
                 overwritten.path,
                 overwritten_what(overwritten.reason)
             ),
@@ -168,8 +168,9 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
 const NAMED: usize = 5;
 
 /// a warning for the files fetchloom placed that someone deleted or moved, which a sync puts
-/// back, as `verb` says, since data.lock still pins them: how to leave a sample out for good,
-/// and where a person's own files stay out of the way.
+/// back, as `verb` says, since data.lock still pins them: how to leave each kind of them out for
+/// good, at most [`NAMED`] ways, where a person's own files stay out of the way, and, when no
+/// file of the data folder was left, how to keep that folder elsewhere.
 fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, verb: &str) {
     let paths = &placement.put_back;
     let Some(first) = paths.first() else {
@@ -181,35 +182,53 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
             let named = paths[..count.min(NAMED)].join(", ");
             let more = match count.saturating_sub(NAMED) {
                 0 => String::new(),
-                more => format!(" and {more} more"),
+                more => format!(" and {} more", units::grouped(more as u64)),
             };
             format!(
-                "{verb} {count} files that were deleted or moved, since data.lock pins them: {named}{more}"
+                "{verb} {} that were deleted or moved, since data.lock pins them: {named}{more}",
+                units::count(count as u64, "file", "files")
             )
         }
     };
-    let droppable = paths
+    let mut leave = Vec::new();
+    if let Some(droppable) = paths
         .iter()
-        .find(|path| !placement.undroppable.contains_key(*path));
-    let leave = match (droppable, placement.undroppable.get(first)) {
-        (None, Some(Undroppable::Made(recipe))) => format!(
-            "{recipe} makes {first}, so to leave it out for good, choose the files inside {recipe}'s step"
-        ),
-        (None, Some(Undroppable::Only(dataset))) => format!(
-            "{first} is the only file of {dataset}, so to leave it out for good, run `fetchloom remove {dataset}`"
-        ),
-        (droppable, _) => format!(
+        .find(|path| !placement.undroppable.contains_key(*path))
+    {
+        leave.push(format!(
             "to leave a file out for good, run `fetchloom drop {}`",
-            crate::cli::shell_word(droppable.unwrap_or(first))
-        ),
-    };
-    output.warn_with(
-        &said,
-        &format!(
-            "{leave}; keep files of your own in a folder outside {}/",
-            manifest.data_dir
-        ),
-    );
+            crate::cli::shell_word(droppable)
+        ));
+    }
+    let mut told = BTreeSet::new();
+    for (path, why) in paths
+        .iter()
+        .filter_map(|path| Some((path, placement.undroppable.get(path)?)))
+    {
+        if leave.len() == NAMED {
+            break;
+        }
+        match why {
+            Undroppable::Made(recipe) if told.insert(recipe) => leave.push(format!(
+                "{recipe} makes {path}, so to leave it out for good, choose the files inside {recipe}'s step"
+            )),
+            Undroppable::Only(dataset) if told.insert(dataset) => leave.push(format!(
+                "{path} is the only file of {dataset}, so to leave it out for good, run `fetchloom remove {dataset}`"
+            )),
+            _ => {}
+        }
+    }
+    let data = &manifest.data_dir;
+    leave.push(format!(
+        "keep files of your own in a folder outside {data}/"
+    ));
+    // nothing of the data folder was left, as when the folder itself was moved
+    if paths.len() > 1 && placement.unchanged == 0 && paths.len() as u64 == placement.placed {
+        leave.push(format!(
+            "to keep the data folder somewhere else than {data}/, set data_dir in data.toml"
+        ));
+    }
+    output.warn_with(&said, &leave.join("; "));
     for path in paths {
         output.detail(path);
     }
@@ -748,10 +767,11 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style};
 
-    /// a sync that puts back many files names the first five and counts the rest, and points
-    /// at drop with the first drop leaves out, quoted for a shell. when drop leaves out none of
-    /// them, the help says what does for the first: the step of the recipe that makes it, or
-    /// removing the dataset it is the only file of.
+    /// a sync that puts back many files names the first five and counts the rest, with their
+    /// thousands apart, and points at drop with the first drop leaves out, quoted for a shell.
+    /// for the files drop leaves out none of, the help says what does for each kind: the step of
+    /// the recipe that makes one, or removing the dataset one is the only file of. when no file
+    /// of the data folder was left, it names `data_dir` too.
     #[test]
     fn files_put_back_are_counted_and_the_first_five_named() {
         let output = Output::new(
@@ -796,6 +816,18 @@ mod tests {
             vec![("data/m/m.csv", Undroppable::Only("m".to_owned()))],
         );
         warn_put_back(&output, &manifest, &only, "put back");
+        let both = put_back(
+            &["data/m/m.csv", "data/thumbs/a.png"],
+            vec![
+                ("data/m/m.csv", Undroppable::Only("m".to_owned())),
+                ("data/thumbs/a.png", made()),
+            ],
+        );
+        warn_put_back(&output, &manifest, &both, "put back");
+        let many: Vec<String> = (0..5000).map(|n| format!("data/pets/{n}.png")).collect();
+        let mut gone = put_back(&many.iter().map(String::as_str).collect::<Vec<_>>(), vec![]);
+        gone.placed = 5000;
+        warn_put_back(&output, &manifest, &gone, "put back");
         let own = "keep files of your own in a folder outside data/";
         assert_eq!(
             output.warned(),
@@ -807,13 +839,19 @@ mod tests {
                     "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom drop \"data/pets/my images/1.png\"`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom drop data/pets/b.png`; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom drop data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
                 ),
                 format!(
                     "put back data/thumbs/a.png, which was deleted or moved, since data.lock pins it; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
                 ),
                 format!(
                     "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
+                ),
+                format!(
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/thumbs/a.png; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
+                ),
+                format!(
+                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom drop data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"
                 ),
             ]
         );

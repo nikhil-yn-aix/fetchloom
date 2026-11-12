@@ -428,7 +428,13 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     let status = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
     let forced = sandbox.run(&["sync", "--force"])?;
-    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    let told = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{told}");
+    // the one line after which the edit is gone says so
+    assert!(
+        told.starts_with("   Replaced data/iris/iris.csv · discarding your edit\n"),
+        "{told}"
+    );
     assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
     assert_eq!(server.requests().len(), 1, "the cache still holds iris");
     Ok(())

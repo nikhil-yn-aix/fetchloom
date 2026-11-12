@@ -214,7 +214,7 @@ fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
     let stderr = text(&forced.stderr)?;
     assert_eq!(forced.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.starts_with("   Replaced data/iris/iris.csv · your edit\n"),
+        stderr.starts_with("   Replaced data/iris/iris.csv · discarding your edit\n"),
         "{stderr}"
     );
     Ok(())
