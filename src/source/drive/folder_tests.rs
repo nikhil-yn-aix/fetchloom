@@ -248,7 +248,7 @@ fn unavailable_entries_count_toward_the_listing_limit() {
         } else {
             let error = result.unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
-            assert!(error.message.contains("more than 100000"));
+            assert!(error.message.contains("more than 100,000"));
         }
     }
 }

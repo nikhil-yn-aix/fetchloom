@@ -250,7 +250,11 @@ pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<V
     if count > most {
         return Err(Error::new(
             Kind::ProjectInvalid,
-            format!("data.lock lists {count} files in {name}, more than the {most} this run lists for one dataset"),
+            format!(
+                "data.lock lists {} files in {name}, more than the {} this run lists for one dataset",
+                crate::units::grouped(listed.count),
+                crate::units::grouped(most as u64)
+            ),
         )
         .help("raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"));
     }

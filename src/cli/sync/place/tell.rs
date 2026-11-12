@@ -150,7 +150,7 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
             .rsplit_once('/')
             .map_or(one.as_str(), |(_, name)| name)
             .to_owned(),
-        many => format!("{} archives", many.len()),
+        many => format!("{} archives", units::grouped(many.len() as u64)),
     };
     let first = found.paths.first().map_or("", String::as_str);
     let command = crate::cli::project::command(&format!("drop {}", crate::cli::shell_word(first)));
@@ -877,6 +877,24 @@ fn entry_name(found: Entry) -> &'static str {
 mod tests {
     use super::*;
     use crate::output::{Level, Style};
+
+    /// an exclude that names files inside more archives than a thousand counts them with their
+    /// thousands apart.
+    #[test]
+    fn files_inside_many_archives_are_counted_with_their_thousands_apart() {
+        let found = plan::Unreached {
+            dataset: "set".to_owned(),
+            pattern: "*.csv".to_owned(),
+            archives: (0..1_200)
+                .map(|index| format!("data/set/{index}.zip"))
+                .collect(),
+            paths: vec!["data/set/0/a.csv".to_owned(), "data/set/1/a.csv".to_owned()],
+        };
+        assert_eq!(
+            unreached_said(&found).0,
+            "exclude \"*.csv\" in datasets.set names 2 files inside 1,200 archives, which exclude does not reach"
+        );
+    }
 
     /// a warning names a folder deleted whole once, with how many files it held, and a folder
     /// that held one file by that file.

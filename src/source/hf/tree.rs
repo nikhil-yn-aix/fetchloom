@@ -228,7 +228,7 @@ mod tests {
         );
         let error = block_on(repo.tree(&recorded, "abc123", None)).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(error.message.contains("100000 files"));
+        assert!(error.message.contains("100,000 files"));
         assert!(error.help.unwrap().contains("FETCHLOOM_MOST_FILES"));
         assert_eq!(recorded.asked(), [FIRST, FIRST, SECOND]);
     }

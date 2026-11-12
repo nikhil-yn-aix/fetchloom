@@ -61,7 +61,7 @@ pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
         Kind::SourceInvalid,
         format!(
             "{subject} lists more than {} files, the most this run lists for one dataset",
-            most_files()
+            crate::units::grouped(most_files() as u64)
         ),
     )
     .help(format!(

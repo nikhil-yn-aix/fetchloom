@@ -167,6 +167,17 @@ fn a_base_shown_but_unread_names_no_conflict_style() {
     );
 }
 
+/// a merge that needs a choice for more datasets than a thousand counts them with their
+/// thousands apart.
+#[test]
+fn a_thousand_choices_are_counted_with_their_thousands_apart() {
+    let conflicts = (0..1_200)
+        .map(|index| (format!("set{index}"), Why::BothChanged))
+        .collect();
+    let error = undecided(&conflicts, &Summary::default(), false);
+    assert_eq!(error.message, "the merge needs a choice for 1,200 datasets");
+}
+
 #[test]
 fn one_sided_datasets_without_a_base_need_a_choice() {
     let (manifest, locks) = two_additions(false);

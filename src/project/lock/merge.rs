@@ -1066,7 +1066,10 @@ pub(crate) fn reads(file: &str, text: &str) -> bool {
 fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) -> Error {
     let message = match conflicts.keys().collect::<Vec<_>>().as_slice() {
         [one] => format!("the merge needs a choice for {one}"),
-        many => format!("the merge needs a choice for {} datasets", many.len()),
+        many => format!(
+            "the merge needs a choice for {} datasets",
+            units::grouped(many.len() as u64)
+        ),
     };
     let mut error = Error::new(Kind::Unconfirmed, message);
     for (name, why) in conflicts {

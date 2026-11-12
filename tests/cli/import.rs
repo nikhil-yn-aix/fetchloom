@@ -578,6 +578,53 @@ fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
     Ok(())
 }
 
+/// a large import's counts read with their thousands apart: a folder of more files than a run
+/// lists, its names windows cannot store, and its list in data.lock.d past the most.
+#[cfg(unix)]
+#[test]
+fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
+    let sandbox = Sandbox::new()?;
+    let many = sandbox.folder("many")?;
+    for index in 0..1_001 {
+        fs::write(many.join(format!("what?{index}.csv")), b"x\n")?;
+    }
+    let most = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_MOST_FILES", "1000")
+            .output()
+    };
+    let over = most(&["add", "../many"])?;
+    assert!(
+        text(&over.stderr)?.starts_with(
+            "error: ../many lists more than 1,000 files, the most this run lists for one dataset\n"
+        ),
+        "{}",
+        text(&over.stderr)?
+    );
+    let added = sandbox
+        .command(&["add", "../many"])
+        .env("FETCHLOOM_TEST_INLINE", "2")
+        .output()?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "warning: many has 1,001 files whose names windows and fat disks cannot store: "
+        ),
+        "{stderr}"
+    );
+    let listed = most(&["status"])?;
+    assert!(
+        text(&listed.stderr)?.starts_with(
+            "error: data.lock lists 1,001 files in many, more than the 1,000 this run lists for one dataset\n"
+        ),
+        "{}",
+        text(&listed.stderr)?
+    );
+    Ok(())
+}
+
 /// two files whose names differ only in how their unicode is written, as a mac and a linux
 /// machine may write café, are refused as that, never as a file and a folder.
 #[cfg(not(target_os = "macos"))]

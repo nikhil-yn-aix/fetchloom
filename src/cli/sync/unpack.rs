@@ -345,7 +345,8 @@ impl Loop<'_> {
                 format!("{name} has a file whose name windows and fat disks cannot store: {listed}")
             }
             count => format!(
-                "{name} has {count} files whose names windows and fat disks cannot store: {listed}"
+                "{name} has {} files whose names windows and fat disks cannot store: {listed}",
+                units::grouped(count as u64)
             ),
         };
         self.context.output.warn_with(
