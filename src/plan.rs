@@ -1872,6 +1872,46 @@ mod tests {
         }
     }
 
+    /// a lock, as from a clone, naming a file whose name is longer than a disk allows is refused
+    /// before anything is written, and the help says how to leave it out. 255 bytes still fit.
+    #[test]
+    fn a_name_longer_than_the_255_bytes_a_disk_allows_is_refused() {
+        for (name, fits) in [("f".repeat(255), true), ("f".repeat(256), false)] {
+            let locked = lock(&[("a", &[name.as_str()])]);
+            let mut planned = Plan::default();
+            let filters = Members::new();
+            expand(
+                &mut planned,
+                "a",
+                "",
+                false,
+                &locked.datasets[0].files,
+                &filters,
+                &|_| None,
+            )
+            .unwrap();
+            let result = check(&planned.targets, Patterns::InDataToml);
+            if fits {
+                assert!(result.is_ok(), "{} bytes: {result:?}", name.len());
+                continue;
+            }
+            let Err(error) = result else {
+                panic!("a name of {} bytes was taken", name.len());
+            };
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                format!(
+                    "{name} cannot be stored on this machine: its name is longer than disks allow"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some("leave it out with an exclude pattern in datasets.a in data.toml")
+            );
+        }
+    }
+
     #[test]
     fn metadata_archive_targets_are_refused() {
         let manifest = manifest(ONE);
