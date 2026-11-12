@@ -48,7 +48,7 @@ exclude = ["pets-v1/images/dog_010_corrupt.png"]
 
 a file of `train.zip` stays left out of `train.zip` alone: in a dataset where `test.zip` holds a file at the same path, that one stays.
 
-commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them at a terminal. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees what no project keeps.
+commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them at a terminal. when a [recipe](../recipes.md) is made from the dataset, directly or through another recipe, that line names its build first, as [raw data only recipes read](#raw-data-only-recipes-read) shows. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees what no project keeps.
 
 an `exclude` written by hand in a dataset does not reach a file inside an archive. the sync that lists the dataset's source again, as the first one after the exclude is written, warns about one that names such a file and matches no file the source lists, and gives the drop command that leaves it out:
 
@@ -64,9 +64,10 @@ a dataset with `place = false` keeps its files out of the data folder, but a [re
 ```text
 $ fetchloom drop data/images/images/img_009.png
    Excluded 1 file of shapes.zip in data.toml
+  next: run `fetchloom build thumbs`, then commit data.toml, data.lock and data.lock.d
 ```
 
-nothing is deleted, since nothing of `images` is placed. the pattern changes what `thumbs` is made from, so `fetchloom build --dry-run` then says `Would run thumbs · images changed`, and the build makes it without the file.
+nothing is deleted, since nothing of `images` is placed. the pattern changes what `thumbs` is made from, while data.lock still pins the result `thumbs` made with the file, so the `next:` line names the build. `fetchloom build --dry-run` then says `Would run thumbs · images changed`, and the build makes it without the file. when several recipes are made from what the drop changed, the line names those no other of them is made from, since a build also makes the recipes its own is made from.
 
 drop leaves files out; it never renames or moves one. to bring a file back, delete its pattern from `data.toml` and run `fetchloom sync`: a file inside an archive returns from the cache, a mirror or the source, and a file the source lists is pinned again, which asks the source.
 

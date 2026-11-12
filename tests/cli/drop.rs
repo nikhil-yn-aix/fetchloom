@@ -679,3 +679,44 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
     assert_eq!(fs::read(folder.join("keep.txt"))?, b"keep\n");
     Ok(())
 }
+
+/// a recipe made from a dataset a drop changed has a result data.lock pinned from the files the
+/// drop left out, so the next step a person sees is that build, also for raw data only recipes
+/// read. a drop no recipe depends on says to commit.
+#[cfg(target_os = "linux")]
+#[test]
+fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    set(&sandbox)?;
+    let work = sandbox.work();
+    crate::recipes::unplace(&work, "pets")?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let Some(screen) = sandbox.on_a_terminal(&["drop", "data/set/notes [v1].md"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(
+            "\n  next: commit data.toml and data.lock; other clones drop them at their next `fetchloom sync`\n"
+        ),
+        "{screen}"
+    );
+    let manifest = work.join("data.toml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\n[datasets.clean]\nfrom = [\"pets\"]\nrun = [\"python3\", \"clean.py\", \"{{pets}}\", \"{{out}}\"]\n\n[datasets.small]\nfrom = [\"clean\"]\nrun = [\"python3\", \"small.py\", \"{{clean}}\", \"{{out}}\"]\n",
+            fs::read_to_string(&manifest)?
+        ),
+    )?;
+    let screen = sandbox
+        .on_a_terminal(&["drop", "data/pets/images/dog_010_corrupt.png"])?
+        .unwrap_or_default();
+    assert!(
+        screen.contains(
+            "   Excluded 1 file of pets.zip in data.toml\n  next: run `fetchloom build small`, then commit data.toml, data.lock and data.lock.d\n"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}

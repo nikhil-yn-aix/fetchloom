@@ -21,6 +21,7 @@ use crate::plan::{self, Plan, Target};
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest};
+use crate::recipe;
 use crate::units;
 
 /// what `drop` did, or with `--dry-run` would do, as `--json` prints it.
@@ -197,15 +198,64 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         };
         error.detail(format!("{written} updated; after fixing the error, `fetchloom sync` removes the files they leave out"))
     })?;
-    let changed = if lock_changed {
-        committed(&project)
-    } else {
-        "data.toml"
-    };
-    context.output.next(&format!(
-        "commit {changed}; other clones drop them at their next `fetchloom sync`"
-    ));
+    tell_next(
+        &context.output,
+        &project,
+        &new_manifest,
+        &edits,
+        lock_changed,
+    );
     Ok(report(placement, None))
+}
+
+/// the closing `next:` line of a drop that changed the datasets of `edits`: the build of the
+/// recipes made from them, which data.lock pins as made from the files before, or the commit.
+fn tell_next(
+    output: &crate::output::Output,
+    project: &crate::project::Project,
+    manifest: &Manifest,
+    edits: &BTreeMap<&str, Edit>,
+    lock_changed: bool,
+) {
+    let datasets: Vec<&str> = edits.keys().copied().collect();
+    output.next(&match built_again(manifest, &datasets).as_slice() {
+        [] => {
+            let changed = if lock_changed {
+                committed(project)
+            } else {
+                "data.toml"
+            };
+            format!("commit {changed}; other clones drop them at their next `fetchloom sync`")
+        }
+        recipes => format!(
+            "run `fetchloom build {}`, then commit data.toml, data.lock and data.lock.d",
+            recipes.join(" ")
+        ),
+    });
+}
+
+/// the recipes to build once `changed` datasets hold other files: each made from one of them,
+/// directly or not, apart from those another of these is made from, which its build makes too.
+fn built_again<'m>(manifest: &'m Manifest, changed: &[&str]) -> Vec<&'m str> {
+    let made_from: BTreeMap<&str, Vec<&str>> = manifest
+        .datasets
+        .iter()
+        .filter(|(name, entry)| entry.recipe().is_some() && !changed.contains(&name.as_str()))
+        .map(|(name, _)| {
+            let needs = recipe::closure(&manifest.datasets, &[name.as_str()]);
+            (name.as_str(), needs)
+        })
+        .filter(|(_, needs)| needs.iter().any(|need| changed.contains(need)))
+        .collect();
+    made_from
+        .keys()
+        .copied()
+        .filter(|name| {
+            !made_from
+                .iter()
+                .any(|(other, needs)| other != name && needs.contains(name))
+        })
+        .collect()
 }
 
 /// what the line that shows planning at work names: the path asked for, or how many.
@@ -932,6 +982,30 @@ mod tests {
         );
         assert_eq!(edits["tiny"].left.len(), 200);
         assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
+    }
+
+    /// the build a drop names makes every result made from what it changed again: a recipe
+    /// another of them is made from builds with that one, and recipes made from other datasets
+    /// stay out.
+    #[test]
+    fn a_drop_names_the_builds_that_make_every_result_again() {
+        let manifest = Manifest::parse(concat!(
+            "[datasets.lab]\nref = \"local\"\n\n",
+            "[datasets.mnist]\nref = \"local\"\n\n",
+            "[datasets.processed]\nfrom = [\"lab\", \"mnist\"]\nrun = [\"prep\", \"{lab}\", \"{mnist}\", \"{out}\"]\n\n",
+            "[datasets.features]\nfrom = [\"processed\"]\nrun = [\"feat\", \"{processed}\", \"{out}\"]\n\n",
+            "[datasets.thumbs]\nfrom = [\"lab\"]\nrun = [\"thumb\", \"{lab}\", \"{out}\"]\n\n",
+            "[datasets.digits]\nfrom = [\"mnist\"]\nrun = [\"digit\", \"{mnist}\", \"{out}\"]\n",
+        ))
+        .unwrap();
+        assert_eq!(built_again(&manifest, &["lab"]), ["features", "thumbs"]);
+        assert_eq!(built_again(&manifest, &["mnist"]), ["digits", "features"]);
+        assert_eq!(
+            built_again(&manifest, &["lab", "mnist"]),
+            ["digits", "features", "thumbs"]
+        );
+        let alone = Manifest::parse("[datasets.lab]\nref = \"local\"\n").unwrap();
+        assert_eq!(built_again(&alone, &["lab"]), Vec::<&str>::new());
     }
 
     /// planning looks for a stop every chunk of its work, and a stop it finds there ends it at
