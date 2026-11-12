@@ -191,6 +191,30 @@ relocking then still looked up each new dataset in lists of all the others, four
 
 a trace of after's 40,000 links shows relocking at 0.35 s, from 11.3 s before; placing them still takes 7.5 s, against 0.6 s for 10,000.
 
+## a second run on a shared cache, 2026-11-12
+
+j6-m4's shape at a smaller size: run A syncs a pinned 1 GiB file and 1,000 files of about 100 KB from a server on this machine paced to 40 MB/s, into an empty cache; 3 s later run B syncs the 1,000 files in another project on the same cache. before, A named its finished downloads 256 at a time or when every one of its downloads ended, so B waited on A's last group until A's large file was done. one release build of 28c136b with the change behind a switch ran each variant in every round, the order rotated each round; three rounds each, the bound's own rows two. nvme is ext4 on the machine's nvme drive; root disk is ext4 on its shared cloud disk, where a `dd` left 3 GB of another program's unwritten data just before A started.
+
+| disk | group waiting at most | flush | B, median and range | A, median |
+|---|---|---|---|---:|
+| nvme | no limit (before) | filesystem | 26.44 s, 26.43 to 26.44 | 29.22 s |
+| nvme | 1 s | filesystem | 12.87 s, 11.86 to 12.88 | 29.15 s |
+| nvme | 1 s | each file of the group | 12.11 s, 11.87 to 20.15 | 29.19 s |
+| nvme | 0.5 s | filesystem | 12.12 s, 12.12 to 12.12 | 29.16 s |
+| nvme | 2 s | filesystem | 13.37 s, 13.37 to 13.37 | 29.20 s |
+| root disk, 3 GB unwritten | no limit (before) | filesystem | 56.99 s, 56.63 to 72.41 | 59.86 s |
+| root disk, 3 GB unwritten | 1 s | filesystem | 50.41 s, 49.97 to 51.68 | 59.19 s |
+| root disk, 3 GB unwritten | 1 s | each file of the group | 54.31 s, 51.02 to 55.09 | 59.08 s |
+
+B can take a file only once A has downloaded it, so its wait is A's time for the 1,000 files plus the bound. on the root disk both runs end with a flush of the whole filesystem, which waits for the other program's 3 GB whichever way a waiting group flushes; flushing the filesystem early wrote part of it sooner, and B ended 3.9 s before flushing each file would have let it. the same build, one run alone on nvme:
+
+| workload | no limit | 1 s, filesystem | 1 s, each file |
+|---|---:|---:|---:|
+| 10,000 files of about 100 KB, unpaced | 3.90 s, 3.80 to 4.50 | 3.96 s, 3.83 to 3.99 | 4.29 s, 4.00 to 4.68 |
+| 300 files paced to 4 MB/s | 7.46 s, 7.46 to 7.49 | 7.42 s, 7.28 to 7.48 | 7.45 s, 7.42 to 8.73 |
+
+the change keeps a 1 s bound and flushes a waiting group as a full one is flushed, with one `syncfs`: B's wait fell by half on nvme and by a tenth on the busy root disk, A and the runs alone did not change beyond their noise, and a group flushed file by file was not reliably faster for B on nvme, one of its runs taking 20.15 s, and was slower on the busy disk and with many files.
+
 ## upgrading a bucket prefix, 2026-11-12
 
 `lock --upgrade` of a dataset pinning five tar shards of 2,037,760 bytes from an s3-compatible stand-in on this machine, after a sixth appeared there. the stand-in states each object's size and an ETag in its listing and ignores conditional requests, as wf-audio's did; such a service's ETag is no MD5. the counts are the upgrade's alone, from `--json` work counters; one run each, since they do not vary.

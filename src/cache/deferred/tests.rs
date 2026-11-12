@@ -351,3 +351,44 @@ fn a_download_outside_the_batch_filesystem_flushes_itself() {
     );
     cache.publish_downloads().unwrap();
 }
+
+/// a group that waits for more downloads than come takes its names once its first download
+/// waited [`PUBLISH_WITHIN`], so another run that wants one of them does not wait for this run's
+/// longest download, and not a moment before.
+#[test]
+fn a_group_takes_its_names_once_its_first_download_waited_long_enough() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    assert!(!cache.publish_due(Instant::now()).unwrap(), "nothing waits");
+    let first = finished(&cache, "https://example.org/first", b"first");
+    let since = lock(&cache.deferred.pending)
+        .as_ref()
+        .unwrap()
+        .since
+        .unwrap();
+    let second = finished(&cache, "https://example.org/second", b"second");
+    let early = since + PUBLISH_WITHIN.saturating_sub(Duration::from_millis(1));
+    assert!(!cache.publish_due(early).unwrap());
+    for stored in [&first, &second] {
+        assert!(!cache.object_path(&stored.digest).exists());
+    }
+    assert!(cache.publish_due(since + PUBLISH_WITHIN).unwrap());
+    for stored in [&first, &second] {
+        assert!(cache.object_path(&stored.digest).is_file());
+    }
+    let third = finished(&cache, "https://example.org/third", b"third");
+    let came = lock(&cache.deferred.pending)
+        .as_ref()
+        .unwrap()
+        .since
+        .unwrap();
+    assert!(came >= since, "a later download waits from when it came");
+    assert!(
+        !cache
+            .publish_due(came + PUBLISH_WITHIN.saturating_sub(Duration::from_millis(1)))
+            .unwrap()
+    );
+    assert!(!cache.object_path(&third.digest).exists());
+    cache.publish_downloads().unwrap();
+    assert!(cache.object_path(&third.digest).is_file());
+}

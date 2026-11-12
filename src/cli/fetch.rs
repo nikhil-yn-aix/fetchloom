@@ -628,7 +628,7 @@ pub(super) async fn all(
 ) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     let batched = defer(cache, jobs.len());
-    let results = each(context, net, cache, jobs, false).await;
+    let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, false)).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
 }
@@ -649,7 +649,12 @@ pub(super) async fn prepared(
         std::mem::take(&mut descriptions[index].host)
     });
     let jobs = queue.map(|(index, url)| (index, make(index, url)));
-    let results = run_each(context, net, cache, count, overall, jobs, false).await;
+    let results = naming_meanwhile(
+        cache,
+        batched,
+        run_each(context, net, cache, count, overall, jobs, false),
+    )
+    .await;
     let published = publish(cache, batched);
     let labels: Vec<_> = descriptions
         .into_iter()
@@ -689,7 +694,7 @@ pub(super) async fn apart(
     jobs: Vec<Job>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let batched = defer(cache, jobs.len());
-    let results = each(context, net, cache, jobs, true).await;
+    let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, true)).await;
     let published = publish(cache, batched);
     let results = results?;
     published?;
@@ -701,6 +706,38 @@ pub(super) async fn apart(
 /// there.
 fn defer(cache: &Cache, downloads: usize) -> bool {
     downloads > crate::cache::MOST_FLUSHED_ALONE && cache.defer_downloads().unwrap_or(false)
+}
+
+/// how often finished downloads that waited long enough for their group take their names.
+const NAMING: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// runs `work` while the downloads that waited long enough in the open batch take their names,
+/// so another run that wants one of them does not wait for this run's longest download.
+async fn naming_meanwhile<T>(
+    cache: &Cache,
+    batched: bool,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    if !batched {
+        return work.await;
+    }
+    let naming = tokio::spawn({
+        let cache = cache.clone();
+        async move {
+            loop {
+                tokio::time::sleep(NAMING).await;
+                let cache = cache.clone();
+                // a failure stays with the batch, which reports it when it ends
+                let _ = tokio::task::spawn_blocking(move || {
+                    cache.publish_due(std::time::Instant::now())
+                })
+                .await;
+            }
+        }
+    });
+    let done = work.await;
+    naming.abort();
+    done
 }
 
 fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {

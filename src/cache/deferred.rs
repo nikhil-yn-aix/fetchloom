@@ -1,13 +1,16 @@
 //! downloads finished but not yet on disk. on linux one flush of the cache's filesystem covers a
-//! group of downloads, where a flush per file cost more than downloading many small files.
-//! a download takes its name in the cache only after a flush that covers it, so a power cut can
-//! never leave a damaged object under a hash.
+//! group of downloads, where a flush per file cost more than downloading many small files. a
+//! group is flushed once it is full, once its first download waited a second, when the run waits
+//! on another run's download, or when the batch ends. a download takes its name in the cache
+//! only after a flush that covers it, so a power cut can never leave a damaged object under a
+//! hash.
 
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use super::{Cache, Stored};
 use crate::digest::{Md5, Sha256};
@@ -15,6 +18,11 @@ use crate::digest::{Md5, Sha256};
 /// how many finished downloads wait for one flush before they take their names. each keeps its
 /// claim's file open until then, and linux lets a process open 1,024 files by default.
 const GROUP: usize = 256;
+
+/// how long the first download waiting in a group waits for the group to fill before the group
+/// is flushed and named anyway, so another run that wants one of them does not wait for the
+/// longest download of this run.
+pub(crate) const PUBLISH_WITHIN: Duration = Duration::from_secs(1);
 
 /// a download written in full, read-only, still at its partial name and still claimed.
 #[derive(Debug)]
@@ -47,6 +55,8 @@ struct Pending {
     /// the digest of every download in this batch, so a large batch is not searched once for
     /// each download.
     digests: HashSet<Sha256>,
+    /// when the first download waiting in `finished` came.
+    since: Option<Instant>,
 }
 
 /// downloads taken from a batch to be flushed once and named together.
@@ -90,6 +100,7 @@ impl Finished {
 
 impl Pending {
     fn take(&mut self) -> Group {
+        self.since = None;
         Group {
             #[cfg(target_os = "linux")]
             batch: Arc::clone(&self.batch),
@@ -140,6 +151,7 @@ impl Cache {
                 batch: Arc::new(batch),
                 finished: Vec::new(),
                 digests: HashSet::new(),
+                since: None,
             });
             return Ok(true);
         }
@@ -153,6 +165,7 @@ impl Cache {
         *lock(&self.deferred.pending) = Some(Pending {
             finished: Vec::new(),
             digests: HashSet::new(),
+            since: None,
         });
     }
 
@@ -182,6 +195,9 @@ impl Cache {
             md5: finished.md5,
             new: !waiting && !self.holds_intact(&finished.digest, finished.size),
         };
+        if batch.finished.is_empty() {
+            batch.since = Some(Instant::now());
+        }
         batch.finished.push(finished);
         if batch.finished.len() >= GROUP {
             let group = batch.take();
@@ -204,6 +220,28 @@ impl Cache {
         drop(pending);
         self.publish_group(&mut publishing, batch.take());
         std::mem::take(&mut *publishing).failed.map_or(Ok(()), Err)
+    }
+
+    /// names the downloads waiting in the batch once the first of them came [`PUBLISH_WITHIN`]
+    /// or more before `now`, after a flush that covers them, and says whether it did.
+    pub(crate) fn publish_due(&self, now: Instant) -> io::Result<bool> {
+        let mut pending = lock(&self.deferred.pending);
+        let Some(batch) = pending.as_mut() else {
+            return Ok(false);
+        };
+        let due = !batch.finished.is_empty()
+            && batch
+                .since
+                .is_some_and(|since| now.saturating_duration_since(since) >= PUBLISH_WITHIN);
+        if !due {
+            return Ok(false);
+        }
+        let group = batch.take();
+        let mut publishing = lock(&self.deferred.publishing);
+        drop(pending);
+        self.publish_group(&mut publishing, group);
+        publishing.result()?;
+        Ok(true)
     }
 
     /// releases this run's completed claims before it waits on another run's download.

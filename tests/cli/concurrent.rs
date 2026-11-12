@@ -431,3 +431,101 @@ fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
     );
     Ok(())
 }
+
+/// j6-m4: a run that waits on no other names its finished downloads within a second, so a second
+/// run that wants them does not wait for the first run's longest download. here the first run's
+/// large file stays unfinished until the second run is done.
+#[cfg(debug_assertions)]
+#[test]
+fn a_run_names_its_finished_downloads_while_its_largest_still_downloads() -> Result {
+    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::support::{Routes, wait_until};
+
+    let sandbox = Sandbox::new()?;
+    let keys: Vec<String> = (0..70).map(|index| format!("s/f{index:02}.bin")).collect();
+    let bodies: Vec<Vec<u8>> = keys.iter().map(|key| key.repeat(40).into_bytes()).collect();
+    let listed: Vec<(&str, &[u8])> = keys
+        .iter()
+        .zip(&bodies)
+        .map(|(key, body)| (key.as_str(), body.as_slice()))
+        .collect();
+    let mut routes = vec![(s3_listing("/lab/", "s/", None), s3_page(&listed, None))];
+    for (key, body) in keys.iter().zip(&bodies) {
+        routes.push((
+            format!("/lab/{key}"),
+            file(body, &format!("\"{}\"", md5(body))),
+        ));
+    }
+    let small = Routes::start(routes)?;
+    let big = vec![b'b'; 64 * 1024];
+    let mut held = reply(
+        "200 OK",
+        &[
+            ("Content-Length", &big.len().to_string()),
+            ("ETag", "\"v1\""),
+        ],
+        b"",
+    );
+    let (release, wait) = std::sync::mpsc::channel();
+    held.push(Part::Wait(wait));
+    held.push(Part::Bytes(big.clone()));
+    let large = Server::start("/big.bin", vec![file(&big, "\"v1\""), held])?;
+    for url in [&small.url, &large.url] {
+        sandbox.allow(url);
+    }
+    let first = sandbox.folder("first")?;
+    let second = sandbox.folder("second")?;
+    let shards = format!("[datasets.small]\nref = \"s3:{}/lab/s/\"\n", small.url);
+    fs::write(
+        first.join("data.toml"),
+        format!("[datasets.big]\nref = \"{}\"\n\n{shards}", large.url),
+    )?;
+    fs::write(second.join("data.toml"), &shards)?;
+    for project in [&first, &second] {
+        let locked = sandbox.command_in(project, &["lock"]).output()?;
+        assert_eq!(locked.status.code(), Some(0), "{}", text(&locked.stderr)?);
+    }
+    let asked = small.requests().len();
+    let shared = sandbox.folder("shared")?;
+    let syncing = Running::start(
+        sandbox
+            .command_in(&first, &["sync"])
+            .env("FETCHLOOM_CACHE", &shared),
+    )?;
+    large.wait_for_requests(2)?;
+    wait_until("the first run to have every small file", || {
+        Ok(small.requests().len() == asked + keys.len())
+    })?;
+    let waiting = Running::start(
+        sandbox
+            .command_in(&second, &["sync"])
+            .env("FETCHLOOM_CACHE", &shared),
+    )?;
+    let synced = waiting.wait_for("Synced");
+    drop(release);
+    let second_run = waiting.finish()?;
+    let first_run = syncing.finish()?;
+    synced?;
+    assert_eq!(
+        second_run.status.code(),
+        Some(0),
+        "{}",
+        text(&second_run.stderr)?
+    );
+    assert_eq!(
+        first_run.status.code(),
+        Some(0),
+        "{}",
+        text(&first_run.stderr)?
+    );
+    assert_eq!(
+        small.requests().len(),
+        asked + keys.len(),
+        "the second run downloaded nothing"
+    );
+    for (key, body) in keys.iter().zip(&bodies) {
+        let name = key.trim_start_matches("s/");
+        assert_eq!(fs::read(second.join("data/small").join(name))?, *body);
+    }
+    Ok(())
+}
