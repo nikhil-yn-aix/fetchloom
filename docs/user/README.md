@@ -34,16 +34,16 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [dataverse](sources/dataverse.md) | use public dataset or file versions |
 | [dryad](sources/dryad.md) | pin published dataset versions, downloaded with a dryad API key |
 | [mendeley data](sources/mendeley.md) | pin published dataset versions and their folders |
+| [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
+| [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
+| [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
 | [ENA](sources/ena.md) | list the read files of runs, experiments, samples and studies |
 | [GEO](sources/geo.md) | list the files GEO keeps for a series, a sample or a platform |
 | [DANDI](sources/dandi.md) | list the assets of a dandiset at one version, checked against the SHA-256 dandi states |
 | [OpenNeuro](sources/openneuro.md) | list the files of a dataset's snapshot, checked against the digests their git-annex keys state |
-| [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
-| [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
-| [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
+| [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [google drive](sources/google-drive.md) | use shared files or folders, read private ones you list, and exclude google docs |
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |
-| [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [cloud buckets](sources/buckets.md) | list and pin S3 and google cloud storage prefixes, private S3 buckets with your AWS keys and private cloud storage buckets with your google credentials |
 | [azure blob storage](sources/azure.md) | list and pin azure containers and folders, private ones with a SAS you keep out of the project |
 | [signing in](signing-in.md) | get at private, restricted or gated data: which sources need an account, how to sign in, and keys for private buckets and folders |
