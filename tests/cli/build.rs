@@ -1657,8 +1657,9 @@ fn held_after_the_mark(
 }
 
 /// a SIGTERM once the build has run its steps and marked its work as finishing, right before it
-/// writes data.lock, no longer stops it: it says it finishes what it started, never that it is
-/// stopping, then pins and places the result and ends with its closing line.
+/// writes data.lock, no longer stops it: it says it finishes what it started, and what a second
+/// SIGTERM does, never that it is stopping, then pins and places the result and ends with its
+/// closing line.
 #[cfg(unix)]
 #[test]
 fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
@@ -1677,7 +1678,7 @@ fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("  Finishing what it started (ctrl-c again to quit at once)\n"),
+        stderr.contains("  Finishing what it started (a second SIGTERM quits at once)\n"),
         "{stderr}"
     );
     assert!(!stderr.contains("Stopping"), "{stderr}");
@@ -1751,8 +1752,9 @@ fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
     Ok(())
 }
 
-/// a SIGTERM while a step runs stops the build: it says so before any line of the stopped
-/// build, ends the step, and leaves data.lock and the data folder as they were.
+/// a SIGTERM while a step runs stops the build: it says so, and what a second SIGTERM does,
+/// before any line of the stopped build, ends the step, and leaves data.lock and the data folder
+/// as they were.
 #[cfg(unix)]
 #[test]
 fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
@@ -1776,7 +1778,7 @@ fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
     let told: Vec<&str> = stderr.lines().collect();
     let stopping = told
         .iter()
-        .position(|line| *line == "   Stopping (press ctrl-c again to quit at once)");
+        .position(|line| *line == "   Stopping (a second SIGTERM quits at once)");
     let stopped = told.iter().position(|line| line.starts_with("    Stopped"));
     assert!(
         matches!((stopping, stopped), (Some(stopping), Some(stopped)) if stopping < stopped),

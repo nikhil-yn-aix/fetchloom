@@ -32,6 +32,14 @@ pub(crate) enum Level {
     Debug,
 }
 
+/// what interrupts a run: ctrl-c at a terminal, or the SIGTERM a scheduler sends a job it ends.
+/// a second of either quits at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Interrupt {
+    CtrlC,
+    Terminate,
+}
+
 /// the one writer to the terminal, so lines, bars and questions never trample each other.
 #[expect(
     clippy::struct_excessive_bools,
@@ -58,6 +66,9 @@ pub(crate) struct Output {
     locked: AtomicBool,
     /// set at the first ctrl-c, so every bar says the run is stopping.
     stopping: Arc<AtomicBool>,
+    /// whether the interrupt heard last was the SIGTERM a scheduler sends, so the lines told for
+    /// it say what a second SIGTERM does rather than ctrl-c.
+    terminated: AtomicBool,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
     report_color: bool,
     /// every bar made, so a first ctrl-c redraws each at once to say it is stopping.
@@ -81,12 +92,12 @@ pub(crate) struct Alone<'a> {
 }
 
 impl Alone<'_> {
-    /// says that a first ctrl-c was heard, and what a second one does. every bar says it is
-    /// stopping from then on.
+    /// says that a first ctrl-c or SIGTERM was heard, and what a second one does. every bar says
+    /// it is stopping from then on.
     pub(crate) fn stopping(&mut self) {
         let output = self.output;
         output.stopping.store(true, Ordering::Relaxed);
-        self.heard("Stopping", "(press ctrl-c again to quit at once)");
+        self.heard("Stopping", &format!("({})", output.again(true)));
         // each bar says so now, not at its next tick, which a busy machine can put off
         let drawn = output
             .drawn
@@ -98,9 +109,9 @@ impl Alone<'_> {
         }
     }
 
-    /// says that a first ctrl-c was heard once the run had marked its work as finishing, so it
-    /// finishes, and what a second one does. a closing line told before it is told again at the
-    /// end.
+    /// says that a first ctrl-c or SIGTERM was heard once the run had marked its work as
+    /// finishing, so it finishes, and what a second one does. a closing line told before it is
+    /// told again at the end.
     pub(crate) fn finishing(&mut self) {
         {
             let mut closing = self
@@ -110,24 +121,20 @@ impl Alone<'_> {
                 .unwrap_or_else(PoisonError::into_inner);
             closing.1 = closing.0.is_some();
         }
-        self.heard(
-            "Finishing",
-            "what it started (ctrl-c again to quit at once)",
-        );
+        let again = self.output.again(false);
+        self.heard("Finishing", &format!("what it started ({again})"));
     }
 
-    /// says that a first ctrl-c came once every byte of `count` downloads was in and the disk
-    /// only keeps them, so the run finishes rather than download them again next time.
+    /// says that a first ctrl-c or SIGTERM came once every byte of `count` downloads was in and
+    /// the disk only keeps them, so the run finishes rather than download them again next time.
     pub(crate) fn finishing_downloads(&mut self, count: usize) {
         let which = if count == 1 {
             "the download is"
         } else {
             "the downloads are"
         };
-        self.heard(
-            "Finishing",
-            &format!("({which} complete; ctrl-c again to quit at once)"),
-        );
+        let again = self.output.again(false);
+        self.heard("Finishing", &format!("({which} complete; {again})"));
     }
 
     /// a line told as a ctrl-c is heard, which clears what the terminal echoed of it. a question
@@ -264,6 +271,7 @@ impl Output {
             progress: false,
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
+            terminated: AtomicBool::new(false),
             report_color: Style::stdout_colored(),
             drawn: Mutex::new(Vec::new()),
             untold: progress::UNTOLD,
@@ -973,9 +981,9 @@ impl Output {
         answer
     }
 
-    /// the output for a first ctrl-c to decide and tell what it does, every other line waiting
-    /// meanwhile, so the stop can be asked before `Stopping` shows without any line the stopping
-    /// work tells coming first.
+    /// the output for a first ctrl-c or SIGTERM to decide and tell what it does, every other
+    /// line waiting meanwhile, so the stop can be asked before `Stopping` shows without any line
+    /// the stopping work tells coming first.
     pub(crate) fn alone(&self) -> Alone<'_> {
         Alone {
             output: self,
@@ -983,8 +991,24 @@ impl Output {
         }
     }
 
+    /// says which interrupt came last, ctrl-c or a SIGTERM, whose second one the lines told
+    /// from then on name.
+    pub(crate) fn interrupted_by(&self, interrupt: Interrupt) {
+        self.terminated
+            .store(interrupt == Interrupt::Terminate, Ordering::Relaxed);
+    }
+
+    /// what quits at once after the interrupt heard last, worded for a person to `press` it.
+    fn again(&self, press: bool) -> &'static str {
+        match (self.terminated.load(Ordering::Relaxed), press) {
+            (true, _) => "a second SIGTERM quits at once",
+            (false, true) => "press ctrl-c again to quit at once",
+            (false, false) => "ctrl-c again to quit at once",
+        }
+    }
+
     /// says that the run finishes after all, as when a stop came after its last look for one but
-    /// before it marked its work as finishing, and what a second ctrl-c does.
+    /// before it marked its work as finishing, and what a second ctrl-c or SIGTERM does.
     pub(crate) fn finishing(&self) {
         self.alone().finishing();
     }
@@ -2682,6 +2706,28 @@ mod tests {
         let piped = telling(false);
         piped.alone().stopping();
         assert_eq!(piped.said(), [stopping]);
+    }
+
+    /// a SIGTERM, which a scheduler sends a job it ends, says in each line told for it what a
+    /// second SIGTERM does, and a ctrl-c after it is told as a ctrl-c.
+    #[test]
+    fn a_line_told_at_a_sigterm_names_a_second_sigterm() {
+        let output = telling(false);
+        output.interrupted_by(super::Interrupt::Terminate);
+        output.alone().stopping();
+        output.finishing();
+        output.alone().finishing_downloads(2);
+        output.interrupted_by(super::Interrupt::CtrlC);
+        output.alone().stopping();
+        assert_eq!(
+            output.said(),
+            [
+                "   Stopping (a second SIGTERM quits at once)",
+                "  Finishing what it started (a second SIGTERM quits at once)",
+                "  Finishing (the downloads are complete; a second SIGTERM quits at once)",
+                "   Stopping (press ctrl-c again to quit at once)",
+            ]
+        );
     }
 
     /// a wait for another program counts its seconds in a live line on a terminal, where a fixed

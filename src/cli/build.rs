@@ -163,10 +163,11 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         .map(|built| Report::Built(Box::new(built)))
 }
 
-/// SIGTERM, which a scheduler sends a job it ends, stops a build as ctrl-c does, and when it
-/// stops, ends the group of the step running now at once, since a SIGKILL that ended fetchloom
-/// would leave the step running. past the build's mark it finishes, as after ctrl-c. a second
-/// one quits as a second ctrl-c does. dropping it stops listening.
+/// SIGTERM, which a scheduler sends a job it ends, stops a build as ctrl-c does, saying what a
+/// second SIGTERM does, and when it stops, ends the group of the step running now at once, since
+/// a SIGKILL that ended fetchloom would leave the step running. past the build's mark it
+/// finishes, as after ctrl-c. a second one quits as a second ctrl-c does. dropping it stops
+/// listening.
 #[cfg(unix)]
 struct Terminate(tokio::task::AbortHandle);
 
@@ -180,7 +181,7 @@ impl Terminate {
             if terminate.recv().await.is_none() {
                 return;
             }
-            let heard = super::heard_first(&stop, &output);
+            let heard = super::heard_first(&stop, &output, crate::output::Interrupt::Terminate);
             if heard == crate::stop::Heard::Stop {
                 step::end_running();
             }

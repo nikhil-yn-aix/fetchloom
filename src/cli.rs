@@ -37,7 +37,7 @@ use crate::cache::{Access, Cache};
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::net::{self, Net, Notice};
-use crate::output::{Level, Output, Style};
+use crate::output::{Interrupt, Level, Output, Style};
 use crate::settings::{File, Settings};
 use crate::stop::{Heard, Stop};
 use crate::threads::Threads;
@@ -968,7 +968,7 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
         already_stopped,
         tokio::signal::ctrl_c(),
         move || {
-            heard_first(&stopping.stop, &stopping.output);
+            heard_first(&stopping.stop, &stopping.output, Interrupt::CtrlC);
         },
         move || {
             // a step's process group ends with fetchloom, so nothing it started runs on
@@ -990,9 +990,10 @@ fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) -> Heard {
     heard
 }
 
-/// a first ctrl-c, told on `output` while every other line waits, so none that the stopping work
-/// tells comes before `Stopping`.
-fn heard_first(stop: &Stop, output: &Output) -> Heard {
+/// a first `interrupt`, told on `output` in words that name a second one, while every other line
+/// waits, so none that the stopping work tells comes before `Stopping`.
+fn heard_first(stop: &Stop, output: &Output, interrupt: Interrupt) -> Heard {
+    output.interrupted_by(interrupt);
     let mut alone = output.alone();
     first_ctrl_c(stop, |heard| match heard {
         Heard::Stop => alone.stopping(),
@@ -1506,7 +1507,7 @@ mod tests {
                 waiting.block_on(stop.asked());
                 output.say("    Stopped at your request");
             });
-            assert_eq!(heard_first(&stop, &output), Heard::Stop);
+            assert_eq!(heard_first(&stop, &output, Interrupt::CtrlC), Heard::Stop);
             work.join().unwrap();
         });
         assert_eq!(
