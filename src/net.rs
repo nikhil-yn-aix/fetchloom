@@ -907,6 +907,31 @@ mod tests {
 
     /// a sign-in cookie, as earthdata hands out, reaches the added streams of a split download
     /// too.
+    /// an AWS key or session token holding a character no header can carry, such as a line break,
+    /// is refused before the request goes, rather than sent without the header it spoils.
+    #[test]
+    fn a_signature_no_request_header_can_carry_is_refused() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let headers = vec![
+            ("x-amz-date", "20241001T100000Z".to_owned()),
+            ("x-amz-security-token", "first line\nsecond line".to_owned()),
+        ];
+        let request = client.get("https://bucket.s3.amazonaws.com/data.csv");
+        let Err(error) = signed(request, headers) else {
+            panic!("a session token with a line break was taken");
+        };
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(
+            error.message,
+            "an AWS key or session token holds a character no request header can carry, such as a line break"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("check the AWS keys in the environment or the profile")
+        );
+    }
+
     #[test]
     fn both_clients_keep_cookies_in_one_jar() {
         use crate::net::scripted::{reply, serve};
