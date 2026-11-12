@@ -540,20 +540,19 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         return error.help("open the link in a browser to see where it leads");
     };
     let remedy = allowed.remedy(&url.origin());
-    let Some((last, others)) = reason.trusted_on_host.split_last() else {
+    let trusted = &reason.trusted_on_host;
+    if trusted.is_empty() {
         return error.help(format!("if you trust that server, {remedy}"));
-    };
-    let (trusted, covered) = if others.is_empty() {
-        (format!("{last} is"), "that origin")
+    }
+    let (are, covered) = if trusted.len() == 1 {
+        ("is", "that origin")
     } else {
-        (
-            format!("{} and {last} are", others.join(", ")),
-            "those origins",
-        )
+        ("are", "those origins")
     };
     error
         .detail(format!(
-            "only {trusted} trusted on {}, and trust covers {covered} alone",
+            "only {} {are} trusted on {}, and trust covers {covered} alone",
+            units::listed(trusted, "and"),
             host(url)
         ))
         .help(format!("to reach it too, {remedy}"))

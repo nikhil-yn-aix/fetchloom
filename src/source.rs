@@ -677,17 +677,12 @@ fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> 
         && listing.files.iter().all(|file| is_about(&file.path));
     let reference = reference.shown();
     if only_about {
-        let mut names: Vec<&str> = listing
+        let names: Vec<&str> = listing
             .files
             .iter()
             .map(|file| file.path.as_str())
             .collect();
-        let last = names.pop().unwrap_or_default();
-        let names = if names.is_empty() {
-            last.to_owned()
-        } else {
-            format!("{} and {last}", names.join(", "))
-        };
+        let names = crate::units::listed(&names, "and");
         listing.warnings.push(format!(
             "{reference} holds only {names}, no data files; its README may say where the data went"
         ));
