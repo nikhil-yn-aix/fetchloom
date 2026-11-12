@@ -1,37 +1,90 @@
 //! AWS keys where the AWS tools keep them: the environment, then the profile `AWS_PROFILE` names,
-//! else `default`, in the shared credentials and config files. a profile that gets its keys
-//! another way, by a role, a sign-in or a program, is refused rather than passed over for
-//! another identity, and keys reach an S3-compatible endpoint only where the person's own AWS
-//! settings send them there.
+//! else `default`, in the shared credentials and config files. a profile that signs in to IAM
+//! identity center or takes on a role gets its keys from the AWS CLI, and one with a
+//! `credential_process` from that program, each run as [`program`] says. a profile is never
+//! passed over for another identity, and keys reach an S3-compatible endpoint only where the
+//! person's own AWS settings send them there.
+
+mod lease;
+mod program;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::SystemTime;
 
+use self::lease::Lease;
+use self::program::Program;
 use crate::error::{Error, Kind};
 use crate::net::sign::Keys;
 use crate::source::Var;
+use crate::stop::Stop;
 
 /// keys found for one endpoint, and where.
-#[derive(Clone, Debug)]
 pub(crate) struct Identity {
-    pub(crate) keys: Keys,
-    /// where the keys came from, as messages name it: `AWS_ACCESS_KEY_ID`, or `profile lab in
-    /// /home/ada/.aws/credentials`.
+    pub(crate) source: Source,
+    /// where the keys came from, as messages name it: `AWS_ACCESS_KEY_ID`, `profile lab in
+    /// /home/ada/.aws/credentials`, or `the credential_process of profile lab`.
     pub(crate) origin: String,
     /// the region set beside the keys, by `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile.
     pub(crate) region: Option<String>,
+}
+
+/// where an identity's keys come from.
+pub(crate) enum Source {
+    /// keys written in the environment or a profile, which never expire.
+    Keys(Arc<Keys>),
+    /// a program that prints keys, run again shortly before they expire.
+    Program { program: Program, lease: Box<Lease> },
+}
+
+impl Identity {
+    /// the keys that sign a request made at `now`: written keys as they are, a program's from
+    /// its last run while they hold, else from a run that every request needing them waits for.
+    ///
+    /// # Errors
+    ///
+    /// what running the program found wrong, the same for every later request, or `interrupted`
+    /// once `stop` asks.
+    pub(crate) async fn keys(&self, now: SystemTime, stop: &Stop) -> Result<Arc<Keys>, Error> {
+        match &self.source {
+            Source::Keys(keys) => Ok(keys.clone()),
+            Source::Program { program, lease } => lease.keys(now, program.run(now, stop)).await,
+        }
+    }
+}
+
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // where the keys came from, never the keys or a program's arguments
+        f.debug_struct("Identity")
+            .field("origin", &self.origin)
+            .field("region", &self.region)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Source {
+    fn program(program: Program) -> Source {
+        Source::Program {
+            program,
+            lease: Box::default(),
+        }
+    }
 }
 
 /// the keys that sign for `endpoint`, or for AWS itself when it is none. the environment's keys,
 /// else the chosen profile's, sign where the settings send S3 requests: AWS, unless
 /// `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` or the profile names an endpoint. another endpoint
 /// takes the keys of the one profile whose `endpoint_url` names it. none when no keys are there.
+/// a program that gives a profile's keys is found here and run only once keys are needed.
 ///
 /// # Errors
 ///
-/// `usage` when `AWS_PROFILE` names a profile neither file has, or an endpoint setting is no
-/// link; `auth.required` for half a key, a profile that gets its keys another way, settings that
-/// send these keys to another endpoint than the one asked for, or two profiles naming it.
+/// `usage` when `AWS_PROFILE` names a profile neither file has, an endpoint setting is no link,
+/// or a `credential_process` cannot be read; `auth.required` for half a key, a program PATH does
+/// not hold, settings that send these keys to another endpoint than the one asked for, or two
+/// profiles naming it.
 pub(crate) fn find(
     var: Var<'_>,
     endpoint: Option<&url::Origin>,
@@ -56,8 +109,8 @@ pub(crate) fn find(
     };
     if sent.as_ref().map(|(origin, _)| origin) == endpoint {
         let region = region(var).or_else(|| files.value(profile, "region"));
-        return Ok(own(var, &files, profile)?.map(|(keys, origin)| Identity {
-            keys,
+        return Ok(own(var, &files, profile)?.map(|(source, origin)| Identity {
+            source,
             origin,
             region,
         }));
@@ -88,11 +141,13 @@ pub(crate) fn find(
         [] => Ok(None),
         [name] => {
             let region = region(var).or_else(|| files.value(name, "region"));
-            Ok(profile_keys(&files, name)?.map(|(keys, origin)| Identity {
-                keys,
-                origin,
-                region,
-            }))
+            Ok(
+                profile_keys(var, &files, name)?.map(|(source, origin)| Identity {
+                    source,
+                    origin,
+                    region,
+                }),
+            )
         }
         several => Err(Error::new(
             Kind::AuthRequired,
@@ -107,19 +162,19 @@ pub(crate) fn find(
 }
 
 /// the environment's keys, else the profile's, and where they came from.
-fn own(var: Var<'_>, files: &Files, profile: &str) -> Result<Option<(Keys, String)>, Error> {
+fn own(var: Var<'_>, files: &Files, profile: &str) -> Result<Option<(Source, String)>, Error> {
     let id = set(var, "AWS_ACCESS_KEY_ID");
     let secret = set(var, "AWS_SECRET_ACCESS_KEY");
     match (id, secret) {
         (Some(id), Some(secret)) => Ok(Some((
-            Keys {
+            Source::Keys(Arc::new(Keys {
                 id,
                 secret,
                 token: set(var, "AWS_SESSION_TOKEN"),
-            },
+            })),
             "AWS_ACCESS_KEY_ID".to_owned(),
         ))),
-        (None, None) => profile_keys(files, profile),
+        (None, None) => profile_keys(var, files, profile),
         (Some(_), None) => Err(half_in_environment(
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
@@ -141,46 +196,47 @@ fn half_in_environment(given: &str, missing: &str) -> Error {
     ))
 }
 
-/// the keys a profile holds: in the credentials file, else in the config file. a profile that
-/// gets them by a role, a sign-in or a program is refused, in the order the AWS tools try them.
-fn profile_keys(files: &Files, profile: &str) -> Result<Option<(Keys, String)>, Error> {
-    let has = |key: &str| files.value(profile, key).is_some();
-    let other = if has("role_arn") {
-        Some("by taking on a role")
-    } else if has("web_identity_token_file") {
-        Some("from a web identity token")
-    } else if has("sso_session") || has("sso_start_url") {
-        Some("by signing in to IAM identity center")
-    } else {
-        None
-    };
-    let unsupported = |how: &str| {
-        Error::new(
-            Kind::AuthRequired,
-            format!("the AWS profile {profile} gets its keys {how}, which fetchloom does not do"),
-        )
-        .help(format!(
-            "set the variables `aws configure export-credentials --profile {profile} --format env` prints, or set AWS_PROFILE to a profile that holds aws_access_key_id and aws_secret_access_key"
-        ))
-    };
-    if let Some(how) = other {
-        return Err(unsupported(how));
+/// where a profile's keys come from, in the order the AWS tools try them: the AWS CLI, for a
+/// profile that takes on a role or signs in to IAM identity center, which fetchloom leaves to
+/// it; keys in the credentials file; the profile's `credential_process`; keys in the config file.
+fn profile_keys(
+    var: Var<'_>,
+    files: &Files,
+    profile: &str,
+) -> Result<Option<(Source, String)>, Error> {
+    let signs_in = files.names(profile).any(|name| name.starts_with("sso_"));
+    let takes_role = ["role_arn", "source_profile", "web_identity_token_file"]
+        .iter()
+        .any(|key| files.value(profile, key).is_some());
+    if signs_in || takes_role {
+        let program = Program::cli(profile, signs_in, var)?;
+        return Ok(Some((
+            Source::program(program),
+            format!("the AWS CLI's profile {profile}"),
+        )));
     }
+    let written = |found: Option<(Keys, String)>| {
+        found.map(|(keys, origin)| (Source::Keys(Arc::new(keys)), origin))
+    };
     if let Some(found) = keys_in(
         files.credentials.section(profile),
         profile,
         files.credentials_path.as_ref(),
     )? {
-        return Ok(Some(found));
+        return Ok(written(Some(found)));
     }
-    if has("credential_process") {
-        return Err(unsupported("from a program, its credential_process"));
+    if let Some(text) = files.value(profile, "credential_process") {
+        let program = Program::process(&text, profile, var)?;
+        return Ok(Some((
+            Source::program(program),
+            format!("the credential_process of profile {profile}"),
+        )));
     }
-    keys_in(
+    Ok(written(keys_in(
         files.config_section(profile),
         profile,
         files.config_path.as_ref(),
-    )
+    )?))
 }
 
 /// the keys in one file's section for `profile`, and where they came from.
@@ -289,6 +345,19 @@ impl Files {
         .into_iter()
         .flatten()
         .find_map(|section| section.get(key).filter(|value| !value.is_empty()).cloned())
+    }
+
+    /// the keys `profile` sets to something, in either file.
+    fn names(&self, profile: &str) -> impl Iterator<Item = &str> {
+        [
+            self.credentials.section(profile),
+            self.config_section(profile),
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(|section| section.iter())
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, _)| key.as_str())
     }
 
     /// every profile either file has.
@@ -432,6 +501,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
+    use super::program::By;
     use super::*;
 
     /// a machine whose home is `home`, with `pairs` set in its environment.
@@ -461,9 +531,21 @@ mod tests {
 
     /// the key id, where it came from and the region of what `find` found for AWS.
     fn found(home: &Path, pairs: &[(&str, &str)]) -> Option<(String, String, Option<String>)> {
-        find(&machine(home, pairs), None)
-            .unwrap()
-            .map(|identity| (identity.keys.id, identity.origin, identity.region))
+        find(&machine(home, pairs), None).unwrap().map(|identity| {
+            (
+                written(&identity).id.clone(),
+                identity.origin,
+                identity.region,
+            )
+        })
+    }
+
+    /// the keys an identity holds as written, which a program never gives.
+    fn written(identity: &Identity) -> &Keys {
+        match &identity.source {
+            Source::Keys(keys) => keys,
+            Source::Program { .. } => panic!("{} runs a program", identity.origin),
+        }
     }
 
     const KEYS: [(&str, &str); 3] = [
@@ -482,7 +564,7 @@ mod tests {
         );
         let identity = find(&machine(home.path(), &KEYS), None).unwrap().unwrap();
         assert_eq!(
-            identity.keys,
+            *written(&identity),
             Keys {
                 id: "AKIAENVIRONMENT".to_owned(),
                 secret: "environment-secret".to_owned(),
@@ -562,40 +644,141 @@ mod tests {
         );
     }
 
+    /// makes a file named `name` in `folder` that this user may run, as PATH finds a program.
+    fn runnable_file(folder: &Path, name: &str) -> PathBuf {
+        let path = folder.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    /// the program an identity runs for its keys.
+    fn program(identity: &Identity) -> &Program {
+        match &identity.source {
+            Source::Program { program, .. } => program,
+            Source::Keys(_) => panic!("{} holds its keys", identity.origin),
+        }
+    }
+
     #[test]
-    fn a_profile_that_gets_its_keys_another_way_is_refused() {
+    fn a_profile_that_signs_in_or_takes_a_role_asks_the_aws_cli() {
         let home = tempfile::tempdir().unwrap();
         files(
             home.path(),
-            "[process]\naws_access_key_id = AKIAPROCESS\naws_secret_access_key = process-secret\n",
-            "[profile role]\nrole_arn = arn:aws:iam::123456789012:role/lab\nsource_profile = default\n[profile sso]\nsso_session = lab\n[profile web]\nweb_identity_token_file = /var/token\n[profile process]\ncredential_process = /usr/bin/keys\n[profile program]\ncredential_process = /usr/bin/keys\n",
+            "[role]\naws_access_key_id = AKIAROLE\naws_secret_access_key = role-secret\n",
+            "[profile role]\nrole_arn = arn:aws:iam::123456789012:role/lab\nsource_profile = base\n[profile chained]\nsource_profile = base\n[profile web]\nrole_arn = arn:aws:iam::123456789012:role/ci\nweb_identity_token_file = /var/token\n[profile sso]\nsso_session = lab\nsso_account_id = 123456789012\n[profile legacy]\nsso_start_url = https://lab.awsapps.com/start\n[profile base]\nregion = eu-west-1\n",
         );
-        for (profile, how) in [
-            ("role", "by taking on a role"),
-            ("sso", "by signing in to IAM identity center"),
-            ("web", "from a web identity token"),
-            ("program", "from a program, its credential_process"),
+        let tools = home.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let aws = runnable_file(&tools, "aws");
+        let path = tools.to_str().unwrap();
+        // the role comes before the keys the credentials file holds, as the AWS tools take it
+        for (profile, signs_in) in [
+            ("role", false),
+            ("chained", false),
+            ("web", false),
+            ("sso", true),
+            ("legacy", true),
         ] {
-            let error = find(&machine(home.path(), &[("AWS_PROFILE", profile)]), None).unwrap_err();
-            assert_eq!(error.kind, Kind::AuthRequired, "{profile}");
+            let pairs = [("AWS_PROFILE", profile), ("PATH", path)];
+            let identity = find(&machine(home.path(), &pairs), None).unwrap().unwrap();
+            assert_eq!(identity.origin, format!("the AWS CLI's profile {profile}"));
+            let program = program(&identity);
+            assert_eq!(program.path, aws, "{profile}");
             assert_eq!(
-                error.message,
-                format!(
-                    "the AWS profile {profile} gets its keys {how}, which fetchloom does not do"
-                ),
+                program.args,
+                [
+                    "configure",
+                    "export-credentials",
+                    "--profile",
+                    profile,
+                    "--format",
+                    "process"
+                ]
             );
-            assert!(
-                error.help.unwrap().contains(&format!(
-                    "aws configure export-credentials --profile {profile} --format env"
-                )),
-                "{profile}"
-            );
+            assert_eq!(program.by, By::Cli { signs_in }, "{profile}");
         }
-        // keys in the credentials file come before a program, as the AWS tools take them
+        let pairs = [("AWS_PROFILE", "role"), ("PATH", "relative")];
+        let error = find(&machine(home.path(), &pairs), None).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
         assert_eq!(
-            found(home.path(), &[("AWS_PROFILE", "process")]).unwrap().0,
-            "AKIAPROCESS"
+            error.message,
+            "the AWS profile role takes on a role, which fetchloom leaves to the AWS CLI, and no folder on PATH holds the AWS CLI"
         );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("install the AWS CLI, version 2.9 or later")
+        );
+    }
+
+    #[test]
+    fn a_credential_process_is_split_into_words_and_found_by_a_full_path() {
+        let home = tempfile::tempdir().unwrap();
+        let tools = home.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let keys = runnable_file(&tools, "keys");
+        files(
+            home.path(),
+            "[written]\naws_access_key_id = AKIAWRITTEN\naws_secret_access_key = written-secret\n",
+            &format!(
+                "[profile named]\ncredential_process = keys --as \"two words\"\n[profile full]\ncredential_process = \"{}\" --region eu-west-1\n[profile written]\ncredential_process = keys\n[profile relative]\ncredential_process = bin/keys\n[profile open]\ncredential_process = \"keys --as\n[profile missing]\ncredential_process = missing-keys\n",
+                keys.display()
+            ),
+        );
+        let path = tools.to_str().unwrap();
+        let run = |profile: &str| {
+            let pairs = [("AWS_PROFILE", profile), ("PATH", path)];
+            let identity = find(&machine(home.path(), &pairs), None).unwrap().unwrap();
+            assert_eq!(
+                identity.origin,
+                format!("the credential_process of profile {profile}")
+            );
+            let program = program(&identity);
+            assert_eq!(program.by, By::Process);
+            (program.path.clone(), program.args.clone())
+        };
+        assert_eq!(
+            run("named"),
+            (
+                keys.clone(),
+                vec!["--as".to_owned(), "two words".to_owned()]
+            )
+        );
+        assert_eq!(
+            run("full"),
+            (
+                keys.clone(),
+                vec!["--region".to_owned(), "eu-west-1".to_owned()]
+            )
+        );
+        // keys in the credentials file come before a program, as the AWS tools take them
+        let pairs = [("AWS_PROFILE", "written"), ("PATH", path)];
+        assert_eq!(found(home.path(), &pairs).unwrap().0, "AKIAWRITTEN");
+        for (profile, kind, message) in [
+            (
+                "relative",
+                Kind::Usage,
+                "the credential_process of the AWS profile relative names the program bin/keys by a relative path",
+            ),
+            (
+                "open",
+                Kind::Usage,
+                "the credential_process of the AWS profile open has a quote that never closes",
+            ),
+            (
+                "missing",
+                Kind::AuthRequired,
+                "the credential_process of the AWS profile missing names missing-keys, which no folder on PATH holds",
+            ),
+        ] {
+            let pairs = [("AWS_PROFILE", profile), ("PATH", path)];
+            let error = find(&machine(home.path(), &pairs), None).unwrap_err();
+            assert_eq!((error.kind, error.message.as_str()), (kind, message));
+        }
     }
 
     #[test]
@@ -621,7 +804,7 @@ mod tests {
         );
         let id = |pairs: &[(&str, &str)], endpoint: &str| {
             find(&machine(home.path(), pairs), Some(&origin(endpoint)))
-                .map(|found| found.map(|identity| (identity.keys.id, identity.region)))
+                .map(|found| found.map(|identity| (written(&identity).id.clone(), identity.region)))
         };
         // the one profile naming an endpoint signs for it, AWS keys never do
         assert_eq!(

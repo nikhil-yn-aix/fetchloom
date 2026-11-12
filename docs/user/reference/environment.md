@@ -128,7 +128,8 @@ AWS keys sign requests only for the S3 buckets `s3_buckets` lists, and only afte
 | `AWS_REGION`, `AWS_DEFAULT_REGION` | the region to sign for when neither the host nor S3 names one, before the profile's `region` |
 | `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` | the S3-compatible service the keys above sign for, instead of AWS; a profile's `endpoint_url` does the same |
 | `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` | `true` ignores the endpoint settings |
+| `PATH` | the folders that hold the AWS CLI and a `credential_process` named without its folder; only folders named by their full path are searched |
 
-a profile that gets its keys by a role, IAM identity center, a web identity token or `credential_process` is refused; the help names the `aws configure export-credentials` command that puts its keys in the environment instead. the secret itself is never sent, and no key appears in `data.toml`, `data.lock`, logs or `--json` output.
+a profile with `credential_process` gets its keys from that program, and one that signs in to IAM identity center or takes on a role from the AWS CLI, version 2.9 or later, as [keys from a program](../sources/buckets.md#keys-from-a-program) describes. the secret itself is never sent, and no key appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 google cloud credentials, such as `GOOGLE_APPLICATION_CREDENTIALS`, are not read; [cloud storage buckets](../sources/buckets.md) are listed and downloaded anonymously.

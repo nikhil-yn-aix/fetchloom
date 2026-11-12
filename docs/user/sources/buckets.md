@@ -1,6 +1,6 @@
 # cloud buckets
 
-fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK or command line tool. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys.
+fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys, which a profile may also get from a program or, for a sign-in or a role, from the AWS CLI.
 
 ```sh
 fetchloom add s3://openneuro.org/ds000001/
@@ -67,15 +67,37 @@ each run asks a bucket without a key first, so a public bucket never sees your k
 keys come from where the AWS tools keep them, in this order:
 
 1. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN` for temporary keys.
-2. the profile `AWS_PROFILE` names, else `default`: its `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/credentials`, else in `~/.aws/config`. `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name other files.
+2. the profile `AWS_PROFILE` names, else `default`, in `~/.aws/credentials` and `~/.aws/config`, or the files `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name. the first of these the profile has gives its keys, as the AWS tools take them:
+   1. a role or a sign-in: `role_arn`, `source_profile`, `web_identity_token_file` or any `sso_` setting, such as `sso_session`. fetchloom leaves these to the AWS CLI, version 2.9 or later, and runs `aws configure export-credentials --profile <name> --format process` for the keys.
+   2. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/credentials`.
+   3. `credential_process`, a program that prints the keys.
+   4. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/config`.
 
-a profile that gets its keys by taking on a role, by signing in to IAM identity center, from a web identity token or from a `credential_process` program is refused with `auth.required`, never passed over for another identity. set the variables `aws configure export-credentials --profile <name> --format env` prints instead. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
+a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
 
 the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`. a signed listing names the bucket's region in its object links, so a later run signs them for it. cloudflare r2 signs for `auto`, and backblaze and wasabi take the region in their host.
 
 keys reach another service only where your AWS settings send them: `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` sends the keys above to that endpoint, and so does a profile's `endpoint_url`, set in the profile or for `s3` in the `services` section it names. a bucket there takes the keys of the one profile whose endpoint names it, so `AWS_PROFILE` can stay on your AWS profile. keys sent to an endpoint are never sent to AWS. `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` turns endpoint settings off. a plain `http` service is signed only when your settings name its `http` link.
 
 the secret never leaves the machine: a request carries the key id and a signature made with the secret. messages show the key id by its last four characters, such as `…WXYZ`. no key or session token reaches data.toml, data.lock, logs or `--json` output.
+
+### keys from a program
+
+a `credential_process`, or the AWS CLI for a sign-in or a role, runs only once a bucket `s3_buckets` lists has refused a request without a key, when its requests first need keys. nothing in data.toml or data.lock chooses a profile, a program or a command.
+
+- the setting is split into words as the AWS CLI splits it, by shell quoting on linux and macos and by the windows rules on windows. no shell runs it, so `$HOME`, `~`, pipes and `;` reach the program as written. the program is a full path, or a name found in a folder on PATH. a folder PATH names relatively, such as `.`, is never searched, since it would be whatever folder fetchloom runs in, and a program named by a relative path fails with `usage`, exit 2. the AWS CLI is found the same way.
+- the program runs from its own folder with nothing on its input. fetchloom reads up to 64 KiB of what it prints on stdout as the JSON AWS defines for `credential_process`: `Version` 1, `AccessKeyId`, `SecretAccessKey`, and `SessionToken` and `Expiration` for keys that expire. stderr is never read. nothing the program prints reaches a message, a log, `--json` output or a file, and the keys stay in memory for the run.
+- one run serves every request for the buckets those keys sign for. keys with an `Expiration` are asked for again 5 minutes before it, or halfway for keys that hold less than 10 minutes. requests that need new keys at the same moment wait for one run.
+- a program that fails, prints no keys fetchloom can read, gives keys that have expired or has given none within a minute fails the request with `auth.required`, exit 40, and every later request for that bucket fails the same way. no request goes without a key or with other keys instead. ctrl-c ends the program.
+
+a profile whose sign-in has expired, as the AWS CLI reports with exit code 255:
+
+```text
+error: `aws configure export-credentials --profile lab` exited with code 255
+  help: sign in again with `aws sso login --profile lab`, or run `aws configure export-credentials --profile lab` yourself to see what went wrong
+```
+
+fetchloom itself asks no instance or container metadata service for keys. a profile whose role names `credential_source = Ec2InstanceMetadata` gets its keys from the AWS CLI, which asks that service.
 
 ## access and limits
 
@@ -97,4 +119,4 @@ a signed request S3 still refuses says `S3 refused the AWS key …WXYZ from AWS_
 
 requester-pays buckets bill the reader for each request, and fetchloom never agrees to pay: they fail with `auth.required`, with or without a key. use the AWS CLI with `--request-payer requester` for them. a bucket that allows reading objects but not listing them still works one object at a time through plain object links.
 
-google cloud storage buckets must allow anonymous reads: `GOOGLE_APPLICATION_CREDENTIALS` is not read, and a refused listing says fetchloom reads public cloud storage buckets only. AWS keys that come from a role, IAM identity center, `credential_process` or an instance's role are not read, and azure blob storage is not a bucket source; an object link that needs no key still works as a plain URL.
+google cloud storage buckets must allow anonymous reads: `GOOGLE_APPLICATION_CREDENTIALS` is not read, and a refused listing says fetchloom reads public cloud storage buckets only. AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read, and azure blob storage is not a bucket source; an object link that needs no key still works as a plain URL.

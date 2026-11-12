@@ -17,6 +17,7 @@ research code can outlive the dataset version it used. keep input identities bes
 | support shared-link sources alongside repositories | research inputs also arrive through hugging face, kaggle, drive and dropbox | [source behavior](../user/sources/README.md) |
 | use reqwest, tokio and rustls | reuse HTTP/2, system proxies and TLS verification while retaining explicit redirect checks | [network](architecture/network.md) |
 | sign S3 requests in the crate, on `hmac` and `sha2` | a GET needs about a hundred lines of AWS signature version 4, checked against AWS's published examples; the AWS SDK and the other signing crates bring their own HTTP stacks, many more crates or licenses outside deny.toml | [network](architecture/network.md#trust-boundaries) |
+| ask the installed AWS CLI for the keys of a profile that signs in to IAM identity center or takes on a role | `aws configure export-credentials` is AWS's own way to hand those keys to another program. sign-in caches, role chains and second sign-in steps change with the CLI, and reading them here would need the AWS SDK or a copy of its rules. a `credential_process` runs as AWS defines it, with no shell, and a profile is never passed over for another identity | [signing private S3 buckets](architecture/sources.md#signing-private-s3-buckets) |
 | keep disk writes and hashing off async workers | overlap byte processing without blocking request scheduling; bound queues to control retained work | [download pipeline](architecture/network.md#download-pipeline) |
 
 ## project inputs

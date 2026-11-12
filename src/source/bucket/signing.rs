@@ -1,7 +1,9 @@
 //! which requests to an S3 bucket go signed. a request for a bucket the `s3_buckets` setting lists
 //! goes without a key first, so a public bucket never sees one; once S3 refuses it, that bucket's
 //! requests are signed for the rest of the run, with the keys the person's AWS settings give for
-//! its endpoint. a bucket nobody listed is never signed for, whatever a project names.
+//! its endpoint. a bucket nobody listed is never signed for, whatever a project names, and once a
+//! bucket's keys come from a program that fails or gives keys that expired, its requests fail
+//! rather than go without a key or with other keys.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -13,7 +15,8 @@ use url::Url;
 use super::{Bucket, Store, is_bucket, s3_host};
 use crate::auth::aws::{self, Identity};
 use crate::error::Error;
-use crate::net::sign::{self, Request, Scope};
+use crate::net::sign::{self, Keys, Request, Scope};
+use crate::stop::Stop;
 
 /// the region a signature names when nothing says where a bucket is: the one S3's global
 /// endpoint serves, and the one most other services take.
@@ -62,6 +65,7 @@ pub(crate) struct Located {
 
 /// keys and a region that sign one bucket's requests.
 pub(crate) struct Signer {
+    keys: Arc<Keys>,
     identity: Arc<Identity>,
     region: String,
 }
@@ -121,29 +125,47 @@ impl Signing {
         })
     }
 
-    /// the keys and region that sign a request for `located`, once S3 refused its bucket
-    /// without a key this run and keys were found for it.
-    pub(crate) fn signer(&self, located: &Located) -> Option<Signer> {
-        if !located.listed {
-            return None;
-        }
-        let state = self.state();
-        if !state.refused.contains(&located.bucket) {
-            return None;
-        }
-        let identity = state
-            .found
-            .get(&located.bucket.endpoint)?
-            .as_ref()
-            .ok()?
-            .clone()?;
-        let region = located
-            .region
-            .clone()
-            .or_else(|| state.regions.get(&located.bucket).cloned())
-            .or_else(|| identity.region.clone().filter(|region| plausible(region)))
-            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
-        Some(Signer { identity, region })
+    /// the keys and region that sign a request made at `now` for the bucket `located`, once S3
+    /// refused that bucket without a key this run and keys were found for it; none, so the
+    /// request goes without a key, for any other.
+    ///
+    /// # Errors
+    ///
+    /// what getting the keys found wrong, such as a `credential_process` that failed or gave
+    /// keys that expired, or `interrupted` once `stop` asks; the request is then not sent at all.
+    pub(crate) async fn signer(
+        &self,
+        located: Option<&Located>,
+        now: SystemTime,
+        stop: &Stop,
+    ) -> Result<Option<Signer>, Error> {
+        let Some(located) = located.filter(|located| located.listed) else {
+            return Ok(None);
+        };
+        let (identity, region) = {
+            let state = self.state();
+            if !state.refused.contains(&located.bucket) {
+                return Ok(None);
+            }
+            let Some(Ok(Some(identity))) = state.found.get(&located.bucket.endpoint) else {
+                return Ok(None);
+            };
+            let identity = identity.clone();
+            let region = located
+                .region
+                .clone()
+                .or_else(|| state.regions.get(&located.bucket).cloned())
+                .or_else(|| identity.region.clone().filter(|region| plausible(region)))
+                .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+            (identity, region)
+        };
+        // a program may run a while for the keys, so the state is not held meanwhile
+        let keys = identity.keys(now, stop).await?;
+        Ok(Some(Signer {
+            keys,
+            identity,
+            region,
+        }))
     }
 
     /// learns from S3 refusing an unsigned request for `located`: a listed bucket is asked with
@@ -186,11 +208,7 @@ impl Located {
         match signer {
             Some(signer) => Keyed::Signed {
                 bucket: self.bucket.clone(),
-                key: format!(
-                    "{} from {}",
-                    signer.identity.keys.shown(),
-                    signer.identity.origin
-                ),
+                key: format!("{} from {}", signer.keys.shown(), signer.identity.origin),
                 region: signer.region.clone(),
             },
             None => Keyed::Unsigned {
@@ -205,7 +223,7 @@ impl Signer {
     /// the headers that sign a GET of `url` made at `now`: the date, the hash of the empty body,
     /// the session of temporary keys, and the authorization, which holds the signature.
     pub(crate) fn headers(&self, url: &Url, now: SystemTime) -> Vec<(&'static str, String)> {
-        let keys = &self.identity.keys;
+        let keys = &self.keys;
         let time = sign::amz_date(now);
         let host = match (url.host_str(), url.port()) {
             (Some(host), Some(port)) => format!("{host}:{port}"),
@@ -264,6 +282,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
+    use crate::source::recorded::block_on;
 
     const KEYS: [(&str, &str); 3] = [
         ("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEWXYZ"),
@@ -289,6 +308,11 @@ mod tests {
 
     fn url(link: &str) -> Url {
         Url::parse(link).unwrap()
+    }
+
+    /// what signs a request for `located`, whose written keys hold at any time.
+    fn signer(signing: &Signing, located: &Located) -> Option<Signer> {
+        block_on(signing.signer(Some(located), UNIX_EPOCH, &Stop::default())).unwrap()
     }
 
     #[test]
@@ -349,11 +373,11 @@ mod tests {
         let located = signing
             .locate(&url("https://lab-raw.s3.amazonaws.com/a.csv"))
             .unwrap();
-        assert!(signing.signer(&located).is_none());
+        assert!(signer(&signing, &located).is_none());
         assert!(signing.refused(&located, Some("eu-west-1")).unwrap());
-        let signer = signing.signer(&located).unwrap();
+        let signed = signer(&signing, &located).unwrap();
         assert_eq!(
-            located.keyed(Some(&signer)),
+            located.keyed(Some(&signed)),
             Keyed::Signed {
                 bucket: Bucket::parse("s3://lab-raw").unwrap(),
                 key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
@@ -364,7 +388,7 @@ mod tests {
             .locate(&url("https://other.s3.amazonaws.com/a.csv"))
             .unwrap();
         assert!(!signing.refused(&other, None).unwrap());
-        assert!(signing.signer(&other).is_none());
+        assert!(signer(&signing, &other).is_none());
         assert_eq!(
             other.keyed(None),
             Keyed::Unsigned {
@@ -377,7 +401,7 @@ mod tests {
             .locate(&url("https://lab-raw.s3.amazonaws.com/a.csv"))
             .unwrap();
         assert!(!keyless.refused(&located, None).unwrap());
-        assert!(keyless.signer(&located).is_none());
+        assert!(signer(&keyless, &located).is_none());
     }
 
     #[test]
@@ -390,7 +414,7 @@ mod tests {
         let region = |signing: &Signing, link: &str, said: Option<&str>| {
             let located = signing.locate(&url(link)).unwrap();
             signing.refused(&located, said).unwrap();
-            signing.signer(&located).unwrap().region
+            signer(signing, &located).unwrap().region
         };
         let set = signing(&["s3://lab-raw", "s3://lab-old"], &REGIONAL);
         let plain = signing(&["s3://lab-raw"], &KEYS);
@@ -418,9 +442,9 @@ mod tests {
         let link = url("https://lab-raw.s3.amazonaws.com/raw/a%20b.csv?versionId=v1");
         let located = signing.locate(&link).unwrap();
         signing.refused(&located, None).unwrap();
-        let signer = signing.signer(&located).unwrap();
+        let signed = signer(&signing, &located).unwrap();
         let now = UNIX_EPOCH + Duration::from_hours(380_376);
-        let headers = signer.headers(&link, now);
+        let headers = signed.headers(&link, now);
         let names: Vec<_> = headers.iter().map(|(name, _)| *name).collect();
         assert_eq!(
             names,

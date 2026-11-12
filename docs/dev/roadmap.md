@@ -6,7 +6,7 @@ pending work covers the features planned for 0.1.0, remaining performance costs 
 
 every feature planned for 0.1.0 has landed. a new one gets a line here, which goes in the same change that documents it in the [user guide](../user/README.md).
 
-deferred until a need shows: a data root on another disk, a link mode for build inputs, finding results across projects, a cache budget, STS and `credential_process` for S3, signed google cloud storage, azure and FTP, split archives beyond plain byte splits, adopting the hugging face cache, relinking copies to the cache, and letting `cache gc --inputs` free raw input whose source lists its pinned hash, with no mirror.
+deferred until a need shows: a data root on another disk, a link mode for build inputs, finding results across projects, a cache budget, AWS keys from instance and container metadata or a web identity outside a profile, signed google cloud storage, azure and FTP, split archives beyond plain byte splits, adopting the hugging face cache, relinking copies to the cache, and letting `cache gc --inputs` free raw input whose source lists its pinned hash, with no mirror.
 
 ## measurement work
 

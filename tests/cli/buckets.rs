@@ -916,6 +916,384 @@ fn an_endpoint_bucket_signs_with_the_profile_that_names_its_endpoint() -> Result
     Ok(())
 }
 
+/// what a `credential_process` or the AWS CLI prints in the tests of programs that give keys,
+/// lowercase like the heads the test server keeps.
+#[cfg(unix)]
+const PRINTED: &str = r#"{"Version": 1, "AccessKeyId": "akiaprintedkey", "SecretAccessKey": "printed-secret-never-shown", "SessionToken": "printed-session-never-shown", "Expiration": "2999-01-01T00:00:00Z"}"#;
+#[cfg(unix)]
+const PRINTED_SECRET: &str = "printed-secret-never-shown";
+#[cfg(unix)]
+const PRINTED_SESSION: &str = "printed-session-never-shown";
+
+/// writes a program at `path` that runs `script` in sh, as a `credential_process` or the AWS
+/// CLI.
+#[cfg(unix)]
+fn program(path: &std::path::Path, script: &str) -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, format!("#!/bin/sh\n{script}\n"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+/// a command for the private bucket `private-lab`, served by `routes`, whose keys come from the
+/// AWS profile `lab` in the config file `config`, with no keys in the environment.
+fn profile_command(
+    sandbox: &Sandbox,
+    routes: &str,
+    config: &std::path::Path,
+    args: &[&str],
+) -> Command {
+    let mut command = sandbox.command(args);
+    command
+        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("AWS_CONFIG_FILE", config)
+        .env("AWS_PROFILE", "lab");
+    command
+}
+
+/// the bucket `private-lab`, which refuses every listing of its root.
+fn refusing() -> Result<Routes> {
+    Routes::start(vec![(
+        s3_listing("/private-lab.s3.amazonaws.com/", "", None),
+        refusal(),
+    )])
+}
+
+/// a profile's `credential_process` gives the keys that sign a listed bucket. it runs without a
+/// shell, once for the listing and the download, and nothing it printed reaches an output, a
+/// file or the cache.
+#[cfg(unix)]
+#[test]
+fn a_credential_process_gives_the_keys_for_a_listed_bucket() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            versioned(),
+        ],
+    )?;
+    let folder = sandbox.folder("aws")?;
+    let runs = folder.join("runs");
+    let keys = folder.join("keys");
+    program(
+        &keys,
+        &format!(
+            "printf '%s\\n' \"$@\" >> '{}'\nprintf 'said on stderr\\n' >&2\nprintf '%s' '{PRINTED}'",
+            runs.display()
+        ),
+    )?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        format!(
+            "[profile lab]\ncredential_process = \"{}\" --as \"two words\" \"$HOME\" a;b\n",
+            keys.display()
+        ),
+    )?;
+    let args = [
+        "-vv",
+        "--json",
+        "add",
+        "s3://private-lab/raw/",
+        "--as",
+        "raw",
+    ];
+    let output = profile_command(&sandbox, &server.url, &config, &args).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    // one run, with its words as written: nothing a shell would do to them
+    assert_eq!(fs::read_to_string(&runs)?, "--as\ntwo words\n$HOME\na;b\n");
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    for head in &heads[1..] {
+        assert_eq!(
+            signed_with(head, PRINTED_SECRET)?,
+            ("akiaprintedkey".to_owned(), "us-east-1".to_owned())
+        );
+        assert!(
+            head.contains(&format!("x-amz-security-token: {PRINTED_SESSION}")),
+            "{head}"
+        );
+        assert!(!head.contains(PRINTED_SECRET), "{head}");
+    }
+    let work = sandbox.work();
+    assert_eq!(fs::read(work.join("data/raw/a.csv"))?, PARTICIPANTS);
+    let mut surfaces = vec![
+        ("stdout".to_owned(), output.stdout),
+        ("stderr".to_owned(), output.stderr),
+    ];
+    kept_files(&work, &mut surfaces)?;
+    kept_files(&sandbox.cache(), &mut surfaces)?;
+    for (name, bytes) in &surfaces {
+        let text = String::from_utf8_lossy(bytes);
+        for printed in [PRINTED_SECRET, PRINTED_SESSION, "said on stderr"] {
+            assert!(!text.contains(printed), "{name} holds {printed}: {text}");
+        }
+    }
+    Ok(())
+}
+
+/// a profile that signs in to IAM identity center gets its keys from `aws configure
+/// export-credentials`, run from the folder PATH names that holds the AWS CLI.
+#[cfg(unix)]
+#[test]
+fn a_profile_that_signs_in_gets_its_keys_from_the_aws_cli() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            versioned(),
+        ],
+    )?;
+    let folder = sandbox.folder("aws")?;
+    let asked = folder.join("asked");
+    let bin = sandbox.folder("bin")?;
+    program(
+        &bin.join("aws"),
+        &format!(
+            "printf '%s\\n' \"$@\" >> '{}'\nprintf '%s' '{PRINTED}'",
+            asked.display()
+        ),
+    )?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        "[profile lab]\nsso_session = lab\nsso_account_id = 123456789012\nsso_role_name = reader\n[sso-session lab]\nsso_start_url = https://lab.awsapps.com/start\nsso_region = eu-west-1\n",
+    )?;
+    let args = ["add", "s3://private-lab/raw/", "--as", "raw"];
+    let output = profile_command(&sandbox, &server.url, &config, &args)
+        .env("PATH", &bin)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read_to_string(&asked)?,
+        "configure\nexport-credentials\n--profile\nlab\n--format\nprocess\n"
+    );
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    for head in &heads[1..] {
+        assert_eq!(signed_with(head, PRINTED_SECRET)?.0, "akiaprintedkey");
+    }
+    assert_eq!(
+        fs::read(sandbox.work().join("data/raw/a.csv"))?,
+        PARTICIPANTS
+    );
+    Ok(())
+}
+
+/// a profile that signs in needs the AWS CLI. without one in a folder PATH names by its full
+/// path, the bucket fails with what to install, and an `aws` in a folder PATH names relatively,
+/// which a cloned project could hold, never runs.
+#[test]
+fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = refusing()?;
+    let folder = sandbox.folder("aws")?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        "[profile lab]\nsso_session = lab\nsso_account_id = 123456789012\nsso_role_name = reader\n",
+    )?;
+    let planted = sandbox.folder("work/bin")?;
+    let ran = sandbox.work().join("ran");
+    #[cfg(unix)]
+    program(&planted.join("aws"), &format!(": > '{}'", ran.display()))?;
+    #[cfg(windows)]
+    fs::write(planted.join("aws.exe"), b"not a program")?;
+    let path = std::env::join_paths([std::path::PathBuf::from("bin"), sandbox.folder("empty")?])?;
+    let output = profile_command(
+        &sandbox,
+        &routes.url,
+        &config,
+        &["--json", "add", "s3://private-lab/"],
+    )
+    .env("PATH", path)
+    .output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "auth.required", "{document}");
+    assert_eq!(
+        error["message"],
+        "the AWS profile lab signs in to IAM identity center, which fetchloom leaves to the AWS CLI, and no folder on PATH holds the AWS CLI"
+    );
+    assert_eq!(
+        error["help"],
+        "install the AWS CLI, version 2.9 or later, and sign in with `aws sso login --profile lab`"
+    );
+    assert!(!ran.exists());
+    assert_eq!(routes.targets().len(), 1);
+    Ok(())
+}
+
+/// keys a `credential_process` gives that have expired stop the bucket's request: it goes again
+/// neither without a key nor with the profile's other keys.
+#[cfg(unix)]
+#[test]
+fn expired_keys_from_a_credential_process_stop_the_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![refusal(), s3_page(&[("raw/a.csv", PARTICIPANTS)], None)],
+    )?;
+    let folder = sandbox.folder("aws")?;
+    let keys = folder.join("keys");
+    let expired = PRINTED.replace("2999-01-01T00:00:00Z", "2001-01-01T00:00:00+00:00");
+    program(&keys, &format!("printf '%s' '{expired}'"))?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        format!(
+            "[profile lab]\ncredential_process = {}\naws_access_key_id = akiaotherkey\naws_secret_access_key = other-secret\n",
+            keys.display()
+        ),
+    )?;
+    let args = ["--json", "add", "s3://private-lab/raw/"];
+    let output = profile_command(&sandbox, &server.url, &config, &args).output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "auth.required", "{document}");
+    assert_eq!(
+        error["message"],
+        "the keys the credential_process of the AWS profile lab gave expired at 2001-01-01T00:00:00Z"
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// a `credential_process` that fails, or prints no keys fetchloom can read, fails the bucket's
+/// request with what went wrong, and nothing it printed shows.
+#[cfg(unix)]
+#[test]
+fn a_credential_process_that_fails_is_named_without_what_it_printed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = refusing()?;
+    let folder = sandbox.folder("aws")?;
+    let keys = folder.join("keys");
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        format!("[profile lab]\ncredential_process = {}\n", keys.display()),
+    )?;
+    let unreadable =
+        "the credential_process of the AWS profile lab printed no keys fetchloom can read";
+    for (script, message) in [
+        (
+            format!("printf '%s' '{PRINTED}'\nprintf 'said on stderr' >&2\nexit 3"),
+            "the credential_process of the AWS profile lab exited with code 3".to_owned(),
+        ),
+        (
+            format!(
+                "printf '%s' '{}'",
+                PRINTED.replace("SecretAccessKey", "Secret")
+            ),
+            format!("{unreadable}: it has no SecretAccessKey"),
+        ),
+        (
+            format!(
+                "printf '%s' '{}'",
+                PRINTED.replace("\"Version\": 1", "\"Version\": 2")
+            ),
+            format!("{unreadable}: its Version is not 1"),
+        ),
+        (
+            format!(
+                "printf '%s' '{}'",
+                PRINTED.replace("2999-01-01T00:00:00Z", "soon")
+            ),
+            format!("{unreadable}: its Expiration is not a time such as 2026-11-12T12:00:00Z"),
+        ),
+        (
+            format!("printf 'secret %s' '{PRINTED_SECRET}'"),
+            format!("{unreadable}: it is not JSON"),
+        ),
+    ] {
+        program(&keys, &script)?;
+        let args = ["--json", "add", "s3://private-lab/"];
+        let output = profile_command(&sandbox, &routes.url, &config, &args).output()?;
+        assert_eq!(output.status.code(), Some(40), "{script}");
+        let document = json(&output)?;
+        assert_eq!(document["errors"][0]["kind"], "auth.required", "{document}");
+        assert_eq!(
+            document["errors"][0]["message"],
+            message.as_str(),
+            "{script}"
+        );
+        for surface in [&output.stdout, &output.stderr] {
+            let text = String::from_utf8_lossy(surface);
+            for printed in [PRINTED_SECRET, PRINTED_SESSION, "said on stderr"] {
+                assert!(!text.contains(printed), "{printed} in {text}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// the `credential_process` runs only for a bucket `s3_buckets` lists that refused a request
+/// without a key: never for one nobody listed, nor for a listed one that answers without a key.
+#[cfg(unix)]
+#[test]
+fn a_credential_process_runs_only_for_a_listed_bucket_that_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("aws")?;
+    let ran = folder.join("ran");
+    let keys = folder.join("keys");
+    program(
+        &keys,
+        &format!(": > '{}'\nprintf '%s' '{PRINTED}'", ran.display()),
+    )?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        format!("[profile lab]\ncredential_process = {}\n", keys.display()),
+    )?;
+    let refused = refusing()?;
+    let unlisted = profile_command(
+        &sandbox,
+        &refused.url,
+        &config,
+        &["--json", "add", "s3://private-lab/"],
+    )
+    .env("FETCHLOOM_S3_BUCKETS", "s3://another-lab")
+    .output()?;
+    assert_eq!(unlisted.status.code(), Some(40));
+    assert_eq!(
+        json(&unlisted)?["errors"][0]["message"],
+        "s3://private-lab/ is private: S3 refused to list it without a key"
+    );
+    assert_eq!(refused.targets().len(), 1);
+    let public = Routes::start(vec![
+        (
+            s3_listing("/private-lab.s3.amazonaws.com/", "raw/", None),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+        ),
+        (
+            "/private-lab.s3.amazonaws.com/raw/a.csv".to_owned(),
+            file(PARTICIPANTS, &format!("\"{}\"", md5(PARTICIPANTS))),
+        ),
+    ])?;
+    let listed = profile_command(
+        &sandbox,
+        &public.url,
+        &config,
+        &["add", "s3://private-lab/raw/", "--as", "raw"],
+    )
+    .output()?;
+    assert_eq!(listed.status.code(), Some(0), "{}", text(&listed.stderr)?);
+    for request in public.requests() {
+        assert!(!request.contains("authorization"), "{request}");
+    }
+    assert!(!ran.exists());
+    Ok(())
+}
+
 /// a bucket at `base` whose one prefix lists `objects`, stated as the test asks, and serves no
 /// file.
 fn stated_bucket(base: &str, objects: &[(&str, String, u64)]) -> Result<Routes> {

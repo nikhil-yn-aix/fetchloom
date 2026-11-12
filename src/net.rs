@@ -513,7 +513,8 @@ impl Net {
     /// host's rate limit is used up. a credential goes only to its own host, and never once a
     /// redirect has left the first one, except a saved login, which answers its own host on any
     /// hop as curl's does. a request for an S3 bucket that `s3_buckets` lists goes again once,
-    /// signed, when S3 refuses it without a key, and signed from the start once it did; a
+    /// signed, when S3 refuses it without a key, and signed from the start once it did; keys that
+    /// a program could not give fail the request rather than let it go without them, and a
     /// redirect never carries the signature on. in mirror-only mode every hop must be a
     /// `mirror`'s request below a mirror's address, checked before any name is looked up.
     async fn send_on(
@@ -553,10 +554,14 @@ impl Net {
             // addresses
             let client = wire.lane(lane, &hop).map_err(Failure::Final)?;
             first_origin &= hop.origin() == url.origin();
-            let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             // a signature goes with the first request alone, never after a redirect
             let located = bucket.as_ref().filter(|_| redirects == 0);
-            let signer = located.and_then(|located| self.signing.signer(located));
+            let signer = self
+                .signing
+                .signer(located, SystemTime::now(), &self.stop)
+                .await
+                .map_err(Failure::Final)?;
+            let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = match &signer {
                 Some(signer) => {
                     tracing::debug!(host = host(&hop), "signing the request with an AWS key");
