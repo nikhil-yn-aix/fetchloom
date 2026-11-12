@@ -173,7 +173,12 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     let copied = copies(&edits);
     let scope = Scope::Only(edits.keys().map(|name| (*name).to_owned()).collect());
     pace.look()?;
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    let survey = Survey::read(
+        &project,
+        &new_manifest.data_dir,
+        context.threads,
+        &context.stop,
+    )?;
     pace.look()?;
     let placing = place::Placing::new(
         &project,

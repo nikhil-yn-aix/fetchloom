@@ -16,6 +16,7 @@ use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::Project;
 use crate::project::state::{Look, State, nanos};
+use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::{name, units};
 
@@ -118,8 +119,17 @@ pub(crate) struct Blocker {
 impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
-    pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
-        Self::surveyed(project, data_dir, None, threads)
+    ///
+    /// # Errors
+    ///
+    /// interrupted once `stop` is asked, before the listing reaches its next folder.
+    pub(crate) fn read(
+        project: &Project,
+        data_dir: &str,
+        threads: Threads,
+        stop: &Stop,
+    ) -> Result<Survey, Error> {
+        Self::surveyed(project, data_dir, None, threads, stop)
     }
 
     /// [`Survey::read`] of the folders `within` alone, paths in the project inside `data_dir`:
@@ -130,8 +140,9 @@ impl Survey {
         data_dir: &str,
         within: &[String],
         threads: Threads,
-    ) -> Survey {
-        Self::surveyed(project, data_dir, Some(within), threads)
+        stop: &Stop,
+    ) -> Result<Survey, Error> {
+        Self::surveyed(project, data_dir, Some(within), threads, stop)
     }
 
     fn surveyed(
@@ -139,7 +150,8 @@ impl Survey {
         data_dir: &str,
         within: Option<&[String]>,
         threads: Threads,
-    ) -> Survey {
+        stop: &Stop,
+    ) -> Result<Survey, Error> {
         let started = nanos(SystemTime::now());
         let within = within.map(|folders| outermost(data_dir, folders));
         let (state, written) = match &within {
@@ -151,7 +163,7 @@ impl Survey {
             temporaries,
             entries,
             writable,
-        } = scan(&project.root, data_dir, within.as_deref(), threads);
+        } = scan(&project.root, data_dir, within.as_deref(), threads, stop)?;
         let mut survey = Survey {
             threads,
             started,
@@ -177,7 +189,7 @@ impl Survey {
         if within.is_none() {
             survey.outside = outside(&project.root, data_dir, &survey.state, &survey.disk);
         }
-        survey
+        Ok(survey)
     }
 
     /// the files among `going`, the records a run drops, that fetchloom placed before `data_dir`
@@ -239,11 +251,17 @@ impl Survey {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
         let start = vec![(root.join(folder), folder.to_owned())];
-        visit_files(start, &mut entries, |_, path, temporary, _| {
-            if !temporary && !self.state.files.contains_key(&path) {
-                others.push(path);
-            }
-        });
+        // one folder outside the data folder, listed while placing, which looks at the stop itself
+        visit_files(
+            start,
+            &mut entries,
+            || false,
+            |_, path, temporary, _| {
+                if !temporary && !self.state.files.contains_key(&path) {
+                    others.push(path);
+                }
+            },
+        );
         others.extend(
             entries
                 .into_iter()
@@ -945,8 +963,15 @@ struct Scanned {
 /// every file under the data folder, how it looks and whether it is writable, by its path in the
 /// project, the paths of those under the hidden names placement stages files in, and the folders,
 /// links and special files beside them. links are neither followed nor touched. with `within`,
-/// only those folders are listed, and what stands on the way down to them.
-fn scan(root: &Path, data_dir: &str, within: Option<&[String]>, threads: Threads) -> Scanned {
+/// only those folders are listed, and what stands on the way down to them. interrupted once
+/// `stop` is asked, before the next folder.
+fn scan(
+    root: &Path,
+    data_dir: &str,
+    within: Option<&[String]>,
+    threads: Threads,
+    stop: &Stop,
+) -> Result<Scanned, Error> {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut scanned = Scanned::default();
     let mut pending = Vec::new();
@@ -961,27 +986,35 @@ fn scan(root: &Path, data_dir: &str, within: Option<&[String]>, threads: Threads
             .map(|folder| (root.join(folder), folder.clone()))
             .collect(),
     };
-    visit_files(starts, &mut entries, |entry, path, temporary, parent| {
-        if last_parent != Some(parent) {
-            // DirEntry retains its parent handle on unix; bound distinct parents too.
-            if parents == 8 {
+    let walked = visit_files(
+        starts,
+        &mut entries,
+        || stop.is_asked(),
+        |entry, path, temporary, parent| {
+            if last_parent != Some(parent) {
+                // DirEntry retains its parent handle on unix; bound distinct parents too.
+                if parents == 8 {
+                    scan_pending(&mut pending, threads, &mut scanned);
+                    parents = 0;
+                }
+                parents += 1;
+                last_parent = Some(parent);
+            }
+            pending.push((entry, path, temporary));
+            if pending.len() == 4096 {
                 scan_pending(&mut pending, threads, &mut scanned);
                 parents = 0;
+                last_parent = None;
             }
-            parents += 1;
-            last_parent = Some(parent);
-        }
-        pending.push((entry, path, temporary));
-        if pending.len() == 4096 {
-            scan_pending(&mut pending, threads, &mut scanned);
-            parents = 0;
-            last_parent = None;
-        }
-    });
+        },
+    );
+    if !walked {
+        return Err(Stop::stopped());
+    }
     scan_pending(&mut pending, threads, &mut scanned);
     scanned.entries = entries;
     span.record("files", scanned.found.len());
-    scanned
+    Ok(scanned)
 }
 
 fn scan_pending(
@@ -1110,13 +1143,20 @@ pub(crate) fn is_inside(path: &str, folder: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// lists `folders` and every folder below them, handing each file to `visit` and keeping the
+/// other entries in `others`. says whether it listed them all, rather than ending at a folder
+/// where `stopped` said so.
 fn visit_files(
     mut folders: Vec<(std::path::PathBuf, String)>,
     others: &mut HashMap<String, Entry>,
+    stopped: impl Fn() -> bool,
     mut visit: impl FnMut(fs::DirEntry, String, bool, usize),
-) {
+) -> bool {
     let mut parent = 0;
     while let Some((folder, relative)) = folders.pop() {
+        if stopped() {
+            return false;
+        }
         parent += 1;
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
@@ -1141,6 +1181,7 @@ fn visit_files(
             }
         }
     }
+    true
 }
 
 /// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
@@ -1220,7 +1261,15 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        let found = scan(dir.path(), "data", None, Threads::default()).found;
+        let found = scan(
+            dir.path(),
+            "data",
+            None,
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap()
+        .found;
         assert_eq!(found.len(), 512);
     }
 
@@ -1247,7 +1296,7 @@ mod tests {
                 .unwrap();
         }
         let serial = Threads::read(&|_| Some("1".into())).unwrap();
-        let expected = scan(root, "data", None, serial);
+        let expected = scan(root, "data", None, serial, &Stop::default()).unwrap();
         assert_eq!(expected.found.len(), 513);
         assert_eq!(
             expected.temporaries,
@@ -1255,9 +1304,12 @@ mod tests {
         );
         for count in ["1", "8"] {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
-            let actual = scan(root, "data", None, threads);
+            let actual = scan(root, "data", None, threads, &Stop::default()).unwrap();
             assert_eq!(actual, expected);
-            assert_eq!(scan(root, "absent", None, threads), Scanned::default());
+            assert_eq!(
+                scan(root, "absent", None, threads, &Stop::default()).unwrap(),
+                Scanned::default()
+            );
         }
     }
 
@@ -1380,6 +1432,24 @@ mod tests {
         assert!(!inside_any("data/a/x", &outermost("data", &[])));
     }
 
+    /// the listing of the data folder looks for a stop at each folder, so a first ctrl-c on a
+    /// large or slow data folder does not wait for the whole listing.
+    #[test]
+    fn a_survey_ends_at_a_stop_asked_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir_all(project.root.join("data/a")).unwrap();
+        fs::write(project.root.join("data/a/x"), b"x").unwrap();
+        let stop = Stop::default();
+        stop.ask();
+        let Err(error) = Survey::read(&project, "data", Threads::default(), &stop) else {
+            panic!("the survey listed the data folder after a stop");
+        };
+        assert_eq!(error.kind, crate::error::Kind::Interrupted);
+    }
+
     /// a survey of named folders lists them alone, and what stands on the way down to them, as
     /// a survey of the whole data folder would see it: a link there is never followed.
     #[test]
@@ -1419,7 +1489,7 @@ mod tests {
             paths.sort();
             paths
         };
-        let whole = Survey::read(&project, "data", Threads::default());
+        let whole = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         assert_eq!(whole.disk.len(), 6);
         assert_eq!(whole.state.files.len(), 5);
         let within = [
@@ -1432,7 +1502,14 @@ mod tests {
             "data/missing",
         ]
         .map(String::from);
-        let survey = Survey::read_within(&project, "data", &within, Threads::default());
+        let survey = Survey::read_within(
+            &project,
+            "data",
+            &within,
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(
             sorted(survey.disk.keys().collect()),
             ["data/a-/v", "data/a/inner/y", "data/a/x", "data/f"]
@@ -1450,10 +1527,13 @@ mod tests {
             "data",
             &["data/a".to_owned(), "data".to_owned()],
             Threads::default(),
-        );
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(all.disk, whole.disk);
         assert_eq!(all.state.files, whole.state.files);
-        let none = Survey::read_within(&project, "data", &[], Threads::default());
+        let none = Survey::read_within(&project, "data", &[], Threads::default(), &Stop::default())
+            .unwrap();
         assert_eq!(none.disk.len(), 0);
         assert_eq!(none.state.files.len(), 0);
     }
@@ -1468,7 +1548,8 @@ mod tests {
         for path in ["data/changed", "data/intact"] {
             fs::write(project.root.join(path), b"original").unwrap();
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         for path in ["data/changed", "data/intact"] {
             survey.state.files.insert(
                 path.to_owned(),
@@ -1525,7 +1606,8 @@ mod tests {
             project.root.join("object"),
         )
         .is_ok();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         for (name, method) in placed {
             let path = format!("data/{name}");
             let mut record = record(&project.root, &path, b"original", method);
@@ -1596,7 +1678,8 @@ mod tests {
         for (name, time) in files {
             write(name, time, b"original");
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         for (name, _) in files {
             let path = format!("data/{name}");
             let mut placed = record(&project.root, &path, b"original", Method::Copy);
@@ -1654,7 +1737,8 @@ mod tests {
         // 10 s, while a state on a finer clock was written at 10.5 s
         let placed = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
         stamp(b"original", placed);
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         survey.state.files.insert(
             "data/table.csv".to_owned(),
             record(&project.root, "data/table.csv", b"original", Method::Copy),
@@ -1722,7 +1806,8 @@ mod tests {
                 .unwrap();
             fs::hard_link(object, project.root.join("data").join(name)).unwrap();
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         survey.state.files.insert(
             "data/intact".to_owned(),
             record(&project.root, "data/intact", b"intact", Method::Hardlink),
@@ -1760,7 +1845,8 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/file"), b"other").unwrap();
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         cache.mark_changed(&placed.sha256).unwrap();
         survey.state.files.insert("data/file".to_owned(), placed);
@@ -1786,7 +1872,8 @@ mod tests {
             return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         let digest = placed.sha256;
         survey.state.files.insert("data/file".to_owned(), placed);
@@ -1807,7 +1894,8 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/file"), b"bytes").unwrap();
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         placed.look.modified = 0;
         survey.disk.insert("data/file".to_owned(), placed.look);
@@ -1830,7 +1918,8 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/file"), b"bytes").unwrap();
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         placed.look.modified = 0;
         placed.checked = 1_700_000_000_500_000_000;
@@ -1895,7 +1984,8 @@ mod tests {
         );
         seal(&object);
         let surveyed = || {
-            let mut survey = Survey::read(&project, "data", Threads::default());
+            let mut survey =
+                Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
             survey.state.files.extend(records.iter().cloned());
             // as reading a state that records them does, so windows reads the links as they are
             survey.look_through_links(&project.root);
@@ -1975,7 +2065,8 @@ mod tests {
         fs::hard_link(&object, project.root.join("data/new")).unwrap();
         let mut new = record(&project.root, "data/new", b"good", Method::Hardlink);
         new.checked = checked;
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         survey.state.files.insert("data/old".to_owned(), old);
         survey.state.files.insert("data/new".to_owned(), new);
         assert_eq!(survey.doubted(&project.root, &cache).unwrap(), ["data/old"]);
@@ -2001,7 +2092,8 @@ mod tests {
         fs::set_permissions(&old_path, permissions).unwrap();
         let mut old = record(&project.root, "data/old", b"good", Method::Hardlink);
         old.checked = checked;
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let new = record(&project.root, "data/new", b"good", Method::Hardlink);
         assert_eq!(old.look.modified, new.look.modified);
         survey.state.files.insert("data/old".to_owned(), old);
@@ -2029,7 +2121,8 @@ mod tests {
                 "this disk keeps `a.txt` apart from `A.txt`",
             );
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let placed = record(&project.root, "data/a.txt", b"a", Method::Copy);
         survey
             .state
@@ -2110,7 +2203,8 @@ mod tests {
                 "this disk keeps two unicode forms of a name apart",
             );
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let listed = survey.disk.keys().next().unwrap().clone();
         let locked = locked("caf\u{e9}.txt", b"a");
         survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
@@ -2138,7 +2232,8 @@ mod tests {
                 "this disk keeps two unicode forms of a name apart",
             );
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         assert_eq!(survey.writable.len(), 1);
         let locked = locked("caf\u{e9}.txt", b"a");
         survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
@@ -2164,7 +2259,8 @@ mod tests {
                 "this disk keeps `a.txt` apart from `A.txt`",
             );
         }
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let locked = locked("a.txt", b"a");
         survey.retarget(&project.root, &[target(&locked, "data/a.txt")]);
         assert_eq!(survey.disk.keys().collect::<Vec<_>>(), ["data/A.txt"]);
@@ -2188,7 +2284,7 @@ mod tests {
         fs::write(data.join("full.csv/inner/kept"), b"work").unwrap();
         symlink(dir.path(), data.join("linked")).unwrap();
         symlink(dir.path().join("elsewhere"), data.join("real/link.csv")).unwrap();
-        let survey = Survey::read(&project, "data", Threads::default());
+        let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         let blocker = |path: &str| {
             survey
                 .blocker(path)
@@ -2245,7 +2341,14 @@ mod tests {
             temporaries: leftovers,
             entries,
             ..
-        } = scan(dir.path(), "data", None, Threads::default());
+        } = scan(
+            dir.path(),
+            "data",
+            None,
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
         assert_eq!(leftovers, Vec::<String>::new());
@@ -2258,9 +2361,16 @@ mod tests {
             ])
         );
         assert_eq!(
-            scan(dir.path(), "missing", None, Threads::default())
-                .found
-                .len(),
+            scan(
+                dir.path(),
+                "missing",
+                None,
+                Threads::default(),
+                &Stop::default()
+            )
+            .unwrap()
+            .found
+            .len(),
             0
         );
     }
@@ -2296,7 +2406,8 @@ mod tests {
             fs::write(file, path).unwrap();
         }
         std::os::unix::fs::symlink(dir.path(), project.root.join("data/pets/link")).unwrap();
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey =
+            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
         for path in placed {
             let record = record(&project.root, path, path.as_bytes(), Method::Copy);
             survey.state.files.insert(path.to_owned(), record);
@@ -2402,7 +2513,8 @@ mod tests {
             fs::write(file, b"bytes").unwrap();
         }
         std::os::unix::fs::symlink(root.join("inputs"), root.join("data/shortcut")).unwrap();
-        let mut survey = Survey::read(&project, "inputs", Threads::default());
+        let mut survey =
+            Survey::read(&project, "inputs", Threads::default(), &Stop::default()).unwrap();
         survey.state.files.insert(
             "data/iris/iris.csv".to_owned(),
             record(root, "data/iris/iris.csv", b"bytes", Method::Copy),
@@ -2433,7 +2545,8 @@ mod tests {
             root: dir.path().to_path_buf(),
         };
         let left = |data_dir: &str, outside: &[&str], wanted: &[&str]| {
-            let mut survey = Survey::read(&project, data_dir, Threads::default());
+            let mut survey =
+                Survey::read(&project, data_dir, Threads::default(), &Stop::default()).unwrap();
             survey.outside = outside.iter().map(|path| (*path).to_owned()).collect();
             let going: HashSet<&str> = outside.iter().copied().collect();
             let wanted: HashSet<&str> = wanted.iter().copied().collect();

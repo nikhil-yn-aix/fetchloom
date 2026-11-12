@@ -47,6 +47,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
 | project state | indexed selected-folder ranges | 40,000 named datasets: ratios 0.1312 glibc and 0.0687 musl; musl stress peak +0.75 MiB | kept | [folder ranges](#searching-selected-folder-ranges-2026-11-12) |
+| project state | the data folder walk looks at the run's stop before each folder | a stop asked before the walk ends it at once; status of 100,000 files on ext4 0.996 glibc, 1.003 musl, peak memory +0.5 and +0.6 MiB | kept, for stopping | [stop during the walk](#a-stop-during-the-data-folder-walk-2026-11-12) |
 | project state | reuse an intact racy hash within one survey | `status --verify` of 32 MiB: musl 0.544, glibc 0.563; controls and memory within noise | kept | [racy hashes](#reusing-racy-hashes-within-a-survey-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -445,6 +446,12 @@ one run each of `add -i` of 1,000 links of 90 to 110 kB from a local server, gli
 | a8f9dad7, efbf3adf, glibc and musl | 256 | 50 | | | |
 
 a limit of 1,024 or more keeps groups of 256, so ordinary runs do what they did: efbf3adf against the clean release build of this batch, 1,000 links in interleaved rounds, 1.000 [0.992, 1.021] on glibc (30 pairs) and 0.987 [0.973, 1.006] on musl (28 pairs), peak memory 1.008 and 1.025 [0.971, 1.049]. under a low limit a run flushes four times as often, which costs a busy disk more; tmpfs could not time that. `downloads_wait_in_groups_a_low_open_file_limit_can_hold` holds 1,000 finished downloads in a batch under a soft limit of 256: with groups of 256 it failed with "too many open files", and again with the quarter taken out.
+
+## a stop during the data folder walk, 2026-11-12
+
+the walk that lists every file under the data folder for a survey looked at no stop, so a first ctrl-c during it waited for the whole listing, which on a network filesystem of a million files can take many seconds. it now looks at the run's stop before each folder it lists, and `Survey::read` ends with `interrupted`. `a_survey_ends_at_a_stop_asked_before_it` lists a data folder with a stop already asked: it failed while the walk ignored the stop, and again with the check taken out.
+
+an atomic load per folder costs nothing measurable: status of 100,000 files in 102 folders, in place on ext4 over nvme, efbf3adf against the clean release build of this batch, 0.996 [0.988, 1.003] on glibc (43 pairs) and 1.003 [0.997, 1.011] on musl (46 pairs), peak memory 79.1 to 79.6 MiB and 95.2 to 95.8 MiB. how long a stop takes on a large slow tree was not timed.
 
 ## pending archive reader budgets, 2026-11-12
 

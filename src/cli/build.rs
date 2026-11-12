@@ -555,7 +555,12 @@ impl<'a> Building<'a> {
         };
         let project = self.work.project;
         let cache = &self.work.cache;
-        let mut survey = Survey::read(project, &self.manifest.data_dir, self.context.threads);
+        let mut survey = Survey::read(
+            project,
+            &self.manifest.data_dir,
+            self.context.threads,
+            &self.context.stop,
+        )?;
         survey.check_doubted(&project.root, cache)?;
         let plan = plan::from_cache(&self.manifest, &fetched, cache)?;
         self.work
@@ -728,7 +733,14 @@ impl<'a> Building<'a> {
             return Err(error);
         }
         let project = self.work.project;
-        let mut survey = Survey::read(project, &self.manifest.data_dir, self.context.threads);
+        let Ok(mut survey) = Survey::read(
+            project,
+            &self.manifest.data_dir,
+            self.context.threads,
+            &self.context.stop,
+        ) else {
+            return Err(error);
+        };
         if survey
             .check_doubted(&project.root, &self.work.cache)
             .is_err()

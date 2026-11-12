@@ -172,7 +172,13 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
             fs::hard_link(&destination, &alias).unwrap();
         }
     }
-    let mut survey = Survey::read(project, "data", Threads::default());
+    let mut survey = Survey::read(
+        project,
+        "data",
+        Threads::default(),
+        &crate::stop::Stop::default(),
+    )
+    .unwrap();
     if !matches!(ownership, Ownership::Untracked) {
         let mut look = survey.disk[PATH];
         if matches!(scenario, 5 | 6) {
@@ -262,7 +268,13 @@ fn a_damaged_file_is_replaced_without_force() {
     write_file(&destination, 0, true, 1_000_000_000);
     let file = locked(0);
     for copy in [false, true] {
-        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut survey = Survey::read(
+            &project,
+            "data",
+            Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
         survey.state.files.insert(
             PATH.to_owned(),
             Placed {
@@ -308,7 +320,13 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
         for flags in 0_u8..64 {
             let [wanted, unknown, missing, edited, different, holds] =
                 std::array::from_fn(|bit| flags & (1 << bit) != 0);
-            let mut survey = Survey::read(&project, "data", Threads::default());
+            let mut survey = Survey::read(
+                &project,
+                "data",
+                Threads::default(),
+                &crate::stop::Stop::default(),
+            )
+            .unwrap();
             let look = Look {
                 size: 16,
                 modified: 123,

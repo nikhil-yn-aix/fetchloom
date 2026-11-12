@@ -80,7 +80,7 @@ settling writes newer state so later runs need not hash the same intact files. `
 
 ### metadata scanning
 
-directory traversal and no-follow file-type checks stay serial; file metadata is read with the placement worker helper. each batch holds at most 4,096 directory entries from at most eight parents and preserves discovery order. retaining those bounded parent handles avoids resolving every full path again without exhausting a small descriptor limit. batches below 512 files stay serial to avoid launching workers for sparse folders. worker groups obey available parallelism and `FETCHLOOM_THREADS`. state parsing, racy hashing, aliases and hardlink audits follow the same observation rules regardless of the worker count.
+directory traversal and no-follow file-type checks stay serial; file metadata is read with the placement worker helper. each batch holds at most 4,096 directory entries from at most eight parents and preserves discovery order. retaining those bounded parent handles avoids resolving every full path again without exhausting a small descriptor limit. batches below 512 files stay serial to avoid launching workers for sparse folders. worker groups obey available parallelism and `FETCHLOOM_THREADS`. the traversal looks at the run's stop before each folder, so `Survey::read` ends with `interrupted` soon after a first ctrl-c, however large or slow the data folder is. the listing of a folder left behind outside the data folder, one folder read while placing, which looks at the stop between its own steps, does not. state parsing, racy hashing, aliases and hardlink audits follow the same observation rules regardless of the worker count.
 
 ### settled-sync shortcut
 

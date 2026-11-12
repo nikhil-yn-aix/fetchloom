@@ -56,7 +56,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     } else {
         open_cache()?
     };
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    let stop = &context.stop;
+    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads, stop)?;
     let placing = place::Placing::new(
         &project,
         &new_manifest,

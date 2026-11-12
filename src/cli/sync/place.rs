@@ -2085,7 +2085,13 @@ mod tests {
     }
 
     fn surveyed(project: &Project) -> Survey {
-        Survey::read(project, "data", crate::threads::Threads::default())
+        Survey::read(
+            project,
+            "data",
+            crate::threads::Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap()
     }
 
     /// a file that stays where it is but now belongs to another dataset, as when two datasets in

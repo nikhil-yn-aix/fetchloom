@@ -1890,7 +1890,8 @@ async fn sync_add(
     // cache already
     let imported = !given.is_empty() && given.iter().all(|given| matches!(given, Given::Locked(_)));
     let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
-    let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads);
+    let stop = &work.context.stop;
+    let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads, stop)?;
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
     let (lock, before) = work

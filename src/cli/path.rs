@@ -364,7 +364,8 @@ fn ready_path(
         &manifest.data_dir,
         &[plan::folder(manifest, name)],
         context.threads,
-    );
+        &context.stop,
+    )?;
     let doubted = survey.doubted(&project.root, cache)?;
     let ready = planned
         .targets

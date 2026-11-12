@@ -522,7 +522,13 @@ fn settled_named(
         .map(|name| plan::folder(manifest, name))
         .collect();
     let reading = context.output.setup("Reading", "the data folder");
-    let mut survey = Survey::read_within(project, &manifest.data_dir, &folders, context.threads);
+    let mut survey = Survey::read_within(
+        project,
+        &manifest.data_dir,
+        &folders,
+        context.threads,
+        &context.stop,
+    )?;
     drop(reading);
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
@@ -585,7 +591,7 @@ fn settled_unheld(
         Err(_) => (peek_cache()?, false),
     };
     let reading = context.output.setup("Reading", "the data folder");
-    let mut survey = Survey::read(project, &manifest.data_dir, context.threads);
+    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
     drop(reading);
     // hashing proved the files placed too recently to trust by time unchanged, and only asks
     // for the state to be written again, which this project cannot be. an edit hashing found
@@ -1276,7 +1282,12 @@ pub(super) async fn sync_all(
     } = run;
     refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let reading = work.context.output.setup("Reading", "the data folder");
-    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    let mut survey = Survey::read(
+        work.project,
+        &manifest.data_dir,
+        work.context.threads,
+        &work.context.stop,
+    )?;
     drop(reading);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -1415,7 +1426,12 @@ pub(super) async fn preview_all(
 ) -> Result<Outcome<Preview>, Error> {
     refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let reading = work.context.output.setup("Reading", "the data folder");
-    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    let mut survey = Survey::read(
+        work.project,
+        &manifest.data_dir,
+        work.context.threads,
+        &work.context.stop,
+    )?;
     drop(reading);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -2120,7 +2136,8 @@ pub(crate) mod tests {
             manifest: digest::sha256(b""),
             lock: Some(digest::sha256(text.as_bytes())),
         };
-        let survey = Survey::read(&project, &manifest.data_dir, first.threads);
+        let survey =
+            Survey::read(&project, &manifest.data_dir, first.threads, &first.stop).unwrap();
         assert!(
             place::untouched(&project, &manifest, &survey, &seen, false, &Scope::All)
                 .unwrap()

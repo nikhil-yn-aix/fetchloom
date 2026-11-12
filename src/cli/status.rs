@@ -23,6 +23,7 @@ use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::{Manifest, Members};
 use crate::project::state::Candidate;
 use crate::recipe;
+use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
 
@@ -159,6 +160,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     let status = check(
         &project,
         context.threads,
+        &context.stop,
         &context.mirrors.mirrors,
         verify.then_some(&context.output),
     )?;
@@ -229,7 +231,13 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let status = check(project, context.threads, &context.mirrors.mirrors, None)?;
+    let status = check(
+        project,
+        context.threads,
+        &context.stop,
+        &context.mirrors.mirrors,
+        None,
+    )?;
     let output = &context.output;
     warn_git(output, project)?;
     if sum_up(output, &status) {
@@ -416,6 +424,7 @@ fn unbuilt(
 fn check(
     project: &Project,
     threads: Threads,
+    stop: &Stop,
     mirrors: &Mirrors,
     verify: Option<&Output>,
 ) -> Result<Status, Error> {
@@ -459,7 +468,7 @@ fn check(
         ..Status::default()
     };
     let cache = super::peek_cache()?;
-    let mut survey = Survey::read(project, &manifest.data_dir, threads);
+    let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
     status.candidates = survey
         .state
         .candidates
@@ -1268,7 +1277,7 @@ mod tests {
         ] {
             std::fs::write(folder.join(name), name).unwrap();
         }
-        let survey = Survey::read(&project, "data", Threads::default());
+        let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
 
         assert_eq!(
             extra(&survey, &HashSet::new()),
