@@ -99,6 +99,10 @@ pub(super) struct Status {
     /// `fetchloom build` brings in line.
     #[serde(skip)]
     building: BTreeMap<String, String>,
+    /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
+    /// have, which a sync carries over, each with that name.
+    #[serde(skip)]
+    renamed: BTreeMap<String, String>,
     /// the fetched datasets each of `unbuilt` is made from that the cache lacks files of, which
     /// building it reads first.
     #[serde(skip)]
@@ -318,11 +322,20 @@ fn check(
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     let lockless = read.is_none();
-    let lock = read.map(|(lock, _)| lock).unwrap_or_default();
+    // a sync carries a pin over to the name data.toml gives it now, so status reads data.lock
+    // as that sync would leave it, and names what it renames
+    let (lock, carried) =
+        super::sync::rename::forecast(&manifest, read.map(|(lock, _)| lock).unwrap_or_default());
+    let renamed: BTreeMap<String, String> = carried
+        .into_iter()
+        .map(|rename| (rename.new, rename.old))
+        .collect();
     let (mut unlocked, removed) = out_of_date(&manifest, &lock);
     let building = unbuilt(project, &manifest, &lock)?;
     unlocked.extend(building.keys().cloned());
+    unlocked.extend(renamed.keys().cloned());
     unlocked.sort();
+    unlocked.dedup();
     let mut status = Status {
         project: project.root.clone(),
         verified: verify,
@@ -330,6 +343,7 @@ fn check(
         unlocked,
         removed,
         building,
+        renamed,
         unplaced: manifest
             .datasets
             .iter()
@@ -795,13 +809,19 @@ fn list(output: &Output, status: &Status) {
         "data.toml changed since data.lock was written"
     };
     for name in &status.unlocked {
-        let reason = status.building.get(name).map_or(unpinned, String::as_str);
+        let reason = match (status.building.get(name), status.renamed.get(name)) {
+            (Some(moved), _) => moved.clone(),
+            (None, Some(old)) => format!(
+                "data.lock pins it as {old}, which data.toml does not have, and `fetchloom sync` keeps that pin under this name without asking the source"
+            ),
+            (None, None) => unpinned.to_owned(),
+        };
         output.report("Unlocked", &format!("{name} · {reason}"));
     }
     for name in &status.removed {
         output.report(
             "Removed",
-            &format!("{name} from data.toml; `fetchloom sync` updates data.lock"),
+            &format!("{name} · not in data.toml, so `fetchloom sync` takes it out of data.lock"),
         );
     }
     for kept in &status.candidates {

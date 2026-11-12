@@ -3,18 +3,40 @@
 //! never asks the source again and never pins other bytes than the old name had.
 
 use super::{Scope, Upgrade};
-use crate::project::lock::Locked;
 use crate::project::lock::derived::Derived;
+use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::{Manifest, Recipe};
 
 /// an entry of data.lock carried over to the name data.toml gives it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Rename {
-    pub(super) old: String,
-    pub(super) new: String,
+pub(in crate::cli) struct Rename {
+    pub(in crate::cli) old: String,
+    pub(in crate::cli) new: String,
     /// whether the old entry went: a run of named datasets that leaves the old name out keeps
     /// its entry until a run of every dataset.
     pub(super) moved: bool,
+}
+
+/// `lock` as a relock of every dataset would carry its entries over to the names data.toml gives
+/// them now, with those renames, so a forecast that writes nothing, as status, agrees with what
+/// a sync keeps. results and entries of names data.toml does not have stay as they are.
+pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Rename>) {
+    let (mut derived, dropped, mut renamed) = results(manifest, lock.derived);
+    derived.extend(dropped);
+    derived.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut datasets = Vec::new();
+    let mut others = lock.datasets;
+    renamed.extend(carry(
+        manifest,
+        &Scope::All,
+        &Upgrade::Nothing,
+        &[],
+        &mut datasets,
+        &mut others,
+    ));
+    datasets.extend(others);
+    datasets.sort_by(|a, b| a.name.cmp(&b.name));
+    (Lock { datasets, derived }, renamed)
 }
 
 /// pairs each name of `new` with the one name of `old` it renames, as `(old, new)`: `answers`

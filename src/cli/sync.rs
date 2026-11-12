@@ -4,7 +4,7 @@
 pub(super) mod disk;
 mod draft;
 pub(super) mod place;
-mod rename;
+pub(super) mod rename;
 pub(super) mod unpack;
 
 use std::collections::{BTreeSet, HashSet};

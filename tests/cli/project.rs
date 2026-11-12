@@ -1541,7 +1541,9 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
     assert!(
-        stdout.contains("    Removed iris from data.toml; `fetchloom sync` updates data.lock\n"),
+        stdout.contains(
+            "    Removed iris · not in data.toml, so `fetchloom sync` takes it out of data.lock\n"
+        ),
         "{stdout}"
     );
     let stderr = text(&output.stderr)?;
@@ -1598,7 +1600,10 @@ fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stdout.contains("Unlocked new"), "{stdout}");
-    assert!(stdout.contains("Removed old from data.toml"), "{stdout}");
+    assert!(
+        stdout.contains("Removed old · not in data.toml"),
+        "{stdout}"
+    );
     assert!(stdout.contains("Missing data/set/file19.csv"), "{stdout}");
     assert!(!stdout.contains("file20.csv"), "{stdout}");
     assert!(stdout.contains("Extra data/extra19.txt"), "{stdout}");
@@ -2743,5 +2748,51 @@ fn a_folder_named_data_toml_is_told_as_such() -> Result {
         .collect::<Result<_>>()?;
     left.sort();
     assert_eq!(left, ["data.toml", "sub"]);
+    Ok(())
+}
+
+/// a dataset renamed in data.lock alone keeps its pin, since sync carries it over to the name
+/// data.toml has and keeps its files, so status forecasts that: no name data.toml never had is
+/// told as removed from it, and no file sync keeps is told as one it removes.
+#[test]
+fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    fs::write(
+        &lock,
+        pinned.replacen("name = \"iris\"", "name = \"irisx\"", 1),
+    )?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["unlocked"], serde_json::json!(["iris"]), "{result}");
+    assert_eq!(result["removed"], serde_json::json!([]), "{result}");
+    assert_eq!(
+        (&result["extra"], &result["unneeded"]),
+        (&serde_json::json!([]), &serde_json::json!([])),
+        "{result}"
+    );
+    let told = text(&sandbox.run(&["status"])?.stdout)?;
+    assert_eq!(
+        told,
+        "   Unlocked iris · data.lock pins it as irisx, which data.toml does not have, and `fetchloom sync` keeps that pin under this name without asking the source\n"
+    );
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        fs::metadata(&placed)?.ino()
+    };
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read_to_string(&lock)?, pinned);
+    assert_eq!(fs::read(&placed)?, IRIS);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        assert_eq!(fs::metadata(&placed)?.ino(), inode, "sync keeps the file");
+    }
     Ok(())
 }
