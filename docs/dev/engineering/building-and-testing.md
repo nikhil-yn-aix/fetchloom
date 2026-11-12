@@ -20,7 +20,7 @@ the first cold build can take several minutes, especially while compiling native
 
 [build.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/build.rs) stamps the commit a build comes from into `FETCHLOOM_COMMIT`, which `--version -v` and its JSON name: a commit `FETCHLOOM_COMMIT` already names at build time, as the release workflow sets, else the `sha1` cargo writes into `.cargo_vcs_info.json` when it packages the crate from git, else `git rev-parse HEAD` where the checkout's top is the crate's own folder, so a crate unpacked inside another repository never takes its commit. a build with none of them says `commit unknown, built outside git`, and JSON gives null. only the hex goes in. cargo runs the script again when this checkout's `HEAD`, its reflog or its branch moves, so a commit makes the crate compile again, which incremental debug builds do in seconds.
 
-the crate package includes `src`, `build.rs`, `Cargo.toml`, `Cargo.lock`, the license and notice files, the README, and the two reference pages its help tests check (`environment.md` and `exit-codes.md`); `include` in [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) keeps test data, other docs and the benchmark out. `fetchloom help` prints shorter built-in topics, not the full reference pages. [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
+the crate package includes `src`, `build.rs`, `Cargo.toml`, `Cargo.lock`, the license and notice files, the README, the three reference pages its tests check (`environment.md`, `exit-codes.md` and `json-output.md`) and the manual page its manual test checks; `include` in [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) keeps test data, other docs and the benchmark out. `fetchloom help` prints shorter built-in topics, not the full reference pages. [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
 
 ## test layers
 
@@ -88,6 +88,13 @@ git diff -- tests/cli/snapshots
 ```
 
 review the updated text, then rerun without `INSTA_UPDATE`. do not accept a changed snapshot merely to make a test pass.
+
+the manual page, [docs/man/fetchloom.1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/man/fetchloom.1), works the same way. `manual::the_manual_page_is_what_the_help_renders` renders it from the command line's definition with clap_mangen and fails when the committed page differs, so a change to the top command's options or to a command's one-line summary needs the page written again:
+
+```sh
+FETCHLOOM_TEST_WRITE_MANUAL=1 cargo test --locked --lib manual
+man -l docs/man/fetchloom.1
+```
 
 ### python and live tests
 

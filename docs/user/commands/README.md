@@ -29,6 +29,8 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | `help <command>` | show a command's help | check syntax at the terminal |
 | bare `fetchloom` | show project status or the welcome | find your next command |
 
+from the first release, the archives and debian packages also carry a manual page with the global options and a line for each command: `man fetchloom` once the debian package is installed, or `man -l fetchloom.1` in an unpacked archive.
+
 ## global options
 
 every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C <dir>`, `--mirror <url>` and `--no-config`. `add`, `get`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.

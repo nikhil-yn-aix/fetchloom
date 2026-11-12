@@ -18,8 +18,9 @@ include = [
     "/LICENSE",
     "/NOTICE",
     "/README.md",
-    # help.rs checks its topics against these pages in its tests, and output's warning kinds
-    # against the JSON reference
+    # help.rs checks its topics against these pages in its tests, output's warning kinds against
+    # the JSON reference, and the manual test its page against the help
+    "/docs/man/fetchloom.1",
     "/docs/user/reference/environment.md",
     "/docs/user/reference/exit-codes.md",
     "/docs/user/reference/json-output.md",
@@ -127,6 +128,9 @@ bolero = "0.13"
 insta = { version = "1.49", features = ["filters"] }
 # the cli sandbox probes clone support on every platform
 reflink-copy = { version = "0.1", default-features = false }
+# docs/man/fetchloom.1, rendered from the command line's definition and checked by a test
+clap_mangen = "0.3.3"
+roff = "1.1"
 
 [lints.rust]
 missing_docs = "warn"

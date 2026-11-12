@@ -58,13 +58,13 @@ the archives are packed so the same files give the same bytes. the build job exp
 
 | artifact | contents |
 |---|---|
-| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE, README.md and THIRD-PARTY-LICENSES in a matching top-level folder |
+| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE, README.md, THIRD-PARTY-LICENSES and the manual page `fetchloom.1` in a matching top-level folder |
 | `fetchloom-0.1.0-aarch64-pc-windows-msvc.zip` | same layout for arm64 windows |
-| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE, README.md and THIRD-PARTY-LICENSES in a matching folder |
+| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE, README.md, THIRD-PARTY-LICENSES and `fetchloom.1` in a matching folder |
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
 | `fetchloom-0.1.0-x86_64-apple-darwin.tar.gz` | same layout for x86_64 macos |
 | `fetchloom-0.1.0-aarch64-apple-darwin.tar.gz` | same layout for arm64 macos |
-| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license, notice and third-party licenses in `/usr/share/doc/fetchloom` |
+| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license, notice and third-party licenses in `/usr/share/doc/fetchloom`, and the manual page, which `man fetchloom` and `man fl` open |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |
@@ -81,6 +81,8 @@ THIRD-PARTY-LICENSES holds the license texts of the crates the six release binar
 cargo fetch --locked
 cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES
 ```
+
+the manual page is [docs/man/fetchloom.1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/man/fetchloom.1): the top command's synopsis, description and options, then each command with its one-line summary. a unit test renders it from the command line's definition with clap_mangen, a dev-dependency, and fails when the committed page differs, so the release copies a page that matches its help; [building and testing](building-and-testing.md#update-snapshots) says how to write it again. the debian packages keep it compressed in `/usr/share/man/man1`.
 
 a pre-release such as 0.1.0-rc.1 keeps that spelling in the archive and debian package file names. its wheels carry pep 440's spelling, 0.1.0rc1, as maturin writes it, with alpha and beta shortened to a and b. its debian packages record 0.1.0~rc.1 as their version, which dpkg sorts before 0.1.0, so the release replaces the pre-release on upgrade.
 

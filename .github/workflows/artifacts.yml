@@ -239,7 +239,7 @@ jobs:
           name="fetchloom-$VERSION-${{ matrix.target }}"
           mkdir -p ".release/$name" dist
           cp "target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }}" \
-            LICENSE NOTICE README.md THIRD-PARTY-LICENSES ".release/$name/"
+            LICENSE NOTICE README.md THIRD-PARTY-LICENSES docs/man/fetchloom.1 ".release/$name/"
           cd .release
           if [ "$RUNNER_OS" = macOS ]; then
             stamp=$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
@@ -272,6 +272,11 @@ jobs:
           install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
           install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
           install -Dm644 THIRD-PARTY-LICENSES "$root/usr/share/doc/fetchloom/THIRD-PARTY-LICENSES"
+          # debian keeps manual pages compressed; man fl opens the same page
+          install -d "$root/usr/share/man/man1"
+          gzip -9n -c docs/man/fetchloom.1 > "$root/usr/share/man/man1/fetchloom.1.gz"
+          chmod 644 "$root/usr/share/man/man1/fetchloom.1.gz"
+          ln -s fetchloom.1.gz "$root/usr/share/man/man1/fl.1.gz"
           mkdir -p "$root/DEBIAN"
           # dpkg sorts 0.1.0~rc.1 before 0.1.0 and 0.1.0-rc.1 after it. the file keeps Cargo's
           # spelling, since a release upload renames a ~ in a file name to a dot
@@ -300,6 +305,14 @@ jobs:
           case "$contents" in
             *' ./usr/share/doc/fetchloom/THIRD-PARTY-LICENSES'*) ;;
             *) echo "::error::the debian package lacks the third-party licenses"; exit 1 ;;
+          esac
+          case "$contents" in
+            *' ./usr/share/man/man1/fetchloom.1.gz'*) ;;
+            *) echo "::error::the debian package lacks the manual page"; exit 1 ;;
+          esac
+          case "$contents" in
+            *' ./usr/share/man/man1/fl.1.gz -> fetchloom.1.gz'*) ;;
+            *) echo "::error::the debian package lacks fl's manual page link"; exit 1 ;;
           esac
           sudo dpkg -i "$deb"
           trap 'sudo dpkg -r fetchloom' EXIT

@@ -132,22 +132,24 @@ class PackageContentTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check_machine(binary, 'aarch64-unknown-linux-musl')
 
-    def test_an_archive_carries_the_third_party_licenses(self):
+    def test_an_archive_carries_the_notices_and_the_manual_page(self):
         folder = f'fetchloom-{VERSION}-x86_64-unknown-linux-musl'
-        named = ['fetchloom', 'LICENSE', 'NOTICE', 'README.md']
-        for names, complete in [(named, False), (named + ['THIRD-PARTY-LICENSES'], True)]:
-            with self.subTest(complete=complete), tempfile.TemporaryDirectory() as directory:
+        shipped = ['fetchloom', 'LICENSE', 'NOTICE', 'README.md', 'THIRD-PARTY-LICENSES', 'fetchloom.1']
+        for missing in [None, 'THIRD-PARTY-LICENSES', 'fetchloom.1']:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 path = root / 'release.tar.gz'
                 with tarfile.open(path, 'w:gz') as archive:
-                    for name in names:
+                    for name in shipped:
+                        if name == missing:
+                            continue
                         member = tarfile.TarInfo(f'{folder}/{name}')
                         member.size = len(name)
                         member.mode = 0o755
                         archive.addfile(member, io.BytesIO(name.encode()))
-                if complete:
+                if missing is None:
                     unpack(path, 'x86_64-unknown-linux-musl', VERSION, root / 'unpacked')
-                    self.assertEqual((root / 'unpacked/THIRD-PARTY-LICENSES').read_bytes(), b'THIRD-PARTY-LICENSES')
+                    self.assertEqual((root / 'unpacked/fetchloom.1').read_bytes(), b'fetchloom.1')
                 else:
                     with self.assertRaises(AssertionError):
                         unpack(path, 'x86_64-unknown-linux-musl', VERSION, root / 'unpacked')
