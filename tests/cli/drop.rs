@@ -720,3 +720,101 @@ fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
     );
     Ok(())
 }
+
+/// a path one typo away from a file or folder drop knows gets the command that names it, with
+/// the rest of the line as typed and the path as typed from the folder it was typed in.
+#[test]
+fn a_path_one_typo_away_names_the_drop_that_was_meant() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    let work = sandbox.work();
+    for (arguments, message, meant) in [
+        (
+            &["drop", "data/pets/lables.csv"][..],
+            "data/pets/lables.csv names no file of pets",
+            "fetchloom drop data/pets/labels.csv",
+        ),
+        (
+            &["drop", "data/pest/images/cat_001.png", "--dry-run"],
+            "data/pest/images/cat_001.png names no file of any dataset",
+            "fetchloom drop data/pets/images/cat_001.png --dry-run",
+        ),
+        (
+            &["drop", "data/pets/imagse"],
+            "data/pets/imagse names no file of pets",
+            "fetchloom drop data/pets/images",
+        ),
+    ] {
+        let output = sandbox.run(arguments)?;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert_eq!(
+            text(&output.stderr)?,
+            format!("error: {message}\n  help: did you mean `{meant}`?\n")
+        );
+    }
+    let inside = sandbox
+        .command_in(
+            &work.join("data/pets/images"),
+            &["drop", "dog_01_corrupt.png"],
+        )
+        .output()?;
+    assert_eq!(inside.status.code(), Some(2));
+    assert!(
+        text(&inside.stderr)?
+            .ends_with("  help: did you mean `fetchloom drop dog_010_corrupt.png`?\n"),
+        "{}",
+        text(&inside.stderr)?
+    );
+    Ok(())
+}
+
+/// drop takes paths, so a quoted pattern names no file: the error says so and gives the
+/// pattern in the members table that does leave those files out, which works as given.
+#[test]
+fn a_quoted_pattern_is_explained_with_the_exclude_that_does_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    let work = sandbox.work();
+    let output = sandbox.run(&["drop", "data/pets/images/*.png"])?;
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stderr)?,
+        "error: data/pets/images/*.png names no file of pets\n  drop takes paths, not patterns, so * is part of the name it looks for\n  help: to leave out every file a pattern matches, add \"pets-v1/images/*.png\" to exclude in members.\"pets.zip\" of datasets.pets in data.toml by hand, then run `fetchloom sync`\n"
+    );
+    let manifest = work.join("data.toml");
+    let agent = sandbox.run(&["--json", "drop", "data/pets/images/*.png"])?;
+    assert_eq!(
+        json(&agent)?["errors"][0]["fix"],
+        serde_json::Value::Null,
+        "a sync alone leaves the files in"
+    );
+    fs::write(
+        &manifest,
+        format!(
+            "{}\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/*.png\"]\n",
+            fs::read_to_string(&manifest)?
+        ),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let folder = work.join("data").join("pets");
+    assert!(!folder.join("images/cat_001.png").exists());
+    assert_eq!(fs::read(folder.join("labels.csv"))?, b"file,label\n");
+    Ok(())
+}
+
+/// a file whose name holds a `*` is a path like any other.
+#[cfg(unix)]
+#[test]
+fn a_file_named_with_a_star_drops_by_its_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("odd")?;
+    fs::write(folder.join("a*b.txt"), b"star\n")?;
+    fs::write(folder.join("keep.txt"), b"keep\n")?;
+    ok(&sandbox.run(&["add", "../odd"])?)?;
+    ok(&sandbox.run(&["drop", "data/odd/a*b.txt"])?)?;
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        "[datasets.odd]\nref = \"local\"\nexclude = [\"a[*]b.txt\"]\n"
+    );
+    Ok(())
+}

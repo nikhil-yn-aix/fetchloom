@@ -127,19 +127,21 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         .iter()
         .map(|path| in_data_folder(&project.root, &here, &manifest.data_dir, path))
         .collect::<Result<Vec<_>, _>>()?;
-    // planning writes nothing, so a stop it finds leaves everything as it was
-    let poll = || {
-        context.stop.check().map_err(|mut error| {
-            error.message = format!("{}, so nothing changed", error.message);
-            error
-        })
-    };
+    let poll = || unchanged_by_a_stop(&context.stop);
     let mut pace = Pace::new(&poll);
     let progress = context.output.wait("Planning", planning(&paths));
     pace.look()?;
     // a dataset with `place = false` is planned where its files would land, so they drop too
     let planned = plan::inputs(&manifest, &lock, &cache)?;
-    let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace)?;
+    let asked = asked(
+        &manifest,
+        &lock,
+        &cache,
+        &planned,
+        &paths,
+        &args.paths,
+        &pace,
+    )?;
     let edits = edits(&manifest, &lock, &cache, &asked, &mut pace)?;
     refuse_what_breaks(&manifest, &lock, &planned, &cache, &edits, &pace)?;
     let (updated, new_lock) = written(&text, &manifest, &lock, &edits, &pace)?;
@@ -183,12 +185,12 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     pace.look()?;
     context.stop.finish();
     drop(progress);
-    project.write(manifest::FILE, updated.as_bytes())?;
-    if lock_changed {
-        context.wrote_lists(&project.root, project.write_lists(&new_lock)?);
-        project.write(lock::FILE, new_lock.render().as_bytes())?;
-        project.sweep_lists(&new_lock);
-    }
+    write(
+        context,
+        &project,
+        &updated,
+        lock_changed.then_some(&new_lock),
+    )?;
     tell(&context.output, &edits, "Excluded");
     let placement = placing.remove_only(&context.output).map_err(|error| {
         let written = if lock_changed {
@@ -198,40 +200,60 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         };
         error.detail(format!("{written} updated; after fixing the error, `fetchloom sync` removes the files they leave out"))
     })?;
-    tell_next(
-        &context.output,
-        &project,
-        &new_manifest,
-        &edits,
-        lock_changed,
-    );
+    tell_next(context, &project, &new_manifest, &edits, lock_changed);
     Ok(report(placement, None))
+}
+
+/// a stop asked while drop plans, which writes nothing, so the stop says that nothing changed.
+fn unchanged_by_a_stop(stop: &crate::stop::Stop) -> Result<(), Error> {
+    stop.check().map_err(|mut error| {
+        error.message = format!("{}, so nothing changed", error.message);
+        error
+    })
+}
+
+/// writes `updated` as data.toml, then `lock`, when the drop changed it, with its lists.
+fn write(
+    context: &Context,
+    project: &crate::project::Project,
+    updated: &str,
+    lock: Option<&Lock>,
+) -> Result<(), Error> {
+    project.write(manifest::FILE, updated.as_bytes())?;
+    if let Some(lock) = lock {
+        context.wrote_lists(&project.root, project.write_lists(lock)?);
+        project.write(lock::FILE, lock.render().as_bytes())?;
+        project.sweep_lists(lock);
+    }
+    Ok(())
 }
 
 /// the closing `next:` line of a drop that changed the datasets of `edits`: the build of the
 /// recipes made from them, which data.lock pins as made from the files before, or the commit.
 fn tell_next(
-    output: &crate::output::Output,
+    context: &Context,
     project: &crate::project::Project,
     manifest: &Manifest,
     edits: &BTreeMap<&str, Edit>,
     lock_changed: bool,
 ) {
     let datasets: Vec<&str> = edits.keys().copied().collect();
-    output.next(&match built_again(manifest, &datasets).as_slice() {
-        [] => {
-            let changed = if lock_changed {
-                committed(project)
-            } else {
-                "data.toml"
-            };
-            format!("commit {changed}; other clones drop them at their next `fetchloom sync`")
-        }
-        recipes => format!(
-            "run `fetchloom build {}`, then commit data.toml, data.lock and data.lock.d",
-            recipes.join(" ")
-        ),
-    });
+    context
+        .output
+        .next(&match built_again(manifest, &datasets).as_slice() {
+            [] => {
+                let changed = if lock_changed {
+                    committed(project)
+                } else {
+                    "data.toml"
+                };
+                format!("commit {changed}; other clones drop them at their next `fetchloom sync`")
+            }
+            recipes => format!(
+                "run `fetchloom build {}`, then commit data.toml, data.lock and data.lock.d",
+                recipes.join(" ")
+            ),
+        });
 }
 
 /// the recipes to build once `changed` datasets hold other files: each made from one of them,
@@ -324,6 +346,7 @@ fn asked<'p, 'a>(
     cache: &Cache,
     planned: &'p Plan<'a>,
     paths: &[String],
+    typed: &[PathBuf],
     pace: &Pace,
 ) -> Result<Vec<Asked<'p, 'a>>, Error> {
     let mut sorted: Vec<(String, &'p Target<'a>)> = planned
@@ -333,11 +356,13 @@ fn asked<'p, 'a>(
         .collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let mut asked = Vec::with_capacity(paths.len());
-    for path in paths {
+    for (path, typed) in paths.iter().zip(typed) {
         pace.look()?;
         let found = named(&sorted, path);
         if found.targets.is_empty() {
-            return Err(unplanned(manifest, lock, cache, planned, path));
+            return Err(unplanned(
+                manifest, lock, cache, planned, &sorted, path, typed,
+            ));
         }
         if let Some(made) = found.targets.iter().find(|target| {
             manifest
@@ -387,8 +412,19 @@ fn made_by_recipe(path: &str, dataset: &str) -> Error {
     .help("choose its files inside the recipe's step instead")
 }
 
-/// why `path`, in the data folder, names no planned file.
-fn unplanned(manifest: &Manifest, lock: &Lock, cache: &Cache, planned: &Plan, path: &str) -> Error {
+/// why `path`, in the data folder and `typed` as given, names no planned file of `sorted`, the
+/// planned files by their folded paths: a file a recipe makes, one an archive this machine never
+/// unpacked may hold, one a pattern leaves out already, a pattern, which drop does not take, or
+/// a path one name off the one meant.
+fn unplanned(
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
+    planned: &Plan,
+    sorted: &[(String, &Target)],
+    path: &str,
+    typed: &Path,
+) -> Error {
     let within = |dataset: &str| {
         let folder = name::fold(&plan::folder(manifest, dataset));
         let path = name::fold(path);
@@ -427,8 +463,157 @@ fn unplanned(manifest: &Manifest, lock: &Lock, cache: &Cache, planned: &Plan, pa
         Some((last, [])) => (*last).to_owned(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
     };
-    Error::new(Kind::Usage, format!("{path} names no file of {owners}")).help(
+    let error = Error::new(Kind::Usage, format!("{path} names no file of {owners}"));
+    if let Some(wild) = path.chars().find(|c| matches!(c, '*' | '?' | '[')) {
+        return error
+            .detail(format!(
+                "drop takes paths, not patterns, so {wild} is part of the name it looks for"
+            ))
+            .help(exclude_help(manifest, lock, cache, sorted, path));
+    }
+    if let Some(meant) = near(sorted, path) {
+        // a path in the project is a command only from the project's folder
+        let help = match (typed.to_str(), retyped(typed, path, &meant)) {
+            (Some(typed), Some(retyped)) => format!(
+                "did you mean `{}`?",
+                super::meant(
+                    &[typed],
+                    &[&retyped],
+                    format!("fetchloom drop {}", super::shell_word(&retyped)),
+                )
+            ),
+            _ => format!("did you mean {meant}?"),
+        };
+        return error.help(help);
+    }
+    error.help(
         "check the path; a file of your own needs no drop: delete it yourself if you do not need it",
+    )
+}
+
+/// the planned file or folder `path` likely meant: `path` with one name changed to the closest
+/// name planned there, below the deepest folder of `path` that holds planned files, among
+/// `sorted`, the planned files by their folded paths, as planning spells it.
+fn near(sorted: &[(String, &Target)], path: &str) -> Option<String> {
+    let key = name::fold(path);
+    let names: Vec<&str> = key.split('/').collect();
+    let under = |folder: &str| {
+        let below = format!("{folder}/");
+        let start = sorted.partition_point(|(key, _)| *key < below);
+        sorted[start..]
+            .iter()
+            .take_while(move |(key, _)| key.starts_with(&below))
+    };
+    let depth = (1..names.len())
+        .rev()
+        .find(|depth| under(&names[..*depth].join("/")).next().is_some())?;
+    let folder = names[..depth].join("/");
+    let mut there: Vec<&str> = under(&folder)
+        .filter_map(|(key, _)| key[folder.len() + 1..].split('/').next())
+        .collect();
+    there.dedup();
+    let mut meant = names.clone();
+    meant[depth] = name::closest(names[depth], there)?;
+    let found = named(sorted, &meant.join("/"));
+    let target = found.targets.first()?;
+    Some(
+        target
+            .path
+            .split('/')
+            .take(names.len())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// `typed`, given for `path` in the project, with the names from the first that `meant` changes
+/// written as `meant` has them, so the suggestion keeps the folder it was typed from. none when
+/// those names are not at the end of `typed` as they are in `path`, as after a `..`.
+fn retyped(typed: &Path, path: &str, meant: &str) -> Option<String> {
+    let typed = typed.to_str()?;
+    let names: Vec<&str> = path.split('/').collect();
+    let changed: Vec<&str> = meant.split('/').collect();
+    let first = names
+        .iter()
+        .zip(&changed)
+        .position(|(name, change)| name != change)?;
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    let mut start = typed.trim_end_matches(separators).len();
+    for (at, name) in names.iter().enumerate().skip(first).rev() {
+        let rest = typed[..start].strip_suffix(name)?;
+        if !(rest.is_empty() || rest.ends_with(separators)) {
+            return None;
+        }
+        start = rest.len();
+        if at > first {
+            start = typed[..start].strip_suffix(separators)?.len();
+        }
+    }
+    Some(format!("{}{}", &typed[..start], changed[first..].join("/")))
+}
+
+/// the help for `path`, a pattern given where drop takes a path: the pattern that leaves out
+/// what it matches and where it goes in data.toml, when the folder before its last name holds
+/// planned files of one dataset that its source lists or that one archive holds.
+fn exclude_help(
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
+    sorted: &[(String, &Target)],
+    path: &str,
+) -> String {
+    let anywhere = "to leave out every file a pattern matches, add it to exclude in data.toml, or to the archive's members table for files inside an archive, by hand, then run `fetchloom sync`".to_owned();
+    let Some((folder, last)) = path.rsplit_once('/') else {
+        return anywhere;
+    };
+    let found = named(sorted, folder);
+    let Some((dataset, first)) = found
+        .targets
+        .first()
+        .and_then(|target| Some((target.dataset, target.file()?)))
+        .filter(|_| found.folder)
+    else {
+        return anywhere;
+    };
+    let alike = |file: &LockedFile| match first.unpacks_to {
+        Some(_) => file.path == first.path,
+        None => file.unpacks_to.is_none(),
+    };
+    let one_origin = found
+        .targets
+        .iter()
+        .all(|target| target.dataset == dataset && target.file().is_some_and(alike));
+    let Some(locked) = lock.get(dataset).filter(|_| one_origin) else {
+        return anywhere;
+    };
+    let inside = match first.unpacks_to {
+        Some(_) => match unpacked(manifest, locked, first, cache) {
+            Ok(inside) => Some(inside),
+            Err(_) => return anywhere,
+        },
+        None => None,
+    };
+    let chosen: Vec<(&str, &str)> = found
+        .targets
+        .iter()
+        .filter_map(|target| {
+            let origin = match &inside {
+                Some(inside) => inside.get(&target.path)?.as_str(),
+                None => target.file()?.path.as_str(),
+            };
+            Some((target.path.as_str(), origin))
+        })
+        .collect();
+    let pattern = match shared_prefix(folder, &chosen) {
+        Some(prefix) => format!("{}/{last}", glob::escape(&prefix)),
+        None => last.to_owned(),
+    };
+    let table = match inside {
+        Some(_) => format!("members.\"{}\" of datasets.{dataset}", first.path),
+        None => format!("datasets.{dataset}"),
+    };
+    format!(
+        "to leave out every file a pattern matches, add \"{pattern}\" to exclude in {table} in data.toml by hand, then run `fetchloom sync`"
     )
 }
 
@@ -965,6 +1150,11 @@ mod tests {
         (manifest, lock, folder, cache)
     }
 
+    /// `paths` as a person types them from the project's folder.
+    fn typed(paths: &[String]) -> Vec<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
     /// a folder of listed files is one pattern, found by reading the dataset's list once for
     /// the folder, not once for each of its files.
     #[test]
@@ -974,7 +1164,16 @@ mod tests {
         let paths = ["data/tiny/d003".to_owned(), "data/tiny/d007".to_owned()];
         let go_on = || Ok(());
         let mut pace = Pace::new(&go_on);
-        let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace).unwrap();
+        let asked = asked(
+            &manifest,
+            &lock,
+            &cache,
+            &planned,
+            &paths,
+            &typed(&paths),
+            &pace,
+        )
+        .unwrap();
         let edits = edits(&manifest, &lock, &cache, &asked, &mut pace).unwrap();
         assert_eq!(
             edits["tiny"].exclude,
@@ -1008,6 +1207,53 @@ mod tests {
         assert_eq!(built_again(&alone, &["lab"]), Vec::<&str>::new());
     }
 
+    /// a path one name away from a planned file or folder finds it, whichever name is off, and
+    /// the suggestion keeps the path as it was typed up to that name.
+    #[test]
+    fn a_typo_is_found_one_name_away_and_kept_as_typed() {
+        let (manifest, lock, _folder, cache) = tiny(3, 2);
+        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let mut sorted: Vec<(String, &Target)> = planned
+            .targets
+            .iter()
+            .map(|target| (name::fold(&target.path), target))
+            .collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (typed, meant) in [
+            (
+                "data/tiny/d001/f0003.txt",
+                Some("data/tiny/d001/f00003.txt"),
+            ),
+            ("data/tiyn/d002", Some("data/tiny/d002")),
+            (
+                "data/tiny/D001/F0003.TXT",
+                Some("data/tiny/d001/f00003.txt"),
+            ),
+            ("data/tiny/d001/f00003.txt/x", None),
+            ("data/tiny/zzz", None),
+        ] {
+            assert_eq!(near(&sorted, typed).as_deref(), meant, "{typed}");
+        }
+        let path = "data/pest/images/x.png";
+        let meant = "data/pets/images/x.png";
+        for (typed, retyped_as) in [
+            ("data/pest/images/x.png", Some("data/pets/images/x.png")),
+            (
+                "../data/pest/images/x.png/",
+                Some("../data/pets/images/x.png"),
+            ),
+            ("pest/images/x.png", Some("pets/images/x.png")),
+            ("pest/images/../images/x.png", None),
+        ] {
+            let retyped_as = retyped_as.map(str::to_owned);
+            assert_eq!(
+                retyped(Path::new(typed), path, meant),
+                retyped_as,
+                "{typed}"
+            );
+        }
+    }
+
     /// planning looks for a stop every chunk of its work, and a stop it finds there ends it at
     /// once, however much is left: the look that finds it is the last.
     #[test]
@@ -1026,7 +1272,16 @@ mod tests {
             stop.check()
         };
         let mut pace = Pace::new(&poll);
-        let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace).unwrap();
+        let asked = asked(
+            &manifest,
+            &lock,
+            &cache,
+            &planned,
+            &paths,
+            &typed(&paths),
+            &pace,
+        )
+        .unwrap();
         assert_eq!(looks.get(), 3);
         let Err(stopped) = edits(&manifest, &lock, &cache, &asked, &mut pace) else {
             panic!("planning went on after the stop");

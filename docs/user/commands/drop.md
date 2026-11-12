@@ -17,7 +17,7 @@ fetchloom drop [options] <path>...
 |---|---|
 | `-n`, `--dry-run` | show what would change on disk without changing it |
 
-[global options](README.md#global-options) also apply. each path is a file or a folder in the data folder, from the current folder, or from the folder `-C` names. it may name a file you deleted already. a folder stands for every file data.lock places under it. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there, as in [raw data only recipes read](#raw-data-only-recipes-read). on windows `\` separates folders too, and names are compared the way a disk that ignores case compares them.
+[global options](README.md#global-options) also apply. each path is a file or a folder in the data folder, from the current folder, or from the folder `-C` names. it may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name there, never a pattern, so a pattern in quotes names no file, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there, as in [raw data only recipes read](#raw-data-only-recipes-read). on windows `\` separates folders too, and names are compared the way a disk that ignores case compares them.
 
 ## what happens
 
@@ -77,7 +77,8 @@ each refusal changes nothing.
 
 | refusal | exit | what to do |
 |---|---|---|
-| a path outside the data folder, or one that names no file of a dataset, which the error says | 2, `usage` | check the path; delete a file of your own yourself |
+| a path outside the data folder, or one that names no file of a dataset, which the error says | 2, `usage` | check the path: for a path one name off a file or folder drop knows, the help gives the command it likely meant, as `` did you mean `fetchloom drop data/iris/iris.csv`? ``. delete a file of your own yourself |
+| a pattern, such as `'data/dot/*.wav'` in quotes | 2, `usage` | add the pattern the help gives to `exclude` in data.toml and run `fetchloom sync`, as below |
 | a file left out already | 2, `usage` | nothing: the error names the pattern in data.toml that leaves it out. delete that pattern and run `fetchloom sync` to bring the file back |
 | a file inside an archive this machine never unpacked | 2, `usage` | run `fetchloom sync` first, so fetchloom knows what the archive holds |
 | every file of a dataset | 2, `usage` | run [`fetchloom remove <name>`](remove.md) to take the dataset out |
@@ -85,6 +86,17 @@ each refusal changes nothing.
 | a drop that leaves one archive the only file of its dataset | 2, `usage` | a dataset that is one archive places its files straight in its folder, so the archive's files would move. keep the files, or write the exclude by hand and run `fetchloom sync` |
 | a file the source lists, while data.toml changed the dataset since data.lock was written | 1, `lock.outdated` | run `fetchloom sync`, then drop again |
 | a dataset or a members table written inline | 50, `project.invalid` | write it as a table, as `[datasets.pets]` |
+
+stderr for a pattern in quotes, where the dataset `dot` is the tar `dot-000000.tar`:
+
+```text
+$ fetchloom drop 'data/dot/*.wav'
+error: data/dot/*.wav names no file of dot
+  drop takes paths, not patterns, so * is part of the name it looks for
+  help: to leave out every file a pattern matches, add "*.wav" to exclude in members."dot-000000.tar" of datasets.dot in data.toml by hand, then run `fetchloom sync`
+```
+
+the pattern reads paths inside the archive, so in a dataset that is one archive whose files share a top folder, it starts with that folder. without the quotes, the shell names each `.wav` file in `data/dot`, and drop leaves out each with a pattern of its own.
 
 ## dry run
 
