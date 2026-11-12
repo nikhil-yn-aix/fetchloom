@@ -1632,6 +1632,7 @@ fn many_differences(sandbox: &Sandbox) -> Result {
     for (path, sha256) in (0..25)
         .map(|index| (format!("a/file{index:02}.csv"), "0".repeat(64)))
         .chain(std::iter::once(("b/kept.csv".to_owned(), sha256(b"kept"))))
+        .chain(std::iter::once(("c/only.csv".to_owned(), "1".repeat(64))))
     {
         writeln!(
             lock,
@@ -1681,6 +1682,11 @@ fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result 
         "{screen}"
     );
     assert!(!screen.contains("file00.csv"), "{screen}");
+    // a folder that held one file is named by that file
+    assert!(
+        screen.contains("    Missing data/set/c/only.csv\n"),
+        "{screen}"
+    );
     assert!(
         screen.contains("      Extra data/extra19.txt\n"),
         "{screen}"
@@ -1690,7 +1696,7 @@ fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result 
         screen.contains("            and 5 more · `fetchloom status | less` shows all\n"),
         "{screen}"
     );
-    assert!(screen.contains("Found 52 differences"), "{screen}");
+    assert!(screen.contains("Found 53 differences"), "{screen}");
     Ok(())
 }
 

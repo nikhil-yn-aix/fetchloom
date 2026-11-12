@@ -955,12 +955,16 @@ fn list(output: &Output, status: &Status) {
         let mut folders: HashMap<&str, usize> = HashMap::new();
         for path in paths.iter().filter(|path| !retiring.contains(path)) {
             if let Some(folder) = status.gone.get(path).filter(|_| shown.is_some()) {
+                // a folder that held one file is named by that file
                 let at = *folders.entry(folder).or_insert_with(|| {
-                    rows.push((String::new(), 0));
+                    rows.push(((*path).clone(), 0));
                     rows.len() - 1
                 });
                 rows[at].1 += 1;
-                rows[at].0 = format!("{folder} · {}", units::count(rows[at].1, "file", "files"));
+                if rows[at].1 > 1 {
+                    rows[at].0 =
+                        format!("{folder} · {}", units::count(rows[at].1, "file", "files"));
+                }
             } else if let Some(said) = said {
                 rows.push((format!("{path} · {said}"), 1));
             } else if status.shared.contains(path) {

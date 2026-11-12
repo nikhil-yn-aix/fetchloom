@@ -210,14 +210,14 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
     }
     let said = put_back_said(verb, &paths, &items, &folders);
     let mut leave = Vec::new();
-    if let Some((name, _, _)) = items
+    if let Some((name, files, path)) = items
         .iter()
         .find(|(_, _, path)| !placement.undroppable.contains_key(*path))
     {
-        let what = if folders.contains_key(name) {
-            "folder"
+        let (what, name) = if *files > 1 {
+            ("folder", *name)
         } else {
-            "file"
+            ("file", path.as_str())
         };
         leave.push(format!(
             "to leave a {what} out for good, run `{}`",
@@ -268,12 +268,10 @@ fn put_back_said(
     items: &[(&str, u64, &String)],
     folders: &BTreeMap<&str, usize>,
 ) -> String {
-    let shown = |(name, files, _): &(&str, u64, &String)| {
-        if folders.contains_key(name) {
-            format!("the {} in {name}/", units::grouped(*files))
-        } else {
-            (*name).to_owned()
-        }
+    let shown = |(name, files, path): &(&str, u64, &String)| match *files {
+        1 => (*path).clone(),
+        files if folders.contains_key(name) => format!("the {} in {name}/", units::grouped(files)),
+        _ => (*name).to_owned(),
     };
     match (paths.len(), items) {
         (1, _) => format!(
@@ -902,6 +900,24 @@ fn entry_name(found: Entry) -> &'static str {
 mod tests {
     use super::*;
     use crate::output::{Level, Style};
+
+    /// a warning names a folder deleted whole once, with how many files it held, and a folder
+    /// that held one file by that file.
+    #[test]
+    fn a_deleted_folder_is_named_once_and_a_lone_file_by_its_path() {
+        let (only, first, second) = (
+            "data/set/c/only.csv".to_owned(),
+            "data/set/a/1.csv".to_owned(),
+            "data/set/a/2.csv".to_owned(),
+        );
+        let paths = [&first, &second, &only];
+        let items = [("data/set/a", 2, &first), ("data/set/c", 1, &only)];
+        let folders = BTreeMap::from([("data/set/a", 0), ("data/set/c", 1)]);
+        assert_eq!(
+            put_back_said("put back", &paths, &items, &folders),
+            "put back 3 files that were deleted or moved, since data.lock pins them: the 2 in data/set/a/, data/set/c/only.csv"
+        );
+    }
 
     /// the folder a file was deleted with is the topmost that holds no file, never above the
     /// floor, and a file whose own folder still holds one was deleted alone.

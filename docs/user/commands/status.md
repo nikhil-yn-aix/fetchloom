@@ -97,7 +97,7 @@ an entry in a file's way is listed once as blocked, rather than each file behind
 
 a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as unneeded, and the files behind it as missing.
 
-a pipe or a file gets every file on a row of its own, as `git status` gives them, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row:
+a pipe or a file gets every file on a row of its own, as `git status` gives them, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row, or the file itself when it held one:
 
 ```text
     Missing data/many/part03/ · 30 files
