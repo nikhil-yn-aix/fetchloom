@@ -753,6 +753,8 @@ fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
             body.clone(),
             Serving {
                 etag: Some("\"v2\""),
+                // one stream may run, so pacing it would only make the test slow
+                rate: u64::MAX,
                 ..SERVING
             },
         );
