@@ -241,24 +241,28 @@ fn output_writes_exactly_that_file_writable_and_alone() -> Result {
 }
 
 /// a download nothing else needs moves out of the cache into the file, so its bytes are written
-/// once, however large. windows copies, since fetchloom cannot count a file's names there.
+/// once, however large, also into folders `-o` names that are not there yet. windows copies,
+/// since fetchloom cannot count a file's names there.
 #[test]
 fn output_moves_a_one_off_out_of_the_cache() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let document = json(&output)?;
-    let method = &document["result"]["files"][0]["method"];
-    if cfg!(unix) {
-        assert_eq!(method, "move");
-        for key in ["reflinks", "hardlinks", "copies"] {
-            assert_eq!(document["work"][key], 0, "{key}");
+    for path in ["data.csv", "new/sub/data.csv"] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let output = sandbox.run(&["--json", "get", &server.url, "-o", path])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let document = json(&output)?;
+        let method = &document["result"]["files"][0]["method"];
+        if cfg!(unix) {
+            assert_eq!(method, "move", "{path}");
+            for key in ["reflinks", "hardlinks", "copies"] {
+                assert_eq!(document["work"][key], 0, "{path}: {key}");
+            }
+        } else {
+            assert_ne!(method, "move");
         }
-    } else {
-        assert_ne!(method, "move");
+        assert_eq!(fs::read(sandbox.work().join(path))?, IRIS);
+        assert_eq!(objects(&sandbox), 0);
     }
-    assert_eq!(objects(&sandbox), 0);
     Ok(())
 }
 

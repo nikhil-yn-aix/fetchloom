@@ -108,6 +108,7 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 - adopting an untracked equal file makes it managed; a later removal can delete it if unchanged, and warns that it was already there. `status` lists such a file as `adoptable`, by the same `holds_target` test, size first, then the hash, and `tell` gives datasets that share a folder one `Adopted` line, as it gives them one `Placed` line.
 - a members table filters an archive's targets after `unpacked_paths` placed every member; filtering first would change the top folder a dataset strips and move the kept files.
 - read each placed file's size and time immediately after placement, not after the whole batch.
+- `get -o` makes the folders of its file through the placer, as a copy would, before it moves a one-off out of the cache. a rename into a folder that is not there fails, and the copy it would fall back to holds the bytes twice until the cache drops its own.
 
 ## tests
 

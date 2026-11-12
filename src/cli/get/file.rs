@@ -766,7 +766,8 @@ fn forget(cache: &Cache, digest: &Sha256) {
 }
 
 /// moves `object`, a download nothing else needs, from the cache to `path`, so a file of any size
-/// costs no second copy of its bytes, and says whether it did. it does not across disks, for an
+/// costs no second copy of its bytes, and says whether it did. a folder of `path` that is not
+/// there yet is made first, as [`publish`] makes it. it does not move across disks, for an
 /// object with another name, as a project's hardlink is, which the file made writable would let
 /// an edit reach, or on windows, where fetchloom cannot count a file's names; the caller copies
 /// then. a name the file cannot take gives the object back to the cache as it was.
@@ -776,6 +777,7 @@ fn take(object: &Path, path: &Path, replace: bool) -> io::Result<bool> {
     let Some(folder) = path.parent() else {
         return Ok(false);
     };
+    Placer::in_named_folder(folder).check_folders(path, true)?;
     let taken = folder.join(format!(".fetchloom-{:016x}.take", fastrand::u64(..)));
     if fs::rename(object, &taken).is_err() {
         return Ok(false);
@@ -1072,6 +1074,23 @@ mod tests {
         assert!(!metadata.permissions().readonly());
         assert_eq!(fs::read(&path).unwrap(), b"served");
         assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
+        assert_eq!(names_in(&dir.path().join("objects")), Vec::<String>::new());
+    }
+
+    /// a folder `-o` names that is not there yet is made before the move, so the download still
+    /// moves rather than being copied once a copy has made the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_one_off_moves_into_a_folder_made_for_it() {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let object = sealed(dir.path());
+        let inode = fs::metadata(&object).unwrap().ino();
+        let folder = dir.path().join("new").join("sub");
+        let path = folder.join("data.csv");
+        assert!(take(&object, &path, false).unwrap());
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(names_in(&folder), ["data.csv"]);
         assert_eq!(names_in(&dir.path().join("objects")), Vec::<String>::new());
     }
 
