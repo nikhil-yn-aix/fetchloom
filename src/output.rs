@@ -1332,12 +1332,12 @@ fn stopped_text(error: &Error, color: bool) -> String {
         "Stopped",
         accented(&rest, Paint::new(), color)
     );
-    for line in &error.details {
+    for line in error.details.iter().flat_map(|line| readable(line)) {
         let _ = write!(
             text,
             "\n{:>11} {dim}{}{dim:#}",
             "",
-            accented(&plain(&hashes_apart(line)), dim, color)
+            accented(&plain(&line), dim, color)
         );
     }
     if let Some(help) = &error.help {
@@ -1354,11 +1354,11 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         "{red}error:{red:#} {}",
         accented(&plain(&error.message), Paint::new(), color)
     );
-    for line in &error.details {
+    for line in error.details.iter().flat_map(|line| readable(line)) {
         let _ = write!(
             text,
             "\n  {dim}{}{dim:#}",
-            accented(&plain(&hashes_apart(line)), dim, color)
+            accented(&plain(&line), dim, color)
         );
     }
     if let Some(help) = &error.help {
@@ -1371,12 +1371,28 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
     text
 }
 
-/// `line` as a person reads it: each whole SHA-256 on it, a word of 64 hex digits, cut to its
-/// first 12 digits, or to one past the first digit where it differs from another hash on the
-/// line, so two hashes that differ late still read apart. `--json` gives them whole.
-fn hashes_apart(line: &str) -> Cow<'_, str> {
-    const WHOLE: usize = 64;
-    const SHORT: usize = 12;
+/// the lines a person reads for the detail `line`: a comparison of two whole SHA-256 values, as
+/// `expected sha256 <a>, got <b>`, on two lines with every digit, one value under the other,
+/// since a person checks them against a published checksum; any other line as [`hashes_apart`]
+/// shows it.
+fn readable(line: &str) -> Vec<Cow<'_, str>> {
+    if let [(first, a), (second, b)] = whole_hashes(line)[..]
+        && line[first + a.len()..second].starts_with(", ")
+        && second + b.len() == line.len()
+    {
+        let before = &line[..first];
+        let between = &line[first + a.len() + 2..second];
+        let width = before.chars().count().max(between.chars().count());
+        return vec![
+            Cow::Owned(format!("{before:<width$}{a}")),
+            Cow::Owned(format!("{between:<width$}{b}")),
+        ];
+    }
+    vec![hashes_apart(line)]
+}
+
+/// each whole SHA-256 on `line`, a word of 64 hex digits, with where it starts.
+fn whole_hashes(line: &str) -> Vec<(usize, &str)> {
     let bytes = line.as_bytes();
     let digit = |byte: &u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
     let mut hashes: Vec<(usize, &str)> = Vec::new();
@@ -1389,11 +1405,21 @@ fn hashes_apart(line: &str) -> Cow<'_, str> {
         let closes = bytes
             .get(end)
             .is_none_or(|byte| matches!(byte, b' ' | b',' | b';' | b'.' | b')'));
-        if run == WHOLE && opens && closes {
+        if run == 64 && opens && closes {
             hashes.push((start, &line[start..end]));
         }
         start = end + 1;
     }
+    hashes
+}
+
+/// `line` as a person reads it: each whole SHA-256 on it, a word of 64 hex digits, cut to its
+/// first 12 digits, or to one past the first digit where it differs from another hash on the
+/// line, so two hashes that differ late still read apart. `--json` gives them whole.
+fn hashes_apart(line: &str) -> Cow<'_, str> {
+    const WHOLE: usize = 64;
+    const SHORT: usize = 12;
+    let hashes = whole_hashes(line);
     if hashes.is_empty() {
         return Cow::Borrowed(line);
     }
@@ -2009,6 +2035,30 @@ mod tests {
 
     /// two hashes on a line read apart wherever they differ, at least 12 digits each; a lone
     /// hash takes 12, and hex digits in a path or a longer word stay as they are.
+    #[test]
+    fn a_hash_comparison_reads_whole_one_value_under_the_other() {
+        let wrong = "0".repeat(64);
+        let got = "492d5ea49605a5bb7e1c3c4d8b1f0f6c2a9d3e7b5c1a0f9e8d7c6b5a49382716";
+        assert_eq!(
+            super::readable(&format!("expected sha256 {wrong}, got {got}")),
+            [
+                format!("expected sha256 {wrong}"),
+                format!("got             {got}")
+            ]
+        );
+        assert_eq!(
+            super::readable(&format!("expected sha256 {wrong}, the source states {got}")),
+            [
+                format!("expected sha256   {wrong}"),
+                format!("the source states {got}")
+            ]
+        );
+        assert_eq!(
+            super::readable(&format!("got {got}.")),
+            [format!("got {}.", &got[..12])]
+        );
+    }
+
     #[test]
     fn hashes_on_a_line_read_apart_however_late_they_differ() {
         let hash = "e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b1";

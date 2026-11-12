@@ -1872,9 +1872,8 @@ fn sha256_takes_the_form_sites_write() -> Result {
     Ok(())
 }
 
-/// a hash that differs from the file's late, past the 12 digits a person usually reads, still
-/// reads apart: each is shown up to just past the first digit where they differ, and JSON gives
-/// both whole.
+/// a hash that differs from the file's late still reads apart: a person reads both whole, one
+/// under the other, to check against a published checksum, and JSON gives them in one detail.
 #[test]
 fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1899,9 +1898,7 @@ fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     assert_eq!(told.status.code(), Some(30));
     assert!(
         text(&told.stderr)?.contains(&format!(
-            "  expected sha256 {}, got {}\n",
-            &wrong[..31],
-            &IRIS_SHA256[..31]
+            "  expected sha256 {wrong}\n  got             {IRIS_SHA256}\n"
         )),
         "{}",
         text(&told.stderr)?

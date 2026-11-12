@@ -179,7 +179,14 @@ a list always runs as several links, even when it holds one, so `--dir` names th
 
 ## checking a hash
 
-`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, alone or after `sha256:` as a list line takes them, with surrounding whitespace ignored. a value of 32 or 40 hex digits is refused as the MD5 or SHA-1 it looks like, since sites often state one beside the SHA-256. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download, and so does a file already at the `-o` path that holds other bytes: its error says the hash or the file may be wrong, and shows both hashes, since a hash typed or copied by hand is as likely to be off as the file. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the expected and received hashes, each cut to its first 12 digits, or to just past the first digit where the two differ, so hashes that differ late still read apart; `--json` gives both whole.
+`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, alone or after `sha256:` as a list line takes them, with surrounding whitespace ignored. a value of 32 or 40 hex digits is refused as the MD5 or SHA-1 it looks like, since sites often state one beside the SHA-256. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download, and so does a file already at the `-o` path that holds other bytes: its error says the hash or the file may be wrong, and shows both hashes, since a hash typed or copied by hand is as likely to be off as the file. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the expected and received hashes whole, one under the other, to check against a published checksum; `--json` gives both in one detail:
+
+```text
+error: cows.csv does not match --sha256
+  expected sha256 0000000000000000000000000000000000000000000000000000000000000000
+  got             492d5ea496056f1a6a6592241032fab764c321596317930b4fa0e1e8bc3b7470
+  help: check the hash given to --sha256, or ask the file's owner which bytes are right
+```
 
 ## existing folders
 
