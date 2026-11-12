@@ -1,7 +1,7 @@
 //! catalog discovery and safe unattended behavior against local catalog responses.
 #![cfg(debug_assertions)]
 
-use crate::support::{Part, Result, Sandbox, Server, json, reply, text};
+use crate::support::{Result, Sandbox, Server, json, reply, text};
 use std::process::Command;
 
 const HF: &[u8] = include_bytes!("../fixtures/sources/search/hf.json");
@@ -322,6 +322,8 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
 #[test]
 fn a_first_stop_while_a_catalog_searches_ends_add() -> Result {
     use std::io::BufRead as _;
+
+    use crate::support::Part;
 
     let sandbox = Sandbox::new()?;
     let answering = |body: &[u8]| {
