@@ -273,6 +273,39 @@ all of them, b3b182a against the changes, median times:
 
 no peak memory interval started above 1.001. beside 100,000 files, `path` of 3 still reads all of the state's 24 MB of json to pass over its records: 25 ms on musl and 45 ms on glibc, nearly all of what is left. going further needs a state that keeps each dataset's records apart.
 
+## the end of a run, 2026-11-12
+
+a run ended its tokio runtime with `shutdown_background`, so `main` returned while the runtime's threads were still exiting: a median of 9 of them at the end of a sync of 32 links. on windows, returning from `main` ends those threads wherever they are and then runs main's thread-local destructors, which under `-vv` take the same process-wide locks the threads take as they exit, and a ci run on fat32 hung after its last line. `end_runtime` now waits for them, at most `EXIT_WAIT`. one experiment build of a8f9dad chose the end at run time, `FETCHLOOM_EXP_EXIT_<ms>=1` for a bound of that many milliseconds and none for `shutdown_background`, and logged how long the end took. abh.py ran the arms in interleaved rounds with the measure lock held, on cores 12-23, or on two of them, alone or each shared with one or three busy loops. tokio joins the threads only when every one lets go within the bound, so an end shorter than the bound joined them all.
+
+| run | build | wall, `shutdown_background` and with a bound | end of the run, median and slowest | joined |
+|---|---|---|---|---:|
+| sync of 32 links of 100 KB from an empty cache | glibc | 27.69 ms, 27.93 ms | 0.35 ms, 3.51 ms | 180 of 180 |
+| the same | musl | 27.86 ms, 27.58 ms | 0.41 ms, 1.68 ms | 180 of 180 |
+| settled sync of the 32 | glibc | 4.78 ms, 4.83 ms | 0.09 ms, 3.30 ms | 300 of 300 |
+| the same | musl | 4.92 ms, 4.95 ms | 0.13 ms, 1.29 ms | 300 of 300 |
+| sync of 32, 2 cores | glibc | 29.38 ms, 29.24 ms | 0.45 ms, 3.08 ms | 120 of 120 |
+| settled, 2 cores | glibc | 4.88 ms, 4.97 ms | 0.10 ms, 2.60 ms | 200 of 200 |
+| sync of 32, 2 cores with a busy loop each | glibc | 54.12 ms, 55.13 ms | 1.45 ms, 5.20 ms | 120 of 120 |
+| settled, 2 cores with a busy loop each | glibc | 9.66 ms, 11.41 ms | 1.59 ms, 1.98 ms | 200 of 200 |
+| sync of 32, 2 cores with three busy loops each | glibc | 116.89 ms, 122.18 ms | 1.74 ms, 8.65 ms | 120 of 120 |
+| settled, 2 cores with three busy loops each | glibc | 24.31 ms, 24.73 ms | 6.01 ms, 10.09 ms | 200 of 200 |
+
+walls are medians of 30 or 50 runs an arm; "with a bound" pools the bounds tried, which joined alike: 10, 25, 50, 100, 250 and 1,000 ms on 12 cores, 10 to 100 ms on 2. one end, 10.09 ms in the last row, passed 10 ms, so 25 ms is the smallest bound tried that every end fit in. on a loaded machine the wait shows in the wall, by about the end's own time.
+
+a stopped run pays the whole bound when a blocking task outlives it: `status --verify` of a 4 GiB file on tmpfs, stopped by SIGINT once 512 MiB were read, its hash left running as a stop leaves a scan, eight runs an arm:
+
+| end | `Stopped` to exit, glibc | `Stopped` to exit, musl |
+|---|---:|---:|
+| `shutdown_background` | 0.93 ms | 1.05 ms |
+| 10 ms | 10.98 ms | 11.14 ms |
+| 25 ms | 25.99 ms | 26.08 ms |
+| 50 ms | 51.08 ms | 51.15 ms |
+| 100 ms | 101.12 ms | 101.27 ms |
+| 250 ms | 251.11 ms | 251.08 ms |
+| 1 s | 1,001.12 ms | 1,001.12 ms |
+
+a second SIGINT sent as `Stopped` showed did not shorten the wait at 100 ms or 1 s, since the run's listener goes with the runtime; a second ctrl-c while the command still runs exits 130 from a runtime thread without the wait.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.

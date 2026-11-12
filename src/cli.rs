@@ -637,9 +637,23 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
         }
     }
     drop(entered);
-    // status is read-only, so an interrupted scan need not delay process exit.
-    runtime.shutdown_background();
+    end_runtime(runtime, EXIT_WAIT);
     outcome
+}
+
+/// how long the end of a run waits for the runtime's threads to have exited. each of 1,920 normal
+/// and settled runs measured let go of them within 10.1 ms, the slowest on two cores each shared
+/// with three busy loops; a stopped run whose scan still runs, as `status --verify`'s, ends this
+/// much after `Stopped`.
+const EXIT_WAIT: Duration = Duration::from_millis(25);
+
+/// ends `runtime`, waiting at most `wait` until its threads have exited, their thread-local
+/// destructors included. on windows, returning from main ends every other thread wherever it is
+/// and then runs main's destructors, which take the same locks as theirs, as `-vv`'s logging does,
+/// so a runtime thread ended inside one left the run hanging after its last line. a blocking task
+/// still running after `wait`, as a scan a stop left behind, ends with the process.
+fn end_runtime(runtime: tokio::runtime::Runtime, wait: Duration) {
+    runtime.shutdown_timeout(wait);
 }
 
 /// whether `command`, as help quotes it, is a whole command line fetchloom would accept, so a
@@ -1371,6 +1385,65 @@ mod tests {
         assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
     }
 
+    /// the end of a run waits until the runtime's threads have exited, their thread-local
+    /// destructors included. on windows, returning from main ends every other thread wherever it
+    /// is, then runs main's destructors, which take the same locks as theirs: a runtime thread
+    /// ended inside one left the run hanging after its last line.
+    #[test]
+    fn ending_the_runtime_waits_until_its_threads_have_exited() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static EXITED: AtomicUsize = AtomicUsize::new(0);
+        struct Exiting;
+        impl Drop for Exiting {
+            fn drop(&mut self) {
+                // a thread still in here when the process ends is what windows cuts short
+                std::thread::sleep(Duration::from_millis(20));
+                EXITED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        thread_local! {
+            static EXITING: Exiting = const { Exiting };
+        }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async { EXITING.with(|_| ()) }).await.unwrap();
+            tokio::task::spawn_blocking(|| EXITING.with(|_| ()))
+                .await
+                .unwrap();
+        });
+        end_runtime(runtime, Duration::from_secs(60));
+        assert_eq!(
+            EXITED.load(Ordering::SeqCst),
+            2,
+            "the run ended while a runtime thread was still exiting"
+        );
+    }
+
+    /// a blocking task that never ends, as a scan a stop left running or `get -i`'s reader of a
+    /// pipe kept open, still lets the run end once the wait is over.
+    #[test]
+    fn a_task_that_never_ends_still_lets_the_run_end() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        runtime.spawn_blocking(move || held.recv());
+        let (ended, end) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            end_runtime(runtime, EXIT_WAIT);
+            let _ = ended.send(());
+        });
+        end.recv_timeout(Duration::from_secs(60))
+            .expect("the run waited for a task that never ends");
+        drop(release);
+    }
+
     /// a stop returns from work that only reads at once, while work that writes is waited for
     /// until it has seen the stop and removed what it started, since the process ends soon after
     /// and would leave its files behind, as a stopped push left its unfinished copies.
@@ -1851,7 +1924,7 @@ mod tests {
             );
             assert_eq!(code, ExitCode::from(130));
             drop(entered);
-            runtime.shutdown_background();
+            end_runtime(runtime, EXIT_WAIT);
             return;
         }
         let folder = tempfile::tempdir().unwrap();
