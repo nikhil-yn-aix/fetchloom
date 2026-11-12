@@ -186,7 +186,10 @@ async fn run_links(context: &Context, args: Get) -> Result<Report, Error> {
                     units::count(asked.len() as u64, "link", "links")
                 ),
             )
-            .help("run one `fetchloom get --sha256` for each file to check"));
+            .help(format!(
+                "run one `{}` for each file to check",
+                super::project::command("get --sha256")
+            )));
         };
         if let Some(listed) = &one.expected
             && listed.sha256 != sha256
@@ -219,8 +222,9 @@ fn unprojected(offline: net::Offline, mut error: Error) -> Error {
             Some("check the id in a browser, then run get with the right one. a dataset that was removed cannot be fetched".to_owned())
         } else if help == offline.unlearned_help() {
             Some(format!(
-                "{} to download it once. after that, `fetchloom get <link> --offline` reuses it",
-                offline.retry()
+                "{} to download it once. after that, `{}` reuses it",
+                offline.retry(),
+                super::project::command("get <link> --offline")
             ))
         } else {
             None
@@ -300,7 +304,8 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
             "fashion mnist".to_owned()
         };
         return Err(error.help(format!(
-            "quote the words of one search, as in `fetchloom get \"{example}\"`, or get one dataset at a time"
+            "quote the words of one search, as in `{}`, or get one dataset at a time",
+            super::project::command(&format!("get \"{example}\""))
         )));
     }
     let mut asked: Vec<Asked> = links

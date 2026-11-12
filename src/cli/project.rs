@@ -176,7 +176,7 @@ pub(super) fn committed(project: &Project) -> &'static str {
 /// `fetchloom`, then `-C` and the folder the run worked in when its command line gave `-C`, then
 /// `words`: a command a help names, which then finds the same project from whatever folder a
 /// person runs it in. the folder is quoted for a shell as typed commands are.
-pub(super) fn command(words: &str) -> String {
+pub(crate) fn command(words: &str) -> String {
     static DIRECTORY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     // the run changed into the folder -C named, so only the command line still says it did
     let directory = DIRECTORY.get_or_init(|| {

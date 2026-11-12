@@ -720,7 +720,10 @@ pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
             ),
         )
         // `fetchloom lock` keeps a dataset whose entry did not change, link and all
-        .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
+        .help(format!(
+            "restore data.lock from git, or run `{}`, which resolves it again and may pin newer data",
+            crate::cli::project::command(&format!("lock --upgrade {dataset}"))
+        ))
     })
 }
 
@@ -1002,7 +1005,8 @@ fn inside(
             "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `fetchloom drop <path>` leaves files out"
         ),
         (None, Patterns::InDataToml) => format!(
-            "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `fetchloom drop <path>`"
+            "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `{}`",
+            crate::cli::project::command("drop <path>")
         ),
         (Some(shards), Patterns::OnCommandLine) => format!(
             "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.\"{}\"] in data.toml, or `fetchloom drop <path>` leaves files out",
@@ -1010,9 +1014,10 @@ fn inside(
             shards.key()
         ),
         (Some(shards), Patterns::InDataToml) => format!(
-            "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.\"{}\"], or leave files out with `fetchloom drop <path>`",
+            "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.\"{}\"], or leave files out with `{}`",
             shards.told(),
-            shards.key()
+            shards.key(),
+            crate::cli::project::command("drop <path>")
         ),
     }
 }

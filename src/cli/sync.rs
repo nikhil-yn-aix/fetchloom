@@ -296,8 +296,8 @@ impl<'a> Loop<'a> {
         self.context.output.warn_with(
             &said,
             &format!(
-                "run `fetchloom build {}` to make {them} here",
-                unbuilt.join(" ")
+                "run `{}` to make {them} here",
+                super::project::command(&format!("build {}", unbuilt.join(" ")))
             ),
         );
         placing.leave_out(&unbuilt);
@@ -409,10 +409,13 @@ impl<'a> Loop<'a> {
         {
             let folder = plan::folder(manifest, dataset);
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
-            return Err(local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
-                "copy them to {folder} and {} again, or run `fetchloom add <folder> --as {dataset}` where they are",
-                self.readying
-            )));
+            return Err(
+                local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
+                    "copy them to {folder} and {} again, or run `{}` where they are",
+                    self.readying,
+                    super::project::command(&format!("add <folder> --as {dataset}"))
+                )),
+            );
         }
         self.download_prepared(manifest, &sources, &files).await?;
         self.unpack_locked(manifest, &sources, &unpacking).await
@@ -1326,7 +1329,8 @@ impl<'a> Loop<'a> {
             .collect();
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
         shown_five(Error::new(Kind::OfflineMissing, message), &labels).help(format!(
-            "no link fetches an import, so going online does not help: copy its files from the folder they came from to {folder} by hand, then run `fetchloom sync`, or sync with `--mirror <folder>` naming a folder mirror that holds them"
+            "no link fetches an import, so going online does not help: copy its files from the folder they came from to {folder} by hand, then run `{}`, or sync with `--mirror <folder>` naming a folder mirror that holds them",
+            super::project::command("sync")
         ))
     }
 }
@@ -1385,7 +1389,8 @@ pub(super) fn tell_stale(
             output.warn_with(
                 &format!("{name} is not built yet"),
                 &format!(
-                    "run `fetchloom build {name}` to make it, then commit data.lock and data.lock.d"
+                    "run `{}` to make it, then commit data.lock and data.lock.d",
+                    super::project::command(&format!("build {name}"))
                 ),
             );
             stale.push(name.clone());
@@ -1409,7 +1414,8 @@ pub(super) fn tell_stale(
         output.warn_with(
             &format!("{name} changed since it was built: {}", said.join("; ")),
             &format!(
-                "data.lock still pins the result built before; run `fetchloom build {name}`, then commit data.lock and data.lock.d"
+                "data.lock still pins the result built before; run `{}`, then commit data.lock and data.lock.d",
+                super::project::command(&format!("build {name}"))
             ),
         );
         stale.push(name.clone());
@@ -1434,8 +1440,8 @@ pub(super) fn unbuilt_here(names: &[String]) -> Error {
         ),
     };
     Error::new(Kind::BuildNeeded, message).help(format!(
-        "run `fetchloom build {}` to make {them} here",
-        names.join(" ")
+        "run `{}` to make {them} here",
+        super::project::command(&format!("build {}", names.join(" ")))
     ))
 }
 

@@ -399,6 +399,88 @@ fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result 
     Ok(())
 }
 
+/// the folder the last `fetchloom -C <folder> ...` before `then` in `told` names, unquoted.
+fn folder_before(told: &str, then: &str) -> Option<std::path::PathBuf> {
+    let (before, _) = told.split_once(then)?;
+    let (_, quoted) = before.rsplit_once("`fetchloom -C ")?;
+    let unquoted = quoted
+        .strip_prefix(['"', '\''])
+        .and_then(|inner| inner.strip_suffix(['"', '\'']))
+        .unwrap_or(quoted);
+    Some(std::path::PathBuf::from(unquoted))
+}
+
+/// a run of [`every_command_a_run_with_c_suggests_names_the_project`]: text to add to the end of
+/// a project file first, the command line after `-C <folder>`, and what follows the folder in
+/// the command it suggests.
+type WithC<'a> = (Option<(&'a str, &'a str)>, Vec<&'a str>, &'a str);
+
+/// after a run with -C, the command a hint, a help or an error names for the project names it
+/// after -C too, whichever command gave it, so each works as typed in the folder the person ran
+/// fetchloom from.
+#[test]
+fn every_command_a_run_with_c_suggests_names_the_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        (
+            "/files/wine.csv".to_owned(),
+            file(b"alcohol\n14.2\n", "\"w1\""),
+        ),
+    ])?;
+    let iris = format!("{}{PATH}", server.url);
+    let wine = format!("{}/files/wine.csv", server.url);
+    let new = format!("{}/files/new.csv", server.url);
+    let zeros = "0".repeat(64);
+    let work = sandbox.work();
+    let project = fs::canonicalize(&work)?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let more = format!("\n[datasets.wine]\nref = \"{wine}\"\n");
+    let cases: [WithC<'_>; 9] = [
+        (None, vec!["add", &iris], " path iris`"),
+        (
+            None,
+            vec!["add", &wine, "--as", "iris"],
+            " remove iris` first",
+        ),
+        (None, vec!["build", "iris"], " sync` places it"),
+        (None, vec!["drop", "data/iris/iris.csv"], " remove iris`"),
+        (None, vec!["path", "/iris"], " path iris` or"),
+        (
+            None,
+            vec!["get", &iris, &wine, "--sha256", &zeros],
+            " get --sha256` for each",
+        ),
+        (
+            None,
+            vec!["--offline", "add", &new],
+            " get <link> --offline` reuses",
+        ),
+        (
+            Some(("data.toml", &more)),
+            vec!["export"],
+            " lock` and commit data.lock, then export again",
+        ),
+        (
+            Some(("data.lock", "<<<<<<< ours\n=======\n>>>>>>> theirs\n")),
+            vec!["status"],
+            " lock`, which merges both sides",
+        ),
+    ];
+    let typed = work.to_string_lossy();
+    for (appended, args, then) in cases {
+        if let Some((name, text)) = appended {
+            let mut written = fs::OpenOptions::new().append(true).open(work.join(name))?;
+            std::io::Write::write_all(&mut written, text.as_bytes())?;
+        }
+        let line = [vec!["-C", &typed], args.clone()].concat();
+        let told = text(&sandbox.command_in(&elsewhere, &line).output()?.stderr)?;
+        let named = folder_before(&told, then).ok_or_else(|| format!("{args:?}: {told}"))?;
+        assert_eq!(fs::canonicalize(named)?, project, "{args:?}: {told}");
+    }
+    Ok(())
+}
+
 /// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
 /// made in place through it is damage to that copy: status says so, and sync puts the pinned file
 /// back and keeps the changed copy beside it. a reflink or a copy is the project's own, and its

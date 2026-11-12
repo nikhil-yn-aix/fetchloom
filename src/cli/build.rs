@@ -209,7 +209,10 @@ fn recipes_only(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
         if manifest.datasets[name].source().is_some() {
             return Err(Error::new(
                 Kind::Usage,
-                format!("{name} is fetched, not built; `fetchloom sync` places it"),
+                format!(
+                    "{name} is fetched, not built; `{}` places it",
+                    super::project::command("sync")
+                ),
             )
             .help("name the recipes to build, the datasets data.toml makes with from and run"));
         }
@@ -348,7 +351,8 @@ impl<'a> Building<'a> {
                     ),
                 )
                 .help(format!(
-                    "run `fetchloom lock` and commit data.lock, or {instead}"
+                    "run `{}` and commit data.lock, or {instead}",
+                    super::project::command("lock")
                 )));
             }
         }
@@ -1512,14 +1516,18 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
             step.name
         ));
     }
-    let accept = format!("`fetchloom build --accept {}`", names.join(" "));
+    let accept = format!(
+        "`{}`",
+        super::project::command(&format!("build --accept {}", names.join(" ")))
+    );
+    let status = super::project::command("status -v");
     error.help(match names.as_slice() {
         [name] => format!(
-            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and {} are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, {accept} pins it",
+            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and {} are as they were. the rebuild is kept for you to compare; for example, `{status}` says where its files are. once you choose it, {accept} pins it",
             plan::folder(manifest, name)
         ),
         _ => format!(
-            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, {accept} pins them"
+            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `{status}` says where their files are. once you choose them, {accept} pins them"
         ),
     })
 }

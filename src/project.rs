@@ -806,7 +806,10 @@ fn unmerged(name: &str, text: &str) -> Option<Error> {
             format!("{name} has an unfinished git merge conflict"),
         )
         .detail(format!("{name}:{}", line + 1))
-        .help("run `fetchloom lock`, which merges both sides without downloading"),
+        .help(format!(
+            "run `{}`, which merges both sides without downloading",
+            crate::cli::command("lock")
+        )),
     )
 }
 

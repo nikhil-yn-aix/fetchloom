@@ -128,8 +128,9 @@ impl Offline {
     /// project or a command line gives links. `get`, which pins nothing, words its own.
     pub(crate) fn unlearned_help(self) -> String {
         format!(
-            "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
-            self.retry()
+            "{} to pin it. `{}` reuses a file fetched before",
+            self.retry(),
+            crate::cli::command("get <link> --offline")
         )
     }
 

@@ -330,8 +330,11 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     }
     let Some(link) = typed.pop() else {
         return Err(
-            Error::new(Kind::Usage, "add needs a link, or a list of links with -i")
-                .help("run `fetchloom add <link>`, or `fetchloom add -i links.txt`"),
+            Error::new(Kind::Usage, "add needs a link, or a list of links with -i").help(format!(
+                "run `{}`, or `{}`",
+                super::project::command("add <link>"),
+                super::project::command("add -i links.txt")
+            )),
         );
     };
     if local::is_path(&link) {
@@ -351,14 +354,22 @@ fn several(args: &Add, links: Vec<String>) -> Result<List, Error> {
             Kind::Usage,
             format!("--as names one dataset, and {what} add {count}"),
         )
-        .help("add the link to name on its own, as in `fetchloom add <link> --as <name>`"));
+        .help(format!(
+            "add the link to name on its own, as in `{}`",
+            super::project::command("add <link> --as <name>")
+        )));
     }
     if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() {
         return Err(Error::new(
             Kind::Usage,
-            format!("--select and --exclude choose the files of one dataset, and {what} add {count}"),
+            format!(
+                "--select and --exclude choose the files of one dataset, and {what} add {count}"
+            ),
         )
-        .help("add the link whose files to choose on its own, as in `fetchloom add <link> --select \"*.csv\"`"));
+        .help(format!(
+            "add the link whose files to choose on its own, as in `{}`",
+            super::project::command("add <link> --select \"*.csv\"")
+        )));
     }
     Ok(List {
         name: None,
@@ -911,7 +922,8 @@ fn other_files(shown: &str, name: &str, difference: String) -> Error {
     )
     .detail(difference)
     .help(format!(
-        "supply the files {name} was imported from, or run `fetchloom remove {name}` and add these as a new import"
+        "supply the files {name} was imported from, or run `{}` and add these as a new import",
+        super::project::command(&format!("remove {name}"))
     ))
 }
 
@@ -1709,8 +1721,14 @@ fn tell_list(
     }
     match names {
         [] => return Ok(()),
-        [name] => output.hint(&format!("scripts can find it with `fetchloom path {name}`")),
-        _ => output.hint("scripts can find each with `fetchloom path <name>`"),
+        [name] => output.hint(&format!(
+            "scripts can find it with `{}`",
+            super::project::command(&format!("path {name}"))
+        )),
+        _ => output.hint(&format!(
+            "scripts can find each with `{}`",
+            super::project::command("path <name>")
+        )),
     }
     close(work, private);
     Ok(())
@@ -2320,9 +2338,10 @@ fn tell_added(
         work.context
             .output
             .done("Added", &format!("{name}, its files are in {folder}"));
-        work.context
-            .output
-            .hint(&format!("scripts can find it with `fetchloom path {name}`"));
+        work.context.output.hint(&format!(
+            "scripts can find it with `{}`",
+            super::project::command(&format!("path {name}"))
+        ));
     } else {
         work.context.output.done(
             "Added",
@@ -2506,7 +2525,8 @@ fn taken(name: &str) -> Error {
         format!("data.toml already has a dataset called {name}"),
     )
     .help(format!(
-        "give this one another name with --as <name>, or run `fetchloom remove {name}` first"
+        "give this one another name with --as <name>, or run `{}` first",
+        super::project::command(&format!("remove {name}"))
     ))
 }
 /// how data.toml records a reference: the canonical id where a source has one, and the link as

@@ -179,7 +179,10 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
             "the list leaves out {} of {datasets}: {they_were} imported from a folder on this machine, so no link holds {them}",
             crate::units::count(files, "file", "files")
         ),
-        &format!("share {them} through a folder mirror, which `fetchloom push --to <folder>` fills"),
+        &format!(
+            "share {them} through a folder mirror, which `{}` fills",
+            super::project::command("push --to <folder>")
+        ),
     );
 }
 
@@ -404,7 +407,10 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
             .stale
             .iter()
             .fold(error, |error, line| error.detail(line.clone()))
-            .help("run `fetchloom lock` and commit data.lock, then export again"));
+            .help(format!(
+                "run `{}` and commit data.lock, then export again",
+                super::project::command("lock")
+            )));
     }
     if !report.unbuilt.is_empty() {
         return Err(Error::new(
@@ -415,8 +421,8 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
             ),
         )
         .help(format!(
-            "run `fetchloom build {}`, then export again",
-            report.unbuilt.join(" ")
+            "run `{}`, then export again",
+            super::project::command(&format!("build {}", report.unbuilt.join(" ")))
         )));
     }
     match format {
@@ -435,7 +441,10 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
                 )
                 .detail(many.join(", ")),
             };
-            Err(error.help("run `fetchloom sync` to unpack them here, then export again"))
+            Err(error.help(format!(
+                "run `{}` to unpack them here, then export again",
+                super::project::command("sync")
+            )))
         }
         Format::Links | Format::Aria2 if !report.refused.is_empty() => {
             let error = match report.refused.as_slice() {

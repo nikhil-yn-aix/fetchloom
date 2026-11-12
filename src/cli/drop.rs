@@ -215,16 +215,25 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         lock_changed.then_some(&new_lock),
     )?;
     tell(&context.output, &edits, false);
-    let placement = placing.remove_only(&context.output).map_err(|error| {
-        let written = if lock_changed {
-            "data.toml and data.lock were"
-        } else {
-            "data.toml was"
-        };
-        error.detail(format!("{written} updated; after fixing the error, `fetchloom sync` removes the files they leave out"))
-    })?;
+    let placement = placing
+        .remove_only(&context.output)
+        .map_err(|error| written_first(error, lock_changed))?;
     tell_next(context, &project, &new_manifest, &edits, lock_changed);
     Ok(report(placement, None))
+}
+
+/// `error`, from deleting the files a drop leaves out, saying that data.toml, and data.lock when
+/// `lock_changed`, were written first and what removes the files then.
+fn written_first(error: Error, lock_changed: bool) -> Error {
+    let written = if lock_changed {
+        "data.toml and data.lock were"
+    } else {
+        "data.toml was"
+    };
+    error.detail(format!(
+        "{written} updated; after fixing the error, `{}` removes the files they leave out",
+        super::project::command("sync")
+    ))
 }
 
 /// the members tables `edits` copy from a glob key's, as `--json` lists them.
@@ -287,8 +296,8 @@ fn tell_next(
                 format!("commit {changed}; other clones drop them at their next `fetchloom sync`")
             }
             recipes => format!(
-                "run `fetchloom build {}`, then commit data.toml, data.lock and data.lock.d",
-                recipes.join(" ")
+                "run `{}`, then commit data.toml, data.lock and data.lock.d",
+                super::project::command(&format!("build {}", recipes.join(" ")))
             ),
         });
 }
@@ -482,12 +491,15 @@ fn unplanned(
             format!("this machine never unpacked {archive}, so fetchloom cannot tell whether it holds {path}"),
         )
         .help(format!(
-            "run `fetchloom sync` first, so fetchloom knows what {archive} holds"
+            "run `{}` first, so fetchloom knows what {archive} holds",
+            super::project::command("sync")
         ));
     }
     if let Some(by) = left_out(manifest, lock, cache, path) {
-        return Error::new(Kind::Usage, format!("{path} is left out already, {by}"))
-            .help("to bring it back, delete that pattern from data.toml and run `fetchloom sync`");
+        return Error::new(Kind::Usage, format!("{path} is left out already, {by}")).help(format!(
+            "to bring it back, delete that pattern from data.toml and run `{}`",
+            super::project::command("sync")
+        ));
     }
     let owners: Vec<&str> = manifest
         .datasets
@@ -599,7 +611,10 @@ fn exclude_help(
     sorted: &[(String, &Target)],
     path: &str,
 ) -> String {
-    let anywhere = "to leave out every file a pattern matches, add it to exclude in data.toml, or to the archive's members table for files inside an archive, by hand, then run `fetchloom sync`".to_owned();
+    let sync = super::project::command("sync");
+    let anywhere = format!(
+        "to leave out every file a pattern matches, add it to exclude in data.toml, or to the archive's members table for files inside an archive, by hand, then run `{sync}`"
+    );
     let Some((folder, last)) = path.rsplit_once('/') else {
         return anywhere;
     };
@@ -659,7 +674,7 @@ fn exclude_help(
         None => format!("datasets.{dataset}"),
     };
     format!(
-        "to leave out every file a pattern matches, add \"{pattern}\" to exclude in {table} in data.toml by hand, then run `fetchloom sync`"
+        "to leave out every file a pattern matches, add \"{pattern}\" to exclude in {table} in data.toml by hand, then run `{sync}`"
     )
 }
 
@@ -858,7 +873,10 @@ fn missing_pin(dataset: &str) -> Error {
         Kind::ProjectInvalid,
         format!("data.lock does not pin {dataset}"),
     )
-    .help("run `fetchloom sync`, then drop again")
+    .help(format!(
+        "run `{}`, then drop again",
+        super::project::command("sync")
+    ))
 }
 
 /// where the files `locked`'s archive `file` keeps land, with their paths inside it, from what
@@ -875,7 +893,10 @@ fn unpacked(
             Kind::LocalIo,
             format!("the cache lost what {} unpacked to", file.path),
         )
-        .help("run `fetchloom sync`, then drop again")
+        .help(format!(
+            "run `{}`, then drop again",
+            super::project::command("sync")
+        ))
     })?;
     let filter = match manifest
         .datasets
@@ -1058,7 +1079,8 @@ fn refuse_what_breaks(
                 format!("that is every file of {dataset}, and a dataset needs one"),
             )
             .help(format!(
-                "to take the whole dataset out of the project, run `fetchloom remove {dataset}`"
+                "to take the whole dataset out of the project, run `{}`",
+                super::project::command(&format!("remove {dataset}"))
             )));
         }
         if edit.leaving.is_empty() {
@@ -1072,7 +1094,10 @@ fn refuse_what_breaks(
                 Kind::Outdated,
                 format!("data.toml changed {dataset} since data.lock was written, so drop cannot leave files out of its pin"),
             )
-            .help("run `fetchloom sync` to bring data.lock in line, then drop again"));
+            .help(format!(
+                "run `{}` to bring data.lock in line, then drop again",
+                super::project::command("sync")
+            )));
         }
         let pinned = archives::pinned(&locked.files);
         let left: Vec<&Pinned> = pinned
@@ -1097,7 +1122,8 @@ fn refuse_what_breaks(
                 ),
             )
             .help(format!(
-                "keep the files, or leave them out with exclude in datasets.{dataset} in data.toml and run `fetchloom sync`, which moves the files of {only}"
+                "keep the files, or leave them out with exclude in datasets.{dataset} in data.toml and run `{}`, which moves the files of {only}",
+                super::project::command("sync")
             )));
         }
     }

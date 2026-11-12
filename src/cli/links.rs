@@ -160,9 +160,9 @@ pub(super) fn checked(
         let at = line.named(name);
         if local::is_path(&line.link) {
             let help = if for_project {
-                "add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`"
+                one_at_a_time()
             } else {
-                "give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990"
+                "give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990".to_owned()
             };
             return Err(Error::new(
                 Kind::ReferenceInvalid,
@@ -201,6 +201,14 @@ pub(super) fn on_line(mut error: Error, at: &str) -> Error {
     error
 }
 
+/// how to add files on this machine, which a list or several links cannot.
+fn one_at_a_time() -> String {
+    format!(
+        "add files on this machine one file or folder at a time, as in `{}`",
+        super::project::command("add ./flowers")
+    )
+}
+
 /// several links typed on the command line for one add, each a line of a list that messages name
 /// by its link, once every one names data to fetch: search words go alone, files on this machine
 /// one folder at a time, and no link may carry a secret data.toml and data.lock would keep or name
@@ -218,7 +226,8 @@ pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
         )
         .detail("several links add a dataset each, so each one names its data")
         .help(format!(
-            "quote the words of one search, as in `fetchloom add \"{example}\"`, or add one dataset at a time"
+            "quote the words of one search, as in `{}`, or add one dataset at a time",
+            super::project::command(&format!("add \"{example}\""))
         )));
     }
     let mut seen: HashMap<(String, Option<String>, Option<String>), String> = HashMap::new();
@@ -228,9 +237,11 @@ pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
         if local::is_path(&link) {
             return Err(Error::new(
                 Kind::Usage,
-                format!("{shown} is a path on this machine, and only links, DOIs and ids add together"),
+                format!(
+                    "{shown} is a path on this machine, and only links, DOIs and ids add together"
+                ),
             )
-            .help("add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`"));
+            .help(one_at_a_time()));
         }
         let parsed = Reference::parse(&link)?;
         parsed

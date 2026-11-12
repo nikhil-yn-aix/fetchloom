@@ -64,8 +64,11 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     }
     if let Some(first) = report.candidates.first() {
         output.next(&format!(
-            "`fetchloom add {}` puts the first match in a project",
-            super::shell_word(&first.reference.to_string())
+            "`{}` puts the first match in a project",
+            super::project::command(&format!(
+                "add {}",
+                super::shell_word(&first.reference.to_string())
+            ))
         ));
     }
     Ok(report)
@@ -91,8 +94,8 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     let search = format!("`fetchloom search {}` to search", super::shell_word(word));
     let help = if pins {
         format!(
-            "run `fetchloom add {}` to pin it, or {search}",
-            super::shell_word(&format!("./{word}"))
+            "run `{}` to pin it, or {search}",
+            super::project::command(&format!("add {}", super::shell_word(&format!("./{word}"))))
         )
     } else {
         format!("run {search}")
@@ -140,7 +143,10 @@ pub(super) async fn pick(
     let first = &report.candidates[0].reference;
     let mut error = Error::new(Kind::ReferenceAmbiguous, format!(
             "\"{words}\" is not a link or an id, and fetchloom will not guess which dataset you mean"
-        )).help(format!("run it again with one of these, such as `fetchloom {command} {first}`"))
+        )).help(format!(
+            "run it again with one of these, such as `{}`",
+            super::project::command(&format!("{command} {first}"))
+        ))
             .with_result(serde_json::json!({"candidates": report.candidates}));
     let output = &context.output;
     if !output.shows_items() {

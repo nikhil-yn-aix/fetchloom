@@ -44,6 +44,8 @@ use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
 
+pub(crate) use project::command;
+
 /// how long retries to one host stay quiet after the line that told one, so downloads that lost
 /// the network together do not fill the screen with the same line.
 const RETRY_LINES: Duration = Duration::from_secs(30);

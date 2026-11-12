@@ -728,7 +728,8 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
         ),
     )
     .help(format!(
-        "data.lock may come from another version of fetchloom. if what this one unpacks is intended, run `fetchloom lock --upgrade {dataset}`"
+        "data.lock may come from another version of fetchloom. if what this one unpacks is intended, run `{}`",
+        crate::cli::project::command(&format!("lock --upgrade {dataset}"))
     ))
 }
 

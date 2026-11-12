@@ -48,7 +48,10 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
                     Kind::Usage,
                     format!("\"{typed}\" names no file on this machine"),
                 )
-                .help("give the path of the folder or file, as in `fetchloom add ./flowers`")
+                .help(format!(
+                    "give the path of the folder or file, as in `{}`",
+                    super::project::command("add ./flowers")
+                ))
             })?
     } else if let Some(rest) = typed.strip_prefix('~') {
         let rest = match rest.chars().next() {
@@ -158,9 +161,12 @@ pub(super) fn refuse_overlap(
     };
     match overlap {
         None => Ok(()),
-        Some(overlap) => Err(Error::new(Kind::Usage, format!("{shown} {overlap}")).help(
-            "name a folder of data outside the project's data folder, as in `fetchloom add ./raw`",
-        )),
+        Some(overlap) => Err(
+            Error::new(Kind::Usage, format!("{shown} {overlap}")).help(format!(
+                "name a folder of data outside the project's data folder, as in `{}`",
+                super::project::command("add ./raw")
+            )),
+        ),
     }
 }
 
@@ -310,7 +316,10 @@ pub(super) fn walk(
             Kind::Usage,
             format!("{shown} is no folder or plain file, so there is nothing to import"),
         )
-        .help("name a folder or a file, as in `fetchloom add ./flowers`"));
+        .help(format!(
+            "name a folder or a file, as in `{}`",
+            super::project::command("add ./flowers")
+        )));
     }
     walked.skipped.sort_unstable();
     walked.system.sort_unstable();

@@ -150,7 +150,9 @@ fn named(manifest: &Manifest, target: &str) -> Result<(), Error> {
         .next()
         .map_or("iris", String::as_str);
     Err(Error::new(Kind::Usage, message).help(format!(
-        "name a dataset, with a file or folder in it after a / if you like, as in `fetchloom path {example}` or `fetchloom path {example}/<file>`"
+        "name a dataset, with a file or folder in it after a / if you like, as in `{}` or `{}`",
+        super::project::command(&format!("path {example}")),
+        super::project::command(&format!("path {example}/<file>"))
     )))
 }
 
@@ -175,7 +177,8 @@ fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> 
         None => error,
     };
     Err(error.help(format!(
-        "set place = true on datasets.{name} in data.toml, then run `fetchloom sync {name}`"
+        "set place = true on datasets.{name} in data.toml, then run `{}`",
+        super::project::command(&format!("sync {name}"))
     )))
 }
 
@@ -239,7 +242,10 @@ fn unbuilt(manifest: &Manifest, lock: Option<&Lock>, name: &str) -> Result<(), E
             manifest.data_dir
         ),
     )
-    .help(format!("run `fetchloom build {name}`, which makes it")))
+    .help(format!(
+        "run `{}`, which makes it",
+        super::project::command(&format!("build {name}"))
+    )))
 }
 
 /// validates the answer against the same plan used to check readiness.
@@ -256,7 +262,8 @@ fn planned_path(
             format!("{name} has no regular files after extraction"),
         )
         .help(format!(
-            "set extract = false on {name} in data.toml, then run `fetchloom sync` to keep the packed archive"
+            "set extract = false on {name} in data.toml, then run `{}` to keep the packed archive",
+            super::project::command("sync")
         )));
     }
     let folder = plan::folder(manifest, name);

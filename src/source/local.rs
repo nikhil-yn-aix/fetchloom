@@ -24,7 +24,10 @@ pub(crate) fn unlisted() -> Error {
         Kind::ReferenceUnresolved,
         "\"local\" names files imported from a folder, which no source can list again",
     )
-    .help("run `fetchloom add <folder> --as <name>` where the files are")
+    .help(format!(
+        "run `{}` where the files are",
+        crate::cli::command("add <folder> --as <name>")
+    ))
 }
 
 /// the refusal of a changed data.toml entry of `name`, an import: only importing the files
@@ -35,7 +38,9 @@ pub(crate) fn changed(name: &str) -> Error {
         format!("{name} was imported from files, so a change to its entry in data.toml cannot pin other files"),
     )
     .help(format!(
-        "put datasets.{name} back as it was, or run `fetchloom remove {name}`, then `fetchloom add <folder> --as {name}` where the files are"
+        "put datasets.{name} back as it was, or run `{}`, then `{}` where the files are",
+        crate::cli::command(&format!("remove {name}")),
+        crate::cli::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -47,7 +52,8 @@ pub(crate) fn unpinned(name: &str) -> Error {
         format!("{name} was imported from files, and data.lock holds no pin of them"),
     )
     .help(format!(
-        "restore data.lock from git, or run `fetchloom add <folder> --as {name}` where the files are"
+        "restore data.lock from git, or run `{}` where the files are",
+        crate::cli::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -58,7 +64,9 @@ pub(crate) fn no_newer(name: &str) -> Error {
         format!("{name} was imported from files, and no source has a newer version of them"),
     )
     .help(format!(
-        "to pin other files, run `fetchloom remove {name}`, then `fetchloom add <folder> --as {name}` where they are"
+        "to pin other files, run `{}`, then `{}` where they are",
+        crate::cli::command(&format!("remove {name}")),
+        crate::cli::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -76,7 +84,9 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
         format!("{name} was imported from files, and {lacking}"),
     )
     .help(format!(
-        "copy them to {folder} by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as {name}` where they are"
+        "copy them to {folder} by hand, then run `{}`, or run `{}` where they are",
+        crate::cli::command("sync"),
+        crate::cli::command(&format!("add <folder> --as {name}"))
     ))
 }
 

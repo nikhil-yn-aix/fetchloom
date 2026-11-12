@@ -722,7 +722,12 @@ fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
         .collect();
     let help: Vec<String> = built
         .iter()
-        .map(|name| format!("`fetchloom build {name}` makes {name}'s files"))
+        .map(|name| {
+            format!(
+                "`{}` makes {name}'s files",
+                super::project::command(&format!("build {name}"))
+            )
+        })
         .collect();
     Some(named_lines(error, &made).help(help.join("; ")))
 }
@@ -1108,7 +1113,10 @@ fn failure(fault: Fault, needed: &Needed, root: &Path) -> Error {
             Kind::IntegrityMismatch,
             format!("the cache's copy of {label} does not hold its pinned bytes, so it was not pushed"),
         )
-        .help("run `fetchloom cache verify`, which notes it, then `fetchloom sync` to fetch it again"),
+        .help(format!(
+            "run `fetchloom cache verify`, which notes it, then `{}` to fetch it again",
+            super::project::command("sync")
+        )),
         Fault::ReadBack => Error::new(
             Kind::IntegrityMismatch,
             format!(

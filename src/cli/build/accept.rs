@@ -94,9 +94,12 @@ fn wanted(manifest: &Manifest, state: &State, names: &[String]) -> Result<Vec<St
         .filter(|name| state.candidates.contains_key(name))
         .collect();
     if wanted.is_empty() {
-        return Err(Error::new(Kind::Usage, "there is no kept rebuild to accept").help(
-            "`fetchloom build --check` runs each step again and keeps the files of one that differs from data.lock",
-        ));
+        return Err(
+            Error::new(Kind::Usage, "there is no kept rebuild to accept").help(format!(
+                "`{}` runs each step again and keeps the files of one that differs from data.lock",
+                crate::cli::project::command("build --check")
+            )),
+        );
     }
     Ok(wanted)
 }
@@ -199,7 +202,8 @@ fn tell(context: &Context, project: &Project, manifest: &Manifest, accepted: &[S
     }
     for (reader, read) in readers(manifest, accepted) {
         output.hint(&format!(
-            "{reader} reads {read}, so `fetchloom build {reader}` builds it again from the accepted files"
+            "{reader} reads {read}, so `{}` builds it again from the accepted files",
+            crate::cli::project::command(&format!("build {reader}"))
         ));
     }
     output.next(&format!("commit {}", committed(project)));
@@ -208,7 +212,8 @@ fn tell(context: &Context, project: &Project, manifest: &Manifest, accepted: &[S
 /// what to run for a new kept rebuild of `name`.
 pub(crate) fn again(name: &str) -> String {
     format!(
-        "`fetchloom build --check {name}` runs its step again as data.lock pins it now, and keeps its files when they differ"
+        "`{}` runs its step again as data.lock pins it now, and keeps its files when they differ",
+        crate::cli::project::command(&format!("build --check {name}"))
     )
 }
 
