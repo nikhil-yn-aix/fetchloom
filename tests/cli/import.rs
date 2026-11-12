@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, text, zip_of};
+use crate::support::{Result, Sandbox, json, skipped, text, zip_of};
 
 /// a folder of two files, one of them in a folder of its own, as a person keeps measurements.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -541,13 +541,22 @@ fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
     let notes = sandbox.folder("notes")?;
     fs::create_dir(notes.join("inner"))?;
     let name = OsString::from_vec(b"notes-\xff.csv".to_vec());
-    // apfs and other filesystems refuse a name that is not UTF-8, so no such file reaches
-    // fetchloom there
+    // apfs refuses a name that is not UTF-8 and hfs+ stores it escaped, so on either no such
+    // name reaches fetchloom
     match fs::write(notes.join(&name), b"1\n") {
         Err(err) if err.raw_os_error() == Some(rustix::io::Errno::ILSEQ.raw_os_error()) => {
-            return Ok(());
+            return skipped(
+                "raw-names",
+                "this filesystem refuses names that are not text",
+            );
         }
         made => made?,
+    }
+    if !fs::read_dir(&notes)?.any(|entry| entry.is_ok_and(|entry| entry.file_name() == name)) {
+        return skipped(
+            "raw-names",
+            "this filesystem rewrites names that are not text",
+        );
     }
     fs::write(notes.join("inner").join(&name), b"1\n")?;
     let refusal = |path: &str| {

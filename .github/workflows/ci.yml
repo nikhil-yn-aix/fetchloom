@@ -163,7 +163,7 @@ jobs:
       - name: nextest
         env:
           # what each runner has, so a test that lacks one fails rather than skips
-          FETCHLOOM_TEST_REQUIRE: ${{ startsWith(matrix.os, 'windows') && 'git,hardlinks' || 'script,git,hardlinks' }}
+          FETCHLOOM_TEST_REQUIRE: ${{ startsWith(matrix.os, 'windows') && 'git,hardlinks' || startsWith(matrix.os, 'macos') && 'script,git,hardlinks' || 'script,git,hardlinks,raw-names' }}
         run: python3 python/ci_tests.py run native
       - name: doctests
         run: cargo test --locked --doc
