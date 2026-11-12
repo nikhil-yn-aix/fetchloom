@@ -20,7 +20,7 @@ fetchloom --version -v >> fetchloom-debug.txt
 
 the version line names the commit fetchloom was built from, or says `commit unknown, built outside git`. on windows, run these lines in cmd or powershell 7, since windows powershell 5.1 rewrites redirected stderr. attach `fetchloom-debug.txt`, the exit code, and the `data.toml` and `data.lock` entries for the dataset. the debug lines say where each file came from, why a file was hashed again, how it was placed, which host a key was sent to, and each retry and redirect.
 
-keys are never logged. a link shows its login as `***`, and each value in its query or fragment too, unless the value's name is known to be harmless, such as `dl`, `version` or dropbox's `rlkey`, so a token under a name fetchloom does not know stays out of the log. the log also names local paths and every link fetchloom asked for, search words included, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
+keys are never logged. a link shows its login as `***`, and each value in its query or fragment too, unless the value's name is known to be harmless, such as `dl`, `version`, `page` or dropbox's `rlkey`, so a token under a name fetchloom does not know stays out of the log. the log also names local paths and every link fetchloom asked for, search words included, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
 
 ## errors
 

@@ -40,9 +40,10 @@ const SECRET_NAMES: [&str; 12] = [
 
 /// names whose values show as written, ignoring case: switches, formats and versions, including
 /// the object versions S3 (`versionId`) and cloud storage (`generation`) links pin, the ids
-/// dataverse's pages take, and the keys dropbox (`rlkey`) and drive (`resourcekey`) share links
-/// need to work, which data.toml keeps anyway.
-const HARMLESS: [&str; 10] = [
+/// dataverse's pages take, the keys dropbox (`rlkey`) and drive (`resourcekey`) share links need
+/// to work, which data.toml keeps anyway, and the numbers that page through an api's listing.
+/// a paging cursor stays masked, since some apis hand back a token there.
+const HARMLESS: [&str; 16] = [
     "dl",
     "raw",
     "download",
@@ -53,6 +54,12 @@ const HARMLESS: [&str; 10] = [
     "persistentid",
     "rlkey",
     "resourcekey",
+    "page",
+    "per_page",
+    "page_size",
+    "limit",
+    "offset",
+    "size",
 ];
 
 /// the first query or fragment key of `url` whose value grants access, when it has one: a name
@@ -378,6 +385,10 @@ mod tests {
                 "https://example.org/a.csv?version=1&persistentId=doi:10.7910/DVN/X#view=v2",
                 "https://example.org/a.csv?version=1&persistentId=doi:10.7910/DVN/X#view=***",
             ),
+            (
+                "https://api.example.org/files?page=2&per_page=100&page_size=50&limit=10&offset=20&size=5&cursor=c1",
+                "https://api.example.org/files?page=2&per_page=100&page_size=50&limit=10&offset=20&size=5&cursor=***",
+            ),
         ] {
             assert_eq!(mask_query(text), shown, "{text}");
             assert_eq!(Shown(&Url::parse(text).unwrap()).to_string(), shown);
@@ -389,7 +400,7 @@ mod tests {
         for (text, expected) in [
             (
                 "https://example.org/a#access_token=hidden&page=2",
-                "https://example.org/a#access_token=***&page=***",
+                "https://example.org/a#access_token=***&page=2",
             ),
             (
                 "https://example.org/a?download=1#%74oken=hidden",
