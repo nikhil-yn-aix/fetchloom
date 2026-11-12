@@ -372,43 +372,60 @@ pub(crate) fn expand<'a>(
                 plan.targets.push(target(&path, member.sha256, member.size));
             }
         }
+        let kept = plan.targets.len() > before;
         if let Some(glob) = glob {
-            covered[glob].add(&file.path, members);
+            covered[glob].add(&file.path, members, kept);
             continue;
         }
         if let Some((key, filter)) = filter
-            && plan.targets.len() == before
+            && !kept
             && !members.is_empty()
         {
-            let error = Error::new(
-                Kind::ProjectInvalid,
-                format!(
-                    "select and exclude in members.\"{key}\" of datasets.{dataset} leave no file of {}",
-                    archive_name(&file.path)
+            return Err(left_nothing(
+                dataset,
+                (key, filter),
+                archive_name(&file.path),
+                &format!(
+                    "loosen the patterns, or exclude \"{}\" in datasets.{dataset} to leave the whole archive out",
+                    crate::glob::escape(&file.path)
                 ),
-            );
-            let line = ["exclude", "select", "members"]
-                .iter()
-                .find_map(|key| filter.lines.get(key));
-            return Err(match line {
-                Some(line) => error.detail(line.clone()),
-                None => error,
-            }
-            .help(format!(
-                "loosen the patterns, or exclude \"{}\" in datasets.{dataset} to leave the whole archive out",
-                crate::glob::escape(&file.path)
-            )));
+            ));
         }
     }
     for glob in covered {
-        glob.refuse_unmatched(dataset)?;
+        glob.refuse(dataset)?;
     }
     Ok(())
 }
 
-/// the archives a glob key's table covers in one dataset, and which of its select patterns a
-/// file of them matches: shards may differ, so a pattern needs a match in one of them, not in
-/// each, and a shard it leaves no file places none.
+/// the refusal of `table`, a key and its table, whose select and exclude leave no file of
+/// `what`, with `help`.
+fn left_nothing(
+    dataset: &str,
+    (key, filter): (&str, &MemberFilter),
+    what: &str,
+    help: &str,
+) -> Error {
+    let error = Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "select and exclude in members.\"{key}\" of datasets.{dataset} leave no file of {what}"
+        ),
+    );
+    let line = ["exclude", "select", "members"]
+        .iter()
+        .find_map(|key| filter.lines.get(key));
+    match line {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    }
+    .help(help.to_owned())
+}
+
+/// the archives a glob key's table covers in one dataset, which of its select patterns a file of
+/// them matches, and whether it keeps a file of one: shards may differ, so a pattern needs a
+/// match in one of them, not in each, and a shard it leaves no file places none, while the
+/// table leaving every one of them none is a mistake.
 struct Covered<'m, 'a> {
     key: &'m str,
     filter: &'m MemberFilter,
@@ -417,6 +434,9 @@ struct Covered<'m, 'a> {
     unknown: bool,
     /// for each select pattern, whether a file of an archive matches it.
     matched: Vec<bool>,
+    /// whether the table keeps a file of an archive it covers, and whether they hold any.
+    kept: bool,
+    held: bool,
     /// the first archive it covers whose files are known, with them, for the refusal's help.
     first: Option<(&'a str, Vec<Member>)>,
 }
@@ -433,14 +453,19 @@ impl<'m, 'a> Covered<'m, 'a> {
             archives: 0,
             unknown: false,
             matched: vec![false; filter.select.globs().len()],
+            kept: false,
+            held: false,
             first: None,
         });
         covered.len() - 1
     }
 
-    /// counts the archive at `archive`, which holds `members`, and the patterns they match.
-    fn add(&mut self, archive: &'a str, members: Vec<Member>) {
+    /// counts the archive at `archive`, which holds `members`, the patterns they match, and
+    /// whether the table `kept` a file of it.
+    fn add(&mut self, archive: &'a str, members: Vec<Member>, kept: bool) {
         self.archives += 1;
+        self.kept |= kept;
+        self.held |= !members.is_empty();
         let paths: HashSet<&str> = members.iter().map(|member| member.path.as_str()).collect();
         for (glob, matched) in self.filter.select.globs().iter().zip(&mut self.matched) {
             *matched = *matched || holds(&members, &paths, glob);
@@ -450,11 +475,9 @@ impl<'m, 'a> Covered<'m, 'a> {
         }
     }
 
-    /// refuses the first select pattern no archive matched, once every archive is known.
-    fn refuse_unmatched(self, dataset: &str) -> Result<(), Error> {
-        let Some(at) = self.matched.iter().position(|matched| !matched) else {
-            return Ok(());
-        };
+    /// refuses, once every archive it covers is known, the first select pattern none of them
+    /// matched, or the table when it keeps no file of any of them.
+    fn refuse(self, dataset: &str) -> Result<(), Error> {
         let Some((archive, members)) = self.first.filter(|_| !self.unknown) else {
             return Ok(());
         };
@@ -462,14 +485,28 @@ impl<'m, 'a> Covered<'m, 'a> {
             "the {} it covers",
             crate::units::count(self.archives, "archive", "archives")
         );
-        let unmatched = &self.filter.select.globs()[at];
-        Err(unmatched_select(
-            dataset,
-            (self.key, self.filter),
-            &inside,
-            unmatched,
-            (archive, &members),
-        ))
+        if let Some(at) = self.matched.iter().position(|matched| !matched) {
+            let unmatched = &self.filter.select.globs()[at];
+            return Err(unmatched_select(
+                dataset,
+                (self.key, self.filter),
+                &inside,
+                unmatched,
+                (archive, &members),
+            ));
+        }
+        if self.held && !self.kept {
+            return Err(left_nothing(
+                dataset,
+                (self.key, self.filter),
+                &inside,
+                &format!(
+                    "loosen the patterns, or exclude \"{}\" in datasets.{dataset} to leave every archive it covers out",
+                    self.key
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1404,6 +1441,34 @@ mod tests {
         assert!(
             placed_from(&manifest, &locked, &unknown).is_ok(),
             "a shard not unpacked here yet may hold it"
+        );
+    }
+
+    /// a glob key's table that leaves every archive it covers no file is refused naming the key,
+    /// as an archive's own table that leaves it none is, once this machine knows them all.
+    #[test]
+    fn a_glob_table_that_leaves_every_archive_no_file_is_refused() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"shard-*.tar\"]\nexclude = \"s.*\"\n"),
+            &[("a", &SHARDS)],
+        );
+        let error = placed_from(&manifest, &locked, &uneven()).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "select and exclude in members.\"shard-*.tar\" of datasets.a leave no file of the 3 archives it covers"
+        );
+        assert_eq!(error.details, ["data.toml:4   exclude = \"s.*\""]);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "loosen the patterns, or exclude \"shard-*.tar\" in datasets.a to leave every archive it covers out"
+            )
+        );
+        let shards = uneven();
+        assert!(
+            placed_from(&manifest, &locked, &shards[..2]).is_ok(),
+            "a shard not unpacked here yet may keep a file"
         );
     }
 
