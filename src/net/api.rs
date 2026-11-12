@@ -87,17 +87,20 @@ impl Api for Net {
 
     async fn get_once(&self, url: &Url) -> Result<Response, Error> {
         let url = self.asking(url)?;
-        if self
-            .paces
-            .holds(&host(&url).to_ascii_lowercase(), std::time::Instant::now())
-        {
+        if self.paces.holds(
+            &host(&url).to_ascii_lowercase(),
+            tokio::time::Instant::now().into_std(),
+        ) {
             return Err(Error::new(
                 Kind::NetworkStatus,
                 format!("{} asked for a pause", host(&url)),
             ));
         }
-        let _permits = self.permit(&url).await?;
-        match self.answer(&url, false).await {
+        let mut permits = Some(self.permit(&url).await?);
+        match self
+            .answer(&url, false, Some(super::Holding::new(&url, &mut permits)))
+            .await
+        {
             Ok(response) => Ok(response),
             Err(Failure::Final(err)) => Err(err),
             Err(Failure::Transient { reason, .. } | Failure::Limited { reason, .. }) => {
@@ -116,19 +119,27 @@ impl Net {
 
     async fn get_for(&self, url: &Url, mirror: bool) -> Result<Response, Error> {
         let url = &self.asking(url)?;
-        let _permits = self.permit(url).await?;
+        let mut permits = Some(self.permit(url).await?);
         let mut retry = Retry::new(self, url);
         loop {
-            match self.answer(url, mirror).await {
+            self.keep_permit(url, &mut permits).await?;
+            match self
+                .answer(url, mirror, Some(super::Holding::new(url, &mut permits)))
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason, wait }) => {
+                    Self::release_for_wait(&mut permits);
                     retry.limited(reason, wait, false).await?;
                 }
                 Err(Failure::Transient {
                     reason,
                     retry_after,
-                }) => retry.wait(reason, retry_after, false).await?,
+                }) => {
+                    Self::release_for_wait(&mut permits);
+                    retry.wait(reason, retry_after, false).await?;
+                }
             }
         }
     }
@@ -159,14 +170,25 @@ impl Net {
         Ok(url)
     }
 
-    async fn answer(&self, url: &Url, mirror: bool) -> Result<Response, Failure> {
+    async fn answer(
+        &self,
+        url: &Url,
+        mirror: bool,
+        holding: Option<super::Holding<'_>>,
+    ) -> Result<Response, Failure> {
         let mut response = self
-            .send_on(super::Lane::Shared, url, mirror, |request| {
-                request.header(
-                    header::ACCEPT,
-                    "application/json, text/html;q=0.9, */*;q=0.8",
-                )
-            })
+            .send_holding(
+                super::Lane::Shared,
+                url,
+                mirror,
+                |request| {
+                    request.header(
+                        header::ACCEPT,
+                        "application/json, text/html;q=0.9, */*;q=0.8",
+                    )
+                },
+                holding,
+            )
             .await?;
         let status = response.status();
         tracing::debug!(url = %super::Shown(url), status = status.as_u16(), "answer");

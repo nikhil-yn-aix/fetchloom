@@ -379,6 +379,7 @@ impl Net {
         writer: PartialWriter,
         response: reqwest::Response,
         allowed: &mut bool,
+        permits: &mut Option<crate::net::Permits>,
     ) -> Result<Streamed, Failure> {
         let (from, total) = (job.from, job.total);
         let probe = match job.measured {
@@ -400,7 +401,7 @@ impl Net {
             interrupted,
             start_over,
             failure: outcome,
-        } = self.run_split(&streams, response, probe).await;
+        } = self.run_split(&streams, response, probe, permits).await;
         let (stopped, pieced) = {
             let board = streams.board();
             (board.stopped, board.pieced)
@@ -435,9 +436,19 @@ impl Net {
         shared: &Streams<'_>,
         response: reqwest::Response,
         mut probe: Probe,
+        permits: &mut Option<crate::net::Permits>,
     ) -> Completion {
         let mut running: Running<'_> = vec![Box::pin(async move {
-            (0, self.split_stream(shared, 0, Some(response)).await)
+            (
+                0,
+                self.split_stream(
+                    shared,
+                    0,
+                    Some(response),
+                    crate::net::Holding::new(shared.job.key, permits),
+                )
+                .await,
+            )
         })];
         let mut tick = tokio::time::interval(self.split.window / 8);
         let (mut failures, mut outcome) = (0, None);
@@ -478,8 +489,8 @@ impl Net {
                 _ = tick.tick() => {
                     if let Some((id, permits)) = self.consider(shared, &mut probe) {
                         running.push(Box::pin(async move {
-                            let _permits = permits;
-                            (id, self.split_stream(shared, id, None).await)
+                            let mut permits = Some(permits);
+                            (id, self.split_stream(shared, id, None, crate::net::Holding::new(shared.job.key, &mut permits)).await)
                         }));
                     }
                 }
@@ -504,6 +515,7 @@ impl Net {
         shared: &Streams<'_>,
         id: usize,
         mut answer: Option<reqwest::Response>,
+        mut holding: crate::net::Holding<'_>,
     ) -> Ended {
         loop {
             let Some(share) = shared.board().share(id) else {
@@ -511,7 +523,10 @@ impl Net {
             };
             let response = match answer.take() {
                 Some(response) => response,
-                None => match self.part(shared, id, share.next, share.end).await {
+                None => match self
+                    .part(shared, id, share.next, share.end, holding.borrow())
+                    .await
+                {
                     Ok(response) => response,
                     Err(ended) => {
                         shared.board().give_back(id);
@@ -545,6 +560,7 @@ impl Net {
         id: usize,
         start: u64,
         end: u64,
+        holding: crate::net::Holding<'_>,
     ) -> Result<reqwest::Response, Ended> {
         let job = &shared.job;
         let check = if job.pinned {
@@ -560,7 +576,13 @@ impl Net {
             }
         };
         let response = self
-            .send_apart(job.from, job.mirror, shape)
+            .send_holding(
+                crate::net::Lane::Apart,
+                job.from,
+                job.mirror,
+                shape,
+                Some(holding),
+            )
             .await
             .map_err(Ended::Failed)?;
         let status = response.status();

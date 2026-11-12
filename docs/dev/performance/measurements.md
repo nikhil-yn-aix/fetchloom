@@ -8,6 +8,9 @@ every change measured with the current harness, one row each: what it gained whe
 
 | area | change | result | outcome | details |
 |---|---|---|---|---|
+| network | request slots released during retry and quota sleeps | mixed 2/2 case: glibc 0.619, musl 0.622; healthy/default controls within noise | kept | [sleeping requests](#network-slots-while-a-request-waits-2026-11-12) |
+| network | one recovery probe after an unknown-quota 429 | 429 counts stay at 13–14 per run, below the required 20% reduction | dropped, no request-count win | [quota probe](#probing-after-an-unknown-quota-2026-11-12) |
+| network | successful metadata reused within one run | 100 selections at 50 ms: glibc 0.166, musl 0.163; one-selection musl RSS +0.18 MiB | dropped, control RSS | [metadata memo](#a-per-run-metadata-memo-2026-11-12) |
 | network | several connections per host for file bodies | far s2 0.288, poor s2 0.424; lan and home flat | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | network | hosts interleaved in the download queue | two-host fixture 0.764 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | network | download jobs built at admission | peak memory 228 to 205 MB at 100,000 pins | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -734,3 +737,64 @@ parenthesized bounds are observed minima and maxima. when only a time, rate or p
 | historical 1,000 URLs of 100 KiB | 240f17a | same L run | lan 3.53 s; home 9.46 s | not recorded | later hint-flush rows supersede this cost |
 
 related: [budgets](budgets.md), [windows defender study](windows-defender.md), [profiling](../engineering/profiling.md), [network](../architecture/network.md), [placing](../architecture/placing.md).
+
+## a per-run metadata memo, 2026-11-12
+
+100 datasets selected different 4 KiB files from five S3 references, each listing 100 files. `fetchloom --json --yes lock --dry-run` resolved them with an empty cache. a second manifest selected one file from one reference. an isolated veth added 1 or 50 ms RTT, without loss or a bandwidth cap. jobs stayed at 8 overall and 4 per host. every reported dataset, path and size was checked against the fixture, and a dry run wrote no lock.
+
+one stock release executable per libc carried `FETCHLOOM_EXP_API_MEMO`, read once. the supplied interleaved harness ran both arms on cores 12–23 under the shared lock, with one warmup per arm after each acquisition. whole rounds with a load burst were excluded; failed runs remained failures. RSS below is GNU time’s child reading, not the Python parent’s inherited `wait4` high-water mark. times and RSS are medians, with observed ranges.
+
+| selections / RTT | libc | quiet pairs | seconds before → after | peak MiB before → after |
+|---|---|---:|---|---|
+| 100 / 1 ms | glibc | 5/12 | 0.096 (0.095–0.098) → 0.026 (0.024–0.027) | 18.88 (17.77–18.98) → 18.53 (18.24–18.77) |
+| 100 / 1 ms | musl | 11/12 | 0.099 (0.096–0.268) → 0.022 (0.022–0.024) | 39.12 (35.23–39.37) → 37.24 (35.15–37.37) |
+| 100 / 50 ms | glibc | 11/12 | 0.741 (0.738–0.787) → 0.123 (0.123–0.124) | 18.75 (18.18–19.01) → 18.58 (18.25–19.20) |
+| 100 / 50 ms | musl | 12/12 | 0.739 (0.737–0.792) → 0.121 (0.120–0.153) | 37.37 (37.12–39.38) → 37.19 (37.06–37.40) |
+| 1 / 1 ms | glibc | 13/20 | 0.013 (0.012–0.017) → 0.013 (0.013–0.017) | 13.17 (12.87–13.34) → 12.96 (12.83–13.34) |
+| 1 / 1 ms | musl | 20/20 | 0.013 (0.013–0.014) → 0.013 (0.012–0.014) | 20.96 (19.12–22.98) → 21.14 (19.21–21.21) |
+| 1 / 50 ms | glibc | 16/20 | 0.111 (0.111–0.112) → 0.111 (0.111–0.112) | 13.06 (12.86–13.35) → 13.08 (12.73–13.29) |
+| 1 / 50 ms | musl | 15/20 | 0.112 (0.111–0.112) → 0.112 (0.111–0.115) | 20.97 (20.90–23.04) → 21.14 (21.02–21.20) |
+
+at 50 ms, requests fell from 100 to 5. paired time ratios were 0.166 [0.166, 0.167] on glibc and 0.163 [0.158, 0.164] on musl, clearing the 10% speed gate. the five quiet glibc pairs at 1 ms are diagnostic, not another qualified result. one musl baseline run at 1 ms hit the harness’s 70 s limit after 77 server GETs; its cause was not isolated. it is retained as a failed run, not discarded as load noise.
+
+the stricter single-dataset memory gate failed on musl: median peak RSS rose by 0.18 MiB at both RTTs. the paired RSS ratios were 1.0086 [1.0066, 1.0088] at 1 ms and 1.0087 [1.0048, 1.0089] at 50 ms. time stayed within noise, but this experiment required no control-RSS regression. no allocator option was changed to conceal the increase. the memo was dropped despite its large multi-dataset gain.
+
+the prototype shared in-flight requests and body bytes, bounded retained entries to one sixteenth of the memory setting, at most 64 MiB, and keyed them by the outgoing URL, headers and credential/bucket scope. only 2xx responses were retained; offline and mirror-only checks preceded reuse, and hints and mirror reads bypassed it. a dead origin download invalidated discovery without letting an older flight republish it. regression and mutation checks covered refusals, different URLs and credentials, paging, S3 signing, refreshed google tokens, cookies, cancellation, byte bounds and dead-link recovery. none of this prototype is shipped.
+
+build and raw evidence: the retained `net2/results/builds/v3` executables and source freeze, `memo-*-v3-1` paired records, `results/tests` red/mutation logs, and `scripts/ab.py` / `scripts/analyze.py`. the experiment used source base `27811da3`; earlier v1/v2 probes are separate and do not supply the keep decision.
+
+## network slots while a request waits, 2026-11-12
+
+one host returned 429 with `Retry-After: 5` before serving two distinct 4 KiB files; another served two distinct 64 MiB files, each paced at 8 MiB/s. the mixed `fetchloom --json --yes add -i inputs.txt` used `FETCHLOOM_JOBS=2 FETCHLOOM_HOST_JOBS=2`. this constrains connections, not the whole `lean` resources level: memory and local workers kept their defaults. the link had 1 ms RTT, no loss and no bandwidth cap. controls removed the limited host or used the normal 8/4 connection limits. native hash checks remained timed; every placed payload was independently checked with SHA-256 afterwards.
+
+`FETCHLOOM_EXP_RELEASE_WAITS`, read once, switched both arms in each stock release executable. each shuffled batch held the shared lock for at most five minutes on cores 12–23, with one warmup per arm. the two musl controls each needed one bounded two-pair fill after a noisy round; every earlier row remains recorded. no permit-matrix run failed. the paired method and GNU-time child RSS are as in the metadata experiment above.
+
+| workload / jobs | libc | quiet pairs | seconds before → after | peak MiB before → after |
+|---|---|---:|---|---|
+| mixed / 2/2 | glibc | 10/10 | 13.176 (13.072–13.200) → 8.159 (8.106–8.196) | 23.22 (22.45–25.93) → 21.25 (20.29–24.46) |
+| mixed / 2/2 | musl | 10/10 | 13.185 (13.107–13.218) → 8.205 (8.193–8.214) | 50.34 (48.53–53.58) → 51.41 (45.96–53.52) |
+| healthy host / 2/2 | glibc | 10/10 | 8.159 (8.103–8.217) → 8.114 (8.104–8.233) | 20.80 (20.21–22.30) → 20.59 (20.19–22.49) |
+| healthy host / 2/2 | musl | 11/12 | 8.171 (8.104–8.221) → 8.117 (8.106–8.225) | 48.73 (44.03–54.69) → 49.45 (43.79–53.31) |
+| mixed / 8/4 | glibc | 10/10 | 8.112 (8.106–8.128) → 8.114 (8.104–8.216) | 22.78 (21.00–23.73) → 22.75 (21.59–25.34) |
+| mixed / 8/4 | musl | 11/12 | 8.210 (8.186–8.225) → 8.216 (8.200–8.224) | 52.51 (47.41–57.38) → 52.78 (50.00–58.19) |
+
+mixed-run time ratios were 0.619 [0.619, 0.620] on glibc and 0.622 [0.621, 0.626] on musl, about 38% faster. server timestamps explain the change: the healthy host’s second request started about 5.008 s after the limited host’s first, versus 0.004 s after releasing sleeping requests’ slots. with 8/4 limits, both healthy requests already started immediately, so no default-two-host speedup is claimed. the control time intervals include 1 and end below 1.005. RSS varies between runs; its control intervals also include 1. the largest observed candidate peak was 58.19 MiB, inside the ordinary default budget.
+
+kept. metadata requests, ordinary downloads and split ranges release their host and global slots during retry and host-quota waits, but keep the partial-file claim. requests retake slots and then check the current quota before sending. stop and errors release ownership. after rebasing, fixed-clock tests also caught and fixed spending NCBI’s 334 ms spacing twice during reacquisition, and a one-try hint retaining slots when quota arrived while it queued. every `Retry-After` floor remains.
+
+five focused tests cover retry/quota sleeps, successful reacquisition and acquisition failure, a newer quota learned during reacquisition, NCBI spacing, and one-try hints. each faulty path was observed failing; deliberate release, quota-check, spacing and hint mutations were caught and restored. the recorded A/B source is `27811da3` plus the frozen v3 experiment. the later integration corrections concern spacing and hint paths, not this numeric-host fixture. raw evidence is retained under `net2/results/permit-*-v3-*`, `results/tests` and `results/builds/v3`. the switch is removed from the kept code.
+
+## probing after an unknown quota, 2026-11-12
+
+a local host allowed two successful requests per second, ten distinct 4 KiB files in all, and otherwise returned 429 with `Retry-After: 1` but no remaining-quota headers. the prototype admitted one recovery probe after the floor and widened after its first non-429 answer. older in-flight answers could not widen it. `FETCHLOOM_EXP_QUOTA_PROBE` selected the candidate; a second comparison enabled sleeping-slot release in both arms. default 8/4 limits, 1 ms RTT, native verification and an independent hash oracle were the same in both arms. each case has ten quiet paired rounds, one warmup per arm, and no failures.
+
+| slot release in both arms | libc | total 429s before → after (range per run) | seconds before → after | peak MiB before → after |
+|---|---|---|---|---|
+| off | glibc | 138 (13–14) → 138 (13–14) | 4.043 (4.041–4.044) → 4.044 (4.043–4.048) | 13.98 (13.77–14.53) → 14.00 (13.77–14.17) |
+| off | musl | 137 (13–14) → 135 (13–14) | 4.043 (4.041–4.045) → 4.045 (4.043–4.089) | 24.96 (24.35–26.12) → 25.60 (23.88–25.95) |
+| on | glibc | 138 (13–14) → 139 (13–14) | 4.043 (4.040–4.046) → 4.045 (4.043–4.047) | 13.96 (13.75–14.31) → 13.92 (13.61–14.18) |
+| on | musl | 137 (13–14) → 136 (13–14) | 4.041 (4.040–4.044) → 4.044 (4.043–4.047) | 25.12 (24.14–26.25) → 25.73 (23.83–26.30) |
+
+dropped. none of the comparisons reduced 429s by the required 20%; time differed by about 0.1%. one successful probe did not reveal the remaining quota, so widening immediately recreated the refusal burst. ordinary-file controls also ran on both libc targets and showed no established time or RSS regression. the proposed narrowing, its state and its switch are not shipped. red and mutation checks for serialization, old in-flight responses, widening and the `Retry-After` floor remain with the prototype evidence.
+
+raw evidence: `net2/results/quota-*-v3-1`, the frozen v3 source and executables, and `results/tests`. these are local HTTP fixtures, not a claim about every provider or HTTPS/HTTP/2 profile.

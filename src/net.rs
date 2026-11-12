@@ -18,7 +18,7 @@ pub(crate) mod sign;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use reqwest::StatusCode;
 use reqwest::header::{self, HeaderName, HeaderValue};
@@ -193,6 +193,31 @@ impl Split {
 }
 
 type Permits = (OwnedSemaphorePermit, OwnedSemaphorePermit);
+
+struct Holding<'a> {
+    key: &'a Url,
+    permits: &'a mut Option<Permits>,
+    owned: bool,
+}
+
+impl<'a> Holding<'a> {
+    fn new(key: &'a Url, permits: &'a mut Option<Permits>) -> Self {
+        let owned = permits.is_some();
+        Self {
+            key,
+            permits,
+            owned,
+        }
+    }
+
+    fn borrow(&mut self) -> Holding<'_> {
+        Holding {
+            key: self.key,
+            permits: &mut *self.permits,
+            owned: self.owned,
+        }
+    }
+}
 
 pub(crate) struct Net {
     /// made on the first request, so a run that never goes online loads no TLS roots and reads no
@@ -503,7 +528,7 @@ impl Net {
         self.offline
     }
 
-    /// [`Net::send_on`] for what a source gives, on the shared client.
+    /// [`Net::send_holding`] for what a source gives, on the shared client.
     #[cfg(test)]
     async fn send(
         &self,
@@ -513,7 +538,8 @@ impl Net {
         self.send_on(Lane::Shared, url, false, shape).await
     }
 
-    /// [`Net::send_on`] for a file body, which a `mirror` may be asked for in mirror-only mode.
+    /// [`Net::send_holding`] for a file body, which a `mirror` may be asked for in mirror-only mode.
+    #[cfg(test)]
     async fn send_body(
         &self,
         url: &Url,
@@ -525,15 +551,29 @@ impl Net {
         Ok(response)
     }
 
-    /// [`Net::send_on`] on a connection of the request's own, for the added streams of a split
-    /// download.
-    async fn send_apart(
+    async fn send_body_holding(
         &self,
         url: &Url,
         mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        holding: Holding<'_>,
     ) -> Result<reqwest::Response, Failure> {
-        self.send_on(Lane::Apart, url, mirror, shape).await
+        let response = self
+            .send_holding(Lane::Apart, url, mirror, shape, Some(holding))
+            .await?;
+        tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    async fn send_on(
+        &self,
+        lane: Lane,
+        url: &Url,
+        mirror: bool,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        self.send_holding(lane, url, mirror, shape, None).await
     }
 
     /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
@@ -547,15 +587,15 @@ impl Net {
     /// `gcs_buckets` lists does the same with a google token, and goes once more with a new
     /// token when cloud storage refuses one with a 401. in mirror-only mode every hop must be a
     /// `mirror`'s request below a mirror's address, checked before any name is looked up.
-    async fn send_on(
+    async fn send_holding(
         &self,
         lane: Lane,
         url: &Url,
         mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        mut holding: Option<Holding<'_>>,
     ) -> Result<reqwest::Response, Failure> {
         self.may_ask(url, mirror, None)?;
-        let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
@@ -573,14 +613,7 @@ impl Net {
         let mut asked_signed = false;
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
-            wire.proxies
-                .check(&hop, &self.typed)
-                .await
-                .map_err(|reason| refused(&hop, reason))?;
-            let carrier = wire.proxies.carrier(&hop);
-            // each hop picks its client, since only a trusted origin's lookups keep private
-            // addresses
-            let client = wire.lane(lane, &hop).map_err(Failure::Final)?;
+            let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
             first_origin &= hop.origin() == url.origin();
             // a signature goes with the first request alone, never after a redirect
             let located = bucket.as_ref().filter(|_| redirects == 0);
@@ -591,7 +624,10 @@ impl Net {
                 .map_err(Failure::Final)?;
             let tokened = self.google_bearer(stored.as_ref(), redirects).await?;
             let blobbed = self.azure_hop(container.as_ref(), redirects)?;
-            let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
+            let ticket = self
+                .pace_holding(&hop, holding.as_mut())
+                .await
+                .map_err(Failure::Final)?;
             let request = match &signer {
                 Some(signer) => {
                     tracing::debug!(host = host(&hop), "signing the request with an AWS key");
@@ -612,7 +648,7 @@ impl Net {
             }
             let mut response = self.sent(wire, &hop, carrier.as_ref(), request).await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
-            pace::Paces::heard(ticket, limits, Instant::now());
+            pace::Paces::heard(ticket, limits, tokio::time::Instant::now().into_std());
             if let Some(located) = located
                 && signer.is_none()
                 && !asked_signed
@@ -654,6 +690,21 @@ impl Net {
             };
             sent_by = Some(std::mem::replace(&mut hop, next));
         }
+    }
+
+    async fn checked_client<'w>(
+        &self,
+        wire: &'w Wire,
+        lane: Lane,
+        hop: &Url,
+    ) -> Result<(&'w reqwest::Client, Option<address::Carrier>), Failure> {
+        wire.proxies
+            .check(hop, &self.typed)
+            .await
+            .map_err(|reason| Failure::Final(failure::refused(hop, &reason)))?;
+        let carrier = wire.proxies.carrier(hop);
+        let client = wire.lane(lane, hop).map_err(Failure::Final)?;
+        Ok((client, carrier))
     }
 
     fn next_hop(
@@ -738,13 +789,31 @@ impl Net {
     /// waits while a rate limit of the URL's host is used up, telling the person watching once
     /// for each reset, then counts the request as on its way.
     async fn pace(&self, url: &Url) -> Result<pace::Ticket, Error> {
+        self.pace_holding(url, None).await
+    }
+
+    async fn pace_holding(
+        &self,
+        url: &Url,
+        mut holding: Option<&mut Holding<'_>>,
+    ) -> Result<pace::Ticket, Error> {
         let name = host(url).to_ascii_lowercase();
         loop {
-            let now = Instant::now();
+            self.stop.check()?;
+            if let Some(holding) = holding.as_mut()
+                && holding.owned
+                && holding.permits.is_none()
+            {
+                self.keep_permit(holding.key, holding.permits).await?;
+            }
+            let now = tokio::time::Instant::now().into_std();
             let hold = match self.paces.admit(&name, now) {
                 Ok(ticket) => return Ok(ticket),
                 Err(hold) => hold,
             };
+            if let Some(holding) = holding.as_mut() {
+                Self::release_for_wait(holding.permits);
+            }
             let wait = hold.until.saturating_duration_since(now);
             tracing::debug!(host = name, ?wait, "waiting for a rate limit to reset");
             if let Some(wait) = hold.told(now) {
@@ -760,6 +829,10 @@ impl Net {
                 () = self.stop.asked() => return Err(failure::interrupted(url)),
             }
         }
+    }
+
+    fn release_for_wait(permits: &mut Option<Permits>) {
+        drop(permits.take());
     }
 
     /// waits for a free slot for this host, then for one overall.
@@ -778,6 +851,7 @@ impl Net {
     }
 
     async fn keep_permit(&self, url: &Url, permits: &mut Option<Permits>) -> Result<(), Error> {
+        self.stop.check()?;
         if permits.is_none() {
             *permits = Some(self.permit(url).await?);
         }
@@ -1146,3 +1220,6 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1);
     }
 }
+
+#[cfg(test)]
+mod waits_tests;

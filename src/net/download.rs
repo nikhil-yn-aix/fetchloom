@@ -658,12 +658,14 @@ impl Net {
                 Ok(Answer::Divert(next)) => from = self.divert(fetch, next, &mut diversions)?,
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason, wait }) => {
+                    Self::release_for_wait(&mut state.permits);
                     retry.limited(reason, wait, known.is_some()).await?;
                 }
                 Err(Failure::Transient {
                     reason,
                     retry_after,
                 }) => {
+                    Self::release_for_wait(&mut state.permits);
                     retry.wait(reason, retry_after, known.is_some()).await?;
                 }
             }
@@ -748,6 +750,10 @@ impl Net {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "response checks and the writer handover stay in order"
+    )]
     async fn attempt(
         &self,
         from: &Url,
@@ -761,7 +767,10 @@ impl Net {
             .resumable()
             .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
         let shape = conditions(earlier.as_ref(), known);
-        let response = self.send_body(from, fetch.mirror, shape).await?;
+        let holding = super::Holding::new(&fetch.from, &mut state.permits);
+        let response = self
+            .send_body_holding(from, fetch.mirror, shape, holding)
+            .await?;
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
@@ -846,7 +855,10 @@ impl Net {
             on,
             measured,
         };
-        let (writer, pieced) = match self.split(job, writer, response, &mut state.split).await? {
+        let (writer, pieced) = match self
+            .split(job, writer, response, &mut state.split, &mut state.permits)
+            .await?
+        {
             split::Streamed::Whole { writer, pieced } => (*writer, pieced),
             split::Streamed::StartOver => return Ok(Answer::StartOver),
         };
