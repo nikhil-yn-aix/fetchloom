@@ -5,6 +5,7 @@ mod address;
 mod api;
 mod download;
 mod failure;
+mod google;
 mod headers;
 mod pace;
 mod rate;
@@ -27,6 +28,9 @@ pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES};
+#[cfg(debug_assertions)]
+pub(crate) use google::test_token_endpoint;
+pub(crate) use google::{Authorized, Google};
 pub(crate) use rate::Rate;
 pub(crate) use shown::{Shown, mask_query, secret};
 
@@ -195,6 +199,8 @@ pub(crate) struct Net {
     credentials: Vec<Key>,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: crate::source::Signing,
+    /// which requests to cloud storage buckets carry a google token.
+    google: Google,
     /// buckets that refused this run an old version of an object whose version as it is now
     /// matched its pin: they likely refuse every old version, so their objects are asked for as
     /// they are now first.
@@ -376,6 +382,7 @@ impl Net {
             typed: address::Typed::default(),
             credentials,
             signing: crate::source::Signing::default(),
+            google: Google::default(),
             refuse_versions: Mutex::default(),
             mirrors_only: None,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
@@ -421,6 +428,13 @@ impl Net {
     /// signs requests for the S3 buckets `signing` lists, once S3 refused them without a key.
     pub(crate) fn with_signing(mut self, signing: crate::source::Signing) -> Net {
         self.signing = signing;
+        self
+    }
+
+    /// sends a google token with requests for the cloud storage buckets `google` lists, once
+    /// cloud storage refused them without one.
+    pub(crate) fn with_google(mut self, google: Google) -> Net {
+        self.google = google;
         self
     }
 
@@ -515,7 +529,9 @@ impl Net {
     /// hop as curl's does. a request for an S3 bucket that `s3_buckets` lists goes again once,
     /// signed, when S3 refuses it without a key, and signed from the start once it did; keys that
     /// a program could not give fail the request rather than let it go without them, and a
-    /// redirect never carries the signature on. in mirror-only mode every hop must be a
+    /// redirect never carries the signature on. a request for a cloud storage bucket that
+    /// `gcs_buckets` lists does the same with a google token, and goes once more with a new
+    /// token when cloud storage refuses one with a 401. in mirror-only mode every hop must be a
     /// `mirror`'s request below a mirror's address, checked before any name is looked up.
     async fn send_on(
         &self,
@@ -528,15 +544,11 @@ impl Net {
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);
+        let stored = self.google.locate(url);
         #[cfg(debug_assertions)]
-        let local = api::test_bucket(url);
+        let local = api::test_bucket(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
-        let url = if let Some(local) = &local {
-            self.typed(local);
-            local
-        } else {
-            url
-        };
+        let url = local.as_ref().unwrap_or(url);
         let wire = self.wire().map_err(Failure::Final)?;
         let mut hop = url.clone();
         let mut sent_by: Option<Url> = None;
@@ -562,6 +574,7 @@ impl Net {
                 .signer(located, SystemTime::now(), &self.stop)
                 .await
                 .map_err(Failure::Final)?;
+            let tokened = self.google_bearer(stored.as_ref(), redirects).await?;
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = match &signer {
                 Some(signer) => {
@@ -572,7 +585,7 @@ impl Net {
                     )
                     .map_err(Failure::Final)?
                 }
-                None => shape(self.request(client, &hop, first_origin)),
+                None => shape(self.request(client, &hop, first_origin)).headers(tokened.headers()),
             };
             // counted as it goes: one refused before is no request, and a redirect's hop is part
             // of the request it follows
@@ -608,6 +621,9 @@ impl Net {
                 response
                     .extensions_mut()
                     .insert(located.keyed(signer.as_ref()));
+            }
+            if self.google_again(&tokened, &mut response).await? {
+                continue;
             }
             let Some(next) = redirect_target(&hop, &response) else {
                 if let Some(name) = name {

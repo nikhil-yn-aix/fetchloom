@@ -30,7 +30,7 @@ memory           4.0 GiB                  this machine   FETCHLOOM_MEMORY
 
 | origin | where the value came from |
 |---|---|
-| `environment` | a nonempty `FETCHLOOM_*` variable, or an empty `FETCHLOOM_ALLOWED_ORIGINS`, `FETCHLOOM_S3_BUCKETS`, `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` or `FETCHLOOM_PUSH_TO`, which clears what the settings file names there |
+| `environment` | a nonempty `FETCHLOOM_*` variable, or an empty `FETCHLOOM_ALLOWED_ORIGINS`, `FETCHLOOM_S3_BUCKETS`, `FETCHLOOM_GCS_BUCKETS`, `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` or `FETCHLOOM_PUSH_TO`, which clears what the settings file names there |
 | `settings file` | the [settings file](../reference/environment.md#settings-file) |
 | `this machine` | sized from this machine: its processors, the memory it has available, or for `build_floor` the disk holding the cache |
 | `default` | fetchloom's own default |
@@ -47,7 +47,7 @@ warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it chan
 
 `settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file.
 
-JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
+JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 
 ## exit codes
 

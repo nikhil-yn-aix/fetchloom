@@ -40,6 +40,8 @@ pub(crate) struct Response {
     pub(crate) region: Option<String>,
     /// how a request for an S3 bucket went out: signed with a key or not, and why.
     pub(crate) keyed: Option<crate::source::Keyed>,
+    /// how a request for a cloud storage bucket went out: with a google token or not, and why.
+    pub(crate) authorized: Option<super::Authorized>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -166,6 +168,7 @@ impl Net {
             .find_map(|link| response.url().join(&link).ok());
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
+        let authorized = response.extensions().get::<super::Authorized>().cloned();
         let final_url = response.url().clone();
         let mut body = Vec::new();
         loop {
@@ -210,6 +213,7 @@ impl Net {
             next,
             region,
             keyed,
+            authorized,
             body,
         })
     }
@@ -251,7 +255,7 @@ pub(super) fn test_bucket(url: &Url) -> Option<Url> {
 }
 
 #[cfg(debug_assertions)]
-fn local_test_server(variable: &str) -> Option<Url> {
+pub(super) fn local_test_server(variable: &str) -> Option<Url> {
     let local = Url::parse(&std::env::var(variable).ok()?).ok()?;
     if local.scheme() != "http"
         || local.host_str() != Some("127.0.0.1")

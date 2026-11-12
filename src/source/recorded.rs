@@ -26,6 +26,7 @@ impl Recorded {
             next: None,
             region: None,
             keyed: None,
+            authorized: None,
             body: body.into(),
         };
         self.answers.insert(parsed.to_string(), response);
@@ -51,6 +52,17 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before how it went out"));
         answer.keyed = Some(keyed);
+        self
+    }
+
+    /// says how the request for `url` went out to its cloud storage bucket, with a token or not.
+    pub(crate) fn authorized(mut self, url: &str, authorized: crate::net::Authorized) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before how it went out"));
+        answer.authorized = Some(authorized);
         self
     }
 

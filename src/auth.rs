@@ -3,12 +3,7 @@
 //! works in fetchloom and in them, and a person never makes a second.
 
 pub(crate) mod aws;
-#[expect(dead_code, reason = "private cloud storage buckets read them next")]
 pub(crate) mod google;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "private cloud storage buckets read them next")
-)]
 pub(crate) mod lease;
 pub(crate) mod netrc;
 pub(crate) mod store;

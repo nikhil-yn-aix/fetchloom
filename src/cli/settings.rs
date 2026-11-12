@@ -175,6 +175,11 @@ fn rows(context: &Context) -> Vec<Shown> {
         settings.s3_buckets.value.iter().map(ToString::to_string),
         vec![settings.s3_buckets.origin],
     ));
+    shown.push(list(
+        "gcs_buckets",
+        settings.gcs_buckets.value.iter().map(ToString::to_string),
+        vec![settings.gcs_buckets.origin],
+    ));
     shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
     shown.push(Shown {
         name: "mirrors_only",

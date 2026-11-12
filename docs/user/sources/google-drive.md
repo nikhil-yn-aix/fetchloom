@@ -26,7 +26,7 @@ folder listings give no file sizes. downloads supply sizes for the lock. [approv
 
 ## access and limits
 
-use links that grant access to the shared files. fetchloom follows download confirmations and reports quota, access and missing-file errors. a resource key is retained when the link supplies one.
+use links that grant access to the shared files. fetchloom follows download confirmations and reports quota, access and missing-file errors. a resource key is retained when the link supplies one. a file or folder shared only with some people fails with `auth.required`: fetchloom signs in to google for [private cloud storage buckets](buckets.md#private-cloud-storage-buckets) only, not to drive.
 
 google docs exports can change between downloads. select and exclude patterns also match these entries. a doc that remains selected stops the command; the error names the selected docs and explains how to exclude them.
 

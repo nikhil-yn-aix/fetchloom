@@ -1,11 +1,12 @@
-//! google cloud storage: the JSON API's object list over anonymous HTTPS.
+//! google cloud storage: the JSON API's object list over HTTPS, without a token unless the
+//! `gcs_buckets` setting lists the bucket and it refused a request without one.
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use serde::Deserialize;
 use url::Url;
 
-use super::{Object, Prefix, object_url, query};
+use super::{Object, Prefix, Store, is_bucket, object_url, query};
 use crate::digest::Md5;
 use crate::error::Error;
 use crate::net::Api;
@@ -28,6 +29,34 @@ struct Item {
     size: String,
     md5_hash: Option<String>,
     generation: Option<String>,
+}
+
+/// a cloud storage bucket as the `gcs_buckets` setting names it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GcsBucket(String);
+
+impl GcsBucket {
+    /// reads `gs://name` or a bare name, with or without a final `/`.
+    pub(crate) fn parse(text: &str) -> Option<GcsBucket> {
+        let text = text.trim();
+        let text = text.strip_suffix('/').unwrap_or(text);
+        let name = match text.split_once("://") {
+            Some((scheme, name)) if scheme.eq_ignore_ascii_case("gs") => name,
+            Some(_) => return None,
+            None => text,
+        };
+        is_bucket(Store::Gcs, name).then(|| GcsBucket(name.to_owned()))
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GcsBucket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "gs://{}", self.0)
+    }
 }
 
 /// every object under the prefix, a page of up to 1,000 at a time.

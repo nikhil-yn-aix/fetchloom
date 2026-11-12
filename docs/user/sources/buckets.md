@@ -1,11 +1,12 @@
 # cloud buckets
 
-fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys, which a profile may also get from a program or, for a sign-in or a role, from the AWS CLI.
+fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys, which a profile may also get from a program or, for a sign-in or a role, from the AWS CLI, and a private cloud storage bucket you list in the `gcs_buckets` setting with your google application default credentials.
 
 ```sh
 fetchloom add s3://openneuro.org/ds000001/
 fetchloom get gs://cloud-samples-data/bigquery/us-states/
 FETCHLOOM_S3_BUCKETS=s3://lab-raw fetchloom add s3://lab-raw/2026/
+FETCHLOOM_GCS_BUCKETS=gs://lab-private fetchloom add gs://lab-private/raw/
 fetchloom add s3:https://minio.lab.example:9000/scans/raw/
 ```
 
@@ -99,6 +100,25 @@ error: `aws configure export-credentials --profile lab` exited with code 255
 
 fetchloom itself asks no instance or container metadata service for keys. a profile whose role names `credential_source = Ec2InstanceMetadata` gets its keys from the AWS CLI, which asks that service.
 
+## private cloud storage buckets
+
+the `gcs_buckets` setting lists the cloud storage buckets fetchloom may send your google credentials for, in the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_GCS_BUCKETS`, separated by commas: `gs://<bucket>`, or the bare name. a bucket nobody listed never gets them, so a cloned project cannot make fetchloom sign in to a bucket of its choosing.
+
+```toml
+gcs_buckets = ["gs://lab-private"]
+```
+
+each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom asks google for an access token, asks again once with it, and sends it with that bucket's later requests from the start. this costs one extra request for each such bucket in each run, or one for each download already on its way when the first refusal came, and one request to google's token endpoint, `https://oauth2.googleapis.com/token`, for all of them. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
+
+the credentials are google's application default credentials, found as google's own libraries find them:
+
+1. the file `GOOGLE_APPLICATION_CREDENTIALS` names: a service account's JSON key, which signs a request for a token.
+2. else the login `gcloud auth application-default login` saved, in `application_default_credentials.json` in gcloud's folder: `CLOUDSDK_CONFIG`, else `~/.config/gcloud`, or `%APPDATA%\gcloud` on windows.
+
+a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. fetchloom keeps a token until 5 minutes before it expires, then asks for a new one, and a token cloud storage refuses with 401, as an expired or revoked one, is replaced once. it never asks a metadata server for the identity of the machine it runs on, so on a google cloud virtual machine use a key file or a login. files of other kinds, for workload identity federation or service account impersonation, are refused with `auth.required`, never passed over for another identity; so is a file that names a token endpoint other than google's, or a `GOOGLE_APPLICATION_CREDENTIALS` file that cannot be read, which fails with `usage`, exit 2.
+
+no key, token or login reaches data.toml, data.lock, the cache, logs or `--json` output. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, and never what it signs with.
+
 ## access and limits
 
 a refused listing (401 or 403, such as S3's `AccessDenied`) fails with `auth.required` and exit code 40, saying whether a key went with the request and what to do. a bucket `s3_buckets` does not list:
@@ -115,8 +135,30 @@ error: s3://lab-raw/2026/ is private: S3 refused to list it without a key, and n
   help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile in ~/.aws/credentials
 ```
 
-a signed request S3 still refuses says `S3 refused the AWS key …WXYZ from AWS_ACCESS_KEY_ID for s3://lab-raw/2026/` and asks you to have the owner let that key list and read the bucket. a line under each error repeats what S3 said, such as `AccessDenied: Access Denied`. a download refused the same way fails with the same kind and says which link it was. a service that wants another region than the request was signed for names it, and a missing bucket fails with `reference.unresolved`.
+a cloud storage bucket `gcs_buckets` does not list:
 
-requester-pays buckets bill the reader for each request, and fetchloom never agrees to pay: they fail with `auth.required`, with or without a key. use the AWS CLI with `--request-payer requester` for them. a bucket that allows reading objects but not listing them still works one object at a time through plain object links.
+```text
+error: gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials
+  help: if you trust gs://lab-private with your google credentials, add it to gcs_buckets in the settings file or FETCHLOOM_GCS_BUCKETS
+```
 
-google cloud storage buckets must allow anonymous reads: `GOOGLE_APPLICATION_CREDENTIALS` is not read, and a refused listing says fetchloom reads public cloud storage buckets only. AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read, and azure blob storage is not a bucket source; an object link that needs no key still works as a plain URL.
+a listed one with no application default credentials on this machine:
+
+```text
+error: gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials, and no google application default credentials were found
+  help: run `gcloud auth application-default login`, or set GOOGLE_APPLICATION_CREDENTIALS to a service account's key file
+```
+
+a login google no longer takes, here one that was revoked, fails before any download:
+
+```text
+error: google refused the google login in /home/ada/.config/gcloud/application_default_credentials.json
+  google said invalid_grant: Token has been expired or revoked.
+  help: sign in again with `gcloud auth application-default login`
+```
+
+a request with a token cloud storage still refuses says `google cloud storage refused the service account … for gs://lab-private/raw/` and asks you to have the owner let that account list and read the bucket. a token refused for lacking the scope that reads cloud storage, which google says in a `WWW-Authenticate` header with `error="insufficient_scope"` or in its message, is not replaced; the error says so and to sign in again with `gcloud auth application-default login`, with no `--scopes`, or with `https://www.googleapis.com/auth/cloud-platform` among them. a signed request S3 still refuses says `S3 refused the AWS key …WXYZ from AWS_ACCESS_KEY_ID for s3://lab-raw/2026/` and asks you to have the owner let that key list and read the bucket. a line under each error repeats what S3 said, such as `AccessDenied: Access Denied`. a download refused the same way fails with the same kind and says which link it was. a service that wants another region than the request was signed for names it, and a missing bucket fails with `reference.unresolved`.
+
+requester-pays buckets bill the reader for each request, and fetchloom never agrees to pay: they fail with `auth.required`, with or without a key or a token, since fetchloom never names a project to bill. use the AWS CLI with `--request-payer requester`, or `gcloud storage cp` with `--billing-project`, for them. a bucket that allows reading objects but not listing them still works one object at a time through plain object links, `https://storage.googleapis.com/<bucket>/<key>` for cloud storage.
+
+AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read, nor google credentials from a metadata server, workload identity federation or impersonation, and azure blob storage is not a bucket source; an object link that needs no key still works as a plain URL.

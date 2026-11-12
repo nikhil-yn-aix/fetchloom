@@ -642,19 +642,81 @@ fn a_signed_listing_states_no_md5_and_links_objects_in_the_region_it_was_signed_
     assert_eq!(listing.files[0].md5, None);
 }
 
+/// a refused cloud storage listing says whether google credentials went with it, and what would
+/// let the next one through.
 #[test]
-fn a_refused_cloud_storage_listing_means_the_bucket_is_not_public() {
+fn a_refused_cloud_storage_listing_says_whether_credentials_went_with_it() {
     let url = STATES
         .replace("cloud-samples-data", "test")
         .replace("bigquery%2Fus-states%2F", "x%2F");
-    let recorded = Recorded::default().on(&url, 401, fixture_bytes("bucket/gcs-denied.json"));
+    let anonymous = |listed| crate::net::Authorized::Anonymous {
+        bucket: "test".to_owned(),
+        listed,
+    };
+    let unlisted = (
+        "gs://test/x/ is private: google cloud storage refused to list it without credentials",
+        "if you trust gs://test with your google credentials, add it to gcs_buckets in the settings file or FETCHLOOM_GCS_BUCKETS",
+    );
+    for (authorized, (message, help)) in [
+        (None, unlisted),
+        (Some(anonymous(false)), unlisted),
+        (
+            Some(anonymous(true)),
+            (
+                "gs://test/x/ is private: google cloud storage refused to list it without credentials, and no google application default credentials were found",
+                "run `gcloud auth application-default login`, or set GOOGLE_APPLICATION_CREDENTIALS to a service account's key file",
+            ),
+        ),
+        (
+            Some(crate::net::Authorized::Token {
+                bucket: "test".to_owned(),
+                identity: "the google login in /home/ada/adc.json".to_owned(),
+                lacks_scope: false,
+            }),
+            (
+                "google cloud storage refused the google login in /home/ada/adc.json for gs://test/x/",
+                "ask the bucket's owner to let that account list and read it",
+            ),
+        ),
+    ] {
+        let recorded = Recorded::default().on(&url, 401, fixture_bytes("bucket/gcs-denied.json"));
+        let recorded = match authorized {
+            Some(authorized) => recorded.authorized(&url, authorized),
+            None => recorded,
+        };
+        let error = resolve("gs://test/x/", &recorded).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), Some(help));
+        assert!(
+            error.details[0].contains("required: Anonymous caller"),
+            "{:?}",
+            error.details
+        );
+    }
+
+    // a token without the scope that reads cloud storage, as google words that
+    let scoped = br#"{"error":{"code":403,"message":"Request had insufficient authentication scopes.","errors":[{"message":"Insufficient Permission","domain":"global","reason":"insufficientPermissions"}],"status":"PERMISSION_DENIED"}}"#;
+    let recorded = Recorded::default()
+        .on(&url, 403, scoped.to_vec())
+        .authorized(
+            &url,
+            crate::net::Authorized::Token {
+                bucket: "test".to_owned(),
+                identity: "the google login in /home/ada/adc.json".to_owned(),
+                lacks_scope: false,
+            },
+        );
     let error = resolve("gs://test/x/", &recorded).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
-    assert_eq!(error.help.as_deref(), Some(PRIVATE));
-    assert!(
-        error.details[0].contains("required: Anonymous caller"),
-        "{:?}",
-        error.details
+    assert_eq!(
+        error.message,
+        "google cloud storage refused the google login in /home/ada/adc.json for gs://test/x/: its token lacks the scope that reads cloud storage"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "a login needs the cloud-platform scope: sign in again with `gcloud auth application-default login`, with no --scopes, or with https://www.googleapis.com/auth/cloud-platform among them"
+        )
     );
 
     let url = STATES
@@ -664,11 +726,13 @@ fn a_refused_cloud_storage_listing_means_the_bucket_is_not_public() {
     let recorded = Recorded::default().on(&url, 400, billed.to_vec());
     let error = resolve("gs://billed/x/", &recorded).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
-    assert_eq!(error.help.as_deref(), Some(PRIVATE));
-    assert!(
-        error.message.contains("bills the reader"),
-        "{}",
-        error.message
+    assert_eq!(
+        error.message,
+        "gs://billed/x/ bills the reader for each request, and fetchloom never agrees to pay"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("use `gcloud storage cp` with --billing-project for this bucket")
     );
 }
 

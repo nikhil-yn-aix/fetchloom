@@ -13,6 +13,7 @@ use std::fmt;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
+pub(crate) use self::gcs::GcsBucket;
 pub(crate) use self::signing::{Keyed, Signing};
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
@@ -20,9 +21,8 @@ use crate::error::{Error, Kind};
 use crate::net::sign::UNRESERVED;
 use crate::net::{self, Api, Response};
 
-/// the help for a cloud storage bucket that refuses anonymous reads.
-const PRIVATE: &str =
-    "fetchloom reads public cloud storage buckets only; use google's tools for private data";
+/// the help for a cloud storage bucket that bills the reader, which fetchloom never agrees to.
+const REQUESTER_PAYS: &str = "use `gcloud storage cp` with --billing-project for this bucket";
 
 /// the longest key S3 and cloud storage accept, in bytes.
 const LONGEST_KEY: usize = 1024;
@@ -66,13 +66,6 @@ impl Store {
         match self {
             Store::S3 => "s3://openneuro.org/ds000001/",
             Store::Gcs => "gs://cloud-samples-data/bigquery/us-states/",
-        }
-    }
-
-    fn service(self) -> &'static str {
-        match self {
-            Store::S3 => "S3",
-            Store::Gcs => "google cloud storage",
         }
     }
 }
@@ -460,19 +453,21 @@ impl Prefix {
             )
             .help("use the AWS CLI with --request-payer requester for this bucket"),
             401 | 403 if self.store == Store::S3 => self.private(response.keyed.as_ref()),
-            401 | 403 => Error::new(
-                Kind::AuthRequired,
-                format!(
-                    "{self} is not a public bucket: {} refused to list it",
-                    self.store.service()
-                ),
-            )
-            .help(PRIVATE),
+            401 | 403 => response
+                .authorized
+                .clone()
+                .unwrap_or(net::Authorized::Anonymous {
+                    bucket: self.bucket.clone(),
+                    listed: false,
+                })
+                .listing_refusal(&self.to_string(), message),
             400 if requester_pays => Error::new(
                 Kind::AuthRequired,
-                format!("{self} bills the reader for each request, which needs an account"),
+                format!(
+                    "{self} bills the reader for each request, and fetchloom never agrees to pay"
+                ),
             )
-            .help(PRIVATE),
+            .help(REQUESTER_PAYS),
             400 if code == Some("AuthorizationHeaderMalformed")
                 && let Some(region) = region =>
             {

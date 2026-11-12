@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::mirror::Location;
-use crate::source::Bucket;
+use crate::source::{Bucket, GcsBucket};
 use crate::units;
 
 /// reads one environment variable, so tests can give each run its own.
@@ -38,7 +38,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 17] = [
+const KEYS: [(&str, &str); 18] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -52,6 +52,7 @@ const KEYS: [(&str, &str); 17] = [
     ("archive_ratio", "FETCHLOOM_ARCHIVE_RATIO"),
     ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
     ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
+    ("gcs_buckets", "FETCHLOOM_GCS_BUCKETS"),
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
@@ -59,15 +60,16 @@ const KEYS: [(&str, &str); 17] = [
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 3] = ["allowed_origins", "s3_buckets", "mirrors"];
+const LISTS: [&str; 4] = ["allowed_origins", "s3_buckets", "gcs_buckets", "mirrors"];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 1] = ["mirrors_only"];
 /// the keys an empty variable clears rather than leaving to the settings file: who may be
 /// reached, which buckets keys sign for, where requests go and where push writes, so blanking one
 /// for a run cannot leave the file's choice in force.
-const CLEARED: [&str; 5] = [
+const CLEARED: [&str; 6] = [
     "allowed_origins",
     "s3_buckets",
+    "gcs_buckets",
     "mirrors",
     "mirrors_only",
     "push_to",
@@ -332,6 +334,9 @@ pub(crate) struct Settings {
     /// the S3 buckets a request may be signed for with this machine's AWS keys, after S3 refused
     /// it without one.
     pub(crate) s3_buckets: Set<Vec<Bucket>>,
+    /// the cloud storage buckets a request may carry a token of this machine's google
+    /// credentials for, after cloud storage refused it without one.
+    pub(crate) gcs_buckets: Set<Vec<GcsBucket>>,
     /// the folders and web servers asked for pinned files before their sources, in order.
     pub(crate) mirrors: Set<Vec<Location>>,
     /// whether requests may go to the mirrors alone, never to a source.
@@ -368,6 +373,7 @@ impl Settings {
             archive_ratio: Set::default(crate::archive::Limits::default().ratio),
             allowed_origins: Set::default(Vec::new()),
             s3_buckets: Set::default(Vec::new()),
+            gcs_buckets: Set::default(Vec::new()),
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
@@ -415,6 +421,7 @@ impl Settings {
             )?,
             allowed_origins: origins(&given, "allowed_origins")?,
             s3_buckets: buckets(&given, "s3_buckets")?,
+            gcs_buckets: gcs_buckets(&given, "gcs_buckets")?,
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_folder(&given, "push_to")?,
@@ -727,6 +734,41 @@ fn buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<Bucket>>, Error> {
             )
             .help(format!(
                 "{} to sign for none, or list buckets as s3://name, or as s3:https://host:port/name at another S3 service, separated by commas",
+                undo(origin, key)
+            )));
+        };
+        if !buckets.contains(&bucket) {
+            buckets.push(bucket);
+        }
+    }
+    Ok(Set {
+        value: buckets,
+        origin,
+    })
+}
+
+/// the cloud storage buckets `key` lists, separated by commas: `gs://name`, or a bare name. none
+/// when it is unset or empty.
+fn gcs_buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<GcsBucket>>, Error> {
+    let Some((entries, origin, named)) = given.list(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let mut buckets = Vec::new();
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(bucket) = GcsBucket::parse(entry) else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{}\", which is not a bucket such as gs://lab-data",
+                    crate::net::mask_query(entry)
+                ),
+            )
+            .help(format!(
+                "{} to send google credentials to none, or list buckets as gs://name, separated by commas",
                 undo(origin, key)
             )));
         };
@@ -1084,7 +1126,7 @@ mod tests {
         assert_eq!(
             unknown.help.as_deref(),
             Some(
-                "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+                "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
             )
         );
     }
@@ -1513,6 +1555,72 @@ mod tests {
                     value: 32,
                     origin: Origin::File
                 }
+            );
+        }
+    }
+
+    #[test]
+    fn gcs_buckets_name_cloud_storage_buckets() {
+        let shown = |settings: &Settings| -> Vec<String> {
+            settings
+                .gcs_buckets
+                .value
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(read(&[], None).unwrap().gcs_buckets, Set::default(vec![]));
+        let set = read(
+            &[(
+                "FETCHLOOM_GCS_BUCKETS",
+                " lab-raw, gs://lab.data/ ,GS://lab_scans,lab-raw,",
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            shown(&set),
+            ["gs://lab-raw", "gs://lab.data", "gs://lab_scans"]
+        );
+        assert_eq!(set.gcs_buckets.origin, Origin::Environment);
+        let filed = file("gcs_buckets = [\"gs://lab-raw\"]\n").unwrap();
+        let set = Settings::read(&env(&[]), filed.clone(), machine(None)).unwrap();
+        assert_eq!(shown(&set), ["gs://lab-raw"]);
+        assert_eq!(set.gcs_buckets.origin, Origin::File);
+        // a blank variable clears what the file lists, so no request carries a token for it
+        let cleared = Settings::read(
+            &env(&[("FETCHLOOM_GCS_BUCKETS", " ")]),
+            filed,
+            machine(None),
+        )
+        .unwrap();
+        assert_eq!(
+            cleared.gcs_buckets,
+            Set {
+                value: Vec::new(),
+                origin: Origin::Environment
+            }
+        );
+        for entry in [
+            "gs://Lab-Raw",
+            "s3://lab-raw",
+            "gs://lab-raw/prefix/",
+            "https://storage.googleapis.com/lab-raw",
+            "gs://ab",
+        ] {
+            let error = read(&[("FETCHLOOM_GCS_BUCKETS", entry)], None).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{entry}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "FETCHLOOM_GCS_BUCKETS holds \"{entry}\", which is not a bucket such as gs://lab-data"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "unset FETCHLOOM_GCS_BUCKETS to send google credentials to none, or list buckets as gs://name, separated by commas"
+                )
             );
         }
     }

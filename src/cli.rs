@@ -217,10 +217,17 @@ impl Context {
             self.settings.s3_buckets.value.clone(),
             Arc::new(crate::auth::env),
         );
+        let google = net::Google::new(
+            self.settings.gcs_buckets.value.clone(),
+            Arc::new(crate::auth::env),
+        );
+        #[cfg(debug_assertions)]
+        let google = google.with_token_endpoint(net::test_token_endpoint());
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
             .with_signing(signing)
+            .with_google(google)
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value);

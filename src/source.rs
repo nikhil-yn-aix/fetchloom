@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use tracing::Instrument as _;
 use url::Url;
 
-pub(crate) use bucket::{Bucket, Keyed, Signing, unversioned, with_version};
+pub(crate) use bucket::{Bucket, GcsBucket, Keyed, Signing, unversioned, with_version};
 
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -1138,6 +1138,7 @@ mod tests {
                 next: None,
                 region: None,
                 keyed: None,
+                authorized: None,
                 body: b"not json".to_vec(),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

@@ -31,7 +31,7 @@ pub(super) fn divert(page: &Url, status: u16, text: &str) -> Result<Url, Error> 
             Kind::AuthRequired,
             format!("{link} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google"));
+        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google drive"));
     }
     match status {
         200 => form(page, text).ok_or_else(|| {

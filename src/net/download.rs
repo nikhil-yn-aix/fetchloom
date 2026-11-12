@@ -886,6 +886,11 @@ impl Net {
         {
             return Err(Failure::Final(keyed.refusal(from)));
         }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && let Some(authorized) = response.extensions().get::<super::Authorized>()
+        {
+            return Err(Failure::Final(authorized.refusal(from)));
+        }
         if let Some(divert) = fetch.divert
             && is_page(status, response.headers())
         {

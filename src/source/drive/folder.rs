@@ -163,7 +163,7 @@ async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page
             Kind::AuthRequired,
             format!("{what} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google")),
+        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google drive")),
         404 | 410 => Err(Error::new(
             Kind::ReferenceUnresolved,
             format!("{what} does not exist"),
