@@ -431,6 +431,19 @@ pub(crate) fn delete(path: &Path) -> Result {
     }
 }
 
+/// deletes the folder at `path` with all it holds as a person can, each file through [`delete`].
+pub(crate) fn delete_folder(path: &Path) -> Result {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            delete_folder(&entry.path())?;
+        } else {
+            delete(&entry.path())?;
+        }
+    }
+    Ok(std::fs::remove_dir(path)?)
+}
+
 /// makes `link` name the folder `target` the way a user can without admin: a junction on
 /// windows, a symlink elsewhere. says whether the filesystem allowed it.
 pub(crate) fn link_folder(target: &Path, link: &Path) -> bool {
