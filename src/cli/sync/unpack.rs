@@ -343,7 +343,11 @@ impl Loop<'_> {
             count if count <= SHOWN => {
                 format!("{} and {last}", paths[..count - 1].join(", "))
             }
-            count => format!("{} and {} more", paths[..SHOWN].join(", "), count - SHOWN),
+            count => format!(
+                "{} and {} more",
+                paths[..SHOWN].join(", "),
+                units::grouped((count - SHOWN) as u64)
+            ),
         };
         let name = &locked.name;
         let said = match paths.len() {
@@ -753,7 +757,10 @@ fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Dur
     if let Some(first) = &skipped.first {
         let said = match skipped.files {
             1 => format!("{first} in {label}, which the system makes"),
-            files => format!("{first} and {} more the system makes in {label}", files - 1),
+            files => format!(
+                "{first} and {} more the system makes in {label}",
+                units::grouped(files - 1)
+            ),
         };
         output.step("Skipped", &said);
     }

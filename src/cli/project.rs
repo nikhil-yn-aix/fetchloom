@@ -115,7 +115,7 @@ pub(super) fn remind_lists(context: &Context) {
         [one] => one.clone(),
         [first, ..] => format!(
             "{} lists data.lock names now, such as {first}",
-            missing.len()
+            units::grouped(missing.len() as u64)
         ),
     };
     let output = &context.output;
@@ -283,7 +283,8 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
     let what = match files.len() {
         1 => format!("{}, code of {recipes}", first.file),
         count => format!(
-            "{count} files of the code of {recipes}, such as {}",
+            "{} files of the code of {recipes}, such as {}",
+            units::grouped(count as u64),
             first.file
         ),
     };
@@ -1276,7 +1277,7 @@ pub(super) fn refetched(survey: &Survey, scope: &Scope) -> Vec<String> {
     if paths.len() > 5 {
         said.push(format!(
             "and {} more files linked to changed cache copies",
-            paths.len() - 5
+            units::grouped((paths.len() - 5) as u64)
         ));
     }
     said

@@ -420,7 +420,7 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
                     Kind::OfflineMissing,
                     format!(
                         "the files inside {} archives are not known on this machine",
-                        many.len()
+                        crate::units::grouped(many.len() as u64)
                     ),
                 )
                 .detail(many.join(", ")),
@@ -441,7 +441,10 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
                 many => many.iter().fold(
                     Error::new(
                         Kind::ProjectInvalid,
-                        format!("{} links in data.lock cannot be written", many.len()),
+                        format!(
+                            "{} links in data.lock cannot be written",
+                            crate::units::grouped(many.len() as u64)
+                        ),
                     ),
                     |error, line| error.detail(line.clone()),
                 ),

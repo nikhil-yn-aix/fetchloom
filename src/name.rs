@@ -185,7 +185,10 @@ pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
         });
     }
     if others.len() > shown {
-        held.push(format!("{} more", others.len() - shown));
+        held.push(format!(
+            "{} more",
+            crate::units::grouped((others.len() - shown) as u64)
+        ));
     }
     if let [first @ .., last] = held.as_slice() {
         return Some(if first.is_empty() {

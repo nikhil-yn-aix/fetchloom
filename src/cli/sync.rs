@@ -1423,7 +1423,10 @@ fn shown_five(mut error: Error, labels: &[&str]) -> Error {
         error = error.detail((*label).to_owned());
     }
     if labels.len() > 5 {
-        error = error.detail(format!("and {} more", labels.len() - 5));
+        error = error.detail(format!(
+            "and {} more",
+            units::grouped((labels.len() - 5) as u64)
+        ));
     }
     error
 }

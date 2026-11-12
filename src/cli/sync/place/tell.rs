@@ -156,7 +156,7 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
     let (what, help) = match found.paths.len() {
         1 => ("a file".to_owned(), format!("run `{command}`")),
         count => (
-            format!("{count} files"),
+            format!("{} files", units::grouped(count as u64)),
             format!("run `fetchloom drop` with their paths, as `{command}`"),
         ),
     };
@@ -368,10 +368,14 @@ fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: bool) 
         }
         (1, false) => "1 file already held the pinned bytes, so it stays as it is".to_owned(),
         (count, true) => format!(
-            "{count} files already held the pinned bytes, so they are now linked to the cache"
+            "{} files already held the pinned bytes, so they are now linked to the cache",
+            units::grouped(count as u64)
         ),
         (count, false) => {
-            format!("{count} files already held the pinned bytes, so they stay as they are")
+            format!(
+                "{} files already held the pinned bytes, so they stay as they are",
+                units::grouped(count as u64)
+            )
         }
     };
     output.step("Adopted", &format!("{folder} · {said}"));
@@ -521,7 +525,8 @@ fn tell_checks(output: &Output, manifest: &Manifest, dataset: &str, files: &[Str
         1 => "1 file is already there; the download tells whether it holds the pinned bytes"
             .to_owned(),
         count => format!(
-            "{count} files are already there; the downloads tell whether they hold the pinned bytes"
+            "{} files are already there; the downloads tell whether they hold the pinned bytes",
+            units::grouped(count as u64)
         ),
     };
     output.step(
@@ -539,7 +544,10 @@ fn tell_adoptions(output: &Output, folder: &str, files: &[&String]) {
     let said = match files.len() {
         0 => return,
         1 => "1 file already holds the pinned bytes".to_owned(),
-        count => format!("{count} files already hold the pinned bytes"),
+        count => format!(
+            "{} files already hold the pinned bytes",
+            units::grouped(count as u64)
+        ),
     };
     output.step("Would adopt", &format!("{folder} · {said}"));
     for path in files {
@@ -566,7 +574,10 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
     if let (Some(folder), [one, ..]) = (folder, others.as_slice()) {
         let placed = match files.len() {
             1 => format!("{first}, a file fetchloom placed {before}"),
-            count => format!("{count} files fetchloom placed {before}, such as {first}"),
+            count => format!(
+                "{} files fetchloom placed {before}, such as {first}",
+                units::grouped(count as u64)
+            ),
         };
         let (theirs, help) = match others.len() {
             1 => (
@@ -574,9 +585,14 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
                 format!("move {one} out of {folder} before you delete {folder}"),
             ),
             count => (
-                format!("{count} files it did not place: {}", some_of(others)),
                 format!(
-                    "move the {count} files fetchloom did not place out of {folder} before you delete {folder}"
+                    "{} files it did not place: {}",
+                    units::grouped(count as u64),
+                    some_of(others)
+                ),
+                format!(
+                    "move the {} files fetchloom did not place out of {folder} before you delete {folder}",
+                    units::grouped(count as u64)
                 ),
             ),
         };
@@ -600,7 +616,8 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
         ),
         (Some(folder), count) => (
             format!(
-                "{folder} still holds {count} files fetchloom placed {before}, such as {first}. fetchloom leaves them there"
+                "{folder} still holds {} files fetchloom placed {before}, such as {first}. fetchloom leaves them there",
+                units::grouped(count as u64)
             ),
             format!("delete {folder} when you no longer need what it holds"),
         ),
@@ -612,7 +629,8 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
         ),
         (None, count) => (
             format!(
-                "{count} files fetchloom placed {before} are outside the data folder now, such as {first}. fetchloom leaves them there"
+                "{} files fetchloom placed {before} are outside the data folder now, such as {first}. fetchloom leaves them there",
+                units::grouped(count as u64)
             ),
             "delete them when you no longer need them".to_owned(),
         ),
@@ -630,7 +648,10 @@ fn some_of(paths: &[String]) -> String {
             format!("{} and {last}", first.join(", "))
         }
         [a, b, c, rest @ ..] if !rest.is_empty() => {
-            format!("{a}, {b}, {c} and {} more", rest.len())
+            format!(
+                "{a}, {b}, {c} and {} more",
+                units::grouped(rest.len() as u64)
+            )
         }
         _ => paths.join(""),
     }

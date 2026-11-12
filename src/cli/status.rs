@@ -291,7 +291,10 @@ fn warn_unnamed(output: &Output, project: &Project) {
         let (said, them) = match parts.len() {
             1 => (format!("data.lock no longer names {first}"), "it"),
             count => (
-                format!("data.lock no longer names {count} lists in data.lock.d, such as {first}"),
+                format!(
+                    "data.lock no longer names {} lists in data.lock.d, such as {first}",
+                    units::grouped(count as u64)
+                ),
                 "them",
             ),
         };
@@ -330,7 +333,7 @@ fn warn_untracked(output: &Output, project: &Project) {
         [one] => format!("data.lock names {one}, which git does not have"),
         [first, ..] => format!(
             "data.lock names {} lists git does not have, such as {first}",
-            missing.len()
+            units::grouped(missing.len() as u64)
         ),
     };
     let them = if missing.len() == 1 { "it" } else { "them" };
@@ -897,7 +900,7 @@ fn tell_unplaced(output: &Output, status: &Status) {
         };
         let files = match paths.len() {
             1 => "its file".to_owned(),
-            count => format!("its {count} files"),
+            count => format!("its {} files", units::grouped(count as u64)),
         };
         output.report(
             "Not placed",

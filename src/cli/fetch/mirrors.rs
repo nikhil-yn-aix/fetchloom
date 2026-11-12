@@ -351,7 +351,10 @@ pub(in crate::cli) fn lacked(context: &Context, files: &[(String, Option<Sha256>
         })
         .collect();
     if files.len() > super::NAMED {
-        lines.push(format!("and {} more", files.len() - super::NAMED));
+        lines.push(format!(
+            "and {} more",
+            units::grouped((files.len() - super::NAMED) as u64)
+        ));
     }
     lines
 }
@@ -741,7 +744,7 @@ fn tell_damaged(context: &Context, location: &Location, labels: &[String]) {
     if labels.len() > NAMED {
         context.output.warn(&format!(
             "the mirror {location} holds {} more damaged copies, so they were not used",
-            labels.len() - NAMED
+            units::grouped((labels.len() - NAMED) as u64)
         ));
     }
 }

@@ -65,7 +65,7 @@ pub(super) fn run(context: &Context) -> Report {
         about.push(format!("{} of memory available", units::size(memory)));
     }
     if let Some(open) = machine.open_files {
-        about.push(format!("{open} open files at most"));
+        about.push(format!("{} open files at most", units::grouped(open)));
     }
     output.step("Machine", &about.join(" \u{b7} "));
     let file = &context.settings.file;
@@ -270,13 +270,16 @@ fn variables(context: &Context) -> Vec<Shown> {
     shown
 }
 
-fn count(name: &'static str, value: impl Into<Value> + ToString + Copy, origin: Origin) -> Shown {
+fn count<N>(name: &'static str, value: N, origin: Origin) -> Shown
+where
+    N: Into<Value> + TryInto<u64> + Copy,
+{
     Shown {
         name,
         value: value.into(),
         origin: vec![origin],
         variable: crate::settings::variable(name),
-        said: value.to_string(),
+        said: value.try_into().map(units::grouped).unwrap_or_default(),
     }
 }
 
@@ -382,6 +385,16 @@ mod tests {
 
     fn folder(path: &str) -> Location {
         Location::Folder(PathBuf::from(path))
+    }
+
+    /// a count reads with its thousands apart, as every count fetchloom prints does, while
+    /// `--json` keeps the number.
+    #[test]
+    fn counts_read_with_their_thousands_apart() {
+        let files = count("archive_files", 10_000_000_u64, Origin::Default);
+        assert_eq!(files.said, "10,000,000");
+        assert_eq!(files.value, json!(10_000_000));
+        assert_eq!(count("jobs", 8_usize, Origin::Default).said, "8");
     }
 
     /// a run given `flagged` with `--mirror`, whose mirrors setting lists `listed` from `origin`.

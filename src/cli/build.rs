@@ -1484,7 +1484,10 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
             error = error.detail(line.clone());
         }
         if lines.len() > LISTED {
-            error = error.detail(format!("and {} more", lines.len() - LISTED));
+            error = error.detail(format!(
+                "and {} more",
+                units::grouped((lines.len() - LISTED) as u64)
+            ));
         }
     }
     for step in steps.iter().filter(|step| step.action == Did::Skipped) {

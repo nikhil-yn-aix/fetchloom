@@ -750,7 +750,10 @@ fn named_lines(mut error: Error, lines: &[&str]) -> Error {
         error = error.detail((*line).to_owned());
     }
     if lines.len() > super::fetch::NAMED {
-        error = error.detail(format!("and {} more", lines.len() - super::fetch::NAMED));
+        error = error.detail(format!(
+            "and {} more",
+            units::grouped((lines.len() - super::fetch::NAMED) as u64)
+        ));
     }
     error
 }
@@ -1423,7 +1426,7 @@ fn everything(datasets: &[String]) -> String {
         few if few.len() <= 3 => format!("every file {} need is on the mirror", listed(few)),
         many => format!(
             "every file the {} datasets need is on the mirror",
-            many.len()
+            units::grouped(many.len() as u64)
         ),
     }
 }
@@ -1435,7 +1438,11 @@ fn named(names: &[&str]) -> String {
     if names.len() <= FEW + 1 {
         return listed(names);
     }
-    format!("{} and {} more", names[..FEW].join(", "), names.len() - FEW)
+    format!(
+        "{} and {} more",
+        names[..FEW].join(", "),
+        units::grouped((names.len() - FEW) as u64)
+    )
 }
 
 /// `words` as a person reads a list: `a`, `a and b`, `a, b and c`.

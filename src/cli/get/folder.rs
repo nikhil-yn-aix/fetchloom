@@ -374,7 +374,10 @@ fn top_level<'a>(files: impl IntoIterator<Item = (&'a str, u64)>) -> Vec<String>
         .map(|(name, size)| format!("{name:<width$}  {size}"))
         .collect();
     if entries.len() > SHOWN {
-        lines.push(format!("and {} more", entries.len() - SHOWN));
+        lines.push(format!(
+            "and {} more",
+            units::grouped((entries.len() - SHOWN) as u64)
+        ));
     }
     lines
 }

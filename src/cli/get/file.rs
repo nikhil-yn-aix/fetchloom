@@ -42,7 +42,7 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
         let several = if listed {
             "reads its links from a list".to_owned()
         } else {
-            format!("has {} links", links.len())
+            format!("has {} links", crate::units::grouped(links.len() as u64))
         };
         return Err(Error::new(
             Kind::Usage,
