@@ -930,17 +930,28 @@ impl Output {
         );
     }
 
-    /// a line told as a ctrl-c is heard. the terminal echoes `^C` where its cursor waits, at the
-    /// start of a fresh line unless bars are drawn there, so the line first clears it.
+    /// a line told as a ctrl-c is heard, which clears what the terminal echoed of it.
     fn heard(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             self.line(&self.over_echo(&verb_line(verb, text, Tone::Warn, self.style.color)));
         }
     }
 
+    /// `line`, clearing its own line first at a terminal, which echoes `^C` where its cursor
+    /// waits, at the start of a fresh line unless bars are drawn there.
     fn over_echo(&self, line: &str) -> String {
         if self.style.interactive {
-            format!("\r\u{1b}[2K{line}")
+            format!("\u{1b}[2K{line}")
+        } else {
+            line.to_owned()
+        }
+    }
+
+    /// `line` as it goes to a terminal: from the start of its own line, so a `^C` the terminal
+    /// echoed there before it is written over rather than shifting the verb column.
+    fn at_start(&self, line: &str) -> String {
+        if self.style.interactive {
+            format!("\r{line}")
         } else {
             line.to_owned()
         }
@@ -955,7 +966,7 @@ impl Output {
             // the bars are hidden, and a question may hold its lines back, so this goes out alone
             write_line(
                 self.style.color,
-                &shown(&self.over_echo(&line), self.style.unicode),
+                &shown(&self.at_start(&self.over_echo(&line)), self.style.unicode),
             );
         }
     }
@@ -973,15 +984,15 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let text = shown(text, self.style.unicode);
+        let text = self.at_start(&shown(text, self.style.unicode));
         #[cfg(test)]
         self.said
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(text.clone().into_owned());
+            .push(text.clone());
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(waiting) = held.as_mut() {
-            waiting.push(text.into_owned());
+            waiting.push(text);
             return;
         }
         let write = || write_line(self.style.color, &text);
@@ -2428,19 +2439,23 @@ mod tests {
     }
 
     /// a terminal echoes ctrl-c as `^C` at the start of the empty line where its cursor waits, so
-    /// the line told then clears it first, keeping the verb column; a pipe gets the line alone.
+    /// the line told then clears it first, and every line starts from the start of its own line,
+    /// writing over an echo the command's next line once followed, so the verb column stays; a
+    /// pipe gets the lines alone.
     #[test]
     fn a_line_told_at_a_ctrl_c_clears_the_echo() {
         let stopping = "   Stopping (press ctrl-c again to quit at once)";
         let terminal = telling(true);
         terminal.stopping();
         terminal.finishing_downloads(1);
+        terminal.done("Added", "late, its files are in data/late");
         assert_eq!(
             terminal.said(),
             [
                 format!("\r\u{1b}[2K{stopping}"),
                 "\r\u{1b}[2K  Finishing (the download is complete; ctrl-c again to quit at once)"
-                    .to_owned()
+                    .to_owned(),
+                "\r      Added late, its files are in data/late".to_owned(),
             ]
         );
         let piped = telling(false);

@@ -262,7 +262,13 @@ impl Sandbox {
             )
             .into()),
             Ok(output) => Ok(Some(
-                String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+                // a return to the start of a fresh line, as each line written there begins
+                // with, moves nothing
+                String::from_utf8_lossy(&output.stdout)
+                    .replace("\r\n", "\n")
+                    .replace("\n\r", "\n")
+                    .trim_start_matches('\r')
+                    .to_owned(),
             )),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
