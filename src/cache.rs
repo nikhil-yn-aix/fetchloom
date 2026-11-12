@@ -33,7 +33,7 @@ pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed, holds_pinned};
 pub(crate) use partial::{
-    Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
+    Claim, Partial, PartialWriter, names, open_unfollowed, read_unfollowed, set_hash_batches,
 };
 #[cfg(unix)]
 pub(crate) use results::seal_captured;

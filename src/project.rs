@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use self::lock::Lock;
 use self::manifest::Manifest;
 use self::state::{Look, State};
+use crate::cache::names;
 use crate::error::{Error, Kind};
 
 const FOLDER: &str = ".fetchloom";
@@ -811,31 +812,6 @@ fn unmerged(name: &str, text: &str) -> Option<Error> {
             crate::cli::command("lock")
         )),
     )
-}
-
-/// whether `path` still names the file `file` has open.
-fn names(path: &Path, file: &File) -> io::Result<bool> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let held = file.metadata()?;
-        match fs::symlink_metadata(path) {
-            Ok(named) => Ok(named.dev() == held.dev() && named.ino() == held.ino()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err),
-        }
-    }
-    #[cfg(windows)]
-    {
-        let held = winapi_util::file::information(file)?;
-        let named = match crate::cache::read_unfollowed(path) {
-            Ok(named) => winapi_util::file::information(&named)?,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(err) => return Err(err),
-        };
-        Ok(held.volume_serial_number() == named.volume_serial_number()
-            && held.file_index() == named.file_index())
-    }
 }
 
 /// removes `folder` and the folders in it, when none of them holds anything but empty folders,

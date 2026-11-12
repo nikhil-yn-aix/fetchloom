@@ -206,7 +206,7 @@ pub(super) fn unheld(path: &Path, opened: File) -> Option<File> {
 }
 
 /// whether `path` still names the file `file` has open.
-fn names(path: &Path, file: &File) -> io::Result<bool> {
+pub(crate) fn names(path: &Path, file: &File) -> io::Result<bool> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
