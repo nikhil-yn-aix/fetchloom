@@ -60,14 +60,12 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         "Cache",
         &format!(
             "{} · {} · {}",
-            cache.root().display(),
+            units::path(cache.root()),
             units::count(usage.objects, "file", "files"),
             units::size(usage.bytes)
         ),
     );
-    for project in &projects {
-        output.step("Used by", &project.display().to_string());
-    }
+    tell_projects(output, &projects);
     let unfinished = cache.unfinished();
     if unfinished.downloads > 0 {
         output.step(
@@ -91,6 +89,30 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
+}
+
+/// the projects that use the cache: each on a line of its own while they are few, else how many,
+/// which `-v` lists.
+fn tell_projects(output: &Output, projects: &[PathBuf]) {
+    const LISTED: usize = 3;
+    if projects.len() <= LISTED {
+        for project in projects {
+            output.step("Used by", &units::path(project));
+        }
+        return;
+    }
+    let count = units::count(projects.len() as u64, "project", "projects");
+    if output.shows_details() {
+        output.step("Used by", &count);
+        for project in projects {
+            output.detail(&units::path(project));
+        }
+    } else {
+        output.step(
+            "Used by",
+            &format!("{count} · `fetchloom cache -v` lists them"),
+        );
+    }
 }
 
 /// where the cache's space goes: what the `projects` registered need, what no project needs and

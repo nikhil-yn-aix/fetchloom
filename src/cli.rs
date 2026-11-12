@@ -899,7 +899,7 @@ fn ask_room(
     let cancel = format!("{doing} ({needs})");
     let shortage = format!(
         "{doing} needs at least {needs} on the disk holding the cache at {}, which has {has} free",
-        cache.display()
+        units::path(cache)
     );
     match output
         .confirm(&format!("{shortage}. go on anyway?"))

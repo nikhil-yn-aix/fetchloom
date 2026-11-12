@@ -17,14 +17,15 @@ there are no command-specific options. [global options](README.md#global-options
 
 ## what it shows
 
-stdout holds one line per setting: its name, its value, where the value came from and the variable that changes it.
+stdout holds one line per setting: its name, its value, where the value came from and the variable that changes it. a value longer than 24 characters, such as a deep cache folder, runs past its column and puts the rest of its row on a line of its own, so the other rows keep their columns. at a terminal a folder below your home folder reads from `~`, and a terminal too narrow for every column leaves out the variable, which is always `FETCHLOOM_` and the setting's name in capitals. from a real run:
 
 ```text
-cache      /scratch/lab/fetchloom-cache  settings file  FETCHLOOM_CACHE
-jobs       32                            settings file  FETCHLOOM_JOBS
-host_jobs  8                             environment    FETCHLOOM_HOST_JOBS
-retries    4                             default        FETCHLOOM_RETRIES
-memory     4.0 GiB                       this machine   FETCHLOOM_MEMORY
+cache            /scratch/lab/fetchloom-cache
+                                          settings file  FETCHLOOM_CACHE
+jobs             32                       settings file  FETCHLOOM_JOBS
+host_jobs        8                        environment    FETCHLOOM_HOST_JOBS
+retries          4                        default        FETCHLOOM_RETRIES
+memory           4.0 GiB                  this machine   FETCHLOOM_MEMORY
 ```
 
 | origin | where the value came from |

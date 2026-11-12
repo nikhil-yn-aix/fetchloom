@@ -10,6 +10,33 @@ const PENGUINS: &[u8] = b"species,island,bill_length_mm\nAdelie,Torgersen,39.1\n
 const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
 const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 
+/// a cache that many projects use says how many on one line, and `-v` names each, so ten long
+/// paths never fill the screen.
+#[test]
+fn many_projects_are_counted_and_named_with_v() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("src")?;
+    fs::write(source.join("a.csv"), b"a\n")?;
+    for name in ["p1", "p2", "p3", "p4"] {
+        let project = sandbox.folder(name)?;
+        let output = sandbox.command_in(&project, &["add", "../src"]).output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let told = text(&sandbox.run(&["cache"])?.stderr)?;
+    assert!(
+        told.contains("    Used by 4 projects · `fetchloom cache -v` lists them\n"),
+        "{told}"
+    );
+    let listed = text(&sandbox.run(&["-v", "cache"])?.stderr)?;
+    assert!(listed.contains("    Used by 4 projects\n"), "{listed}");
+    let last = sandbox.folder("p4")?;
+    assert!(
+        listed.contains(&format!("            {}\n", last.display())),
+        "{listed}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
     let sandbox = Sandbox::new()?;

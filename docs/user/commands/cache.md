@@ -21,7 +21,7 @@ fetchloom cache verify [options]
 
 ## inspect
 
-`fetchloom cache` reports the cache path, the bytes it holds and the projects using it. it prints the bare path on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`.
+`fetchloom cache` reports the cache path, the bytes it holds and the projects using it, each on a `Used by` line while there are at most three; more share one line, as ``Used by 10 projects · `fetchloom cache -v` lists them``, and `-v` names each under it. a path below your home folder reads from `~` there. it prints the bare path, whole, on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`, and every project in `result.projects`.
 
 it also says where the space goes. stderr from a test on a drive that makes hardlinks, with the sandbox folder shortened to `/home/me`: a project needs `iris.csv` and `penguins.csv`, the second with `copy = true`, a dataset removed from it left `wine.csv`, and `get` linked `notes.txt` into a folder of its own:
 

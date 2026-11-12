@@ -55,7 +55,7 @@ pub(super) fn run(context: &Context) -> Report {
     let shown = rows(context);
     let machine = context.settings.machine;
     let output = &context.output;
-    output.answer(&table(&shown));
+    output.answer(&table(&shown, output.answer_width()));
     let mut about = vec![units::count(
         machine.processors as u64,
         "processor",
@@ -70,8 +70,8 @@ pub(super) fn run(context: &Context) -> Report {
     output.step("Machine", &about.join(" \u{b7} "));
     let file = &context.settings.file;
     match &file.path {
-        Some(path) if file.found => output.step("Settings", &path.display().to_string()),
-        Some(path) => output.step("Settings", &format!("{} (no file yet)", path.display())),
+        Some(path) if file.found => output.step("Settings", &units::path(path)),
+        Some(path) => output.step("Settings", &format!("{} (no file yet)", units::path(path))),
         None => output.step("Settings", "no folder for a settings file"),
     }
     output.hint("a FETCHLOOM_* variable changes a setting where it is set; the settings file keeps it for every run");
@@ -334,13 +334,27 @@ fn size(name: &'static str, set: Set<u64>) -> Shown {
 
 /// the settings in aligned columns: name, value, where it came from, and the variable that sets
 /// it.
-fn table(shown: &[Shown]) -> String {
+/// the widest a value may make its column. a longer one, such as a deep cache folder, runs past
+/// it, and its origin and variable go on a line of their own, so one long value does not push
+/// every other row off the terminal.
+const VALUE: usize = 24;
+
+/// the settings as aligned columns, one per line, for a person or for `grep`. a terminal `width`
+/// columns wide shows a path below the home folder from `~`, and when it is too narrow for every
+/// column it leaves out the variable, which is always `FETCHLOOM_` and the setting's name.
+fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()
         .map(|setting| {
+            let said = match (&setting.value, width) {
+                (Value::String(path), Some(_)) if setting.name == "cache" => {
+                    units::path(std::path::Path::new(path))
+                }
+                _ => setting.said.clone(),
+            };
             [
                 setting.name.to_owned(),
-                setting.said.clone(),
+                said,
                 setting
                     .origin
                     .iter()
@@ -351,22 +365,42 @@ fn table(shown: &[Shown]) -> String {
             ]
         })
         .collect();
-    let widths: Vec<usize> = (0..3)
-        .map(|column| {
-            rows.iter()
-                .map(|row| row[column].chars().count())
-                .max()
-                .unwrap_or_default()
-        })
-        .collect();
+    let widest = |column: usize, most: usize| {
+        rows.iter()
+            .map(|row| row[column].chars().count())
+            .filter(|count| *count <= most)
+            .max()
+            .unwrap_or_default()
+    };
+    let widths = [
+        widest(0, usize::MAX),
+        widest(1, VALUE),
+        widest(2, usize::MAX),
+    ];
+    let full = widths.iter().map(|width| width + 2).sum::<usize>() + widest(3, usize::MAX);
+    let variables = width.is_none_or(|width| full <= width);
     rows.iter()
         .map(|row| {
-            let mut line = String::new();
-            for (cell, width) in row.iter().zip(&widths) {
-                let _ = write!(line, "{cell:<width$}  ");
+            let mut line = format!("{:<name$}  ", row[0], name = widths[0]);
+            let value = row[1].chars().count();
+            if value > widths[1] {
+                // the origin and variable go under their columns, on a line of their own
+                let _ = write!(
+                    line,
+                    "{}\n{:<pad$}",
+                    row[1],
+                    "",
+                    pad = widths[0] + widths[1] + 4
+                );
+            } else {
+                let _ = write!(line, "{:<width$}  ", row[1], width = widths[1]);
             }
-            line.push_str(&row[3]);
-            line
+            if variables {
+                let _ = write!(line, "{:<width$}  {}", row[2], row[3], width = widths[2]);
+            } else {
+                line.push_str(&row[2]);
+            }
+            line.trim_end().to_owned()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -385,6 +419,35 @@ mod tests {
 
     fn folder(path: &str) -> Location {
         Location::Folder(PathBuf::from(path))
+    }
+
+    /// a value too long for its column, such as a deep cache folder, runs past it with its
+    /// origin and variable on a line of their own, so every other row stays one line; a terminal
+    /// too narrow for every column leaves out the variable.
+    #[test]
+    fn a_long_value_keeps_the_other_rows_in_their_columns() {
+        let row = |name: &'static str, said: &str, variable: &'static str| Shown {
+            name,
+            value: json!(said),
+            origin: vec![Origin::Default],
+            variable,
+            said: said.to_owned(),
+        };
+        let cache = "/scratch/a-very-long-group-name/someone/fetchloom-cache";
+        let shown = [
+            row("cache", cache, "FETCHLOOM_CACHE"),
+            row("jobs", "8", "FETCHLOOM_JOBS"),
+        ];
+        assert_eq!(
+            table(&shown, None),
+            format!(
+                "cache  {cache}\n          default  FETCHLOOM_CACHE\njobs   8  default  FETCHLOOM_JOBS"
+            )
+        );
+        assert_eq!(
+            table(&shown, Some(30)),
+            format!("cache  {cache}\n          default\njobs   8  default")
+        );
     }
 
     /// a count reads with its thousands apart, as every count fetchloom prints does, while
@@ -470,7 +533,7 @@ mod tests {
             let document = serde_json::to_value(row).unwrap();
             assert_eq!(document["value"], value, "{said}");
             assert_eq!(document["origin"], json, "{said}");
-            let line = table(std::slice::from_ref(row));
+            let line = table(std::slice::from_ref(row), None);
             let items: Vec<&str> = value
                 .as_array()
                 .unwrap()

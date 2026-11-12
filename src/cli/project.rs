@@ -1429,7 +1429,10 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
     })?;
     tracing::debug!(root = %project.root.display(), "found data.toml");
     if project.root != here {
-        output.aside(&format!("using the project in {}", project.root.display()));
+        output.aside(&format!(
+            "using the project in {}",
+            units::path(&project.root)
+        ));
     }
     Ok(project)
 }
