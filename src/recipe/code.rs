@@ -1,6 +1,5 @@
-//! the code a recipe names, hashed the same on every system: a text file with the line endings
-//! git for windows checks out made plain, since `core.autocrlf` turns LF into CRLF there, any
-//! other file as it is, and a folder as the tree of its files.
+//! the code a recipe names, hashed alike on every system: a text file with CRLF made LF, since git
+//! for windows checks out CRLF, any other file as it is, and a folder as the tree of its files.
 
 use std::fs;
 use std::io::{self, Read};
@@ -26,13 +25,9 @@ const SKIPPED: [&str; 7] = [
     "Thumbs.db",
 ];
 
-/// the hash of the code at `path`, a file or a folder below `root` with `/` between folders, for
-/// the recipe `recipe`. none when nothing is there. a link anywhere on the way, or a special file,
-/// is refused, since code is the project's own files.
-///
-/// # Errors
-///
-/// `project.invalid` for a link or a special file, `local.io` when it cannot be read.
+/// the hash of the code at `path`, a file or folder below `root`, for the recipe `recipe`, or none
+/// when nothing is there. a link on the way or a special file is `project.invalid`, since code is
+/// the project's own files, and a failed read `local.io`.
 pub(crate) fn hash(root: &Path, recipe: &str, path: &str) -> Result<Option<Code>, Error> {
     let Some((at, is_folder)) = locate(root, recipe, path)? else {
         return Ok(None);
@@ -65,13 +60,8 @@ pub(crate) fn hash(root: &Path, recipe: &str, path: &str) -> Result<Option<Code>
     }))
 }
 
-/// the files whose bytes [`hash`] reads for the code at `path`, by their paths from `root` with
-/// `/` between folders, as the disk names them: the file itself, or each file of the folder its
-/// hash takes in. empty when nothing is there. no file is read.
-///
-/// # Errors
-///
-/// as [`hash`] refuses the code, or cannot read a folder of it.
+/// the files [`hash`] reads for the code at `path`, by their paths from `root` as the disk names
+/// them, reading none. it fails as [`hash`] would on the code, or on a folder it cannot read.
 pub(crate) fn files(root: &Path, recipe: &str, path: &str) -> Result<Vec<String>, Error> {
     let Some((at, is_folder)) = locate(root, recipe, path)? else {
         return Ok(Vec::new());

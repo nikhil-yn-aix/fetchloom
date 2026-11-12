@@ -1,7 +1,5 @@
-//! recipes: a dataset made from other datasets by a command data.toml names. this module reads
-//! the command's words, orders recipes after the datasets they read, and keys each one by
-//! everything its result depends on, so fetchloom can tell when a pinned result is out of date.
-//! running a step belongs to `fetchloom build` alone.
+//! recipes, datasets a command in data.toml makes from others: their words, their order, and a key
+//! over everything the result depends on, which tells a stale pin. only `fetchloom build` runs one.
 
 pub(crate) mod code;
 
@@ -124,9 +122,8 @@ impl Template {
     }
 }
 
-/// every dataset in an order where each comes after the datasets it is made from, ties by name:
-/// Kahn's algorithm with a name-ordered queue. a cycle gives its path instead, as `a`, `b`, `a`.
-/// every name a recipe reads must be in `datasets`.
+/// every dataset after the datasets it is made from, ties by name, or a cycle's path, as `a`, `b`,
+/// `a`. every name a recipe reads must be in `datasets`.
 pub(crate) fn order(datasets: &BTreeMap<String, Entry>) -> Result<Vec<&str>, Vec<&str>> {
     let inputs = |name: &str| -> &[String] {
         datasets
@@ -209,14 +206,8 @@ pub(crate) fn closure<'a>(datasets: &'a BTreeMap<String, Entry>, names: &[&str])
         .collect()
 }
 
-/// what a recipe reads of a dataset fetched from a source: each file data.lock pins, and an
-/// archive that unpacks by the tree of what it unpacks to, never its own bytes, since the step
-/// finds its files and not it: a source that packs the same files again keeps the content. a
-/// split archive is one line at its first part, so the same files split again keep it too. the
-/// lines decide which files the step finds and where. links, versions and when it was pinned
-/// stay out, so a source that moves or renames a version keeps the content. the dataset's
-/// members tables, which choose files inside its archives, follow as lines of their own, sorted,
-/// so a dataset without them keeps its content.
+/// what a recipe reads of a fetched dataset: each pinned file, an archive by the tree it unpacks
+/// to, then its members patterns, never links, versions or pin times, so a repack keeps it.
 pub(crate) fn content(locked: &Locked, members: &Members) -> Sha256 {
     let mut files: Vec<_> = archives::pinned(&locked.files)
         .into_iter()
@@ -246,10 +237,8 @@ pub(crate) fn content(locked: &Locked, members: &Members) -> Sha256 {
     digest::sha256(text.as_bytes())
 }
 
-/// the key of a recipe's result: the hash of the JSON of [`SCHEME`], the content of each dataset
-/// it reads, by name, its command as written, the hash of each file or folder of its code, by
-/// path, and its variables, by name. it holds nothing of the machine, the project's place, the
-/// dataset's own name or when it ran, so a moved project or a renamed recipe keeps its key.
+/// the key of a recipe's result, over [`SCHEME`], its inputs, command, code and variables, and
+/// nothing of the machine, the project's place, its own name or when it ran.
 pub(crate) fn key(
     from: &[Input],
     run: &[String],
@@ -299,8 +288,7 @@ fn json(text: &str) -> String {
     serde_json::Value::String(text.to_owned()).to_string()
 }
 
-/// a recipe as it stands now: the content data.lock pins of each dataset it reads, its command
-/// as data.toml writes it, the hash of its code on disk and its variables, which make its key.
+/// a recipe as it stands now, which makes its key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Step {
     pub(crate) name: String,
@@ -324,11 +312,7 @@ pub(crate) struct Read {
 
 impl Step {
     /// the recipe `name` of `manifest` as it stands in the project at `root`, with what `lock`
-    /// pins, or none when `name` is no recipe.
-    ///
-    /// # Errors
-    ///
-    /// the code's own refusals and read failures, from [`code::hash`].
+    /// pins, or none when it is no recipe. it fails as [`code::hash`] does.
     pub(crate) fn read(
         root: &Path,
         manifest: &Manifest,
@@ -368,8 +352,7 @@ impl Step {
         }))
     }
 
-    /// each dataset it reads with its content, as data.lock records them, once data.lock pins
-    /// every one.
+    /// each dataset it reads with its content, once data.lock pins every one.
     pub(crate) fn from(&self) -> Option<Vec<Input>> {
         self.inputs
             .iter()
@@ -392,8 +375,7 @@ impl Step {
         Some(key(&self.from()?, &self.run, &self.hashed()?, &self.env))
     }
 
-    /// what moved since `pinned`, data.lock's result of it, was built: nothing when it still
-    /// answers the recipe as it stands.
+    /// what moved since `pinned`, data.lock's result, was built: nothing when it still answers.
     pub(crate) fn changes(&self, pinned: Option<&Derived>) -> Vec<Change> {
         let unpinned = self
             .inputs
@@ -467,9 +449,8 @@ fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
     }
 }
 
-/// what a recipe reads of the fetched dataset `name`: its pin in `lock` and the members tables
-/// `manifest` gives it, which choose the files inside its archives. its content, and so a key,
-/// and the files a build lays out for the step both come from here, so they cannot disagree.
+/// what a recipe reads of the fetched dataset `name`: its pin and members tables. its content and
+/// the files a build lays out both come from here, so they cannot disagree.
 pub(crate) fn source_read<'a>(
     manifest: &'a Manifest,
     lock: &'a Lock,
@@ -517,12 +498,8 @@ impl fmt::Display for Change {
     }
 }
 
-/// what moved since data.lock's result of the recipe `name` was built, as [`Step::changes`]
-/// finds it; nothing for a dataset fetched from a source.
-///
-/// # Errors
-///
-/// as [`Step::read`].
+/// what moved since data.lock's result of the recipe `name` was built, as [`Step::changes`] finds
+/// it, failing as [`Step::read`] does. nothing for a dataset fetched from a source.
 pub(crate) fn drift(
     root: &Path,
     manifest: &Manifest,
@@ -577,8 +554,7 @@ mod tests {
         )
     }
 
-    /// a build reads what each recipe is made from first: every dataset a name needs comes
-    /// before it, ties go by name, and datasets nothing named needs stay out.
+    /// needed datasets come first, ties by name, and datasets nothing named needs stay out.
     #[test]
     fn closure_orders_what_names_need() {
         let manifest = Manifest::parse(
@@ -706,8 +682,7 @@ mod tests {
         }
     }
 
-    /// a split archive keys as an archive in one file does, by the tree it unpacks to, at its
-    /// first part: the same files split again into other parts keep the content.
+    /// as one file would, at its first part, so the same files split again keep the content.
     #[test]
     fn a_split_archive_keys_by_its_tree_however_it_is_split() {
         let tree = Some(digest::sha256(b"tree"));
@@ -727,9 +702,8 @@ mod tests {
         assert_ne!(content(&packed, &none), content(&in_two, &none));
     }
 
-    /// a dataset's members tables decide which files a step finds, so each pattern follows the
-    /// files as a line of its own, in an order that does not depend on how they are written. a
-    /// dataset without them keeps the content it had.
+    /// each pattern follows the files as a line of its own, in one order however they are written,
+    /// and a dataset without them keeps the content it had.
     #[test]
     fn member_filters_change_content() {
         let raw = locked(vec![
