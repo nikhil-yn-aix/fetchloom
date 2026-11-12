@@ -20,7 +20,7 @@ use crate::name;
 use crate::plan::{self, Plan, Target};
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::{self, Lock, Locked, LockedFile};
-use crate::project::manifest::{self, Manifest};
+use crate::project::manifest::{self, Manifest, Narrowing};
 use crate::recipe;
 use crate::units;
 
@@ -1065,15 +1065,15 @@ fn refuse_what_breaks(
     edits: &BTreeMap<&str, Edit>,
     pace: &Pace,
 ) -> Result<(), Error> {
+    let mut planned_files: HashMap<&str, usize> = HashMap::new();
+    for target in &planned.targets {
+        *planned_files.entry(target.dataset).or_default() += 1;
+    }
+    let unknown: HashSet<&str> = planned.unknown.iter().map(|(name, _)| *name).collect();
     for (dataset, edit) in edits {
         pace.look()?;
-        let kept = planned
-            .targets
-            .iter()
-            .filter(|target| target.dataset == *dataset)
-            .count();
-        let unknown = planned.unknown.iter().any(|(name, _)| name == dataset);
-        if edit.left.len() >= kept && !unknown {
+        let kept = planned_files.get(dataset).copied().unwrap_or_default();
+        if edit.left.len() >= kept && !unknown.contains(dataset) {
             return Err(Error::new(
                 Kind::Usage,
                 format!("that is every file of {dataset}, and a dataset needs one"),
@@ -1148,21 +1148,35 @@ fn written(
     edits: &BTreeMap<&str, Edit>,
     pace: &Pace,
 ) -> Result<(String, Lock), Error> {
-    let mut updated = text.to_owned();
+    let updated = narrowed(text, manifest, lock, edits, pace)?;
+    lock_written(&updated, lock, edits).map(|new_lock| (updated, new_lock))
+}
+
+/// data.toml's new text once `edits` are written, read and written once.
+fn narrowed(
+    text: &str,
+    manifest: &Manifest,
+    lock: &Lock,
+    edits: &BTreeMap<&str, Edit>,
+    pace: &Pace,
+) -> Result<String, Error> {
+    let mut changes = Vec::new();
     for (dataset, edit) in edits {
         pace.look()?;
         for (archive, patterns) in &edit.members {
             if let Some(from) = edit.copied.get(archive) {
-                updated = manifest::with_members_copied(
-                    &updated,
-                    dataset,
-                    &from.key,
+                changes.push(Narrowing::MembersCopied {
+                    name: dataset,
+                    from: &from.key,
                     archive,
-                    &from.unmatched,
-                )?;
+                    unmatched: &from.unmatched,
+                });
             }
-            let patterns: Vec<String> = patterns.iter().cloned().collect();
-            updated = manifest::with_exclusions(&updated, dataset, Some(archive), &patterns)?;
+            changes.push(Narrowing::Exclusions {
+                name: dataset,
+                archive: Some(archive),
+                patterns: patterns.iter().cloned().collect(),
+            });
         }
         // a table that matches no archive left would be refused, as a whole archive's own is
         if let Some(source) = manifest
@@ -1180,15 +1194,26 @@ fn written(
                 .filter(|path| !edit.leaving.contains(path))
                 .collect();
             for (key, _) in source.members.unmatched(&kept) {
-                updated = manifest::without_members(&updated, dataset, key)?;
+                changes.push(Narrowing::WithoutMembers {
+                    name: dataset,
+                    archive: key.to_owned(),
+                });
             }
         }
         if !edit.exclude.is_empty() {
-            let patterns: Vec<String> = edit.exclude.iter().cloned().collect();
-            updated = manifest::with_exclusions(&updated, dataset, None, &patterns)?;
+            changes.push(Narrowing::Exclusions {
+                name: dataset,
+                archive: None,
+                patterns: edit.exclude.iter().cloned().collect(),
+            });
         }
     }
-    let new_manifest = Manifest::parse(&updated)?;
+    manifest::narrowed(text, &changes)
+}
+
+/// data.lock's new content once `edits` are written and data.toml holds `updated`.
+fn lock_written(updated: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Result<Lock, Error> {
+    let new_manifest = Manifest::parse(updated)?;
     let now = lock::timestamp(std::time::SystemTime::now());
     let mut new_lock = lock.clone();
     for locked in &mut new_lock.datasets {
@@ -1211,7 +1236,7 @@ fn written(
             );
         }
     }
-    Ok((updated, new_lock))
+    Ok(new_lock)
 }
 
 /// a line for each dataset and archive drop leaves files out of, with `-v` naming each file.
@@ -1257,6 +1282,8 @@ fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, dry_run: b
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     /// data.toml and data.lock of the import tiny, `folders` folders of `each` files, with an
@@ -1490,5 +1517,237 @@ mod tests {
             ("data/x/raw/b.csv", "other/b.csv"),
         ];
         assert_eq!(shared_prefix("data/x/raw", &renamed), None);
+    }
+
+    /// the pin of `name`, read from `manifest`, holding `files`, each `(path, archive)`.
+    fn pinned(manifest: &Manifest, name: &str, files: &[(&str, bool)]) -> Locked {
+        let source = manifest.datasets[name].source().unwrap();
+        Locked {
+            name: name.to_owned(),
+            reference: source.reference.clone(),
+            spec: lock::spec(source),
+            extract: source.extract,
+            resolved: source.reference.clone(),
+            title: None,
+            license: None,
+            doi: None,
+            access: crate::source::Access::Unknown,
+            timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            files: files
+                .iter()
+                .map(|(path, archive)| LockedFile {
+                    sha256: crate::digest::sha256(path.as_bytes()),
+                    path: (*path).to_owned(),
+                    size: 1,
+                    md5: None,
+                    url: String::new(),
+                    unpacks_to: archive.then(|| crate::digest::sha256(b"tree")),
+                })
+                .collect(),
+        }
+    }
+
+    /// what drop leaves out of one dataset: `exclude` in its own table, the same paths leaving
+    /// data.lock, and `members`, patterns for an archive's table.
+    fn leaves<'a>(exclude: &[&'a str], members: &[(&'a str, &str)]) -> Edit<'a> {
+        let mut by_archive: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for (archive, pattern) in members {
+            by_archive
+                .entry(archive)
+                .or_default()
+                .insert((*pattern).to_owned());
+        }
+        Edit {
+            exclude: exclude.iter().map(|path| (*path).to_owned()).collect(),
+            leaving: exclude.iter().copied().collect(),
+            members: by_archive,
+            copied: BTreeMap::new(),
+            left: Vec::new(),
+        }
+    }
+
+    const ACROSS: &str = concat!(
+        "[project]\ndata_dir = \"data\"\n\n",
+        "# raw recordings\n[datasets.alpha]\nref = \"zenodo:1\"\nexclude = \"*.tmp\"  # scratch\n\n",
+        "[datasets.beta]\nref = \"zenodo:2\"\n\n",
+        "# the glob that picks parts\n[datasets.beta.members.\"*.zip\"]\nselect = [\"a/*\", \"b/*\"]\nexclude = [\"*.log\"]\n\n",
+        "[datasets.gamma]\nref = \"zenodo:3\"\n\n",
+        "[datasets.gamma.members.\"old.zip\"]\nexclude = [\"junk/*\"]\n\n",
+        "# left alone\n[datasets.untouched]\nref = \"zenodo:4\"\n",
+    );
+
+    /// a drop across datasets writes each one's exclusions in its own table, an archive a glob
+    /// table covered gets a table of its own copied from it, and an archive that leaves whole
+    /// takes its own table with it, keeping every comment and the layout around them.
+    #[test]
+    fn a_drop_across_datasets_writes_each_dataset_in_place() {
+        let manifest = Manifest::parse(ACROSS).unwrap();
+        let lock = Lock {
+            datasets: vec![
+                pinned(
+                    &manifest,
+                    "alpha",
+                    &[("x.txt", false), ("y.txt", false), ("z.csv", false)],
+                ),
+                pinned(
+                    &manifest,
+                    "beta",
+                    &[("parts.zip", true), ("other.zip", true)],
+                ),
+                pinned(&manifest, "gamma", &[("old.zip", true), ("new.zip", true)]),
+                pinned(&manifest, "untouched", &[("only.bin", false)]),
+            ],
+            derived: Vec::new(),
+        };
+        let mut beta = leaves(&[], &[("parts.zip", "a/one.txt")]);
+        beta.copied.insert(
+            "parts.zip",
+            FromGlob {
+                key: "*.zip".to_owned(),
+                unmatched: vec!["b/*".to_owned()],
+            },
+        );
+        let edits = BTreeMap::from([
+            ("alpha", leaves(&["x.txt", "y.txt"], &[])),
+            ("beta", beta),
+            ("gamma", leaves(&["old.zip"], &[])),
+        ]);
+        let go_on = || Ok(());
+        let (text, new_lock) =
+            written(ACROSS, &manifest, &lock, &edits, &Pace::new(&go_on)).unwrap();
+        assert_eq!(
+            text,
+            concat!(
+                "[project]\ndata_dir = \"data\"\n\n",
+                "# raw recordings\n[datasets.alpha]\nref = \"zenodo:1\"\nexclude = [\n  \"*.tmp\",\n  \"x.txt\",\n  \"y.txt\",\n]  # scratch\n\n",
+                "[datasets.beta]\nref = \"zenodo:2\"\n\n",
+                "# the glob that picks parts\n[datasets.beta.members.\"*.zip\"]\nselect = [\"a/*\", \"b/*\"]\nexclude = [\"*.log\"]\n\n",
+                "[datasets.beta.members.\"parts.zip\"]\nselect = [\"a/*\"]\nexclude = [\n  \"*.log\",\n  \"a/one.txt\",\n]\n\n",
+                "[datasets.gamma]\nref = \"zenodo:3\"\nexclude = [\"old.zip\"]\n\n",
+                "# left alone\n[datasets.untouched]\nref = \"zenodo:4\"\n",
+            )
+        );
+        let files = |name: &str| -> Vec<String> {
+            new_lock
+                .get(name)
+                .unwrap()
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect()
+        };
+        assert_eq!(files("alpha"), ["z.csv"]);
+        assert_eq!(files("beta"), ["parts.zip", "other.zip"]);
+        assert_eq!(files("gamma"), ["new.zip"]);
+        assert_eq!(files("untouched"), ["only.bin"]);
+    }
+
+    /// a drop across many datasets reads data.toml as often as one across a few, rather than
+    /// once more for each dataset it writes.
+    #[test]
+    fn a_drop_across_many_datasets_reads_data_toml_as_often_as_across_few() {
+        let reads = |count: usize| {
+            let mut text = String::new();
+            for at in 0..count {
+                writeln!(text, "[datasets.d{at:04}]\nref = \"zenodo:{at}\"\n").unwrap();
+            }
+            let manifest = Manifest::parse(&text).unwrap();
+            let names: Vec<String> = (0..count).map(|at| format!("d{at:04}")).collect();
+            let lock = Lock {
+                datasets: names
+                    .iter()
+                    .map(|name| {
+                        pinned(
+                            &manifest,
+                            name,
+                            &[("keep.bin", false), ("remove.bin", false)],
+                        )
+                    })
+                    .collect(),
+                derived: Vec::new(),
+            };
+            let edits: BTreeMap<&str, Edit> = names
+                .iter()
+                .map(|name| (name.as_str(), leaves(&["remove.bin"], &[])))
+                .collect();
+            let go_on = || Ok(());
+            let before = manifest::tests::reads();
+            let (text, _) = written(&text, &manifest, &lock, &edits, &Pace::new(&go_on)).unwrap();
+            let reads = manifest::tests::reads() - before;
+            assert_eq!(text.matches("exclude = [\"remove.bin\"]").count(), count);
+            reads
+        };
+        assert_eq!(
+            reads(60),
+            reads(3),
+            "data.toml is read again for each dataset"
+        );
+    }
+
+    /// a drop across datasets refuses the first, in name order, it would leave no file, and
+    /// a dataset whose archive this machine has not unpacked is not counted out.
+    #[test]
+    fn a_drop_across_datasets_refuses_the_first_left_with_no_file() {
+        let manifest = Manifest::parse(concat!(
+            "[datasets.a]\nref = \"local\"\n\n[datasets.b]\nref = \"local\"\n\n",
+            "[datasets.c]\nref = \"local\"\n\n[datasets.d]\nref = \"local\"\n",
+        ))
+        .unwrap();
+        let lock = Lock {
+            datasets: vec![
+                pinned(
+                    &manifest,
+                    "a",
+                    &[("1.txt", false), ("2.txt", false), ("3.txt", false)],
+                ),
+                pinned(&manifest, "b", &[("only.txt", false)]),
+                pinned(&manifest, "c", &[("1.txt", false), ("2.txt", false)]),
+                pinned(&manifest, "d", &[("whole.zip", true)]),
+            ],
+            derived: Vec::new(),
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let left = |dataset: &str, paths: &[&str]| -> Vec<Left> {
+            paths
+                .iter()
+                .map(|path| Left {
+                    path: format!("data/{dataset}/{path}"),
+                    dataset: dataset.to_owned(),
+                    archive: None,
+                    pattern: (*path).to_owned(),
+                })
+                .collect()
+        };
+        let edit = |dataset: &str, paths: &[&'static str]| {
+            let mut edit = leaves(paths, &[]);
+            edit.left = left(dataset, paths);
+            edit
+        };
+        let go_on = || Ok(());
+        let pace = Pace::new(&go_on);
+        let refused = |edits: &BTreeMap<&str, Edit>| {
+            refuse_what_breaks(&manifest, &lock, &planned, &cache, edits, &pace)
+                .err()
+                .map(|error| error.message)
+        };
+        let mut edits = BTreeMap::from([
+            ("a", edit("a", &["1.txt"])),
+            ("c", edit("c", &["1.txt", "2.txt"])),
+            ("d", edit("d", &["whole.zip"])),
+        ]);
+        assert_eq!(
+            refused(&edits).as_deref(),
+            Some("that is every file of c, and a dataset needs one")
+        );
+        edits.insert("b", edit("b", &["only.txt"]));
+        assert_eq!(
+            refused(&edits).as_deref(),
+            Some("that is every file of b, and a dataset needs one")
+        );
+        edits.remove("b");
+        edits.insert("c", edit("c", &["2.txt"]));
+        assert_eq!(refused(&edits), None);
     }
 }

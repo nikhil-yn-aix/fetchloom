@@ -49,6 +49,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | the number of processors read once a run | 0.997 | dropped, no win | [named commands](#commands-that-name-a-dataset-2026-11-12) |
 | lock and names | waiting `path` calls finish once the project is ready | 32 waiters 3.24 to 0.25 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | lock and names | a merge's data.toml edits made on one reading of each side | merge of 2,000 datasets 18.0 to 0.33 s, of 1,000 4.0 to 0.10 s; 1 and 10 flat | kept | [merge](#a-merge-of-many-datasets-2026-11-12) |
+| lock and names | a drop across datasets written in one edit, its planned files counted once | drop of a file from each of 2,000 datasets 8.8 to 0.07 s; 1 and 10 flat | kept | [drop](#a-drop-across-many-datasets-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -457,6 +458,21 @@ the fixtures are the scale map's: data.toml and data.lock in git's conflict line
 peak memory stayed the same at 1 and 10 datasets, fell to 0.947 and 0.925 at 1,000, and was 0.969 on glibc and 1.019 [1.014, 1.021] on musl at 2,000, 59.3 to 60.2 MiB. the merged text and everything `--json` printed matched byte for byte at every size. kept.
 
 what is left still grows with the square of the datasets, at a much smaller cost: each new table looks for the dataset it goes before and shifts the places after it by walking every table once, which is most of the 0.33 s at 2,000, and choosing which side's layout to keep takes each side's datasets out one at a time. going further needs an index of names and places kept beside the document's tables.
+
+## a drop across many datasets, 2026-11-12
+
+`drop` of files in many datasets wrote data.toml again for each dataset it changed, reading and writing the whole text once for each exclusion, each copied members table and each members table it took out, and before that counted each dataset's planned files by going through every planned file of the project. both grew with the square of the datasets. it now collects the changes, makes them on one reading of data.toml, and counts the planned files once. a layout reading data.toml again would change the order of, as dotted keys mixed with tables, takes the old way; a test compares the two over 5,000 generated layouts and changes, errors included, another counts that a drop across 60 datasets reads data.toml as often as one across 3, and two more hold the text a drop across four datasets writes and the refusal of the first dataset in name order left with no file.
+
+the fixtures are the scale map's: n datasets of two files each, `keep.bin` and `remove.bin`, run as `--json --offline drop --dry-run` of every `remove.bin`. one release build of 7dc24bb chose the old or new way by `FETCHLOOM_EXP_DROP_BATCH`, measured as in [a merge of many datasets](#a-merge-of-many-datasets-2026-11-12): 30 rounds at 1 and 10 datasets, 10 at 1,000 and 2,000.
+
+| datasets | glibc, old to new | new/old | musl, old to new | new/old |
+|---:|---|---|---|---|
+| 1 | 3.8 to 3.8 ms | 0.996 [0.985, 1.020] | 3.2 to 3.2 ms | 1.006 [0.987, 1.035] |
+| 10 | 4.1 to 3.9 ms | 0.936 [0.926, 0.951] | 3.7 to 3.6 ms | 0.962 [0.933, 0.973] |
+| 1,000 | 2.30 to 0.036 s | 0.0157 [0.0155, 0.0159] | 2.06 to 0.031 s | 0.0149 [0.0147, 0.0150] |
+| 2,000 | 8.83 to 0.070 s | 0.0080 [0.0077, 0.0083] | 8.31 to 0.056 s | 0.0067 [0.0067, 0.0068] |
+
+peak memory stayed the same at 1 and 10 datasets and within 1% at 1,000 and 2,000, the most 1.008 on musl at 2,000, 0.4 MiB, for the changes held until data.toml is written. what `--json` printed matched byte for byte at every size. kept.
 
 ## evidence limits
 

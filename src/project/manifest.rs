@@ -1531,6 +1531,17 @@ pub(crate) fn with_exclusions(
     patterns: &[String],
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
+    exclusions(&mut document, name, archive, patterns)?;
+    Ok(document.to_string())
+}
+
+/// `document` with `patterns` in an exclude, as [`with_exclusions`] says.
+fn exclusions(
+    document: &mut DocumentMut,
+    name: &str,
+    archive: Option<&str>,
+    patterns: &[String],
+) -> Result<(), Error> {
     let dataset = document
         .get_mut("datasets")
         .and_then(Item::as_table_mut)
@@ -1564,7 +1575,7 @@ pub(crate) fn with_exclusions(
         }
     };
     exclude_once(table, patterns);
-    Ok(document.to_string())
+    Ok(())
 }
 
 /// the refusal to add to `what`, a part of data.toml written inline, which gets no new keys, as
@@ -1597,6 +1608,18 @@ pub(crate) fn with_members_copied(
     unmatched: &[String],
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
+    members_copied(&mut document, name, from, archive, unmatched)?;
+    Ok(document.to_string())
+}
+
+/// `document` with a members table copied, as [`with_members_copied`] says.
+fn members_copied(
+    document: &mut DocumentMut,
+    name: &str,
+    from: &str,
+    archive: &str,
+    unmatched: &[String],
+) -> Result<(), Error> {
     let members = document
         .get_mut("datasets")
         .and_then(Item::as_table_mut)
@@ -1635,7 +1658,7 @@ pub(crate) fn with_members_copied(
         }
     }
     members.insert(archive, Item::Table(table));
-    Ok(document.to_string())
+    Ok(())
 }
 
 /// adds each of `patterns` that `exclude` in `table` lacks, a list of more than one written a
@@ -1708,6 +1731,12 @@ fn one_per_line(list: &mut Array) {
 /// whole archive is left out, and without `members` once it is empty.
 pub(crate) fn without_members(text: &str, name: &str, archive: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
+    members_out(&mut document, name, archive);
+    Ok(document.to_string())
+}
+
+/// `document` without a members table, as [`without_members`] says.
+fn members_out(document: &mut DocumentMut, name: &str, archive: &str) {
     if let Some(dataset) = document
         .get_mut("datasets")
         .and_then(Item::as_table_like_mut)
@@ -1725,7 +1754,83 @@ pub(crate) fn without_members(text: &str, name: &str, archive: &str) -> Result<S
             dataset.remove("members");
         }
     }
+}
+
+/// one change drop makes to data.toml, as the function it names makes it.
+#[derive(Debug)]
+pub(crate) enum Narrowing<'a> {
+    /// [`with_members_copied`].
+    MembersCopied {
+        name: &'a str,
+        from: &'a str,
+        archive: &'a str,
+        unmatched: &'a [String],
+    },
+    /// [`with_exclusions`].
+    Exclusions {
+        name: &'a str,
+        archive: Option<&'a str>,
+        patterns: Vec<String>,
+    },
+    /// [`without_members`].
+    WithoutMembers { name: &'a str, archive: String },
+}
+
+/// data.toml's text with each change made in turn, read and written once however many there are.
+///
+/// # Errors
+///
+/// as the change that meets a part of data.toml written inline fails, and the changes after it
+/// are not made.
+pub(crate) fn narrowed(text: &str, changes: &[Narrowing<'_>]) -> Result<String, Error> {
+    if changes.is_empty() {
+        return Ok(text.to_owned());
+    }
+    let mut document = editable(text)?;
+    if !plain(&document) {
+        return narrowed_one_at_a_time(text, changes);
+    }
+    for change in changes {
+        match change {
+            Narrowing::MembersCopied {
+                name,
+                from,
+                archive,
+                unmatched,
+            } => members_copied(&mut document, name, from, archive, unmatched)?,
+            Narrowing::Exclusions {
+                name,
+                archive,
+                patterns,
+            } => exclusions(&mut document, name, *archive, patterns)?,
+            Narrowing::WithoutMembers { name, archive } => {
+                members_out(&mut document, name, archive);
+            }
+        }
+    }
     Ok(document.to_string())
+}
+
+/// [`narrowed`]'s text, reading and writing data.toml again for each change.
+fn narrowed_one_at_a_time(text: &str, changes: &[Narrowing<'_>]) -> Result<String, Error> {
+    let mut text = text.to_owned();
+    for change in changes {
+        text = match change {
+            Narrowing::MembersCopied {
+                name,
+                from,
+                archive,
+                unmatched,
+            } => with_members_copied(&text, name, from, archive, unmatched)?,
+            Narrowing::Exclusions {
+                name,
+                archive,
+                patterns,
+            } => with_exclusions(&text, name, *archive, patterns)?,
+            Narrowing::WithoutMembers { name, archive } => without_members(&text, name, archive)?,
+        };
+    }
+    Ok(text)
 }
 
 /// takes the dataset `name` out of `document`, as [`without_dataset`] says.
@@ -3707,5 +3812,126 @@ pub(crate) mod tests {
             );
         }
         assert!(compared * 2 > cases, "{compared} of {cases} compared");
+    }
+
+    /// a data.toml for drop to change: datasets with their own exclude, written as one pattern
+    /// or a list, a table for a glob of archives or for one archive, members written with
+    /// dotted keys or inline, and now and then a dataset written inline.
+    fn narrowable(layouts: &mut Layouts) -> (String, Vec<&'static str>) {
+        let mut text = String::new();
+        let mut written = Vec::new();
+        if layouts.one_in(2) {
+            text.push_str("[project]\ndata_dir = \"data\"\n\n");
+        }
+        for name in ["a", "b", "c", "d"] {
+            if layouts.one_in(5) {
+                continue;
+            }
+            written.push(name);
+            if layouts.one_in(3) {
+                writeln!(text, "# {name}, its comment").unwrap();
+            }
+            writeln!(text, "[datasets.{name}]\nref = \"zenodo:1\"").unwrap();
+            match layouts.below(4) {
+                0 => text.push_str("exclude = \"*.tmp\"  # scratch\n"),
+                1 => text.push_str("exclude = [\n  \"*.tmp\",  # scratch\n  \"*.bak\",\n]\n"),
+                _ => {}
+            }
+            match layouts.below(10) {
+                0 => text.push_str("members.\"dot.zip\".exclude = [\"x/*\"]\n"),
+                1 => text.push_str("members = { \"in.zip\" = { exclude = [\"x/*\"] } }\n"),
+                _ => {}
+            }
+            text.push('\n');
+            if layouts.one_in(2) {
+                writeln!(
+                    text,
+                    "[datasets.{name}.members.\"*.zip\"]\nselect = [\"a/*\", \"b/*\"]\nexclude = [\"*.log\"]\n"
+                )
+                .unwrap();
+            }
+            if layouts.one_in(3) {
+                writeln!(
+                    text,
+                    "[datasets.{name}.members.\"own.zip\"]\nexclude = [\"junk/*\"]\n"
+                )
+                .unwrap();
+            }
+        }
+        if layouts.one_in(6) {
+            text.push_str("[datasets]\ne = { ref = \"zenodo:2\" }\n");
+        }
+        (text, written)
+    }
+
+    /// changes drop makes, made at once in one reading of a data.toml laid out as most are,
+    /// write what the same changes made one at a time write, and fail alike where one meets a
+    /// part written inline.
+    #[test]
+    fn drop_changes_at_once_write_what_changes_one_at_a_time_write() {
+        let missing = ["e", "z"];
+        let archives = [
+            "*.zip", "own.zip", "new.zip", "*.zip", "own.zip", "new.zip", "dot.zip", "in.zip",
+        ];
+        let patterns = ["a/one.txt", "*.log", "x/*", "b/two.txt"];
+        let unmatched = [
+            vec![],
+            vec!["b/*".to_owned()],
+            vec!["a/*".to_owned(), "b/*".to_owned()],
+        ];
+        let mut layouts = Layouts(0x2545_f491_4f6c_dd1d);
+        let (mut compared, mut failed) = (0, 0);
+        for _ in 0..5000 {
+            let (text, written) = narrowable(&mut layouts);
+            let changes: Vec<Narrowing> = (0..=layouts.below(4))
+                .map(|_| {
+                    let name = if written.is_empty() || layouts.one_in(10) {
+                        missing[layouts.below(missing.len())]
+                    } else {
+                        written[layouts.below(written.len())]
+                    };
+                    let archive = archives[layouts.below(archives.len())];
+                    let patterns: Vec<String> = (0..=layouts.below(2))
+                        .map(|_| patterns[layouts.below(patterns.len())].to_owned())
+                        .collect();
+                    match layouts.below(8) {
+                        0 => Narrowing::MembersCopied {
+                            name,
+                            from: archives[layouts.below(2)],
+                            archive,
+                            unmatched: &unmatched[layouts.below(unmatched.len())],
+                        },
+                        1 => Narrowing::WithoutMembers {
+                            name,
+                            archive: archive.to_owned(),
+                        },
+                        2 | 3 => Narrowing::Exclusions {
+                            name,
+                            archive: None,
+                            patterns,
+                        },
+                        _ => Narrowing::Exclusions {
+                            name,
+                            archive: Some(archive),
+                            patterns,
+                        },
+                    }
+                })
+                .collect();
+            let at_once = narrowed(&text, &changes);
+            if editable(&text).is_ok_and(|document| plain(&document)) {
+                compared += 1;
+                failed += usize::from(at_once.is_err());
+            }
+            assert_eq!(
+                at_once.map_err(|err| err.message),
+                narrowed_one_at_a_time(&text, &changes).map_err(|err| err.message),
+                "text:\n{text}\nchanges: {changes:#?}"
+            );
+        }
+        assert!(
+            compared > 1000 && (100..compared / 2).contains(&failed),
+            "{failed} of {compared} failed"
+        );
     }
 }
