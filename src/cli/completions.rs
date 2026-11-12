@@ -328,15 +328,28 @@ fn with_names(shell: Shell, script: &str) -> String {
     }
 }
 
-/// bash: the dataset names after a command that takes them, else the static completer.
+/// bash: the dataset names after a command that takes them, else the static completer. each
+/// name is matched as plain text and quoted for the line, since `compgen -W` would expand it.
 const BASH_NAMES: &str = r#"_fetchloom() {
-    local word names
+    local word names name quoted glob=1
+    local -a all
     for word in "${COMP_WORDS[@]:1:COMP_CWORD-1}"; do
         case "$word" in
             COMMANDS)
                 if names=$("$1" completions bash --names="$2" -- "${COMP_WORDS[@]:1:COMP_CWORD-1}" 2>/dev/null); then
+                    # split on lines alone, with globbing off as long as that takes
+                    [[ $- == *f* ]] && glob=0
+                    set -f
                     local IFS=$'\n'
-                    COMPREPLY=($(compgen -W "$names" -- "$2"))
+                    all=($names)
+                    ((glob)) && set +f
+                    COMPREPLY=()
+                    for name in "${all[@]}"; do
+                        if [[ $name == "$2"* ]]; then
+                            printf -v quoted '%q' "$name"
+                            COMPREPLY+=("$quoted")
+                        fi
+                    done
                     return 0
                 fi
                 break
@@ -396,7 +409,8 @@ set edit:completion:arg-completer[fetchloom] = {|@words|
 }
 ";
 
-/// powershell: the names, else the static completer, which the script keeps in a variable.
+/// powershell: the names, else the static completer, which the script keeps in a variable. a
+/// name that is more than letters, digits, `-`, `_` and `.` goes on the line in single quotes.
 const POWERSHELL_NAMES: &str = r#"
 Register-ArgumentCompleter -Native -CommandName 'fetchloom' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
@@ -407,8 +421,13 @@ Register-ArgumentCompleter -Native -CommandName 'fetchloom' -ScriptBlock {
     if ($words | Select-Object -Skip 1 | Where-Object { $_ -in @(COMMANDS) }) {
         $names = & fetchloom completions powershell "--names=$wordToComplete" -- @($words | Select-Object -Skip 1) 2>$null
         if ($LASTEXITCODE -eq 0) {
-            $names | Where-Object { $_ -like "$wordToComplete*" } |
-                ForEach-Object { [CompletionResult]::new($_, $_, [CompletionResultType]::ParameterValue, $_) }
+            $typed = [WildcardPattern]::Escape($wordToComplete) + '*'
+            foreach ($name in $names) {
+                if ($name -like $typed) {
+                    $text = if ($name -match '^[A-Za-z0-9_.-]+$') { $name } else { "'" + ($name -replace '[''\u2018-\u201B]', '$0$0') + "'" }
+                    [CompletionResult]::new($text, $name, [CompletionResultType]::ParameterValue, $name)
+                }
+            }
             return
         }
     }

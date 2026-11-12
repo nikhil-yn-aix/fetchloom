@@ -252,3 +252,115 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
     );
     Ok(())
 }
+
+/// a name a cloned data.toml could hold if no rule stopped it, which runs a command wherever a
+/// shell reads it as code instead of as a word.
+#[cfg(unix)]
+const PROBE: &str = "ir$(echo RAN >&2)x";
+
+/// a folder holding a stand-in for fetchloom that prints `names` for any arguments, as the
+/// scripts' call for names would get them past the program's own name rules.
+#[cfg(unix)]
+fn printing(sandbox: &Sandbox, names: &[&str]) -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let folder = sandbox.folder("stand-in")?;
+    let quoted: Vec<String> = names
+        .iter()
+        .map(|name| format!("'{}'", name.replace('\'', r"'\''")))
+        .collect();
+    let program = folder.join("fetchloom");
+    std::fs::write(
+        &program,
+        format!("#!/bin/sh\nprintf '%s\\n' {}\n", quoted.join(" ")),
+    )?;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))?;
+    Ok(folder)
+}
+
+/// `folder` first on PATH, then the folders of this machine's PATH.
+#[cfg(unix)]
+fn before_path(folder: &std::path::Path) -> Result<std::ffi::OsString> {
+    Ok(std::env::join_paths(
+        std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )?)
+}
+
+/// bash takes each name it is given as a word: it expands none while completing and quotes
+/// each on the line, so a name runs nothing at a tab or when the line runs, which bash reading
+/// each offer back as a command line would show. skipped where bash is not installed.
+#[cfg(unix)]
+#[test]
+fn bash_takes_the_names_it_is_given_literally() -> Result {
+    let sandbox = Sandbox::new()?;
+    let script = sandbox.folder("scripts")?.join("fetchloom.bash");
+    std::fs::write(&script, sandbox.run(&["completions", "bash"])?.stdout)?;
+    let stand_in = printing(&sandbox, &["iris", "irises", PROBE, "cows"])?;
+    let complete = r#". "$1" && COMP_WORDS=(fetchloom path ir) && COMP_CWORD=2 &&
+        _fetchloom fetchloom ir path && for offer in "${COMPREPLY[@]}"; do
+        eval "set -- $offer" && printf 'reads %s\n' "$1"; done"#;
+    let output = match std::process::Command::new("bash")
+        .arg("-c")
+        .arg(complete)
+        .arg("bash")
+        .arg(&script)
+        .env("PATH", before_path(&stand_in)?)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("RAN"), "a name ran: {stderr}");
+    let reads: Vec<String> = text(&output.stdout)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("reads "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(reads, ["iris", "irises", PROBE]);
+    Ok(())
+}
+
+/// powershell puts each name it is given on the line as a word too: a name that is more than
+/// letters, digits, `-`, `_` and `.` comes in single quotes. skipped where pwsh is not
+/// installed.
+#[cfg(unix)]
+#[test]
+fn powershell_takes_the_names_it_is_given_literally() -> Result {
+    let sandbox = Sandbox::new()?;
+    let script = sandbox.folder("scripts")?.join("fetchloom.ps1");
+    std::fs::write(&script, sandbox.run(&["completions", "powershell"])?.stdout)?;
+    let stand_in = printing(&sandbox, &["iris", PROBE, "it's", "cows"])?;
+    let complete = format!(
+        "Get-Content -Raw '{}' | Invoke-Expression; $line = 'fetchloom path i'; \
+         (TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches | \
+         ForEach-Object {{ 'offers ' + $_.CompletionText }}",
+        script.display()
+    );
+    let output = match std::process::Command::new("pwsh")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &complete])
+        .env("PATH", before_path(&stand_in)?)
+        .env("POWERSHELL_TELEMETRY_OPTOUT", "1")
+        .env("POWERSHELL_UPDATECHECK", "Off")
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return crate::support::skipped("pwsh", "no pwsh, so no powershell to complete in");
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("RAN"), "a name ran: {stderr}");
+    let offers: Vec<String> = text(&output.stdout)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("offers "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(offers, ["iris", "'ir$(echo RAN >&2)x'", "'it''s'"]);
+    Ok(())
+}
