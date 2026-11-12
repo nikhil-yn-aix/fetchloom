@@ -1096,13 +1096,11 @@ mod tests {
         assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
     }
 
-    /// a transfer's time counts from its start, not from when its bar appeared, as when the
-    /// bar waited for the server or checked what an earlier run kept, so its rate settles over
-    /// this run's transfer alone; and the rate starts over once, a second in, leaving out the
-    /// bytes that arrived at once as it began, which once read as `58.5 MiB/s` from a server
-    /// sending 38.1.
+    /// a transfer's time counts from its start, not from when its bar appeared, as when the bar
+    /// waited for the server or checked what an earlier run kept: a bar that showed 5 s before
+    /// its transfer started shows no more than the time since the start was asked for.
     #[test]
-    fn a_resumed_transfer_rates_from_its_own_start() {
+    fn a_transfer_counts_its_time_from_its_start_not_from_its_bar() {
         let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
         let bar = Bar::add(
             &bars,
@@ -1116,29 +1114,42 @@ mod tests {
             .clone()
             .unwrap()
             .with_elapsed(Duration::from_secs(5));
-        assert!(drawn.elapsed() >= Duration::from_secs(5));
+        let asked = Instant::now();
         bar.start(Some(300), 152);
-        assert!(
-            drawn.elapsed() < Duration::from_secs(5),
-            "{:?}",
-            drawn.elapsed()
-        );
+        let shown = drawn.elapsed();
+        assert!(shown <= asked.elapsed(), "{shown:?}");
+    }
+
+    /// a transfer's rate starts over once, a second in, leaving out the bytes that arrived at
+    /// once as it began, which once read as `58.5 MiB/s` from a server sending 38.1.
+    #[test]
+    fn the_rate_starts_over_once_a_second_into_a_transfer() {
+        let moved = Moved::new(Arc::default());
         let begun = Instant::now();
-        bar.moved.restart(begun);
-        assert!(!bar.moved.rerate(begun + Duration::from_millis(900)));
-        assert!(bar.moved.rerate(begun + RERATE));
-        assert!(!bar.moved.rerate(begun + 2 * RERATE), "once a transfer");
+        moved.restart(begun);
+        assert!(!moved.rerate(begun + Duration::from_millis(900)));
+        assert!(moved.rerate(begun + RERATE));
+        assert!(!moved.rerate(begun + 2 * RERATE), "once a transfer");
         let mib = 1024 * 1024;
         let second = Duration::from_secs(1);
         // 7 MiB arrived at once, then 38 MiB a second: the rate starts over a second in
-        bar.moved.mark(begun + second, 7 * mib);
-        let rate = bar.moved.rate(7 * mib + 76 * mib, begun + 3 * second);
+        moved.mark(begun + second, 7 * mib);
+        let rate = moved.rate(7 * mib + 76 * mib, begun + 3 * second);
         assert!((rate - 38.0 * 1_048_576.0).abs() < 1.0, "{rate}");
-        // a link that slows to 19 MiB a second shows it within 20 s
-        bar.moved.rate(7 * mib + 38 * mib * 11, begun + 12 * second);
-        let slower = bar
-            .moved
-            .rate(7 * mib + 38 * mib * 11 + 19 * mib * 20, begun + 32 * second);
+    }
+
+    /// a rate covers the last 10 to 20 s of a transfer, so a link that slows from 38 MiB a
+    /// second to 19 shows 19 within 20 s.
+    #[test]
+    fn the_rate_follows_a_link_that_slows_within_twenty_seconds() {
+        let moved = Moved::new(Arc::default());
+        let begun = Instant::now();
+        moved.restart(begun);
+        let mib = 1024 * 1024;
+        let second = Duration::from_secs(1);
+        let fast = moved.rate(38 * mib * 11, begun + 11 * second);
+        assert!((fast - 38.0 * 1_048_576.0).abs() < 1.0, "{fast}");
+        let slower = moved.rate(38 * mib * 11 + 19 * mib * 20, begun + 31 * second);
         assert!((slower - 19.0 * 1_048_576.0).abs() < 1.0, "{slower}");
     }
 
