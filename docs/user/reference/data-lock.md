@@ -38,7 +38,7 @@ files = [
 | `files[].url` | download URL recorded before redirects; empty for an imported file, which no source holds |
 | `files[].unpacks_to` | optional `sha256:` plus the 64-digit archive tree hash |
 
-hashes are written in lowercase. datasets sort by name and files by path. the writer uses the field order above, inline file tables, LF newlines and a final newline. identical lock contents render identically; a fresh resolution can have a different timestamp.
+hashes are written in lowercase. datasets sort by name and files by path. the writer uses the field order above, inline file tables, LF newlines and a final newline. identical lock contents render identically; a fresh resolution can have a different timestamp. since fetchloom writes data.lock in this one form, a comment or a hand-made order in it is gone at the next write; notes belong in data.toml, which keeps them.
 
 `locked` stays unchanged when `resolved` and `files` stay unchanged, even after re-resolution.
 
