@@ -108,66 +108,46 @@ class HelperOptions(unittest.TestCase):
                     ["fetchloom", "--json", "--progress", "-C", "p", "sync", "--yes", *named],
                 )
 
-    def test_strict_sync_raises_on_kept_files(self):
-        kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
-        warning = {
-            "kind": "place.kept",
-            "message": "data/iris/iris.csv has changed, so it stays",
-            "details": [],
-            "help": "`fetchloom sync --force` replaces it",
+    def test_strict_sync_fails_as_sync_strict_does(self):
+        # fetchloom's answers in a project whose recipe clean was never built: sync succeeds,
+        # and only sync --strict fails
+        result = {
+            "project": "/work/p",
+            "selected": None,
+            "datasets": [],
+            "lock_changed": False,
+            "placement": {"placed": 0, "replaced": 0, "removed": 0, "unchanged": 1, "kept": [], "unbuilt": []},
         }
-        response = subprocess.CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": [warning]}), ""
-        )
+        warning = {
+            "kind": "build.unbuilt",
+            "message": "clean is not built yet",
+            "details": [],
+            "help": "run `fetchloom build clean` to make it, then commit data.lock and data.lock.d",
+        }
+        error = {
+            "kind": "data.not_ready",
+            "message": "the data is not ready to use",
+            "details": ["clean needs a build (not built yet): `fetchloom build clean` makes it"],
+            "help": "each line says what makes it ready",
+            "fix": None,
+        }
+
+        def program(argv):
+            if "--strict" in argv:
+                answer = {"status": "error", "result": result, "warnings": [warning], "errors": [error]}
+                return subprocess.CompletedProcess(argv, 1, json.dumps(answer), "")
+            answer = {"status": "ok", "result": result, "warnings": [warning], "errors": []}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(answer), "")
+
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom, "_call", return_value=response):
+            with patch.object(fetchloom, "_call", side_effect=program) as run:
                 with self.assertWarns(UserWarning):
-                    self.assertEqual(fetchloom.sync("p"), Path("p"))
+                    self.assertEqual(fetchloom.sync("p"), Path("/work/p"))
                 with self.assertWarns(UserWarning), self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.sync("p", strict=True)
-        self.assertEqual(raised.exception.kind, "conflict.kept")
-        self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])
-        self.assertEqual(raised.exception.message, "1 file in the data folder differs from data.lock")
-        self.assertEqual(raised.exception.help, "save any changes you need, then run `fetchloom -C p sync --force`")
-
-    def test_strict_help_forces_only_the_named_datasets(self):
-        kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
-        response = subprocess.CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": []}), ""
-        )
-        with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom, "_call", return_value=response):
-                with self.assertRaises(fetchloom.Error) as raised:
-                    fetchloom.sync(names=["iris", "flowers"], strict=True)
-        self.assertEqual(
-            raised.exception.help,
-            "save any changes you need, then run `fetchloom sync --force -- iris flowers`",
-        )
-
-    @unittest.skipUnless(os.name == "posix", "runs the suggested command in a posix shell")
-    def test_strict_help_forces_the_project_it_synced(self):
-        # a notebook in project A syncs project B: the command it is told to run must change B
-        root = "/work/haz B's $data"
-        kept = {"project": root, "placement": {"kept": [{"path": "data/plain/plain.csv", "reason": "foreign"}]}}
-        response = subprocess.CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": []}), ""
-        )
-        for project, words in [
-            ("../haz B's $data", ["-C", root, "sync", "--force", "--", "plain", "iris"]),
-            (".", ["sync", "--force", "--", "plain", "iris"]),
-        ]:
-            with self.subTest(project=project):
-                with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom, "_call", return_value=response):
-                        with self.assertRaises(fetchloom.Error) as raised:
-                            fetchloom.sync(project, names=["plain", "iris"], strict=True)
-                command = raised.exception.help.split("`")[1]
-                # a stand-in fetchloom prints each word the shell hands it
-                shell = subprocess.run(
-                    ["sh", "-c", "fetchloom() { printf '%s\\0' \"$@\"; }; " + command],
-                    capture_output=True, check=True,
-                )
-                self.assertEqual(shell.stdout.decode().split("\0")[:-1], words)
+        self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "p", "sync", "--strict"])
+        self.assertEqual((raised.exception.kind, raised.exception.code), ("data.not_ready", 1))
+        self.assertEqual(raised.exception.details, error["details"])
 
     # the words of the cli's own case table, quoted as it quotes them
     QUOTED = [
@@ -209,18 +189,6 @@ class HelperOptions(unittest.TestCase):
                 except FileNotFoundError:
                     continue
                 self.assertEqual(told.stdout.decode().split("\n")[:-1], words)
-
-    def test_strict_names_several_files_in_the_plural(self):
-        files = [{"path": f"data/iris/{name}", "reason": "changed"} for name in ["a.csv", "b.csv"]]
-        result = {"project": "p", "placement": {"kept": files}}
-        response = subprocess.CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
-        )
-        with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom, "_call", return_value=response):
-                with self.assertRaises(fetchloom.Error) as raised:
-                    fetchloom.sync("p", strict=True)
-        self.assertEqual(raised.exception.message, "2 files in the data folder differ from data.lock")
 
 
 class GetOptions(unittest.TestCase):

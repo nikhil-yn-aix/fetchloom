@@ -55,6 +55,6 @@ batch download failures use the first failed file in job order for the overall k
 
 `get` with several links works the same way with links in place of files: the first failed link in command line and list order decides the kind and exit code, and each failed link remains in `errors[0].failures` and in `result.items`. a `--sha256` mismatch is `integrity.mismatch`, exit 30.
 
-the [python helper](../scripting.md#python-helper) also raises errors of its own, with no process exit code, so their `code` is `None`: `conflict.kept` from a strict sync, and `usage` when `get()` is given both `path` and `folder`, or `force=True` without `path`.
+the [python helper](../scripting.md#python-helper) also raises errors of its own, with no process exit code, so their `code` is `None`: `usage` when `get()` is given both `path` and `folder`, or `force=True` without `path`.
 
 [troubleshooting](../troubleshooting.md) pairs recorded error text with fixes.

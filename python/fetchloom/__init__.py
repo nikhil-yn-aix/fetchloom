@@ -30,6 +30,7 @@ _SWITCHES = {
     "--offline": "offline",
     "--locked": "locked",
     "--verify": "verify",
+    "--strict": "strict",
 }
 _VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256", "-C": "project"}
 # an example or command in backticks, or input fetchloom quotes, as in `found no dataset matching "x"`
@@ -127,41 +128,32 @@ def sync(
     ``project`` is the project folder or any folder inside it. ``names``, such as ``["iris"]``
     or ``"iris"``, syncs those datasets alone: the others keep their entries in data.lock and
     their files as they are, and the next sync without names still checks them all. files
-    edited by hand stay, and each one fetchloom keeps is reported as a python warning;
-    ``strict=True`` also raises :class:`Error` with kind ``conflict.kept``, listing them in
-    ``details``, so a notebook never runs on inputs that differ from the lock. a file
-    fetchloom put back as pinned, such as one linked to the cache's copy that was edited in
-    place, matches the lock again: its warning says so and names the file that keeps the
-    changed copy, and nothing is raised. a download above 1 GiB raises :class:`Error` with
-    kind ``unconfirmed`` unless ``yes=True`` approves it. ``offline=True`` prevents network
-    requests. ``locked=True`` raises :class:`Error` with kind ``lock.outdated`` instead of
-    updating a data.lock that is missing or out of date with data.toml, for the named
-    datasets alone when ``names`` names some, and with kind ``build.needed`` when data.lock
-    does not pin a recipe as building it now would make, which only ``fetchloom build``
-    changes. ``verify=True`` checks the SHA-256 of every placed file, as ``sync --verify``
-    does, and puts back one whose bytes changed though its size and time did not.
+    edited by hand stay, and each one fetchloom keeps is reported as a python warning.
+    ``strict=True`` raises :class:`Error` with kind ``data.not_ready`` and code 1, as
+    ``sync --strict`` does, when the data is not ready to use once the sync is done: a file
+    it kept, a recipe's result not on this machine, or a dataset data.lock does not pin as
+    data.toml asks. ``details`` names each with what makes it ready, so a notebook never runs
+    on inputs that differ from the lock. a file fetchloom put back as pinned, such as one
+    linked to the cache's copy that was edited in place, matches the lock again: its warning
+    says so and names the file that keeps the changed copy. a download above 1 GiB raises
+    :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
+    ``offline=True`` prevents network requests. ``locked=True`` raises :class:`Error` with
+    kind ``lock.outdated`` instead of updating a data.lock that is missing or out of date
+    with data.toml, for the named datasets alone when ``names`` names some, and with kind
+    ``build.needed`` when data.lock does not pin a recipe as building it now would make,
+    which only ``fetchloom build`` changes. ``verify=True`` checks the SHA-256 of every
+    placed file, as ``sync --verify`` does, and puts back one whose bytes changed though its
+    size and time did not.
     """
     arguments = _options(["sync"], yes, offline, locked)
     if verify:
         arguments.append("--verify")
+    if strict:
+        arguments.append("--strict")
     named = [names] if isinstance(names, str) else list(names)
     if named:
         arguments += ["--", *named]
-    result = _run(arguments, project, {"project", "yes", "offline", "locked", "verify"})
-    placement = result.get("placement") or {}
-    kept = [file["path"] for file in placement.get("kept", [])]
-    if strict and kept:
-        files = "1 file in the data folder differs" if len(kept) == 1 else f"{len(kept)} files in the data folder differ"
-        # a person may run it from another folder, such as a notebook's own project
-        words = ["fetchloom"] if os.fspath(project) == "." else ["fetchloom", "-C", result["project"]]
-        words += ["sync", "--force", *(["--", *named] if named else [])]
-        force = " ".join(_shell_word(word) for word in words)
-        raise Error(
-            "conflict.kept",
-            f"{files} from data.lock",
-            kept,
-            f"save any changes you need, then run `{force}`",
-        )
+    result = _run(arguments, project, {"project", "yes", "offline", "locked", "verify", "strict"})
     return Path(result["project"])
 
 
