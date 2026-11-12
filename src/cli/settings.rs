@@ -52,7 +52,6 @@ struct File {
 }
 
 pub(super) fn run(context: &Context) -> Report {
-    warn_misnamed(&context.output, std::env::vars_os().map(|(name, _)| name));
     let shown = rows(context);
     let machine = context.settings.machine;
     let output = &context.output;

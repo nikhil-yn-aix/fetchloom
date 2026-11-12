@@ -37,7 +37,7 @@ memory     4.0 GiB                       this machine   FETCHLOOM_MEMORY
 
 the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is no file there yet.
 
-a set variable one typo from one fetchloom reads changes nothing, so `settings` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
+a set variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it before it starts, `settings` included, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
 
 ```text
 warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it changes nothing

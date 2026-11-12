@@ -537,6 +537,7 @@ pub(crate) fn run() -> ExitCode {
     let Some(command) = args.command else {
         return execute(context, None, started);
     };
+    settings::warn_misnamed(&context.output, std::env::vars_os().map(|(name, _)| name));
     match offline(var("FETCHLOOM_OFFLINE")) {
         Ok(environment) => {
             context.offline = net::Offline::from_settings(global.offline, environment);
