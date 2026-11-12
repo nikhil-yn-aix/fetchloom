@@ -621,6 +621,9 @@ pub(crate) fn run() -> ExitCode {
     let _ = SETTINGS_FILE.set(file.clone());
     match Settings::read(&var, file, Machine::read()) {
         Ok(settings) => {
+            if let Some(threads) = settings.threads {
+                context.threads = context.threads.at_most(threads.value);
+            }
             crate::cache::set_hash_batches(settings.hash_batches());
             crate::source::set_most_files(settings.most_files.value);
             crate::archive::set_limits(settings.archive_limits());

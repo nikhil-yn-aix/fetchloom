@@ -95,6 +95,43 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
+/// `FETCHLOOM_RESOURCES=lean` shows in `settings` with where it came from, and each knob it sets
+/// shows as set by it, while `most_files` stays as the default level gives it and a knob set by
+/// name keeps its own value.
+#[test]
+fn settings_show_what_a_resources_level_derives() -> Result {
+    let sandbox = Sandbox::new()?;
+    let settings = |pairs: &[(&str, &str)]| -> Result<serde_json::Value> {
+        let mut command = sandbox.command(&["--json", "settings"]);
+        command.envs(pairs.iter().copied());
+        let document = json(&command.output()?)?;
+        assert_eq!(document["status"], "ok", "{document}");
+        Ok(document)
+    };
+    let lean = settings(&[("FETCHLOOM_RESOURCES", "lean")])?;
+    let resources = shown(&lean, "resources");
+    assert_eq!(resources["value"], "lean");
+    assert_eq!(resources["origin"], "environment");
+    assert_eq!(resources["variable"], "FETCHLOOM_RESOURCES");
+    let processors = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    for (name, value) in [
+        ("jobs", serde_json::json!(2)),
+        ("host_jobs", serde_json::json!(2)),
+        ("memory", serde_json::json!(128_u64 << 20)),
+        ("threads", serde_json::json!(processors.min(2))),
+    ] {
+        assert_eq!(shown(&lean, name)["value"], value, "{name}");
+        assert_eq!(shown(&lean, name)["origin"], "resources", "{name}");
+    }
+    let default = settings(&[])?;
+    assert_eq!(shown(&default, "resources")["value"], "default");
+    assert_eq!(shown(&lean, "most_files"), shown(&default, "most_files"));
+    let named = settings(&[("FETCHLOOM_RESOURCES", "lean"), ("FETCHLOOM_JOBS", "5")])?;
+    assert_eq!(shown(&named, "jobs")["value"], 5);
+    assert_eq!(shown(&named, "jobs")["origin"], "environment");
+    Ok(())
+}
+
 /// `--no-config`, or `FETCHLOOM_NO_CONFIG`, runs a command on the defaults past a settings file
 /// that would stop it, and `settings` says the file was bypassed. without it the file still
 /// stops the run, and data.toml is read either way.

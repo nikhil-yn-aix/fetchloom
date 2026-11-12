@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
+mod resources;
+
+pub(crate) use resources::Level;
+
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::mirror::Location;
@@ -38,8 +42,9 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 18] = [
+const KEYS: [(&str, &str); 19] = [
     ("cache", "FETCHLOOM_CACHE"),
+    ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
     ("retries", "FETCHLOOM_RETRIES"),
@@ -104,6 +109,8 @@ pub(crate) enum Origin {
     /// an option on the command line, such as `--mirror`, which `fetchloom settings` shows
     /// before what the settings give.
     Flag,
+    /// derived from the `resources` level, for a knob no name set.
+    Resources(Level),
 }
 
 impl Origin {
@@ -115,7 +122,13 @@ impl Origin {
             Origin::Environment => "environment",
             Origin::File => "file",
             Origin::Flag => "flag",
+            Origin::Resources(_) => "resources",
         }
+    }
+
+    /// whether a person set the value by its name, in a variable or the settings file.
+    fn is_named(self) -> bool {
+        matches!(self, Origin::Environment | Origin::File)
     }
 }
 
@@ -127,6 +140,7 @@ impl fmt::Display for Origin {
             Origin::Environment => "environment",
             Origin::File => "settings file",
             Origin::Flag => "command line",
+            Origin::Resources(level) => return write!(f, "resources = {level}"),
         })
     }
 }
@@ -334,6 +348,8 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
 pub(crate) struct Settings {
     pub(crate) machine: Machine,
     pub(crate) file: File,
+    /// how much of the machine a run spends for speed, which sets each knob no name sets.
+    pub(crate) resources: Set<Level>,
     pub(crate) jobs: Set<usize>,
     pub(crate) host_jobs: Set<usize>,
     pub(crate) retries: Set<u32>,
@@ -341,6 +357,12 @@ pub(crate) struct Settings {
     pub(crate) ask_above: Set<u64>,
     /// the memory a run's buffers aim to stay within: download queues share it.
     pub(crate) memory: Set<u64>,
+    /// the memory budget as set by name, else as the default level gives it, which what no level
+    /// changes is sized from: `most_files` and the archive limits.
+    steady_memory: u64,
+    /// the most workers one local group runs, as the level sets it when `FETCHLOOM_THREADS`
+    /// does not, which then caps every group as that variable would.
+    pub(crate) threads: Option<Set<usize>>,
     /// the most files one dataset may list, sized from `memory` unless set.
     pub(crate) most_files: Set<usize>,
     /// the most entries one archive may unpack to.
@@ -372,17 +394,11 @@ pub(crate) struct Settings {
 impl Settings {
     /// every setting at fetchloom's defaults, with what is sized from `machine` sized from it.
     pub(crate) fn defaults(machine: Machine) -> Settings {
-        // a quarter of what the machine gives, but never more than half of it, however small
-        let memory = match machine.memory {
-            Some(room) => Set {
-                value: (room / 4).clamp(LEAST_MEMORY.min(room / 2), MOST_MEMORY),
-                origin: Origin::Machine,
-            },
-            None => Set::default(LEAST_MEMORY),
-        };
+        let memory = budget(machine);
         Settings {
             machine,
             file: File::default(),
+            resources: Set::default(Level::Default),
             jobs: Set::default(JOBS),
             host_jobs: Set::default(HOST_JOBS),
             retries: Set::default(crate::net::RETRIES),
@@ -400,6 +416,8 @@ impl Settings {
             push_to: Set::default(None),
             build_floor: Set::default(None),
             memory,
+            steady_memory: memory.value,
+            threads: None,
         }
     }
 
@@ -413,11 +431,41 @@ impl Settings {
     pub(crate) fn read(var: Var<'_>, file: File, machine: Machine) -> Result<Settings, Error> {
         let defaults = Settings::defaults(machine);
         let given = Given { var, file: &file };
-        let memory = size(&given, "memory", defaults.memory)?;
+        let resources = level(&given)?;
+        let limits = resources.value.limits(machine);
+        let memory = size(
+            &given,
+            "memory",
+            derived(limits.memory, resources.value, defaults.memory),
+        )?;
+        let steady = if memory.origin.is_named() {
+            memory
+        } else {
+            defaults.memory
+        };
+        // a level caps local workers only where FETCHLOOM_THREADS does not
+        let threads = limits
+            .threads
+            .filter(|_| var("FETCHLOOM_THREADS").is_none_or(|value| value.is_empty()))
+            .map(|value| Set {
+                value,
+                origin: Origin::Resources(resources.value),
+            });
         Ok(Settings {
             machine,
-            jobs: count(&given, "jobs", 1..=256, defaults.jobs)?,
-            host_jobs: count(&given, "host_jobs", 1..=256, defaults.host_jobs)?,
+            resources,
+            jobs: count(
+                &given,
+                "jobs",
+                1..=256,
+                derived(limits.jobs, resources.value, defaults.jobs),
+            )?,
+            host_jobs: count(
+                &given,
+                "host_jobs",
+                1..=256,
+                derived(limits.host_jobs, resources.value, defaults.host_jobs),
+            )?,
             retries: count(
                 &given,
                 "retries",
@@ -426,7 +474,7 @@ impl Settings {
             )?,
             timeout: seconds(&given, "timeout", 1..=3600, defaults.timeout)?,
             ask_above: size(&given, "ask_above", defaults.ask_above)?,
-            most_files: count(&given, "most_files", 1..=1_000_000_000, most_files(memory))?,
+            most_files: count(&given, "most_files", 1..=1_000_000_000, most_files(steady))?,
             archive_files: count(
                 &given,
                 "archive_files",
@@ -448,6 +496,8 @@ impl Settings {
             push_to: push_folder(&given, "push_to")?,
             build_floor: floor(&given, "build_floor")?,
             memory,
+            steady_memory: steady.value,
+            threads,
             file,
         })
     }
@@ -461,7 +511,7 @@ impl Settings {
             members: self.archive_files.value,
             bytes: self.archive_size.value,
             ratio: self.archive_ratio.value,
-            memory: (self.memory.value / 4).max(defaults.memory),
+            memory: (self.steady_memory / 4).max(defaults.memory),
         }
     }
 
@@ -471,6 +521,26 @@ impl Settings {
         let jobs = u64::try_from(self.jobs.value).unwrap_or(u64::MAX).max(1);
         usize::try_from(((self.memory.value / jobs) >> 20).clamp(1, 16)).unwrap_or(16)
     }
+}
+
+/// the memory budget `machine` gives a run without a level: a quarter of what it has, but never
+/// more than half of it, however small, nor more than 4 GiB.
+fn budget(machine: Machine) -> Set<u64> {
+    match machine.memory {
+        Some(room) => Set {
+            value: (room / 4).clamp(LEAST_MEMORY.min(room / 2), MOST_MEMORY),
+            origin: Origin::Machine,
+        },
+        None => Set::default(LEAST_MEMORY),
+    }
+}
+
+/// `fallback`, a knob's value without a level, or what `level` gives it as `value`.
+fn derived<T>(value: Option<T>, level: Level, fallback: Set<T>) -> Set<T> {
+    value.map_or(fallback, |value| Set {
+        value,
+        origin: Origin::Resources(level),
+    })
 }
 
 /// the most files a dataset may list within `memory`, never fewer than fetchloom's own default.
@@ -891,6 +961,30 @@ fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Err
     }
 }
 
+/// the `resources` level, lean, default or max, or the default level when it is unset or empty.
+fn level(given: &Given<'_>) -> Result<Set<Level>, Error> {
+    let Some((text, origin, named)) = given.get("resources") else {
+        return Ok(Set::default(Level::Default));
+    };
+    let words = || {
+        let [lean, default, max] = Level::ALL.map(Level::name);
+        format!("{lean}, {default} or {max}")
+    };
+    Level::parse(&text)
+        .map(|value| Set { value, origin })
+        .ok_or_else(|| {
+            Error::new(
+                Kind::Usage,
+                format!("{named} is \"{text}\", which is not {}", words()),
+            )
+            .help(format!(
+                "{} to use the default level, or set it to {}",
+                undo(origin, "resources"),
+                words()
+            ))
+        })
+}
+
 /// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default` when it is unset
 /// or empty.
 fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Error> {
@@ -1174,7 +1268,7 @@ mod tests {
         assert_eq!(
             unknown.help.as_deref(),
             Some(
-                "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+                "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
             )
         );
     }

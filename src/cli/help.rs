@@ -65,6 +65,9 @@ const ENVIRONMENT: &str = "fetchloom environment
 
   FETCHLOOM_CACHE      the cache folder, instead of the system's cache folder
   FETCHLOOM_OFFLINE    1 works offline, as --offline does
+  FETCHLOOM_RESOURCES  lean, default or max: lean spends less memory and runs
+                       fewer downloads at once, max runs more; FETCHLOOM_JOBS,
+                       FETCHLOOM_MEMORY and the like still win over it
   FETCHLOOM_JOBS       how many files download at once, 1 to 256; 8 by default
   FETCHLOOM_HOST_JOBS  how many of those one site gets at once, 1 to 256;
                        4 by default

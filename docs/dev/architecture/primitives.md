@@ -15,7 +15,8 @@ these modules contain small value types and policies used by more than one compo
 | [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs) | checked whole-path selection patterns | `Glob`, `new`, `matches`, `is_top_level_only` |
 | [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | human sizes, rates, durations and clipping, and sizes typed as `512M` | `size`, `rate`, `speed`, `duration`, `count`, `clip`, `bytes` |
 | [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
-| [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs) | every setting with its origin: variable, settings file, machine or default | `Settings`, `File`, `Set`, `Origin`, `read`, `defaults`, `hash_batches` |
+| [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs) | every setting with its origin: variable, settings file, resources level, machine or default | `Settings`, `File`, `Set`, `Origin`, `read`, `defaults`, `hash_batches` |
+| [settings/resources.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings/resources.rs) | resources levels: what lean, default and max give the knobs they derive from the machine | `Level`, `Limits`, `limits` |
 | [space.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/space.rs) | free space on the disk holding a folder: statvfs on unix, the volume list on windows; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file | `free`, `short`, `Filesystem`, `cache_holds` |
 | [machine.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/machine.rs) | what the machine allows: processors, available memory on linux inside cgroup limits, open files | `Machine`, `read` |
 | [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
@@ -53,6 +54,12 @@ local placement, cache verification and archive workers use one fallible scoped-
 before constructing the async runtime, the CLI starts and joins one fallible probe thread. an immediate refusal returns `local.io` (exit 50), including in JSON, without invoking the runtime builder. release builds abort on panics and retain the bug-report hook. the probe does not reserve capacity: a later refusal during tokio worker creation can still panic.
 
 linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLOOM_JOBS` controls network work and does not replace these local budgets. listings, plans and member records still grow with file count.
+
+### settings and resources levels
+
+`Settings::read` takes each value from its variable, then the settings file, then the `resources` level, then the machine or fetchloom's default. `Level::limits` is a pure function of the level and `Machine`: lean gives jobs, host jobs, a local worker cap and a memory budget, max gives jobs and host jobs, and default gives none, so a run without a level reads exactly the defaults. a value a level gave carries `Origin::Resources`, which `settings` shows as `resources = lean` and JSON as `resources`.
+
+the memory a level gives sizes only the hash queues of downloads (`hash_batches`). `most_files` and the archive limits stay sized from the memory set by name, else the default level's budget, so lean never refuses a listing or an archive that default accepts. `cli::run` narrows `Threads` to the level's worker cap only when `FETCHLOOM_THREADS` is unset or empty, before the runtime is built, so the variable wins as any setting set by name does.
 
 ### volume, errors and cancellation
 

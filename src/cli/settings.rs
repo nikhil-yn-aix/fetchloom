@@ -115,6 +115,7 @@ fn rows(context: &Context) -> Vec<Shown> {
     let mut shown = Vec::new();
     let cache = super::cache_folder();
     let build_floor = floor(settings, cache.as_deref());
+    shown.push(level(settings.resources));
     shown.push(Shown {
         name: "cache",
         value: cache
@@ -247,10 +248,10 @@ fn variables(context: &Context) -> Vec<Shown> {
     shown.push(Shown {
         name: "threads",
         value: json!(threads),
-        origin: vec![if context.threads.is_limited() {
-            Origin::Environment
-        } else {
-            Origin::Machine
+        origin: vec![match settings.threads {
+            Some(level) => level.origin,
+            None if context.threads.is_limited() => Origin::Environment,
+            None => Origin::Machine,
         }],
         variable: "FETCHLOOM_THREADS",
         said: threads.to_string(),
@@ -342,6 +343,16 @@ fn size(name: &'static str, set: Set<u64>) -> Shown {
         origin: vec![set.origin],
         variable: crate::settings::variable(name),
         said: units::size(set.value),
+    }
+}
+
+fn level(set: Set<crate::settings::Level>) -> Shown {
+    Shown {
+        name: "resources",
+        value: json!(set.value.name()),
+        origin: vec![set.origin],
+        variable: crate::settings::variable("resources"),
+        said: set.value.name().to_owned(),
     }
 }
 
