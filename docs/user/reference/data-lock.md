@@ -54,31 +54,33 @@ the lists in `data.lock.d` are named by their contents, so a merge brings each b
 
 ## big datasets
 
-a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock, and says so: `data.lock names data.lock.d/photos.0123456789ab.1.tsv.zst, which is not there`, with help to get the commit that adds data.lock.d. a list is named by its content, so a new one is a new file, which `git commit -a` leaves out: in a git repository, `status` warns of each list data.lock names that git does not have, and a command that writes a list git does not have ends with `git add data.lock.d`, as a `next:` line at a terminal and a warning otherwise. fetchloom asks git with `git ls-files`, which only reads git's index, and says nothing without git or outside a repository.
+a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock, and says so: `data.lock names data.lock.d/photos.2e682d3ff7a4.tsv.zst, which is not there`, with help to get the commit that adds data.lock.d. a list is named by its content, so a new one is a new file, which `git commit -a` leaves out: in a git repository, `status` warns of each list data.lock names that git does not have, and a command that writes one ends with `git add data.lock.d`.
+
+the entry of a real run that imported a folder of 50,001 small files:
 
 ```toml
 version = 1
 
 [[dataset]]
 name = "photos"
-ref = "hf:datasets/org/photos"
-spec = "sha256:..."
-resolved = "hf:datasets/org/photos@3c1f0e2..."
-locked = "2026-11-10T00:00:00Z"
-files_in = ["data.lock.d/photos.0123456789ab.1.tsv.zst", "data.lock.d/photos.0123456789ab.2.tsv.zst"]
-file_count = 412000
-file_bytes = 98765432100
-files_sha256 = "sha256:0123456789ab..."
+ref = "local"
+spec = "sha256:b52165b04be5b07b1a5050f8bd2a189fd4dc1acbecb65af3e85c3a2c4157b538"
+resolved = "local"
+locked = "2026-11-12T10:25:38Z"
+files_in = ["data.lock.d/photos.2e682d3ff7a4.tsv.zst"]
+file_count = 50001
+file_bytes = 288896
+files_sha256 = "sha256:2e682d3ff7a415d2fa4340c6b13454e3d6ac7cce7e11119505ad0b55821e05d7"
 ```
 
 | field | value |
 |---|---|
-| `files_in` | the parts, in order, in place of `files` |
+| `files_in` | the parts, in order, in place of `files`; more than one part takes a number after the hash, as `photos.2e682d3ff7a4.1.tsv.zst` |
 | `file_count` | the files the parts list |
 | `file_bytes` | the sum of their sizes |
 | `files_sha256` | `sha256:` and the SHA-256 of the parts' text, one part after another |
 
-a part is a zstandard frame of UTF-8 text: a header line naming its columns, then one line per file, sorted by path, at most 250,000 files a part. a source's list has the header `path\tsize\tsha256\tmd5\turl\tunpacks_to` and the fields of an inline file table; a [recipe result](#recipe-results)'s list has the header `path\tsize\tsha256`. reading expects the header of the dataset's kind, so one kind of list never stands for the other. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.1.tsv.zst | head` shows one.
+a part is a zstandard frame of UTF-8 text: a header line naming its columns, then one line per file, sorted by path, at most 250,000 files a part. a source's list has the header `path\tsize\tsha256\tmd5\turl\tunpacks_to` and the fields of an inline file table; a [recipe result](#recipe-results)'s list has the header `path\tsize\tsha256`. reading expects the header of the dataset's kind, so one kind of list never stands for the other. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.tsv.zst | head` shows one.
 
 reading checks every part's name, line, order and count against `data.lock`, and the SHA-256 of the whole. a missing, changed or foreign part fails with `project.invalid`, and `cache gc` then keeps the whole cache rather than guess what the project needs. a list of more files than [`FETCHLOOM_MOST_FILES`](environment.md) allows is refused before it is read. a million files take about 46 bytes each, 47 MB in four parts; listed inline they would take about 300 MB.
 
@@ -86,25 +88,27 @@ reading checks every part's name, line, order and count against `data.lock`, and
 
 a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, once every step of the build is done, after the result's files are in the cache; every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe, and `sync` places a result's files like a fetched dataset's. `locked` moves only when the key or the tree changes, so a build that makes the same files again leaves the table as it is. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
 
+from a real build:
+
 ```toml
 [[dataset]]
 name = "clean"
 from = [
-  { name = "iris", content = "sha256:..." },
+  { name = "iris", content = "sha256:44b3e8323e385e61743eade568bb1ca54b660cc33aadd89a324b80a467b8a2a9" },
 ]
 run = ["python3", "clean.py", "{iris}", "{out}"]
 code = [
-  { path = "clean.py", sha256 = "..." },
-  { path = "lib", tree = "sha256:..." },
+  { path = "clean.py", sha256 = "d71b468a0dc9d58310667feaf6b814d38d05f1e5e4d7a63d3be4e1f609f53a3e" },
+  { path = "lib", tree = "sha256:0a0b56cbee4ab6f62bc733bfe4378f682d6a5c8d598bbf70c4d1dcf7a694120c" },
 ]
 env = { SOURCE_DATE_EPOCH = "315532800" }
-key = "sha256:..."
-locked = "2026-11-10T00:00:00Z"
-tree = "sha256:..."
-files_in = ["data.lock.d/clean.0123456789ab.tsv.zst"]
-file_count = 2
-file_bytes = 4
-files_sha256 = "sha256:0123456789ab..."
+key = "sha256:d764536988d07c1808714c1d822acd09625f068427e816f05f01867649c3015d"
+locked = "2026-11-12T10:25:28Z"
+tree = "sha256:0b2cd7241af67f42241767d525012f7e7fb6eab90c364cc97aec8edf6f21d21b"
+files_in = ["data.lock.d/clean.48557b15b131.tsv.zst"]
+file_count = 1
+file_bytes = 366
+files_sha256 = "sha256:48557b15b131a59c6aff11e5019b52425a87400b3ddadc974a5c046735ea9048"
 ```
 
 | field | value |
@@ -161,7 +165,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 
 an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.
 
-`access` is a hint for sharing the files, never a licence check: [`push`](../commands/push.md#data-you-may-not-share) asks before copying a dataset whose `access` is not `public` into a mirror. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
+`access` is a hint for sharing the files, never a license check: [`push`](../commands/push.md#data-you-may-not-share) asks before copying a dataset whose `access` is not `public` into a mirror. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
 
 DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment. a competition file kaggle sent as a zip of itself is recorded at its path plus `.zip`, with `unpacks_to`.
 
