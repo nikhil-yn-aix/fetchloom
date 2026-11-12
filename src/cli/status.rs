@@ -147,7 +147,12 @@ struct Differing {
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
 pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
     let project = super::project::find(&context.output)?;
-    let status = check(&project, context.threads, &context.mirrors.mirrors, verify)?;
+    let status = check(
+        &project,
+        context.threads,
+        &context.mirrors.mirrors,
+        verify.then_some(&context.output),
+    )?;
     let output = &context.output;
     warn_git(output, &project)?;
     list(output, &status);
@@ -209,7 +214,7 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let status = check(project, context.threads, &context.mirrors.mirrors, false)?;
+    let status = check(project, context.threads, &context.mirrors.mirrors, None)?;
     let output = &context.output;
     warn_git(output, project)?;
     if sum_up(output, &status) {
@@ -372,16 +377,16 @@ fn unbuilt(
 }
 
 /// compares the data folder with data.lock, reading only what the disk says about each file,
-/// or, with `verify`, hashing every placed file too. a project still as a complete sync left it
-/// is settled as sync finds it, without a plan, so status agrees with sync even once the cache
-/// no longer records what an archive holds, as after a move and `cache gc --now`. a recipe's
-/// result is looked for in the cache and the folder `mirrors`, never on a web mirror, since
-/// status makes no request.
+/// or, given `verify`, hashing every placed file too, under a bar `verify` draws. a project
+/// still as a complete sync left it is settled as sync finds it, without a plan, so status agrees
+/// with sync even once the cache no longer records what an archive holds, as after a move and
+/// `cache gc --now`. a recipe's result is looked for in the cache and the folder `mirrors`, never
+/// on a web mirror, since status makes no request.
 fn check(
     project: &Project,
     threads: Threads,
     mirrors: &Mirrors,
-    verify: bool,
+    verify: Option<&Output>,
 ) -> Result<Status, Error> {
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
@@ -408,7 +413,7 @@ fn check(
     unlocked.dedup();
     let mut status = Status {
         project: project.root.clone(),
-        verified: verify,
+        verified: verify.is_some(),
         lockless,
         unlocked,
         removed,
@@ -446,8 +451,8 @@ fn check(
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
-    if verify {
-        status.hashed_only = survey.verify(&project.root, &Scope::All)?;
+    if let Some(output) = verify {
+        status.hashed_only = survey.verify(&project.root, &Scope::All, Some(output))?;
     }
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();

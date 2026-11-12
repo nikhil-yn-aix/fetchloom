@@ -627,18 +627,13 @@ impl Survey {
         Ok(())
     }
 
-    /// as [`Survey::verify_shown`] does, with no bar.
-    pub(crate) fn verify(&mut self, root: &Path, scope: &Scope) -> Result<HashSet<String>, Error> {
-        self.verify_shown(root, scope, None)
-    }
-
     /// hashes every placed file of a dataset in `scope` that still looks as placed and that
     /// nothing here hashed or put in doubt already, so changed bytes that kept their size and
     /// time show too, as `--verify` asks. given `output`, a bar of the bytes moves as each block
     /// is read. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
     /// file joins `damaged`. a file that cannot be read stops the check. returns the files it
     /// found changed, which a plain sync cannot see.
-    pub(crate) fn verify_shown(
+    pub(crate) fn verify(
         &mut self,
         root: &Path,
         scope: &Scope,
@@ -1265,7 +1260,7 @@ mod tests {
         survey.edited.insert("data/edited".to_owned());
 
         let named = Scope::Only(std::collections::BTreeSet::from(["set".to_owned()]));
-        survey.verify_shown(&project.root, &named, None).unwrap();
+        survey.verify(&project.root, &named, None).unwrap();
 
         let (shared, alone): (Vec<_>, Vec<_>) = ["data/copy", "data/link", "data/lone"]
             .into_iter()
@@ -1280,9 +1275,7 @@ mod tests {
             survey.state.files["data/intact"].look,
         );
         assert!(
-            survey
-                .verify_shown(&project.root, &Scope::All, None)
-                .is_err(),
+            survey.verify(&project.root, &Scope::All, None).is_err(),
             "an unreadable file stops it"
         );
     }

@@ -488,7 +488,7 @@ fn settled_unheld(
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
     if args.verify {
-        survey.verify(&project.root, &scope)?;
+        survey.verify(&project.root, &scope, Some(&context.output))?;
     }
     let Some(placement) = place::untouched(project, &manifest, &survey, &seen, false, &scope)?
     else {
@@ -1149,7 +1149,7 @@ pub(super) async fn sync_all(
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
-        survey.verify(&work.project.root, &work.scope)?;
+        survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
     }
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
@@ -1286,7 +1286,7 @@ pub(super) async fn preview_all(
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
-        survey.verify(&work.project.root, &work.scope)?;
+        survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
     }
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen

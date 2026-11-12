@@ -145,7 +145,7 @@ on windows, a folder's listing can keep a hardlink's old size and time after ano
 
 an entry in a locked file's way, such as a link at its path or a file where its folder belongs, stays without `--force`, with kept reason `blocked` and the entry's path as `blocked_by`. with `--force`, sync removes it, a link itself and never what it points to, and places the files; a folder that holds anything stays even then. a file fetchloom placed that no dataset needs now is in nobody's way: sync removes it first, as it removes any such file, so when a pinned file becomes a folder of files, or a folder becomes one file, one sync places the new files. an old file you changed stays, and still keeps the new files out as blocked.
 
-sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` hashes every placed file too: one whose bytes changed though its size and time did not is put back without `--force`, while an edit that shows in its size or time keeps the rule above.
+sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` hashes every placed file too: one whose bytes changed though its size and time did not is put back without `--force`, while an edit that shows in its size or time keeps the rule above. at a terminal, a `Checking` bar shows the bytes hashed so far.
 
 if cache registration fails, sync still succeeds with a warning that gc may not keep the project's files. check cache permissions and run sync again.
 
