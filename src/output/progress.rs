@@ -335,18 +335,12 @@ fn style(
                     .unwrap_or_else(|| {
                         // this run's bytes over its own time, as the time left is
                         let rate = moved.rate(state.pos(), Instant::now());
-                        let left =
-                            state
-                                .len()
-                                .filter(|_| rate > 0.0)
-                                .map_or(Duration::ZERO, |length| {
-                                    #[expect(
-                                        clippy::cast_precision_loss,
-                                        reason = "a time left needs no exact count"
-                                    )]
-                                    let rest = length.saturating_sub(state.pos()) as f64;
-                                    Duration::from_secs_f64(rest / rate)
-                                });
+                        let left = state
+                            .len()
+                            .filter(|_| rate > 0.0)
+                            .map_or(Duration::ZERO, |length| {
+                                time_left(length.saturating_sub(state.pos()), rate)
+                            });
                         measure(done, total, rate, state.elapsed(), left, quiet, stopping)
                     });
                 let width = usize::from(console::Term::stderr().size().1);
@@ -495,13 +489,32 @@ fn measure(
     if settled {
         parts.push(units::speed(rate));
         if foreseen {
-            parts.push(format!("{} left", units::seconds(left)));
+            parts.push(format!("{} left", units::seconds(whole_up(left))));
         }
     }
     if elapsed >= MOMENT && !foreseen && !still {
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
+}
+
+/// how long the `rest` of a transfer takes at `rate` bytes a second, the longest duration when a
+/// rate slow enough makes it too long to count.
+fn time_left(rest: u64, rate: f64) -> Duration {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a time left needs no exact count"
+    )]
+    let rest = rest as f64;
+    Duration::try_from_secs_f64(rest / rate).unwrap_or(Duration::MAX)
+}
+
+/// `wait` in whole seconds, rounded up, so time still to come never reads 0 s.
+fn whole_up(wait: Duration) -> Duration {
+    Duration::from_secs(
+        wait.as_secs()
+            .saturating_add(u64::from(wait.subsec_nanos() > 0)),
+    )
 }
 
 /// what a download's bar says while it waits on something other than the server's bytes: the
@@ -541,12 +554,7 @@ fn next_try(next: u32, of: u32, left: Duration, limit: Option<&str>) -> String {
     }
     parts.push(format!("try {next} of {of}"));
     if !left.is_zero() {
-        // rounded up, so a wait under way never reads 0 s
-        let seconds = left.as_secs() + u64::from(left.subsec_nanos() > 0);
-        parts.push(format!(
-            "next in {}",
-            units::seconds(Duration::from_secs(seconds))
-        ));
+        parts.push(format!("next in {}", units::seconds(whole_up(left))));
     }
     parts.join(" · ")
 }
@@ -1677,6 +1685,29 @@ mod tests {
             ),
             "0.00/136.0 MiB · 2.9 KiB/s · 801 min 00 s left",
             "half a minute of a steady slow rate is worth telling"
+        );
+        let rate = 4.0 * 1_048_576.0;
+        let after = |done, left| measure(done, Some(20 * mib), rate, 5 * second, left, busy, false);
+        assert_eq!(
+            after(13 * mib, Duration::from_millis(1750)),
+            "13.0/20.0 MiB · 4.0 MiB/s · 2 s left",
+            "a time left rounds up, as a wait does"
+        );
+        assert_eq!(
+            after(17 * mib, Duration::from_millis(750)),
+            "17.0/20.0 MiB · 4.0 MiB/s · 1 s left",
+            "a transfer under way never has 0 s left"
+        );
+    }
+
+    /// a rate too slow to count what is left in a duration gives the longest one, where the
+    /// conversion panicked, which a release build turns into an abort.
+    #[test]
+    fn a_time_left_beyond_counting_is_the_longest() {
+        assert_eq!(time_left(u64::MAX, 1e-6), Duration::MAX);
+        assert_eq!(
+            time_left(3 * 1024 * 1024, 2.0 * 1_048_576.0),
+            Duration::from_millis(1500)
         );
     }
 
