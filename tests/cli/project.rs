@@ -136,10 +136,12 @@ fn the_next_step_is_told_only_at_a_terminal() -> Result {
         let sandbox = Sandbox::new()?;
         let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
         if let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? {
+            // the server is on this machine, so anyone who clones lists it in their settings
+            let origin = server.url.trim_end_matches(PATH);
             assert!(
-                screen.contains(
-                    "\n  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`\n"
-                ),
+                screen.contains(&format!(
+                    "\n  next: commit data.toml and data.lock; anyone who clones adds `allowed_origins = [\"{origin}\"]` to their settings file, then runs `fetchloom sync`\n"
+                )),
                 "{screen}"
             );
             for args in [
@@ -2950,10 +2952,11 @@ fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
     let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? else {
         return Ok(());
     };
+    let origin = server.url.trim_end_matches(PATH);
     assert!(
-        screen.contains(
-            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom sync`\n"
-        ),
+        screen.contains(&format!(
+            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones adds `allowed_origins = [\"{origin}\"]` to their settings file, then runs `fetchloom sync`\n"
+        )),
         "{screen}"
     );
     crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", ".gitignore"])?;

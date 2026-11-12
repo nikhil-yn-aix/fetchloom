@@ -1057,9 +1057,9 @@ fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
 }
 
 /// a link typed for add reaches a private address, such as a lab server's, for that run alone.
-/// the add says so with the exact origin and the settings file to list it in, and a clone with an
-/// empty cache is refused, naming the link once and quoting the setting that lets it through,
-/// until `allowed_origins` lists that origin.
+/// the add warns of it with the exact origin and the settings file to list it in, which `-q`
+/// keeps, and a clone with an empty cache is refused, naming the link once and quoting the
+/// setting that lets it through, until `allowed_origins` lists that origin.
 #[test]
 fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1072,16 +1072,16 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
         settings.display()
     );
     let added = sandbox
-        .command(&["add", &server.url])
+        .command(&["-q", "add", &server.url])
         .env("FETCHLOOM_SETTINGS", &settings)
         .output()?;
     let stderr = text(&added.stderr)?;
     assert_eq!(added.status.code(), Some(0), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            "hint: a later run downloads from {origin}, a private address, only once allowed_origins lists it: {line}"
-        )),
-        "{stderr}"
+    assert_eq!(
+        stderr,
+        format!(
+            "warning: a later run downloads from {origin}, a private address, only once allowed_origins lists it\n  help: {line}\n"
+        )
     );
     let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
     let sync = |allowed: Option<&str>| {
@@ -1136,6 +1136,30 @@ fn a_typed_name_on_a_private_address_gets_the_same_hint() -> Result {
             "a later run downloads from {origin}, a private address, only once allowed_origins lists it"
         )),
         "{stderr}"
+    );
+    Ok(())
+}
+
+/// at a terminal, the warning about a private address comes before the closing line, and that
+/// line says what anyone who clones needs before their sync can reach it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_private_link_is_told_before_the_closing_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let origin = server.url.trim_end_matches(PATH);
+    let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? else {
+        return Ok(());
+    };
+    let warned = screen.find(&format!(
+        "warning: a later run downloads from {origin}, a private address"
+    ));
+    let next = screen.find(&format!(
+        "next: commit data.toml and data.lock; anyone who clones adds `allowed_origins = [\"{origin}\"]` to their settings file, then runs `fetchloom sync`\n"
+    ));
+    assert!(
+        warned.zip(next).is_some_and(|(warned, next)| warned < next),
+        "{screen}"
     );
     Ok(())
 }

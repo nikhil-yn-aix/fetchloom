@@ -483,8 +483,8 @@ async fn add_held(
     )
     .await?;
     let [name] = names;
-    render_add(&work, &new_manifest, &name, here, starting)?;
-    tell_private(&work, &parsed.reference);
+    let private = private_origins(&work, [&parsed.reference]);
+    render_add(&work, &new_manifest, &name, here, starting, &private)?;
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -741,7 +741,7 @@ async fn import_new(
         &[],
     )
     .await?;
-    render_add(work, &manifest, name, here, starting)?;
+    render_add(work, &manifest, name, here, starting, &[])?;
     Ok(Report {
         project: work.project.root.clone(),
         datasets: names.to_vec(),
@@ -1047,7 +1047,15 @@ async fn add_list_held(
     .map_err(|error| on_lines(error, &list.name, &lines))?;
     tell_started(&work, starting);
     ignore_data(&work, &manifest)?;
-    tell_list(&work, &manifest, &names, &already, here)?;
+    let private = private_origins(
+        &work,
+        list.lines
+            .iter()
+            .zip(&lines)
+            .filter(|(_, from)| from.dataset.is_some())
+            .map(|((_, parsed), _)| &parsed.reference),
+    );
+    tell_list(&work, &manifest, &names, &already, here, &private)?;
     Ok(Report {
         project: project.root.clone(),
         datasets: names,
@@ -1450,13 +1458,14 @@ impl Promised {
 }
 
 /// the last lines of `add -i`: each dataset added and where its files are, from `here`, then
-/// each one data.toml had already.
+/// each one data.toml had already, then the closing lines, which name the `private` origins.
 fn tell_list(
     work: &Loop<'_>,
     manifest: &Manifest,
     names: &[String],
     already: &[String],
     here: &Path,
+    private: &[url::Origin],
 ) -> Result<(), Error> {
     let output = &work.context.output;
     let lock = work.project.lock()?.unwrap_or_default();
@@ -1485,10 +1494,7 @@ fn tell_list(
         [name] => output.hint(&format!("scripts can find it with `fetchloom path {name}`")),
         _ => output.hint("scripts can find each with `fetchloom path <name>`"),
     }
-    output.next(&format!(
-        "commit {}; anyone who clones runs `fetchloom sync`",
-        committed(work.project)
-    ));
+    close(work, private);
     Ok(())
 }
 
@@ -1752,10 +1758,11 @@ fn render_add(
     name: &str,
     here: &Path,
     starting: bool,
+    private: &[url::Origin],
 ) -> Result<(), Error> {
     tell_started(work, starting);
     ignore_data(work, manifest)?;
-    tell_added(work, manifest, name, here)
+    tell_added(work, manifest, name, here, private)
 }
 
 /// says that the add started its project, when it did.
@@ -1768,24 +1775,75 @@ fn tell_started(work: &Loop<'_>, starting: bool) {
     }
 }
 
-/// says, after an add of a link a person typed, that its origin is on a private address, such as
-/// a lab server's: typing it trusted it for this run alone, so a later run that downloads from
-/// it, here or in a clone, needs `allowed_origins` to list it.
-fn tell_private(work: &Loop<'_>, reference: &Reference) {
-    let Some(origin) = reference.written_origin() else {
-        return;
-    };
+/// the origins of `references`, links an add pinned, that are on a private address, such as a lab
+/// server's, which a later run reaches only once `allowed_origins` lists them.
+fn private_origins<'r>(
+    work: &Loop<'_>,
+    references: impl IntoIterator<Item = &'r Reference>,
+) -> Vec<url::Origin> {
+    let mut private: Vec<url::Origin> = Vec::new();
+    for origin in references.into_iter().filter_map(Reference::written_origin) {
+        if work.net.on_private_address(&origin) && !private.contains(&origin) {
+            private.push(origin);
+        }
+    }
+    private
+}
+
+/// the last lines of an add: a warning for each `private` origin this machine's settings do not
+/// list, since typing its link trusted it for this run alone, then what to commit, and what
+/// anyone who clones does, which for such an origin starts with listing it in their settings.
+fn close(work: &Loop<'_>, private: &[url::Origin]) {
     let context = work.context;
-    if context.settings.allowed_origins.value.contains(&origin)
-        || !work.net.on_private_address(&origin)
-    {
+    let unlisted: Vec<&url::Origin> = private
+        .iter()
+        .filter(|origin| !context.settings.allowed_origins.value.contains(origin))
+        .collect();
+    if let Some((last, rest)) = unlisted.split_last() {
+        let named: Vec<String> = unlisted
+            .iter()
+            .map(|origin| origin.ascii_serialization())
+            .collect();
+        let (what, them) = if rest.is_empty() {
+            ("a private address", "it")
+        } else {
+            ("private addresses", "them")
+        };
+        let mut allowed = context.allowed();
+        allowed
+            .origins
+            .extend(rest.iter().map(|origin| (*origin).clone()));
+        context.output.warn_with(
+            &format!(
+                "a later run downloads from {}, {what}, only once allowed_origins lists {them}",
+                listed(&named)
+            ),
+            &allowed.remedy(last),
+        );
+    }
+    let committed = committed(work.project);
+    if private.is_empty() {
+        context.output.next(&format!(
+            "commit {committed}; anyone who clones runs `fetchloom sync`"
+        ));
         return;
     }
-    context.output.hint(&format!(
-        "a later run downloads from {}, a private address, only once allowed_origins lists it: {}",
-        origin.ascii_serialization(),
-        context.allowed().remedy(&origin)
+    let quoted: Vec<String> = private
+        .iter()
+        .map(|origin| format!("\"{}\"", origin.ascii_serialization()))
+        .collect();
+    context.output.next(&format!(
+        "commit {committed}; anyone who clones adds `allowed_origins = [{}]` to their settings file, then runs `fetchloom sync`",
+        quoted.join(", ")
     ));
+}
+
+/// `words` as a sentence lists them: `a`, `a and b`, or `a, b and c`.
+fn listed(words: &[String]) -> String {
+    match words.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => words.concat(),
+    }
 }
 
 /// restores both project files after a failed add of the datasets `names`, including their
@@ -2011,7 +2069,13 @@ async fn again(
     })
 }
 
-fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str, here: &Path) -> Result<(), Error> {
+fn tell_added(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    name: &str,
+    here: &Path,
+    private: &[url::Origin],
+) -> Result<(), Error> {
     if has_files(work, manifest, name)? {
         let folder = from_here(work.project, here, &plan::folder(manifest, name));
         work.context
@@ -2026,10 +2090,7 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str, here: &Path) -> 
             &format!("{name}, its archives contain no regular files"),
         );
     }
-    work.context.output.next(&format!(
-        "commit {}; anyone who clones runs `fetchloom sync`",
-        committed(work.project)
-    ));
+    close(work, private);
     Ok(())
 }
 
