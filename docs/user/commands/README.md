@@ -49,7 +49,7 @@ every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | `-n`, `--dry-run` | with `add`, `remove`, `drop`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
 | `-h` | print the short help, including after a command: the commands and options used most, or a command's usage, examples and own options, then where the rest is |
 | `--help` | print the whole help, including after a command. the first of `-h` and `--help` on a line decides |
-| `-V`, `--version` | print the version; root-level option |
+| `-V`, `--version` | print the version; with `-v`, also the OS, the architecture, the git commit the build came from and the cache folder; root-level option |
 
 all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists persistent shell settings and color precedence. a [settings file](../reference/environment.md#settings-file), `settings.toml`, keeps settings for every run, and [`fetchloom settings`](settings.md) shows each setting and where it came from.
 

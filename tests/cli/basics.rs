@@ -15,6 +15,28 @@ fn version_prints_the_package_version() -> Result {
     Ok(())
 }
 
+/// `--version -v` names the commit the build came from, as a bug report needs, and the json of
+/// `--version` does too, with or without -v. a test build comes from a git checkout.
+#[test]
+fn the_version_names_the_commit_it_was_built_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let said = text(&sandbox.run(&["--version", "-v"])?.stdout)?;
+    let commit = said
+        .split(" \u{b7} commit ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .ok_or("no commit")?;
+    assert!(
+        matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{said}"
+    );
+    for args in [&["--version", "--json"][..], &["--version", "-v", "--json"]] {
+        let document: Value = serde_json::from_slice(&sandbox.run(args)?.stdout)?;
+        assert_eq!(document["result"]["commit"], commit, "{args:?}");
+    }
+    Ok(())
+}
+
 /// `--help` lists every command and the options every command takes. the introduction above
 /// them is the welcome's, which `a_bare_run_prints_a_short_welcome_with_a_first_command` holds
 /// and `help_opens_like_the_first_run` finds here.

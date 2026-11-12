@@ -566,7 +566,7 @@ pub(crate) fn run() -> ExitCode {
                 "\n{} {} \u{b7} commit {} \u{b7} cache {}",
                 std::env::consts::OS,
                 std::env::consts::ARCH,
-                option_env!("FETCHLOOM_COMMIT").unwrap_or("unknown"),
+                commit().unwrap_or("unknown, built outside git"),
                 // a broken settings file is told by the commands that use it, not by --version
                 Cache::locate(
                     &var,
@@ -898,6 +898,13 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
 #[derive(Serialize)]
 struct About {
     version: &'static str,
+    commit: Option<&'static str>,
+}
+
+/// the commit this build of fetchloom came from, as build.rs found it, or none for a build
+/// outside git.
+fn commit() -> Option<&'static str> {
+    option_env!("FETCHLOOM_COMMIT").filter(|commit| !commit.is_empty())
 }
 
 /// prints `text` for a person, after `banner`, or the version in the document `--json` asked for.
@@ -908,6 +915,7 @@ fn about(context: &Context, banner: &str, text: &str, started: Instant) -> ExitC
     ));
     let about = About {
         version: env!("CARGO_PKG_VERSION"),
+        commit: commit(),
     };
     finish(context, None, Ok(about), started)
 }

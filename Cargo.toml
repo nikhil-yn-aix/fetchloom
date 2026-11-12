@@ -12,6 +12,7 @@ keywords = ["dataset", "research", "reproducibility", "download", "lockfile"]
 categories = ["command-line-utilities", "science"]
 include = [
     "/src/**/*.rs",
+    "/build.rs",
     "/Cargo.toml",
     "/Cargo.lock",
     "/LICENSE",
