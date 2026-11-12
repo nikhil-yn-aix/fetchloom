@@ -13,7 +13,7 @@ pub(crate) use self::competition::Competition;
 pub(super) use self::competition::{may_wrap, refused_download};
 pub(crate) use self::token::{config_folder, locate};
 use super::{Reference, Var, malformed};
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::net::Credential;
 
 /// the host of kaggle's API, and the only host kaggle's credentials go to.
@@ -132,6 +132,15 @@ fn parts(url: &Url) -> Option<Vec<&str>> {
     )
 }
 
+/// the error for a listing of `listed`, a dataset or a competition, that fetchloom cannot use.
+fn unusable(listed: impl fmt::Display, reason: &str) -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        format!("kaggle sent a listing of {listed} that fetchloom cannot use: {reason}"),
+    )
+    .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+}
+
 /// an owner or a dataset name: letters, digits, `-`, `_` and `.`, but not only dots, which would
 /// move the api link to another endpoint.
 fn is_part(text: &str) -> bool {
@@ -180,6 +189,37 @@ mod tests {
     fn link(text: &str) -> Option<(String, Option<String>)> {
         Dataset::from_link(&Url::parse(text).unwrap())
             .map(|(dataset, file)| (dataset.to_string(), file))
+    }
+
+    /// a listing fetchloom cannot use names the dataset or the competition kaggle listed, why,
+    /// and where to report it.
+    #[test]
+    fn an_unusable_listing_names_what_kaggle_listed() {
+        let dataset = Dataset::parse("uciml/iris").unwrap();
+        let competition = Competition::parse("titanic").unwrap();
+        let cases = [
+            (
+                unusable(&dataset, "it sent a page twice"),
+                "kaggle:uciml/iris",
+            ),
+            (
+                unusable(&competition, "it sent a page twice"),
+                "kaggle:competitions/titanic",
+            ),
+        ];
+        for (error, listed) in cases {
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert_eq!(
+                error.message,
+                format!(
+                    "kaggle sent a listing of {listed} that fetchloom cannot use: it sent a page twice"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+            );
+        }
     }
 
     #[test]

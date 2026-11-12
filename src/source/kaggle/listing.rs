@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Dataset, HOST, is_part};
+use super::{Dataset, HOST, is_part, unusable};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Access, Listing, Reference, Remote};
@@ -136,7 +136,10 @@ impl Dataset {
             }
             // each page then adds a file, so the file limit bounds the pages too
             if page.dataset_files.is_empty() && !page.next_page_token.is_empty() {
-                return Err(self.invalid("the listing sent an empty page with more to come"));
+                return Err(unusable(
+                    self,
+                    "the listing sent an empty page with more to come",
+                ));
             }
             for file in page.dataset_files {
                 files.push(self.remote(&version, file)?);
@@ -151,7 +154,7 @@ impl Dataset {
                 return Ok(files);
             }
             if !tokens.insert(page.next_page_token.clone()) {
-                return Err(self.invalid("the listing sent the same page twice"));
+                return Err(unusable(self, "the listing sent the same page twice"));
             }
             token = page.next_page_token;
         }
@@ -176,7 +179,7 @@ impl Dataset {
     fn remote(&self, version: &str, file: File) -> Result<Remote, Error> {
         let mut url = self.api("download")?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the download URL has no path"))?
+            .map_err(|()| unusable(self, "the download URL has no path"))?
             .push(&file.name);
         // without raw, kaggle sends a large file zipped
         url.query_pairs_mut()
@@ -201,7 +204,10 @@ impl Dataset {
                 slug: slug.to_owned(),
                 version: None,
             }),
-            _ => Err(self.invalid(&format!("it names the dataset \"{reference}\""))),
+            _ => Err(unusable(
+                self,
+                &format!("it names the dataset \"{reference}\""),
+            )),
         }
     }
 
@@ -211,7 +217,7 @@ impl Dataset {
             "https://{HOST}/v1/datasets/{action}/{}/{}",
             self.owner, self.slug
         );
-        Url::parse(&text).map_err(|err| self.invalid(&format!("{text} is not a link: {err}")))
+        Url::parse(&text).map_err(|err| unusable(self, &format!("{text} is not a link: {err}")))
     }
 
     /// the dataset's page on kaggle.com.
@@ -249,14 +255,6 @@ impl Dataset {
                 "run the same command again later. if it keeps happening, check the dataset at {}",
                 self.page()
             ))
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("kaggle sent a listing of {self} that fetchloom cannot use: {reason}"),
-        )
-        .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
     }
 }
 

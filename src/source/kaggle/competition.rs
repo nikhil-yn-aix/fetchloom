@@ -8,7 +8,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{HOST, is_part, malformed, parts, selected};
+use super::{HOST, is_part, malformed, parts, selected, unusable};
 use crate::auth::Account;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
@@ -163,7 +163,10 @@ impl Competition {
             let page: Page = crate::source::json(self, &response)?;
             // each page then adds a file, so the file limit bounds the pages too
             if page.files.is_empty() && !page.next_page_token.is_empty() {
-                return Err(self.invalid("the listing sent an empty page with more to come"));
+                return Err(unusable(
+                    self,
+                    "the listing sent an empty page with more to come",
+                ));
             }
             for file in page.files {
                 files.push(self.remote(file)?);
@@ -181,7 +184,7 @@ impl Competition {
                 return Ok(files);
             }
             if !tokens.insert(page.next_page_token.clone()) {
-                return Err(self.invalid("the listing sent the same page twice"));
+                return Err(unusable(self, "the listing sent the same page twice"));
             }
             token = page.next_page_token;
         }
@@ -205,7 +208,7 @@ impl Competition {
     fn remote(&self, file: File) -> Result<Remote, Error> {
         let mut url = self.api("data/download")?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the download URL has no path"))?
+            .map_err(|()| unusable(self, "the download URL has no path"))?
             .push(&file.name);
         Ok(Remote {
             path: file.name,
@@ -228,14 +231,14 @@ impl Competition {
             .as_ref()
             .and_then(Competition::from_link)
             .map(|(competition, _)| competition)
-            .ok_or_else(|| self.invalid(&format!("it names the competition \"{reference}\"")))
+            .ok_or_else(|| unusable(self, &format!("it names the competition \"{reference}\"")))
     }
 
     /// an API URL about this competition, such as
     /// `https://api.kaggle.com/v1/competitions/data/list/titanic`.
     fn api(&self, action: &str) -> Result<Url, Error> {
         let text = format!("https://{HOST}/v1/competitions/{action}/{}", self.slug);
-        Url::parse(&text).map_err(|err| self.invalid(&format!("{text} is not a link: {err}")))
+        Url::parse(&text).map_err(|err| unusable(self, &format!("{text} is not a link: {err}")))
     }
 
     /// kaggle's answer without an account, or with a key it does not take.
@@ -266,14 +269,6 @@ impl Competition {
             Some(response) => said(error, response),
             None => error,
         }
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("kaggle sent a listing of {self} that fetchloom cannot use: {reason}"),
-        )
-        .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
     }
 }
 
