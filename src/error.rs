@@ -28,6 +28,10 @@ pub(crate) enum Kind {
     ProjectChanged,
     /// a check found data.lock out of date with data.toml.
     Outdated,
+    /// a strict check found data the run asked for not ready to use: a file kept with other bytes
+    /// than data.lock pins, one not in place yet, a recipe's result not here, or a dataset
+    /// data.lock does not pin as data.toml asks.
+    NotReady,
     /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
     /// can pin, since it runs the project's code.
     BuildNeeded,
@@ -61,6 +65,7 @@ impl Kind {
             Kind::ProjectInvalid => "project.invalid",
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
+            Kind::NotReady => "data.not_ready",
             Kind::BuildNeeded => "build.needed",
             Kind::BuildFailed => "build.failed",
             Kind::BuildDiffers => "build.differs",
@@ -70,7 +75,7 @@ impl Kind {
 
     pub(crate) fn exit_code(self) -> u8 {
         match self {
-            Kind::Unconfirmed | Kind::Outdated => 1,
+            Kind::Unconfirmed | Kind::Outdated | Kind::NotReady => 1,
             Kind::Usage => 2,
             Kind::ReferenceInvalid
             | Kind::ReferenceUnresolved
@@ -401,6 +406,7 @@ mod tests {
             ProjectInvalid,
             ProjectChanged,
             Outdated,
+            NotReady,
             BuildNeeded,
             BuildFailed,
             BuildDiffers,

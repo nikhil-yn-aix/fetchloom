@@ -2793,3 +2793,56 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     );
     Ok(())
 }
+
+/// a strict sync keeps an edited file as a plain sync does, but fails with `data.not_ready`,
+/// naming it and what to do, as `status --check` does without changing anything. both pass once
+/// the file holds the pinned bytes again.
+#[test]
+fn a_kept_edit_fails_a_strict_sync_and_status_check_until_it_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let edited = b"sepal_length,species\n999,user-edited\n";
+    edit(&placed, edited)?;
+    for args in [
+        &["--json", "sync", "--offline", "--strict"][..],
+        &["--json", "status", "--check"][..],
+    ] {
+        let output = sandbox.run(args)?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "data.not_ready", "{args:?}: {document}");
+        assert_eq!(
+            error["details"],
+            serde_json::json!([
+                "data/iris/iris.csv changed since fetchloom placed it: save what you need, then `fetchloom sync --force` replaces it"
+            ]),
+            "{args:?}: {document}"
+        );
+        assert_eq!(
+            error["fix"],
+            serde_json::Value::Null,
+            "{args:?}: {document}"
+        );
+        assert!(document["result"].is_object(), "{args:?}: {document}");
+        assert_eq!(fs::read(&placed)?, edited, "{args:?}");
+    }
+    let forced = sandbox.run(&["sync", "--offline", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    for args in [
+        &["sync", "--offline", "--strict"][..],
+        &["status", "--check"][..],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    assert_eq!(fs::read(&placed)?, V1);
+    Ok(())
+}

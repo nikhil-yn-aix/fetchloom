@@ -4,11 +4,11 @@
 
 ```sh
 fetchloom --json lock --check
-fetchloom --json --yes sync --locked
-fetchloom --json status
+fetchloom --json --yes sync --locked --strict
+fetchloom --json status --check
 ```
 
-stop when the lock check fails. after sync, inspect kept conflicts before using the data. status differences and kept conflicts still exit 0.
+stop when the lock check fails. `--strict` and `--check` fail with `data.not_ready`, exit 1, while the data is not ready to use, as when sync kept an edited file. without them, status differences and kept conflicts exit 0, so inspect them before using the data.
 
 ## reading an answer
 

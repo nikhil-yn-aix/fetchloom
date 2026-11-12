@@ -26,6 +26,8 @@ use crate::recipe;
 use crate::threads::Threads;
 use crate::units;
 
+pub(super) mod ready;
+
 /// the most rows a terminal shows of each kind of difference. a pipe, a file and `--json` get
 /// them all.
 const SHOWN: usize = 20;
@@ -149,8 +151,10 @@ struct Differing {
     pinned: Option<PathBuf>,
 }
 
-/// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
-pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
+/// `status`, hashing every placed file when `verify` asks, as `status --verify` does, and failing
+/// with `data.not_ready` when `strict` asks, as `status --check` does, and the data is not ready
+/// to use.
+pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Status, Error> {
     let project = super::project::find(&context.output)?;
     let status = check(
         &project,
@@ -216,6 +220,9 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
             "`{}` lists where the files of each kept rebuild that differ from data.lock are",
             super::project::command("status -v")
         ));
+    }
+    if strict {
+        ready::ready(&ready::of_status(&status)).map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
 }

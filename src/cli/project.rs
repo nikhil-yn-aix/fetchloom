@@ -329,7 +329,28 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
     ))
 }
 
+/// `sync`, and with `--strict` the `data.not_ready` error, keeping what the sync did, when the
+/// data it was asked for is not ready to use once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
+    let strict = args.strict.then(|| args.names.clone());
+    let report = sync_as_asked(context, args).await?;
+    let (Some(names), Some(placement)) = (strict, &report.placement) else {
+        return Ok(report);
+    };
+    let project = Project {
+        root: report.project.clone(),
+    };
+    let scope = if names.is_empty() {
+        Scope::All
+    } else {
+        Scope::Only(names.into_iter().collect())
+    };
+    let unready = super::status::ready::after_sync(&project, &scope, placement)?;
+    super::status::ready::ready(&unready).map_err(|error| error.with_report(&report))?;
+    Ok(report)
+}
+
+async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
     // a dry run changes nothing, so like `lock --check` it needs no hold

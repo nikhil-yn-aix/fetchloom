@@ -20,6 +20,7 @@ pass `--json` to every command: stdout is then one JSON document, with no colors
 | one dataset, leaving the others as they are | `fetchloom sync <name> --json` | the other datasets keep their pins and files |
 | code needs a dataset's path | `fetchloom path <name>`, or `<name>/<file>` | stdout is the absolute path, `result.path` with `--json`. it syncs that dataset first when needed; `fetchloom path <name> --locked` never changes data.lock |
 | check data/ against the lock | `fetchloom status --json` | each array in `result` lists one kind of difference, and `unplaced` lists datasets with `place = false`, which is none. it exits 0 either way. `fetchloom status --verify --json` also hashes every placed file |
+| fail unless the data is ready to use, as before a script reads it | `fetchloom status --check --json`, or `fetchloom sync --strict --json` | exit 0, or 1 with `data.not_ready`, each file or dataset in the way and what makes it ready in `errors[0].details`. nothing is replaced: an edited file stays |
 | check data.lock against data.toml, as in CI | `fetchloom lock --check --json` | exit 0, or 1 with `lock.outdated` and what changed in `errors[0].details`; it changes nothing |
 | words, not a reference | `fetchloom search <words> --json` | use a `reference` from `result.candidates`; `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
 | download once, without a project | `fetchloom get <ref> --dir <folder> --json`; `--select`, `--exclude` and `--no-extract` choose files as with `add`, and `fetchloom get -i links.txt --json` reads a list of links | `result.folder` and `result.files`; for several links, `result.items` |
@@ -37,7 +38,7 @@ read all of stdout as one document: in a pipe it is one line, and at a terminal 
 
 never parse stderr. `-q`, `-v`, `--color` and `--progress` change only what a person reads there; `--progress` prints a plain line as a download or a lookup starts, then now and then during a long one. `fetchloom help --json` lists every command and option.
 
-a `status` that finds differences and a `sync` that keeps edits both exit 0, so read the arrays and `result.placement.kept` before using the data. a successful `path` does not prove the bytes match the lock. `cache gc` and `cache verify` keep partial results in `result.not_removed` and `result.unreadable`, each with a path and its cause.
+a `status` that finds differences and a `sync` that keeps edits both exit 0, so read the arrays and `result.placement.kept` before using the data, or ask for `--check` and `--strict`, which make them exit 1 with `data.not_ready` instead. a successful `path` does not prove the bytes match the lock. `cache gc` and `cache verify` keep partial results in `result.not_removed` and `result.unreadable`, each with a path and its cause.
 
 ## exit codes
 
@@ -45,6 +46,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 |---|---|---|
 | 1 | `unconfirmed` | a question no one answered: a big download, too little disk, data to `push` that asked for an account or terms, what `cache gc --inputs` frees, or a side to keep after a git merge. ask the user; then `--yes`, or `fetchloom lock --ours <name>` or `--theirs <name>` |
 | 1 | `lock.outdated` | data.lock is missing or does not pin what data.toml asks. review the change with the user before `fetchloom lock`, which pins what the sources serve today. a clone with no data.lock should get it from the project's owner |
+| 1 | `data.not_ready` | `sync --strict` or `status --check` found the data not ready to use. tell the user each line of `errors[0].details`: replacing an edited file with `fetchloom sync --force` or building a recipe is their call. `fix` is `fetchloom sync` only when a plain sync puts everything in place |
 | 2 | `usage` | fix the command line as `help` says |
 | 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose from `result.candidates` |
 | 20 | `network.*`, `offline.missing` | retry later. offline, go online or name a folder mirror that holds the files. `network.refused` for a private address quotes the `allowed_origins` value that would let it through: ask the user whether they trust that server. in mirror-only mode, tell the user which files no mirror holds, from `errors[0].details` |

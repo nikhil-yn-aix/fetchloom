@@ -7,6 +7,7 @@ fetchloom sync
 fetchloom sync iris
 fetchloom sync --offline
 fetchloom sync --locked
+fetchloom sync --strict
 fetchloom sync --verify
 fetchloom sync --force --dry-run
 ```
@@ -24,6 +25,7 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 | `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. it finds changes by size and time; add `--verify` for changes that kept both |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI. given names, only their entries are checked |
 | `--verify` | check the SHA-256 of every placed file, and put back those that changed though their size and time did not |
+| `--strict` | fail with `data.not_ready`, exit 1, when the data asked for is not ready to use once the sync is done, naming each file or dataset with what makes it ready. the sync does the same work and keeps edits as without it, as [local changes](#local-changes) shows |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
 [global options](README.md#global-options) also apply.
@@ -135,6 +137,19 @@ a dataset's own folder, or the whole data folder, deleted to start afresh is no 
 
 without `--force`, edited files and untracked files at pinned paths stay in place, and JSON lists them in `result.placement.kept`. other extra files are not listed there; [status](status.md) finds them. the warning about each names the `fetchloom sync --force` that replaces it. a sync that placed files ends with where a script finds the dataset, as `` next: `fetchloom path cows` tells your scripts where cows is``.
 
+a script that must not read an edited input asks for `--strict`. the sync does the same work and keeps the edit, then fails with `data.not_ready`, exit 1, while the data is not ready to use: a file kept with other bytes than data.lock pins, a recipe's result not on this machine or a mirror, or a recipe data.lock does not pin as building it now would make. `status --check` answers the same question without changing anything. stderr after `iris.csv` was edited, from a real run:
+
+```text
+warning: data/iris/iris.csv has changed, so it stays
+  help: `fetchloom sync --force` replaces it
+     Synced 1 dataset into data, 1 file left unchanged; see the warnings above
+error: the data is not ready to use
+  data/iris/iris.csv changed since fetchloom placed it: save what you need, then `fetchloom sync --force` replaces it
+  help: each line says what makes it ready
+```
+
+once the file holds the pinned bytes again, `sync --strict` exits 0. with `--json`, `errors[0].kind` is `data.not_ready` and `result` holds the sync's report as without `--strict`.
+
 save your files before using `--force`. it overwrites edited and untracked files at pinned paths and names each one, as in `Replaced data/iris/iris.csv · discarding your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete extra files, or edited files no dataset needs now. a file it replaces keeps its bytes until the pinned files are in place: sync renames it to `.fetchloom-<hex>.old` in the same folder, deletes that once the pinned files have their names, and renames it back if placing fails or is stopped. a run cut off midway can leave such a file, which status lists as extra.
 
 a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made through any link to it, after making the read-only file writable, changes that shared copy, so sync treats it as damage, not as a project's edit: it downloads the file again and, without `--force`, puts the pinned file back in each project whose file is still that copy. each of those projects keeps the changed copy beside it as `<path>.changed`, or `<path>.changed.2` when that name is taken, so the edit is not lost; status lists it as extra until you delete it. each project's `.changed` file is its own copy, so editing one changes no other. a file saved anew, as most editors save, is the project's own and stays an edit. to edit a dataset's files, set `copy = true` for it. the warning reads:
@@ -219,13 +234,13 @@ a checkout you may not write, such as a read-only mount in a job or a container,
 
 ## exit codes
 
-0 includes success with kept conflicts or a registration warning. a name data.toml does not have exits 2. missing data offline exits 20, and downloaded bytes that differ from the pins exit 30. an unanswered question exits 1. under `--locked`, a missing or stale lock exits 1 with `lock.outdated` before anything changes, as `there is no data.lock, so nothing pins the files' bytes yet` for a missing one, and a recipe whose result is not built, or not on this machine, exits 60 with `build.needed`, as [recipe results](#recipe-results) says. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 includes success with kept conflicts or a registration warning, unless `--strict` asks to fail with `data.not_ready`, exit 1, while the data is not ready to use. a name data.toml does not have exits 2. missing data offline exits 20, and downloaded bytes that differ from the pins exit 30. an unanswered question exits 1. under `--locked`, a missing or stale lock exits 1 with `lock.outdated` before anything changes, as `there is no data.lock, so nothing pins the files' bytes yet` for a missing one, and a recipe whose result is not built, or not on this machine, exits 60 with `build.needed`, as [recipe results](#recipe-results) says. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
-| success leaves an edited input | sync preserves conflicts | inspect status and save the edit before choosing `--force` |
+| success leaves an edited input | sync preserves conflicts | inspect status and save the edit before choosing `--force`; a script asks for `sync --strict`, which fails instead |
 | offline sync needs resolution | the manifest changed or pins are missing | prepare the project online before disconnecting |
 | `error: offline, and 2 files data.lock names are not in the cache`, though a web mirror holds them | offline asks no web mirror, and the help says so, as `offline asks no web mirror, so http://127.0.0.1:8000 was not asked` | go online, or use what needs no network: a cache that holds them in `FETCHLOOM_CACHE`, or a folder mirror that holds them with `--mirror <folder>` |
 | `error: flowers was imported from files, and this machine's cache does not hold them` offline, exit 20 with `offline.missing` | no link fetches an [imported](add.md#files-on-this-machine) file, so going online does not help, and the help offers no download | copy its files from the folder they came from into the dataset's folder by hand, then sync, or sync with `--mirror <folder>` naming a folder [mirror](../mirrors.md) that holds them; JSON's `fix` is null |

@@ -880,6 +880,10 @@ pub(crate) struct Drop {
 
 /// put the files data.lock lists into the data folder
 #[derive(Clone, Debug, clap::Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a yes or no on the command line"
+)]
 pub(crate) struct Sync {
     /// the datasets to sync, by their names in data.toml; all of them when none is named. the
     /// others keep their entries in data.lock and their files as they are
@@ -902,6 +906,11 @@ pub(crate) struct Sync {
     /// size and time did not
     #[arg(long, help_heading = "options")]
     pub(crate) verify: bool,
+
+    /// fail when the data asked for is not ready to use afterwards, as when sync kept an
+    /// edited file, naming each, for scripts. the sync and the edit stay as without it
+    #[arg(long, help_heading = "options")]
+    pub(crate) strict: bool,
 }
 
 /// list files that are missing, changed locally or extra
@@ -911,6 +920,11 @@ pub(crate) struct Status {
     /// too
     #[arg(long, help_heading = "options")]
     pub(crate) verify: bool,
+
+    /// fail when the data is not ready to use, naming each file or dataset in the way, as
+    /// sync --strict does, for scripts. it still changes nothing
+    #[arg(long, help_heading = "options")]
+    pub(crate) check: bool,
 }
 
 /// bring data.lock in line with data.toml

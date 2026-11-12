@@ -5,7 +5,7 @@ exit codes group failures, while error kinds identify the cause.
 | exit | error kinds |
 |---|---|
 | 0 | success |
-| 1 | `unconfirmed`, `lock.outdated` |
+| 1 | `unconfirmed`, `lock.outdated`, `data.not_ready` |
 | 2 | `usage` |
 | 10 | `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid` |
 | 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
@@ -25,6 +25,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 |---|---|
 | `unconfirmed` | check the download size, or the room a build says its steps need, and pass `--yes` only if you approve; after a git merge, choose a side for each dataset named with `fetchloom lock --ours <name>` or `--theirs <name>`, which `--yes` never does. for `cache gc --inputs`, check `result.inputs` and the folder mirrors it relies on, and pass `--yes` only once those mirrors are to stay |
 | `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock. from a `--locked` run, `errors[0].fix` is null, as it is for every error such a run ends with whose next step would change data.lock. from `fetchloom build --check` or `--locked`, a recipe data.lock does not pin as building it now would make is outdated too: build it deliberately, then commit data.lock and data.lock.d |
+| `data.not_ready` | `sync --strict` or `status --check` found the data asked for not ready to use. `errors[0].details` names each file or dataset with what makes it ready, as ``data/iris/iris.csv changed since fetchloom placed it: save what you need, then `fetchloom sync --force` replaces it``, and the run replaced nothing. `errors[0].fix` is `fetchloom sync` only when a plain sync puts everything in place; otherwise it is null, since replacing an edit, pinning or building is the user's call |
 | `usage` | check arguments and [environment settings](environment.md) |
 | `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules |
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |
@@ -46,7 +47,7 @@ a cached archive that cannot be read because the filesystem failed uses `local.i
 
 ## success with differences
 
-`status` exits 0 when it finds differences. `sync` exits 0 when it preserves conflicts. inspect status arrays and `result.placement.kept` before using the data. a cache registration warning also leaves sync successful.
+`status` exits 0 when it finds differences. `sync` exits 0 when it preserves conflicts. inspect status arrays and `result.placement.kept` before using the data, or ask for `status --check` and `sync --strict`, which exit 1 with `data.not_ready` while the data is not ready to use: a file with other bytes than data.lock pins, one not in place yet, a recipe's result not on this machine, or a dataset data.lock does not pin as data.toml asks. a cache registration warning also leaves sync successful.
 
 `cache verify` returns 30 when it finds changed bytes, or 50 for unreadable paths when no bytes changed. `cache gc` returns 50 if any cleanup fails. both retain their partial results in [JSON output](json-output.md#command-results).
 

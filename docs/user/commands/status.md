@@ -5,6 +5,7 @@
 ```sh
 fetchloom status
 fetchloom status --verify
+fetchloom status --check
 fetchloom status --json
 ```
 
@@ -17,6 +18,7 @@ fetchloom status [options]
 | option | effect |
 |---|---|
 | `--verify` | check the SHA-256 of every placed file, so a change that kept its size and time shows too |
+| `--check` | fail with `data.not_ready`, exit 1, when the data is not ready to use, naming each file or dataset with what makes it ready, as `sync --strict` does after a sync. it still changes nothing |
 
 [global options](README.md#global-options) also apply.
 
@@ -108,13 +110,13 @@ datasets and archives are never cut short, and JSON includes every difference.
 
 ## exit codes
 
-0 means status completed, even when it found differences. scripts must inspect every array. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
+0 means status completed, even when it found differences. scripts must inspect every array, or ask for `--check`, which exits 1 with `data.not_ready` while the data is not ready to use: a dataset data.lock does not pin as data.toml asks, or no data.lock at all, a recipe that needs a build or whose result is not here, or a file data.lock places that is missing, outdated, damaged, edited, blocked or held by a file fetchloom did not place. extra files, those no dataset needs and datasets with `place = false` leave the data ready. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
-| exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON |
+| exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON, or use `status --check` |
 | a file shows as damaged that you did not touch | an edit through another project's link changed the cache's copy you share | run `fetchloom sync`; use `copy = true` on datasets you edit |
 | fewer paths appear in the terminal | a terminal shows 20 rows of each kind, and a gone folder as one row | run `fetchloom status \| less`, or use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |
