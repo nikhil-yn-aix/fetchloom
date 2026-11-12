@@ -728,9 +728,9 @@ mod tests {
                 format!("{named} printed more than 64 KiB"),
             ),
             (
-                &format!("exec '{}'", missing.display()),
+                "printf 'printed-secret'\nexit 3",
                 PATIENCE,
-                format!("{named} exited with code 127"),
+                format!("{named} exited with code 3"),
             ),
         ] {
             let program = script(folder.path(), body, patience);
