@@ -328,7 +328,12 @@ fn ready_path(
     }
     // reject a known impossible member before a missing file can trigger downloads.
     let answer = planned_path(project, manifest, &planned, name, file)?;
-    let survey = Survey::read(project, &manifest.data_dir, context.threads);
+    let survey = Survey::read_within(
+        project,
+        &manifest.data_dir,
+        &[plan::folder(manifest, name)],
+        context.threads,
+    );
     let doubted = survey.doubted(&project.root, cache)?;
     let ready = planned
         .targets

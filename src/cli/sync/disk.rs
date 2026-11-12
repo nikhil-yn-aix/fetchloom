@@ -119,14 +119,39 @@ impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
     pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
+        Self::surveyed(project, data_dir, None, threads)
+    }
+
+    /// [`Survey::read`] of the folders `within` alone, paths in the project inside `data_dir`:
+    /// it lists only them and keeps only the state's records inside them, so it answers for the
+    /// files there, and its state is never written back.
+    pub(crate) fn read_within(
+        project: &Project,
+        data_dir: &str,
+        within: &[String],
+        threads: Threads,
+    ) -> Survey {
+        Self::surveyed(project, data_dir, Some(within), threads)
+    }
+
+    fn surveyed(
+        project: &Project,
+        data_dir: &str,
+        within: Option<&[String]>,
+        threads: Threads,
+    ) -> Survey {
         let started = nanos(SystemTime::now());
-        let (state, written) = project.state();
+        let (mut state, written) = project.state();
+        let within = within.map(|folders| outermost(data_dir, folders));
+        if let Some(folders) = &within {
+            state.files.retain(|path, _| inside_any(path, folders));
+        }
         let Scanned {
             found: disk,
             temporaries,
             entries,
             writable,
-        } = scan(&project.root, data_dir, threads);
+        } = scan(&project.root, data_dir, within.as_deref(), threads);
         let mut survey = Survey {
             threads,
             started,
@@ -149,7 +174,9 @@ impl Survey {
         survey.hash_racy(&project.root, written, other_device);
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
-        survey.outside = outside(&project.root, data_dir, &survey.state, &survey.disk);
+        if within.is_none() {
+            survey.outside = outside(&project.root, data_dir, &survey.state, &survey.disk);
+        }
         survey
     }
 
@@ -211,7 +238,8 @@ impl Survey {
     fn not_placed(&self, root: &Path, folder: &str) -> Vec<String> {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
-        visit_files(root, folder, &mut entries, |_, path, temporary, _| {
+        let start = vec![(root.join(folder), folder.to_owned())];
+        visit_files(start, &mut entries, |_, path, temporary, _| {
             if !temporary && !self.state.files.contains_key(&path) {
                 others.push(path);
             }
@@ -912,36 +940,40 @@ struct Scanned {
 
 /// every file under the data folder, how it looks and whether it is writable, by its path in the
 /// project, the paths of those under the hidden names placement stages files in, and the folders,
-/// links and special files beside them. links are neither followed nor touched.
-fn scan(root: &Path, data_dir: &str, threads: Threads) -> Scanned {
+/// links and special files beside them. links are neither followed nor touched. with `within`,
+/// only those folders are listed, and what stands on the way down to them.
+fn scan(root: &Path, data_dir: &str, within: Option<&[String]>, threads: Threads) -> Scanned {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut scanned = Scanned::default();
     let mut pending = Vec::new();
     let mut last_parent = None;
     let mut parents = 0;
     let mut entries = HashMap::new();
-    visit_files(
-        root,
-        data_dir,
-        &mut entries,
-        |entry, path, temporary, parent| {
-            if last_parent != Some(parent) {
-                // DirEntry retains its parent handle on unix; bound distinct parents too.
-                if parents == 8 {
-                    scan_pending(&mut pending, threads, &mut scanned);
-                    parents = 0;
-                }
-                parents += 1;
-                last_parent = Some(parent);
-            }
-            pending.push((entry, path, temporary));
-            if pending.len() == 4096 {
+    let starts = match within {
+        None => vec![(root.join(data_dir), data_dir.to_owned())],
+        Some(folders) => folders
+            .iter()
+            .filter(|folder| way_down(root, data_dir, folder, &mut entries, &mut scanned))
+            .map(|folder| (root.join(folder), folder.clone()))
+            .collect(),
+    };
+    visit_files(starts, &mut entries, |entry, path, temporary, parent| {
+        if last_parent != Some(parent) {
+            // DirEntry retains its parent handle on unix; bound distinct parents too.
+            if parents == 8 {
                 scan_pending(&mut pending, threads, &mut scanned);
                 parents = 0;
-                last_parent = None;
             }
-        },
-    );
+            parents += 1;
+            last_parent = Some(parent);
+        }
+        pending.push((entry, path, temporary));
+        if pending.len() == 4096 {
+            scan_pending(&mut pending, threads, &mut scanned);
+            parents = 0;
+            last_parent = None;
+        }
+    });
     scan_pending(&mut pending, threads, &mut scanned);
     scanned.entries = entries;
     span.record("files", scanned.found.len());
@@ -977,13 +1009,91 @@ fn scan_pending(
     }
 }
 
-fn visit_files(
+/// whether `folder`, a path in the project inside `data_dir`, is a folder reached through real
+/// folders, never links, as a scan of the whole data folder would reach it. what stands on the
+/// way is recorded as that scan records it.
+fn way_down(
     root: &Path,
     data_dir: &str,
+    folder: &str,
+    entries: &mut HashMap<String, Entry>,
+    scanned: &mut Scanned,
+) -> bool {
+    let Some(below) = folder.strip_prefix(data_dir).and_then(|rest| {
+        if rest.is_empty() {
+            Some(None)
+        } else {
+            rest.strip_prefix('/').map(Some)
+        }
+    }) else {
+        return false;
+    };
+    let Some(below) = below else {
+        return true;
+    };
+    let mut path = data_dir.to_owned();
+    for part in below.split('/') {
+        path.push('/');
+        path.push_str(part);
+        let Ok(found) = fs::symlink_metadata(root.join(&path)) else {
+            return false;
+        };
+        let kind = found.file_type();
+        if kind.is_dir() {
+            entries.insert(path.clone(), Entry::Folder);
+            continue;
+        }
+        if kind.is_file() {
+            if place::is_copy_temporary(part) {
+                scanned.temporaries.push(path.clone());
+            }
+            if !found.permissions().readonly() {
+                scanned.writable.insert(path.clone());
+            }
+            scanned.found.insert(path, Look::of(&found));
+        } else if kind.is_symlink() {
+            entries.insert(path, Entry::Link);
+        } else {
+            entries.insert(path, Entry::Special);
+        }
+        return false;
+    }
+    true
+}
+
+/// `folders`, paths in the project inside `data_dir`, without those inside another of them,
+/// which listing that other one covers.
+fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
+    let mut outer: Vec<String> = Vec::new();
+    let mut sorted: Vec<&String> = folders.iter().collect();
+    sorted.sort_by_key(|folder| folder.len());
+    for folder in sorted {
+        if folder == data_dir {
+            return vec![folder.clone()];
+        }
+        if !outer.iter().any(|kept| is_inside(folder, kept)) {
+            outer.push(folder.clone());
+        }
+    }
+    outer
+}
+
+/// whether `path` is `folder` or inside it, both paths in the project.
+fn is_inside(path: &str, folder: &str) -> bool {
+    path.strip_prefix(folder)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// whether `path` is inside one of `folders`.
+fn inside_any(path: &str, folders: &[String]) -> bool {
+    folders.iter().any(|folder| is_inside(path, folder))
+}
+
+fn visit_files(
+    mut folders: Vec<(std::path::PathBuf, String)>,
     others: &mut HashMap<String, Entry>,
     mut visit: impl FnMut(fs::DirEntry, String, bool, usize),
 ) {
-    let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
     let mut parent = 0;
     while let Some((folder, relative)) = folders.pop() {
         parent += 1;
@@ -1089,7 +1199,7 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        let found = scan(dir.path(), "data", Threads::default()).found;
+        let found = scan(dir.path(), "data", None, Threads::default()).found;
         assert_eq!(found.len(), 512);
     }
 
@@ -1116,7 +1226,7 @@ mod tests {
                 .unwrap();
         }
         let serial = Threads::read(&|_| Some("1".into())).unwrap();
-        let expected = scan(root, "data", serial);
+        let expected = scan(root, "data", None, serial);
         assert_eq!(expected.found.len(), 513);
         assert_eq!(
             expected.temporaries,
@@ -1124,9 +1234,9 @@ mod tests {
         );
         for count in ["1", "8"] {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
-            let actual = scan(root, "data", threads);
+            let actual = scan(root, "data", None, threads);
             assert_eq!(actual, expected);
-            assert_eq!(scan(root, "absent", threads), Scanned::default());
+            assert_eq!(scan(root, "absent", None, threads), Scanned::default());
         }
     }
 
@@ -1171,6 +1281,64 @@ mod tests {
             checked: 0,
             adopted: false,
         }
+    }
+
+    /// a survey of named folders lists them alone, and what stands on the way down to them, as
+    /// a survey of the whole data folder would see it: a link there is never followed.
+    #[test]
+    fn a_survey_within_folders_lists_and_keeps_only_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let root = &project.root;
+        for path in [
+            "data/a/x",
+            "data/a/inner/y",
+            "data/b/z",
+            "data/ab/w",
+            "data/f",
+        ] {
+            fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            fs::write(root.join(path), path).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("data/a"), root.join("data/link")).unwrap();
+        let mut state = State::default();
+        for path in ["data/a/x", "data/a/inner/y", "data/b/z", "data/ab/w"] {
+            let placed = record(root, path, path.as_bytes(), Method::Copy);
+            state.files.insert(path.to_owned(), placed);
+        }
+        project.write_state(&state).unwrap();
+        let sorted = |paths: Vec<&String>| {
+            let mut paths: Vec<String> = paths.into_iter().cloned().collect();
+            paths.sort();
+            paths
+        };
+        let whole = Survey::read(&project, "data", Threads::default());
+        assert_eq!(whole.disk.len(), 5);
+        assert_eq!(whole.state.files.len(), 4);
+        let within = [
+            "data/a",
+            "data/a/inner",
+            "data/link",
+            "data/f/g",
+            "data/missing",
+        ]
+        .map(String::from);
+        let survey = Survey::read_within(&project, "data", &within, Threads::default());
+        assert_eq!(
+            sorted(survey.disk.keys().collect()),
+            ["data/a/inner/y", "data/a/x", "data/f"]
+        );
+        assert_eq!(
+            sorted(survey.state.files.keys().collect()),
+            ["data/a/inner/y", "data/a/x"]
+        );
+        assert_eq!(survey.entries.get("data/a"), Some(&Entry::Folder));
+        #[cfg(unix)]
+        assert_eq!(survey.entries.get("data/link"), Some(&Entry::Link));
+        assert!(survey.edited.is_empty());
     }
 
     #[test]
@@ -1882,7 +2050,7 @@ mod tests {
             temporaries: leftovers,
             entries,
             ..
-        } = scan(dir.path(), "data", Threads::default());
+        } = scan(dir.path(), "data", None, Threads::default());
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
         assert_eq!(leftovers, Vec::<String>::new());
@@ -1895,7 +2063,9 @@ mod tests {
             ])
         );
         assert_eq!(
-            scan(dir.path(), "missing", Threads::default()).found.len(),
+            scan(dir.path(), "missing", None, Threads::default())
+                .found
+                .len(),
             0
         );
     }
