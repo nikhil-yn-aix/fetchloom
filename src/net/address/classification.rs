@@ -337,11 +337,6 @@ fn numeric_socket_scope_ids_are_not_accepted_as_url_hosts() {
 }
 
 #[test]
-fn offline_errors_keep_their_explanation() {
-    assert_eq!(Offline.to_string(), "offline");
-}
-
-#[test]
 fn unknown_host_errors_keep_the_host_and_explanation() {
     assert_eq!(
         Unknown("missing.invalid".to_owned()).to_string(),

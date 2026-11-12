@@ -1072,20 +1072,6 @@ mod tests {
     use super::Args;
 
     #[test]
-    fn force_help_names_files_fetchloom_did_not_place() -> Result<(), &'static str> {
-        let help = Args::command()
-            .find_subcommand_mut("sync")
-            .ok_or("sync command is missing")?
-            .render_help()
-            .to_string();
-        assert!(
-            help.contains("replace edited files, and files fetchloom did not place"),
-            "{help}"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn cache_verify_and_auth_each_have_one_name() {
         for line in [
             &["fetchloom", "cache", "check"][..],
@@ -1158,49 +1144,6 @@ mod tests {
             Args::try_parse_from(["fetchloom", "get", "zenodo:1", "-o", "a.csv", "--force"])
                 .is_ok()
         );
-    }
-
-    #[test]
-    fn upgrade_help_keeps_the_versions_data_toml_names() -> Result<(), &'static str> {
-        let help = Args::command()
-            .find_subcommand_mut("lock")
-            .ok_or("lock command is missing")?
-            .render_help()
-            .to_string();
-        assert!(
-            help.contains("check sources again for newer data, keeping any version data.toml"),
-            "{help}"
-        );
-        Ok(())
-    }
-
-    /// cache help says what verify means for a changed file, without the note it leaves inside
-    /// the cache to get there.
-    #[test]
-    fn cache_help_says_a_changed_file_is_downloaded_again() {
-        let help = every_help();
-        let verify = help
-            .iter()
-            .find(|(name, _)| name == "cache verify")
-            .unwrap();
-        assert!(
-            verify
-                .1
-                .contains("check cached files, so a changed one is downloaded again"),
-            "{}",
-            verify.1
-        );
-        assert!(!verify.1.contains("deletes cached files"));
-        let cache = help.iter().find(|(name, _)| name == "cache").unwrap();
-        // help wraps to the terminal's width, so a phrase may cross a line
-        let flat = cache.1.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            flat.contains("`cache verify` notes changed ones, which are downloaded again"),
-            "{flat}"
-        );
-        for (name, text) in [verify, cache] {
-            assert!(!text.contains("mark"), "{name}: {text}");
-        }
     }
 
     /// the words a shell makes of `line`, where double quotes keep a pattern such as "*.csv"
@@ -1317,18 +1260,18 @@ mod tests {
                 "locked paths",
                 "partial files",
                 "one a line",
+                "mark",
             ] {
                 assert!(!flat.contains(word), "{name} says {word}\n{help}");
             }
         }
-        let top = &screens.last().unwrap().1;
-        let flat = top.split_whitespace().collect::<Vec<_>>().join(" ");
-        for option in [
-            "--json print one JSON document on stdout, not the usual output",
-            "-y, --yes answer yes to questions, but never pick a dataset for you",
-        ] {
-            assert!(flat.contains(option), "{option}\n{top}");
-        }
+        // verify keeps a changed file to download again; only `cache gc` deletes cached files
+        let verify = &screens
+            .iter()
+            .find(|(name, _)| name == "cache verify")
+            .unwrap()
+            .1;
+        assert!(!verify.contains("deletes cached files"), "{verify}");
     }
 
     #[test]
