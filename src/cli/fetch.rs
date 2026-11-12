@@ -195,6 +195,21 @@ impl Overall {
     }
 }
 
+/// the bytes a download whose server told `total` needs room for on the disk holding the cache:
+/// what is left to transfer from `resumed`, and when it `unpacks` an archive whose members nobody
+/// listed, the whole archive once more, the least its files can take. a lower bound: an archive
+/// may unpack to much more.
+fn room_needed(total: Option<u64>, resumed: u64, unpacks: bool) -> u64 {
+    total.map_or(0, |total| {
+        let left = total.saturating_sub(resumed);
+        if unpacks {
+            left.saturating_add(total)
+        } else {
+            left
+        }
+    })
+}
+
 /// `sizes` added up, and how many of them are not known.
 fn sized(sizes: impl Iterator<Item = Option<u64>>) -> (u64, usize) {
     sizes.fold((0, 0), |(total, unknown), size| match size {
@@ -403,14 +418,19 @@ impl<'a> Watch<'a> {
         let free = self.approval.cache.as_deref().map(crate::space::free);
         // a download that may have found its bytes unchanged was not asked about before
         if unknown || self.job.fetch.held.is_some() {
+            let needed = room_needed(total, resumed, unknown && self.job.fetch.unpack);
             // a disk without room asks instead, and its question names the size too
             if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
                 && !self.yes
-                && crate::space::short(left, free).is_some()
+                && crate::space::short(needed, free).is_some()
             {
-                let doing = format!("downloading {}", self.job.label);
+                let doing = if needed > left {
+                    format!("downloading and unpacking {}", self.job.label)
+                } else {
+                    format!("downloading {}", self.job.label)
+                };
                 let free = free.unwrap_or_default();
-                self.approve(|| super::ask_room(self.output, &doing, left, free, cache))?;
+                self.approve(|| super::ask_room(self.output, &doing, needed, free, cache))?;
             } else if left > self.approval.above {
                 let size = units::size(left);
                 self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
@@ -1452,6 +1472,24 @@ mod tests {
             "12 files · 1 done",
             "four more may be under way"
         );
+    }
+
+    /// an archive whose size only its server told, and which is unpacked once it is in, needs
+    /// room for what is left to transfer and for its files once more, at least the archive's
+    /// size, when nobody listed them; a file kept as it came, or not an archive, needs only the
+    /// transfer.
+    #[test]
+    fn an_archive_whose_server_told_its_size_needs_room_to_unpack_it() {
+        const MB: u64 = 1_000_000;
+        assert_eq!(room_needed(Some(MB), 0, true), 2 * MB);
+        assert_eq!(room_needed(Some(MB), 400_000, true), 1_600_000);
+        assert_eq!(room_needed(Some(MB), 0, false), MB);
+        assert_eq!(
+            room_needed(None, 5, true),
+            0,
+            "received bytes tell the rest"
+        );
+        assert_eq!(room_needed(Some(u64::MAX), 0, true), u64::MAX);
     }
 
     /// a lone download that finds bytes an earlier run kept says so on its bar while it gets
