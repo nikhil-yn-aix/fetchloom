@@ -46,6 +46,10 @@ pub(super) struct Report {
     /// the files those datasets need on the mirror, each once, and their bytes.
     objects: u64,
     bytes: u64,
+    /// the files of those the push set out to write, as the mirror lacked them or held a damaged
+    /// copy, and their bytes.
+    planned: u64,
+    planned_bytes: u64,
     /// the files written, and their bytes.
     copied: u64,
     copied_bytes: u64,
@@ -1160,7 +1164,8 @@ enum Outcome<'a> {
     DryRun,
 }
 
-/// what `planned` comes to, as it ended: what it wrote, or what it would have written.
+/// what `planned` comes to, as it ended: what it set out to write, and what it wrote, or with a
+/// dry run what it would write.
 fn report(planned: &Planned, outcome: Outcome<'_>) -> Report {
     let dry_run = matches!(outcome, Outcome::DryRun);
     let mut report = Report::empty(planned.target.clone(), dry_run);
@@ -1185,10 +1190,12 @@ fn report(planned: &Planned, outcome: Outcome<'_>) -> Report {
         let put = match (there, &mut puts) {
             (There::Present, _) => Some(Put::Present),
             (_, Some(puts)) => puts.next().copied(),
-            (There::Damaged, None) => Some(Put::Replaced),
-            (There::Absent, None) => Some(Put::Copied),
+            // a dry run counts what it would write; a push that stopped wrote nothing
+            (There::Damaged, None) if dry_run => Some(Put::Replaced),
+            (There::Absent, None) if dry_run => Some(Put::Copied),
+            (There::Damaged | There::Absent, None) => None,
         };
-        report.tally(needed, put);
+        report.tally(needed, *there, put);
     }
     if let Some(changes) = &mut report.changes {
         (changes.download, changes.unpack) = downloads(planned);
@@ -1227,6 +1234,8 @@ impl Report {
             datasets: Vec::new(),
             objects: 0,
             bytes: 0,
+            planned: 0,
+            planned_bytes: 0,
             copied: 0,
             copied_bytes: 0,
             present: 0,
@@ -1244,8 +1253,9 @@ impl Report {
         }
     }
 
-    /// counts `needed`, which writing it gave `put`, or which was not written.
-    fn tally(&mut self, needed: &Needed, put: Option<Put>) {
+    /// counts `needed`, which the mirror held as `there` when the push planned, and which writing
+    /// it gave `put`, or which was not written.
+    fn tally(&mut self, needed: &Needed, there: There, put: Option<Put>) {
         let size = needed.item.size;
         if let Source::List(_) = needed.source {
             if matches!(put, Some(Put::Copied | Put::Replaced)) {
@@ -1258,6 +1268,10 @@ impl Report {
         }
         self.objects += 1;
         self.bytes += size;
+        if there != There::Present {
+            self.planned += 1;
+            self.planned_bytes += size;
+        }
         match put {
             Some(Put::Present) => {
                 self.present += 1;

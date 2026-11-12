@@ -218,6 +218,7 @@ fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {
     let result = &json(&output)?["result"];
     assert_eq!(result["dry_run"], true);
     assert_eq!(result["started"], true);
+    assert_eq!(result["planned"], 6);
     assert_eq!(result["copied"], 6);
     assert_eq!(result["copied_bytes"], bytes());
     assert_eq!(result["present"], 0);
@@ -326,8 +327,11 @@ fn gated_data_asks_first() -> Result {
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "unconfirmed");
-    // what the push would have written, and what it asks about
-    assert_eq!(document["result"]["copied"], 6);
+    // nothing written, what the push set out to write, and what it asks about
+    assert_eq!(document["result"]["copied"], 0);
+    assert_eq!(document["result"]["copied_bytes"], 0);
+    assert_eq!(document["result"]["planned"], 6);
+    assert_eq!(document["result"]["planned_bytes"], bytes());
     assert_eq!(
         document["result"]["asks"],
         serde_json::json!([{"dataset": "iris", "access": "terms"}])
@@ -356,6 +360,52 @@ fn gated_data_asks_first() -> Result {
         .output()?;
     ok(&yes)?;
     assert_eq!(json(&yes)?["result"]["copied"], 1);
+    Ok(())
+}
+
+/// a push stopped while it downloads what the cache lacks, before it writes, copied nothing: its
+/// result says so, beside what it set out to write.
+#[cfg(unix)]
+#[test]
+fn a_stopped_push_says_it_copied_nothing_of_its_plan() -> Result {
+    use crate::support::{Part, reply};
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 1 << 20];
+    let (release, wait) = std::sync::mpsc::channel();
+    let mut held = reply(
+        "200 OK",
+        &[
+            ("Content-Length", &body.len().to_string()),
+            ("ETag", "\"v1\""),
+        ],
+        &body[..1 << 16],
+    );
+    held.push(Part::Wait(wait));
+    let server = Server::start("/files/big.bin", vec![file(&body, "\"v1\""), held])?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let root = sandbox.work().join("mirror");
+    let child = sandbox
+        .command_in(&folder, &["--json", "--yes", "push", "--to"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    server.wait_for_requests(2)?;
+    let sent = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()?;
+    assert!(sent.success());
+    let output = child.wait_with_output()?;
+    drop(release);
+    assert_eq!(output.status.code(), Some(130), "{}", text(&output.stderr)?);
+    let result = &json(&output)?["result"];
+    assert_eq!(result["copied"], 0, "{result}");
+    assert_eq!(result["planned"], 1);
+    assert_eq!(result["planned_bytes"], body.len());
+    assert!(!root.exists());
     Ok(())
 }
 
