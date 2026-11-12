@@ -726,6 +726,9 @@ async fn import_held(
         units::count(walked.files.len() as u64, "file", "files"),
         units::size(walked.bytes())
     );
+    // the walk's list of files is read for the last time above; freed here, it stays out of the
+    // peak of placing them
+    drop(walked);
     if let Some(name) = supplied {
         let work = Loop::new(context, project, net, cache).telling(&name);
         let imported = Imported {

@@ -33,6 +33,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | placement | each dataset's folder found with one lookup | sync of 40,000 datasets 9.68 to 6.33 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
+| placement | an import's list of walked files freed before its files are placed | import of 100,000 files peak memory 0.890 on glibc, 0.908 on musl; wall flat | kept | [import](#an-import-of-100000-files-2026-11-12) |
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
@@ -493,6 +494,23 @@ the fixtures are the scale map's datasets-n, n datasets of one file, and files-n
 | `list <name>`, 100,000 files | 203 to 188 ms | 0.930 [0.907, 0.946], 0.851 | 153 to 149 ms | 0.973 [0.966, 0.989], 0.997 |
 
 at 1 and 10, the 32 cases on both builds came out between 0.99 and 1.05 at the median of 30 rounds. three intervals started above 1: `list <name>` of one dataset on glibc, `--json list` of 10 datasets and `list <name>` of 10 files on musl. 100 more rounds of each gave 1.003 [0.997, 1.012], 1.006 [0.996, 1.014] and 1.017 [0.998, 1.035]. peak memory at 1 and 10 stayed the same, or fell to 0.984 for the table on musl. every view printed the same bytes as before at every size. kept: what is left of a list's time is mostly reading data.toml and data.lock.
+
+## an import of 100,000 files, 2026-11-12
+
+`add <folder>` kept the list of files its walk found, each with its absolute path in the folder, until the end of the command, though the line telling what it copied was its last use: the list stayed alive while the import was pinned and its files placed, which is where the peak of a large import falls. the scale map's replay of 100,000 files found 12.4 MB of those paths and 7.3 MB of the list's spare room still live at the peak. the list is now freed once that line is written. the import tests hold the lines, warnings and pins it gives.
+
+the fixtures are the scale map's files-n folders, hardlinked into a folder of their own, run as `--json --offline --yes add <folder> --as imported` into an empty project with an empty cache of its own on ext4 over nvme, both made again before each run and deleted after it, outside the clock. one release build chose the old or new way by `FETCHLOOM_EXP_IMPORT_DROP`, measured as in [a merge of many datasets](#a-merge-of-many-datasets-2026-11-12): 30 rounds at 1 and 10 files, 30 and 20 at 10,000 on glibc and musl, 16 at 100,000. peak memory is the run's maximum RSS, from wait4.
+
+| files | build | wall, old to new | new/old | peak memory, old to new | new/old |
+|---:|---|---|---|---|---|
+| 1 and 10 | glibc | 8 and 13 ms, the same | 1.002 [0.989, 1.018], 1.010 [0.975, 1.024] | 14.0 MiB, the same | 1.000 |
+| 1 and 10 | musl | 13 and 12 ms, the same | 0.979 [0.974, 1.012], 0.999 [0.990, 1.014] | 18.6 MiB, the same | 1.000 |
+| 10,000 | glibc | 0.427 to 0.428 s | 1.002 [0.990, 1.013] | 31.9 to 30.4 MiB | 0.955 [0.948, 0.961] |
+| 10,000 | musl | 0.433 to 0.437 s | 1.007 [0.992, 1.026] | 118.5 to 120.7 MiB | 0.974 [0.953, 1.017] |
+| 100,000 | glibc | 4.61 to 4.64 s | 0.986 [0.979, 1.011] | 180.9 to 160.7 MiB | 0.890 [0.887, 0.890] |
+| 100,000 | musl | 4.30 to 4.34 s | 1.001 [0.988, 1.020] | 216.3 to 194.6 MiB | 0.908 [0.898, 0.927] |
+
+kept: 11% less peak memory for 100,000 files on glibc and 9% on musl, below the replay's 17% of heap, with no time interval away from 1. the import's time is mostly copying the files into the cache.
 
 ## evidence limits
 
