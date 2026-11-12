@@ -1,6 +1,6 @@
 # cache folder
 
-the shared cache stores downloaded bytes by SHA-256 and keeps local records for reuse and recovery.
+the cache is one folder that keeps each file by its SHA-256, with the records fetchloom needs to reuse and check them. [cache](../../dev/architecture/cache.md) in the developer guide has the mechanics.
 
 ```sh
 fetchloom cache
@@ -42,23 +42,13 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   tmp/
 ```
 
-`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. `gc.lock` is empty; commands that use the cache hold it with a shared OS lock and `cache gc` holds it alone, so gc waits for them ([runs that use the cache](../commands/cache.md#runs-that-use-the-cache)). `reminded` is empty; its modification time is when fetchloom last [checked for bytes no project needs](../commands/cache.md#reminder). opening, verifying and collecting the cache ignore unknown top-level files. on macos, first initialization also creates `.metadata_never_index` for spotlight and sets the time machine backup-exclusion attribute when the filesystem supports it. these markers belong to the cache root, not to each object.
+`CACHEDIR.TAG` lets backup tools skip the cache, and on macos the cache is also kept out of spotlight and time machine. `gc.lock` is empty; commands that use the cache share a lock on it and `cache gc` takes it alone, as [runs that use the cache](../commands/cache.md#runs-that-use-the-cache) says. `reminded` is empty; its modification time is when fetchloom last [checked for bytes no project needs](../commands/cache.md#reminder).
 
-objects hold read-only payloads. sealing sets an object's modification time just past its birth time, so a later modification time means it was written since, and it is hashed before use. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup.
-
-the next unpack or gc removes a staging folder as soon as it can take that lock.
-
-where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule.
-
-random names use 16 hexadecimal digits. unclaimed loose `.new` files use the age rule.
-
-each step of a [recipe](../recipes.md) runs in a `.build` folder under `tmp/`, which only you may enter on linux and macos: `in/` holds a copy of each dataset it reads and `out/` what it writes. its build holds its `lock` as an archive's staging does, removes the folder when the step ends, and the next build or gc removes one a killed build left once it can take that lock.
-
-`tmp/` also holds atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
+`objects/` holds the files, read-only. a file whose modification time moved since it entered the cache was written since, and is hashed before use. `tmp/` holds work in progress: an archive's files while they unpack, each recipe step's `in/` and `out/` folders, which only you may enter on linux and macos, and records being written. a run that was killed leaves its folder there, and the next run or gc removes it.
 
 ## URL and partial records
 
-`urls/` records are JSON written for revalidated, unpinned URLs, and for each link a `get` kept one file from when only its site can list it, keyed by the link and the patterns that chose the file, with the file's path in `name`, so an offline `get` can do without the listing. a lock takes a record's `sha256` without a request when an S3 listing gives the link with the record's strong `validators.etag` and `size`, and the cache still holds that object or the files it unpacked to. gc removes a record once neither its object nor the record of what it unpacked to is left:
+`urls/` records what a link served last, so a later run can ask the server only whether it changed, and an offline `get` can do without a site's listing. gc removes a record once neither its file nor what it unpacked to is left:
 
 | field | value |
 |---|---|
@@ -70,25 +60,17 @@ each step of a [recipe](../recipes.md) runs in a `.build` folder under `tmp/`, w
 | `validators.last_modified` | `Last-Modified` string, or null |
 | `validators.date` | response `Date` string, or null; required in every record |
 
-partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `url` uses the same fingerprint, so signed-link credentials stay out of records. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
-
-lookup requires the matching fingerprint and restores the request URL only in memory. cache bodies and other metadata are not sanitized output.
-
-`ranges` lists pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; it is an empty array when there are none. every declared URL, validator and partial-record field is required. optional values are explicit nulls, not missing fields. incomplete records are discarded as hints.
-
-progress is saved about once a second while writing. a complete known-size download of at most 1 MiB, started at offset 0 without retained ranges, needs no closing checkpoint; an interrupted prefix still gets one. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
-
-the `.lock` file coordinates writers; its contents are unused. a run waiting for another writer first flushes and publishes its own finished downloads, so runs sharing a cold cache do not wait for each other's unpublished files. a run also publishes a finished download within about a second, when no more downloads come to share its flush, so a run that wants it does not wait for the other run's longest download. a run that finishes a download removes its `.lock` as it lets go of it, while it still holds the lock, so a finished download leaves nothing under `partial/`; a stopped one keeps its `.lock` beside the `.part` and `.json` it can resume from. gc removes the `.part` and `.json` of a download nobody holds once they are a day old, or at once with `cache gc --now`, and the `.lock` of any download nobody holds, such as one a killed run left, without counting it among the freed leftovers. a run that opened a `.lock` just before it was removed notices, once it holds the lock, that the name now points elsewhere or nowhere, and opens the name again, so two runs never own one download. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
+a link is named by a fingerprint, the SHA-256 of its text, so a secret in a signed link never reaches a record. a download a run stopped keeps its bytes as `partial/<digit>/<fingerprint>.part`, with a `.json` record of how many bytes arrived, their SHA-256, the file's stated length, the server's validators and any pieces finished past them, so the next run can continue it; its `.lock` keeps two runs from writing one download. gc removes an unfinished download nobody came back for after a day, or at once with `cache gc --now`. without file locks, downloads cannot continue across runs.
 
 ## other indexes
 
-- an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records an MD5 that a download of that URL computed and checked, and is used only for that URL, including when its object is no longer cached. a download pinned by SHA-256 records none.
-- an unpack record uses the [tree encoding](data-lock.md#the-tree-hash). its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
-- a result record, `builds/<key>/<tree>`, is the tree of what a recipe's step made, in the [tree encoding](data-lock.md#the-tree-hash), under the key of its recipe, so a record proves itself against the `tree` `data.lock` pins. a key may have several, from a step that does not make the same files each time. a build reuses the newest record whose every object is in the cache, and on linux and macos only one you wrote that no one else may write: fetchloom writes records only their owner may change, whatever the umask or the folder's ACL, since someone who could rewrite one and rename it to its new hash could pair a key with any files. a build holds `builds/<key>/lock` while it runs that key's step, so a second build of the key waits and reuses the result. gc keeps the objects and the record of every result a registered project's `data.lock` pins, and removes any other record once it is a day old, or at once with `--now`, as a build that failed before writing data.lock leaves one; a key left with no record loses its lock and its folder too.
-- a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is a file named by an object's SHA-256. its first line is empty until a repair writes a time there; each later line records a copy found changed as four numbers: device and inode on unix, or volume and file index on windows, then size and modification time in nanoseconds since 1970. a project's hardlink that is still one of those copies, edited through some link, is put back by sync rather than kept as an edit; at most 16 copies are kept. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one that no longer holds its bytes. its modification time records when. before a replacement, fetchloom refreshes the mark with an empty first line, keeping its time as when the change was found, so the old object stays in doubt. only once the new copy holds the object's name does it write that copy's modification time on the first line, in nanoseconds since 1970; a failed replacement leaves that line empty, so the changed object is hashed and refused. the cache trusts objects written well after that time, and a project's hardlink that is the very file now in the cache is the replacement, so only projects linking the old copy recheck it. gc removes a mark only after its object is gone and no registered project needs it. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains what other projects do with a mark.
+- `stated/md5/` maps an MD5 a source stated for a link to the SHA-256 and size of the bytes that matched it, as `<sha256> <size>`, so a later download of that link can be skipped.
+- `unpacked/` holds what each archive unpacked to, in the [tree encoding](data-lock.md#the-tree-hash), checked against the `unpacks_to` data.lock pins.
+- `builds/<key>/<tree>` records what a recipe's step made, in the same encoding, under its key, so a later build can reuse it. on linux and macos a build reuses only records you wrote and no one else may change.
+- `projects/` registers each project a sync placed files for, as JSON naming its folder, so `cache gc` knows what it needs.
+- `changed/` holds a mark for each cached file found changed, as by an edit through a hardlink, naming the copies found changed, so sync can put each project's link back. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains how they are used.
 
-archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. a registered project whose data.toml is gone, as when its folder was deleted, needs none, since gc forgets it. deletion failures, or a project's data.toml or data.lock that is there but cannot be read, leave them cached. members remain ordinary objects. [cache commands](../commands/cache.md) explain retention and gc.
+an archive's own bytes leave the cache once its files are in, unless a registered project needs it packed. [cache commands](../commands/cache.md) explain retention and gc.
 
 project-local lock and placement records live in [the project folder](project-folder.md), outside the cache.
 
@@ -98,8 +80,4 @@ project-local lock and placement records live in [the project folder](project-fo
 
 a cache folder you may not write to fails a download with `local.io` (exit 50), and the message names the folder that refused, such as `<cache>/partial`. fix its permissions, or set `FETCHLOOM_CACHE` to a folder you may write to.
 
-on unix, registrations and change marks flush their containing directory after replacement, as well as their file contents. a reported directory-flush failure means the new name exists but its persistence is uncertain; fix the storage error and retry. a registration turns read-only once its directory is flushed, so a sync that finds it read-only and unchanged writes nothing; one still writable has its directory flushed again first. this directory guarantee is not extended to windows here. a lost new cache object name after a power cut causes a later fetch, so it does not substitute for a project's pinned lock.
-
-an unreadable `changed/` folder or change mark stops sync and get with `local.io` (exit 50), before they place files or record a completed sync. fix storage access and read/search permissions, run `fetchloom cache verify`, then retry. keep the marks: deleting them can hide damage from another project's hardlinks.
-
-objects are not rehashed on every use, only once their time moved since sealing. run `fetchloom cache verify` to check every object's bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.
+an unreadable `changed/` folder or change mark stops sync and get with `local.io`, exit 50, before they place files. fix the storage or its permissions, run `fetchloom cache verify`, then retry; keep the marks, since deleting them can hide damage from another project's hardlinks. a file the cache got just before a power cut can be lost and is then downloaded again, so the cache never stands in for a project's pins.
