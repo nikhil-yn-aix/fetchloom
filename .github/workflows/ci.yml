@@ -154,7 +154,10 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.151
+      # the crate has no code that differs by processor, so the arm64 linux and windows runners
+      # would lint what the x86_64 jobs of their system already lint
       - run: cargo clippy --all-targets --locked -- -D warnings
+        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15'
       - run: cargo clippy --release --locked -- -D warnings
         if: matrix.os == 'ubuntu-24.04'
       - run: cargo build --locked --example recipe_step
