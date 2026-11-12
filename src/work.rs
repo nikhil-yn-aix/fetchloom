@@ -30,13 +30,10 @@ pub(crate) struct Work {
     /// their bytes.
     pub(crate) data_folder_objects: AtomicU64,
     pub(crate) data_folder_bytes: AtomicU64,
-    /// the objects the run wrote to the cache, by the first 8 bytes of each digest, so placing
-    /// tells them from objects the cache held already. no clock can: a filesystem that keeps
-    /// whole seconds, or a file server with its own clock, dates an object the run wrote before
-    /// the run began. 8 bytes keep a million objects apart but for a chance near one in 37
-    /// million, and a clash only lowers two counts: of two written objects that share a key,
-    /// `objects_written` counts one, and a file placed from an object the cache held is left out
-    /// of `placed_from_cache` when a written object shares that object's key.
+    /// the objects the run wrote, by the first 8 bytes of each digest, so placing tells them from
+    /// objects the cache held. no clock can: a disk keeping whole seconds or a file server's clock
+    /// may date a new one before the run began. a million objects clash by a chance near one in 37
+    /// million, which only undercounts.
     wrote: Mutex<HashSet<u64>>,
 }
 

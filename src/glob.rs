@@ -1,6 +1,5 @@
-//! glob patterns for `select` and `exclude`. a pattern matches the whole path inside a dataset:
-//! `*` and `?` stay within one folder, `**` spans any number of folders, and `[...]` matches one
-//! character from a set.
+//! glob patterns for `select` and `exclude`, matching a whole path inside a dataset: `*` and `?`
+//! stay in one folder, `**` spans any number of folders, and `[...]` matches one of a set.
 
 use std::collections::HashMap;
 
@@ -100,15 +99,13 @@ impl Glob {
         reachable[names.len()]
     }
 
-    /// whether the pattern names files only by their name, with no folder in it, which matches
-    /// only files at the top of a dataset.
+    /// whether the pattern has no folder in it, so it matches only files at a dataset's top.
     pub(crate) fn is_top_level_only(&self) -> bool {
         self.parts.len() == 1 && matches!(self.parts[0], Part::Name(_))
     }
 
-    /// the folder every path the pattern matches lies in, written out in full: `data/train` for
-    /// `data/train/**` or `data/train/*.csv`. none when a match may lie anywhere, as for `*.csv`
-    /// or `**/x.csv`.
+    /// the folder every match lies in, written out, as `data/train` for `data/train/*.csv`; none
+    /// when a match may lie anywhere, as for `*.csv` or `**/x.csv`.
     pub(crate) fn folder(&self) -> Option<String> {
         let mut names = Vec::new();
         // the last part names the files, so only the parts before it can name a folder
@@ -138,10 +135,8 @@ impl Glob {
         names.map(|names| names.join("/"))
     }
 
-    /// whether a path below `folder`, a `/`-separated path inside a dataset or empty for its
-    /// top, may match: `folder` is on the way to the folders [`Glob::scope`] names, one of them,
-    /// or below one when the pattern has a `**`. false only when nothing below it can match, so
-    /// a listing may skip the folder.
+    /// whether a path below `folder`, inside a dataset or empty for its top, may match: false only
+    /// when nothing below it can, so a listing may skip the folder.
     pub(crate) fn may_reach(&self, folder: &str) -> bool {
         let (names, deep) = self.scoped();
         let folders: Vec<&str> = folder.split('/').filter(|name| !name.is_empty()).collect();
@@ -158,10 +153,9 @@ impl Glob {
             && Glob::lead(&names, &folders)
     }
 
-    /// the folders every match lies in: the pattern's folder names before the file's, up to its
-    /// first `**`, each without escapes where it has no wildcard, such as `sub-*/anat` for
-    /// `sub-*/anat/*.nii.gz` and `data` for `data/**`. empty for a pattern that matches only
-    /// files at the top; none when a match may lie anywhere, as for `**/x.csv`.
+    /// the folders every match lies in: the names before the file's up to the first `**`, each
+    /// unescaped where it has no wildcard, as `sub-*/anat` for `sub-*/anat/*.nii.gz`. empty for
+    /// a pattern of top files only; none when a match may lie anywhere, as for `**/x.csv`.
     pub(crate) fn scope(&self) -> Option<String> {
         let (names, deep) = self.scoped();
         if names.is_empty() && deep {
@@ -200,9 +194,8 @@ impl Glob {
     }
 }
 
-/// patterns that match a path when any one of them does. a pattern without wildcards, as `drop`
-/// writes one for each file it leaves out, is looked up by its path, and only the others are
-/// tried in turn, so ten thousand of them cost one lookup per path.
+/// patterns that match a path when any one does. a pattern without wildcards, as `drop` writes one
+/// per file, is looked up by path, so ten thousand cost one lookup per path.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Set {
     /// every pattern, as written.
@@ -236,7 +229,6 @@ impl Set {
         self.globs.is_empty()
     }
 
-    /// the patterns as written.
     pub(crate) fn globs(&self) -> &[Glob] {
         &self.globs
     }
@@ -261,9 +253,8 @@ impl Set {
 /// the most folders listed one by one; past it one listing of everything costs fewer requests.
 const MOST_FOLDERS: usize = 8;
 
-/// the folders that hold every path `patterns` can match, none nested in another, so a source
-/// can list those instead of everything. none when there are no patterns, when one can match
-/// outside any folder, or when they name more folders than are worth listing one by one.
+/// the folders, none nested, holding every path `patterns` can match, so a source can list those
+/// alone; none without patterns, when one matches outside any folder, or past [`MOST_FOLDERS`].
 pub(crate) fn folders(patterns: &[Glob]) -> Option<Vec<String>> {
     if patterns.is_empty() {
         return None;
@@ -531,8 +522,7 @@ mod tests {
         }
     }
 
-    /// a listing may skip the folders a pattern cannot reach: its top-level files need the top
-    /// alone, and a wildcard folder only the folders it matches.
+    /// top-level files need the top alone, and a wildcard folder only the folders it matches.
     #[test]
     fn a_pattern_reaches_only_the_folders_its_matches_can_lie_in() {
         let reach = |text: &str, folder: &str| Glob::new(text).unwrap().may_reach(folder);
@@ -627,9 +617,8 @@ mod tests {
         }
     }
 
-    /// pruning is safe: whatever path a pattern matches, each folder on its way, the top
-    /// included, may reach it, and the pattern's scope holds it, unless a `**` matched no folder
-    /// at the end, as `data/**` matches a file named `data`.
+    /// each folder on a match's way, the top included, may reach it and the scope holds it, but
+    /// where a `**` matched no folder at the end, as `data/**` matches a file named `data`.
     #[test]
     fn no_folder_holding_a_match_is_skipped() {
         let names = ["a", "b", "ab", "a*b", "x[1]", "é.csv", "a.csv"];
@@ -666,8 +655,7 @@ mod tests {
         assert!(matched > 1_000, "only {matched} matches were tried");
     }
 
-    /// drop writes one escaped path per file it leaves out, so a set of ten thousand of them
-    /// must cost a lookup per path, not ten thousand tries.
+    /// drop writes one escaped path per file it leaves out, so ten thousand must cost one lookup.
     #[test]
     fn literal_patterns_are_looked_up_rather_than_tried() {
         let mut globs: Vec<Glob> = (0..10_000)

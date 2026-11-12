@@ -5,8 +5,7 @@ use clap_mangen::Man;
 use roff::{Roff, bold, roman};
 
 /// the page as the definition renders it: the top command's synopsis, description and options,
-/// then each command with what it does. it names no version, so only a change to the help
-/// changes it.
+/// then each command. it names no version, so only a change to the help changes it.
 fn rendered() -> String {
     let definition = crate::cli::definition();
     let commands: Vec<(String, String)> = definition

@@ -72,12 +72,9 @@ impl From<Duration> for Took {
     }
 }
 
-/// what downloads brought, from each file's size and the bytes this run moved for it:
-/// `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the rate counts only the
-/// bytes moved, so a resumed file does not look faster than the link, and only the time until
-/// the last byte arrived, so a slow disk does not make the link look slow either. a disk that
-/// took a second or more to keep the files after that is named with the whole time:
-/// `1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`.
+/// what downloads brought, as `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the
+/// rate counts only bytes this run moved, until the last arrived, so a resume or a slow disk never
+/// skews it; a disk that kept the files a second or more after is named, with the whole time.
 pub(crate) fn downloaded(
     files: impl IntoIterator<Item = (u64, u64)>,
     took: impl Into<Took>,
@@ -261,7 +258,7 @@ pub(crate) fn bytes(text: &str) -> Option<u64> {
     }
     let multiplier = 1024_u64.pow(power);
     let whole = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
-    // carry decimal digits from the right so rounding needs no precision-sized integer.
+    // carry decimal digits from the right so rounding needs no precision-sized integer
     let fraction = fraction.bytes().rev().fold(0, |tail, digit| {
         (tail + u64::from(digit - b'0') * multiplier) / 10
     });
@@ -272,8 +269,7 @@ pub(crate) fn bytes(text: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// a path below the home folder reads from `~`; the home folder alone is `~`, and a path
-    /// elsewhere, or a home of `/`, stays whole.
+    /// the home folder alone is `~`, and a path elsewhere, or a home of `/`, stays whole.
     #[cfg(unix)]
     #[test]
     fn a_path_below_home_reads_from_the_tilde() {
@@ -349,8 +345,7 @@ mod tests {
         }
     }
 
-    /// a long list names its first few and counts the rest with thousands apart, and a short one
-    /// is listed whole.
+    /// with thousands apart, and a short one is listed whole.
     #[test]
     fn long_lists_name_a_few_and_count_the_rest() {
         let words: Vec<String> = (1..=1_204).map(|n| n.to_string()).collect();
@@ -424,8 +419,7 @@ mod tests {
         );
     }
 
-    /// a closing line says the whole time a person waited, naming the part the disk took to keep
-    /// the files once their last byte arrived, while the rate stays the link's.
+    /// beside the whole time a person waited, while the rate stays the link's.
     #[test]
     fn a_download_names_the_time_its_disk_took() {
         const MIB: u64 = 1024 * 1024;

@@ -1,6 +1,5 @@
-//! free space on the disk a run downloads to, so a download bigger than its disk is told before it
-//! starts rather than once the disk fills, and the largest file a disk holds, so a file FAT32
-//! cannot hold is refused before it is copied there.
+//! free space on the disk a run downloads to, so a download too big for it is told before it
+//! starts, and the largest file a disk holds, so a file FAT32 cannot hold is refused first.
 
 use std::path::Path;
 
@@ -89,18 +88,13 @@ impl Filesystem {
         (self == Filesystem::Fat).then_some(FAT_LARGEST)
     }
 
-    /// whether a file of `size` bytes fits on this filesystem.
     pub(crate) fn holds(self, size: u64) -> bool {
         self.largest_file().is_none_or(|largest| size <= largest)
     }
 }
 
-/// refuses the first of `files`, by name and size, that the disk holding the cache at `cache`
-/// cannot hold, before any of them downloads.
-///
-/// # Errors
-///
-/// `local.io` naming the file, its size and what to do.
+/// refuses, before any of `files` downloads, the first the disk holding the cache at `cache`
+/// cannot hold, as `local.io` naming the file, its size and what to do.
 pub(crate) fn cache_holds<'f>(
     cache: &Path,
     files: impl IntoIterator<Item = (&'f str, u64)>,
@@ -206,8 +200,7 @@ fn measured(_: &Path) -> Option<u64> {
     None
 }
 
-/// the bytes the disk holding `path`, which must exist, holds in all, none when the system does
-/// not say.
+/// the total bytes of the disk holding `path`, which must exist; none when the system does not say.
 pub(crate) fn total(path: &Path) -> Option<u64> {
     sized(path)
 }
@@ -260,9 +253,8 @@ pub(crate) struct Needs {
     pub(crate) result: Option<u64>,
 }
 
-/// the most a build of `steps` may take on the disk holding the cache: every download and result
-/// stays there, while a step's copies of what it reads go when it ends, so only the largest step's
-/// count, and only on a disk that does not `clone` files. a result never built counts as nothing.
+/// the most a build of `steps` may take on the cache's disk: every download and result stays, while
+/// only the largest step's copies count, and only where the disk does not clone files.
 pub(crate) fn peak(steps: &[Needs], clones: bool) -> u64 {
     let stays = steps
         .iter()
@@ -320,8 +312,7 @@ mod tests {
         }
     }
 
-    /// downloads and results add up over the steps, while copies of what a step reads count once,
-    /// for the step that reads most, and not at all where the disk clones files.
+    /// downloads and results add up, while copies count once, for the step that reads most.
     #[test]
     fn the_estimate_counts_copies_only_without_clones() {
         let steps = [

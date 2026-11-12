@@ -85,9 +85,8 @@ impl Stop {
         }
     }
 
-    /// asks every task to stop. a run that marked its work as finishing finishes anyway, so its
-    /// work never sees the stop, which [`Stop::on_late`] tells, unless a first ctrl-c already let
-    /// it finish.
+    /// asks every task to stop. a run that marked its work as finishing finishes anyway, told late
+    /// through [`Stop::on_late`] unless a first ctrl-c already let it finish.
     pub(crate) fn ask(&self) {
         let mut late = false;
         // under the watch's lock, so a mark at the same moment comes wholly before or after
@@ -104,11 +103,9 @@ impl Stop {
         }
     }
 
-    /// decides what a first ctrl-c does: a run that marked its work as finishing, or whose only
-    /// downloads left have every byte in, finishes; any other stops, and the stop is asked here,
-    /// before the caller tells the person, so once that line shows the work sees it. the choice
-    /// and the ask are made under the watch's lock, so a mark at the same moment comes wholly
-    /// before or after them.
+    /// decides what a first ctrl-c does: a run that marked its work as finishing, or has every byte
+    /// of its last downloads in, finishes; any other stops, the stop asked before the caller says
+    /// so, under the watch's lock, so a mark at that moment comes wholly before or after.
     pub(crate) fn hear(&self) -> Heard {
         let mut heard = Heard::Stop;
         self.asked.send_if_modified(|asked| {
@@ -143,11 +140,9 @@ impl Stop {
         *self.asked.borrow()
     }
 
-    /// marks the point past which the run completes its work, whatever is asked. a command marks
-    /// it once it last looked for a stop where it could still stop, so a stop asked later, as by
-    /// ctrl-c while it prints its last lines, leaves it finished. one asked in between, after
-    /// that look, is told late through [`Stop::on_late`] and taken back, so no work after the
-    /// mark stops for it.
+    /// marks the point past which the run completes its work, whatever is asked: a command marks it
+    /// after its last look for a stop, so a ctrl-c during its last lines leaves it done. one asked
+    /// between the look and the mark is taken back, told through [`Stop::on_late`].
     pub(crate) fn finish(&self) {
         let mut late = false;
         self.asked.send_if_modified(|asked| {
@@ -240,9 +235,8 @@ impl Stop {
     }
 }
 
-/// holds a run right after it marks its work as finishing: with `FETCHLOOM_TEST_HOLD_FINISH`
-/// naming a file, it writes `<file>.held`, then waits until that file appears, so a CLI test can
-/// land a stop past the mark. release builds never read it.
+/// holds a run just after its finishing mark: with `FETCHLOOM_TEST_HOLD_FINISH` naming a file, it
+/// writes `<file>.held` and waits until the file appears, so a CLI test can stop past the mark.
 #[cfg(debug_assertions)]
 fn held_at_finish() {
     let Some(release) =
@@ -265,8 +259,7 @@ mod tests {
 
     use super::*;
 
-    /// file work sees a stop as the `Interrupted` io error its callers turn back into a stop, and
-    /// sees nothing until one is asked.
+    /// which its callers turn back into a stop, and sees nothing until one is asked.
     #[test]
     fn file_work_sees_a_stop_as_interrupted() {
         let stop = Stop::default();
@@ -277,9 +270,8 @@ mod tests {
         assert_eq!(err.to_string(), "stopped at your request");
     }
 
-    /// a first ctrl-c stops work that has not marked itself as finishing, asking the stop before
-    /// the caller tells the person, and lets work that has run to its end, without asking a stop
-    /// that would end it anyway.
+    /// work not marked as finishing stops, the stop asked before the caller says so, while marked
+    /// work finishes without a stop asked.
     #[test]
     fn a_ctrl_c_after_the_mark_lets_the_work_finish() {
         let stop = Stop::default();
@@ -295,9 +287,8 @@ mod tests {
         assert!(finished.check_unfinished().is_ok());
     }
 
-    /// a stop asked of work that marked itself as finishing, or marked after the stop, is told
-    /// late, once, whichever of the two the run does first, while one a first ctrl-c already let
-    /// finish needs no more telling.
+    /// once, whether the mark came first or after; a run a first ctrl-c already let finish needs
+    /// no more telling.
     #[test]
     fn a_stop_the_work_finishes_anyway_is_told_late() {
         let told = Arc::new(AtomicUsize::new(0));
@@ -336,9 +327,8 @@ mod tests {
         assert_eq!(told.load(Ordering::SeqCst), 2);
     }
 
-    /// a ctrl-c while every byte of the run's downloads is in, and the disk only keeps them,
-    /// lets the run finish, since stopping would download them again; a download still
-    /// receiving, or one yet to start, makes it stop.
+    /// stopping would download them again; a download still receiving, or yet to start, makes it
+    /// stop.
     #[test]
     fn a_ctrl_c_while_the_disk_keeps_every_byte_lets_the_run_finish() {
         let stop = Stop::default();
