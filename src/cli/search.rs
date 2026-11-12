@@ -135,16 +135,49 @@ pub(super) async fn pick(
     if let Some(index) = chosen {
         let reference = report.candidates[index].reference.to_string();
         context.output.step("Chose", &reference);
-        Ok(reference)
-    } else {
-        let first = &report.candidates[0].reference;
-        let mut error = Error::new(Kind::ReferenceAmbiguous, format!(
-                "\"{words}\" is not a link or an id, and fetchloom will not guess which dataset you mean"
-            )).help(format!("run it again with one of these, such as `fetchloom {command} {first}`"))
-                .with_result(serde_json::json!({"candidates": report.candidates}));
-        error.details = rows;
-        Err(error)
+        return Ok(reference);
     }
+    let first = &report.candidates[0].reference;
+    let mut error = Error::new(Kind::ReferenceAmbiguous, format!(
+            "\"{words}\" is not a link or an id, and fetchloom will not guess which dataset you mean"
+        )).help(format!("run it again with one of these, such as `fetchloom {command} {first}`"))
+            .with_result(serde_json::json!({"candidates": report.candidates}));
+    let output = &context.output;
+    if !output.shows_items() {
+        error.details = rows;
+        return Err(error);
+    }
+    // what a person reads first is the list to add from, in the width of their terminal, as
+    // with `TERM=dumb`, which opens no picker; the error after it says why nothing was added
+    output.done(
+        "Found",
+        &format!(
+            "{} for \"{words}\"; add one by its id:",
+            units::count(report.candidates.len() as u64, "dataset", "datasets")
+        ),
+    );
+    let width = console::Term::stderr()
+        .size_checked()
+        .map(|(_, columns)| usize::from(columns));
+    let parts = parts(output, &report.candidates, width, LIST_LEAD);
+    let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
+        .min(crate::output::REFERENCE_COLUMN);
+    for shown in parts {
+        // facts that do not fit beside the reference go on a line of their own under it
+        if shown.below {
+            output.item(&shown.reference);
+            output.item(&format!("  {}", shown.facts));
+            continue;
+        }
+        let row = [shown.title.as_str(), shown.facts.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .fold(format!("{:pad$}", shown.reference), |row, part| {
+                format!("{row}  {part}")
+            });
+        output.item(row.trim_end());
+    }
+    Err(error)
 }
 
 /// the columns before a reference in the list `search` prints.

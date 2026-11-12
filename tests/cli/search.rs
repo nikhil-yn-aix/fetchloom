@@ -67,6 +67,42 @@ fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
     Ok(())
 }
 
+/// with `TERM=dumb`, the way a screen reader's user runs fetchloom, plain words list the matches
+/// first, in rows that fit the terminal, then say why nothing was added, and exit 10.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dumb_terminal_lists_the_matches_first_in_its_width() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let mut command = catalogs.command(&sandbox, &["add", "iris"]);
+    command.env("TERM", "dumb");
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "rows 40 cols 60", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(10), "{screen}");
+    let found = screen
+        .find("Found 9 datasets for \"iris\"; add one by its id:\n")
+        .ok_or_else(|| format!("no list first: {screen}"))?;
+    let error = screen.find("error: ").ok_or("no error")?;
+    assert!(found < error, "{screen}");
+    let rows: Vec<&str> = screen[found..error]
+        .lines()
+        .skip(1)
+        .filter(|line| line.starts_with("            "))
+        .collect();
+    assert!(rows.len() >= 9, "{screen}");
+    assert!(rows.iter().all(|row| row.chars().count() <= 60), "{screen}");
+    assert!(
+        rows.iter().any(|row| row
+            .trim_start()
+            .starts_with("hf:datasets/scikit-learn/iris ")),
+        "{screen}"
+    );
+    Ok(())
+}
+
 #[test]
 fn unattended_add_refuses_to_guess_even_with_yes() -> Result {
     let sandbox = Sandbox::new()?;

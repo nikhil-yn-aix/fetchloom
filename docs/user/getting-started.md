@@ -12,7 +12,7 @@ a terminal is a window where you type a command and press enter to run it.
 
 type each command below on its own line and press enter after it.
 
-with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines: no colors, no redrawn progress bars, and ` - ` in place of symbols such as `·`. it also asks no questions, so a download over 1 GiB needs `--yes`, and plain words such as `iris` list the matching datasets, to add by their id, instead of opening a list to move through. `-q` keeps only answers, warnings and errors, `NO_COLOR=1` turns off colors alone, and `--json` gives one document for a script.
+with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines: no colors, no redrawn progress bars, and ` - ` in place of symbols such as `·`. it also asks no questions, so a download over 1 GiB needs `--yes`, and plain words such as `iris` list the matching datasets, in rows that fit the terminal, to add by their id, instead of opening a list to move through; the run then ends with an error saying it did not guess one, exit 10. `-q` keeps only answers, warnings and errors, `NO_COLOR=1` turns off colors alone, and `--json` gives one document for a script.
 
 ## install
 
