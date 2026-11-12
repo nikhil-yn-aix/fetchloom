@@ -8,14 +8,14 @@ fetchloom --json --yes sync
 fetchloom --json status
 ```
 
-`--json` prints one document on stdout, including usage errors, welcome, version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. without `--json`, help is text. help flags and `--json` before `--` are recognized even beside a non-UTF-8 argument. short help flags may be bundled, as in `-qh`; values of `-C`, including attached non-UTF-8 paths, are not command names. an unknown help topic is a usage error with a null command, its topic shown with link secrets masked. explicit debug logging may also write stderr, and so does `--progress`: with it, a long download or wait prints a plain line on stderr after 2 s and then every 10 s, as without `--json` where no bar shows, while the document carries no progress. `-q` hides those lines. JSON mode never prompts; use `--yes` when approval is needed.
+`--json` prints one document on stdout, also for usage errors, the welcome, the version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. stderr gets only debug logs you asked for, and with `--progress`, plain progress lines after 2 s and then every 10 s. JSON mode never asks a question; use `--yes` when approval is needed.
 
-a result is encoded before any document bytes are printed. a result that JSON cannot represent, such as a path containing non-UTF-8 bytes, returns a complete `local.io` error document and exit 50. command effects are not rolled back when reporting fails. stdout write failures also fail a successful command with exit 50 and may print their explanation on stderr when stdout is unusable. a reader that closes its pipe early is still treated as successful.
+a result JSON cannot represent, such as a path that is not UTF-8, returns a complete `local.io` error document instead, exit 50, and so does a failure to write stdout, though what the command did stays done. a reader that closes its pipe early is no failure.
 
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `build`, `status`, `list`, `export`, `push`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
+| `command` | `add`, `remove`, `drop`, `sync`, `lock`, `build`, `status`, `list`, `export`, `push`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, a `cache gc --inputs` that needs a yes, search candidates, `get` runs of several links, what `export` found, what a `push` planned when the cache lacks files or it needs a yes, what a `build` did before it failed, and a `lock` whose merge needs a choice; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
@@ -66,33 +66,33 @@ placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `k
 
 `get.items` has one record for each link, in the order given on the command line and then in the `--input-file` list. each has `reference`, the link as given with a login and secret query values masked; `status`, `ok` or `error`; `folder`, the link's absolute folder or null; `files`, file records as above, empty on failure; and `error`, null on success or an object with `kind`, `message`, `details`, `help` and, for failed downloads, `failures`, in the form of `errors[]`. one link without `-i` keeps `folder` and `files` at the top as well, and returns a null `result` on failure. several links, or any `-i` list, give a null top-level `folder` and empty `files`. when some of them fail, the run returns `error` with `result` still set: `errors[0].kind` and the exit code come from the first failed link in that order, and `errors[0].failures` names each failed link in `file`. an interruption, a refused question about the total size and a cache that cannot open return immediately with a null `result`.
 
-status arrays:
+status arrays, each a list of project-relative paths or dataset names, as [status](../commands/status.md#categories) explains:
 
 | field | entries |
 |---|---|
-| `unlocked` | dataset names missing from the lock or with a changed spec or `extract`, and recipes whose result data.lock does not pin as building them now would make, which `fetchloom build` pins; human output says what moved |
-| `removed` | dataset names in data.lock but no longer in data.toml, recipe results included |
-| `candidates` | recipes with a kept rebuild, files a build made that differ from what data.lock pins for the same key, which `fetchloom build --accept` pins: `name`, `tree`, `stale`, true when it came from another recipe or pin than data.lock has now, which `--accept` refuses, and `files`, each file that differs with `path`, `difference` (`changed`, `missing` or `extra`), nullable `file`, the cache file of the rebuild's bytes, and nullable `pinned`, the cache file of the bytes data.lock pins |
-| `missing` | absent target paths |
-| `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
-| `untracked` | existing target paths without state records, with other bytes than data.lock pins there |
-| `adoptable` | existing target paths without state records that hold the bytes data.lock pins there, which sync adopts |
-| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, read-only where the dataset asks for `copy = true`, or links to the cache's copy someone made writable, which sync makes read-only again |
-| `damaged` | managed files that no longer hold their pinned bytes, though no edit of the project's shows. one kind is hardlinks whose bytes hashing found changed while they still share them: still the cached object or linked to other projects, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them; an edit through any link, in this project or another, changes them all. the other kind is files that share their bytes with nothing, copies, reflinks and links left with a name of their own, whose bytes changed though their size and modification time match the state; `status --verify` hashes them all, and a change mark puts them in doubt for a plain status too. `sync` puts back the links and those a mark shows, and `sync --verify` the rest |
-| `blocked` | paths of entries in a target's way: a link, special file or folder at the target's path, or a file, link or special file where a folder on its way belongs. `sync --force` replaces them, except a folder that holds anything |
-| `extra` | scanned paths outside the known targets, apart from files listed as blocked, that fetchloom did not place or that changed since: sync keeps them |
-| `unneeded` | scanned paths outside the known targets that fetchloom placed and nobody changed since, which the next sync removes |
-| `not_unpacked` | archive paths whose member records are unavailable on this machine |
-| `unbuilt` | recipes whose pinned result has files missing from the data folder, or placed for an older pin, whose bytes neither the cache nor a folder mirror holds, which sync leaves out and `fetchloom build` makes; their paths are in no other array. with a web mirror set, which status never asks, their paths are `missing` instead |
-| `unplaced` | dataset names with `place = false`, which have no files in the data folder; no difference |
+| `unlocked` | datasets data.lock does not pin as data.toml asks, and recipes whose result is not pinned as building them now would make |
+| `removed` | datasets in data.lock but no longer in data.toml |
+| `candidates` | recipes with a kept rebuild that differs from data.lock, each with `name`, `tree`, `stale`, true when `--accept` would refuse it, and `files`, each with `path`, `difference` (`changed`, `missing` or `extra`), and nullable `file` and `pinned`, the cache files of the rebuild's bytes and of the pinned ones |
+| `missing` | pinned files that are absent |
+| `edited` | files fetchloom placed that were changed |
+| `untracked` | files fetchloom did not place, at pinned paths, with other bytes than the pins |
+| `adoptable` | files fetchloom did not place, at pinned paths, holding the pinned bytes, which sync adopts |
+| `outdated` | unchanged files that sync replaces: pinned to other bytes now, or read-only where the dataset asks for `copy = true` |
+| `damaged` | files fetchloom placed that hold other bytes though no edit of the project's shows, as a hardlink an edit through another link changed |
+| `blocked` | entries in a pinned file's way |
+| `extra` | files no dataset places, which sync keeps |
+| `unneeded` | files fetchloom placed that no dataset needs now, which the next sync removes |
+| `not_unpacked` | archives whose files this machine does not know |
+| `unbuilt` | recipes whose pinned result is on no machine or mirror here, which sync leaves out |
+| `unplaced` | datasets with `place = false`; no difference |
 
-status lists all differences in JSON, as its rows in a pipe do. at a terminal it shows 20 rows of each file category, a gone folder as one row; unlocked, removed, unbuilt and unplaced datasets and not-unpacked archives are not truncated. a project still as the last complete sync left it reports only files no record claims as extra, as sync finds nothing to do; once something changed since, files already placed from an archive whose record is unavailable can also appear as extra.
+JSON lists every difference, as rows in a pipe do, while a terminal shows 20 rows of each kind of file.
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
 
 `cache gc` keeps objects no project needs until they are a day old by modification time, unless `--now` removes that grace period. unfinished downloads keep a day too, unless `--now` removes every one no running fetchloom holds. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
-`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this kind also covers partial cleanup failures. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal. a path already absent is not a failed removal.
+`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this kind also covers partial cleanup failures. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
 
@@ -115,7 +115,7 @@ a file already standing where a file goes whose hash only its download can learn
 `result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a real run with the project path shortened:
 
 ```json
-{"project":"/home/me/study","selected":null,"datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[],"overwritten":[],"changed_copies":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
+{"project":"/home/me/study","selected":null,"datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[],"overwritten":[],"changed_copies":[],"put_back":[],"unbuilt":[]},"dry_run":true,"changes":{"place":["data/iris/Iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
 
 for `lock`, `lock_changed` and `datasets` say whether `data.lock` would change and which pins, as far as is known without downloading; `placement` is null. `changes.download` lists the files locking would download first, to learn a hash or, with `--upgrade`, to check a file no checksum pins, which the dry run counts as unchanged until then. `changes.unpack` lists the archives it would unpack to learn what they hold. `place`, `replace` and `remove` are empty.
