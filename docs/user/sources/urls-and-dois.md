@@ -70,7 +70,7 @@ a plain link is recorded as both `resolved` and the file's download link, and it
 
 ## credentials
 
-project commands refuse a link holding a login or a known secret, such as `token=`, since data.toml and data.lock are shared. `get` takes such a link for a one-off download, and masks the login and known secrets in what it prints; a secret under a name fetchloom does not know cannot be told apart. the cache's [records of links](../reference/cache-folder.md#url-and-partial-records) keep a fingerprint of each link, not its text. a server's own login goes in `.netrc`, which `fetchloom auth login <host>` writes.
+project commands refuse a link holding a login or a known secret, such as `token=`, since data.toml and data.lock are shared. `get` takes such a link for a one-off download. what it prints masks the login and each query or fragment value whose name is not known to be harmless, such as `dl`, `version` or `rlkey`, so a secret under a name fetchloom does not know stays out of its output; a project command cannot tell that secret apart, so check a link's query before you add it. the cache's [records of links](../reference/cache-folder.md#url-and-partial-records) keep a fingerprint of each link, not its text. a server's own login goes in `.netrc`, which `fetchloom auth login <host>` writes.
 
 ## limits
 

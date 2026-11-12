@@ -1699,7 +1699,7 @@ mod tests {
             ),
             (
                 "s3:https://minio.lab/scans?x=1",
-                "s3:https://minio.lab/scans?x=1",
+                "s3:https://minio.lab/scans?x=***",
             ),
             ("s3:ftp://minio.lab/scans", "s3:ftp://minio.lab/scans"),
             (

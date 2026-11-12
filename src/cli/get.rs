@@ -1655,7 +1655,7 @@ mod tests {
     fn a_link_is_shown_without_its_login_or_secret_query() {
         assert_eq!(
             shown(" https://ada:pw@example.org/a.csv?token=t&v=1 "),
-            "https://***@example.org/a.csv?token=***&v=1"
+            "https://***@example.org/a.csv?token=***&v=***"
         );
         assert_eq!(shown("zenodo:1"), "zenodo:1");
     }

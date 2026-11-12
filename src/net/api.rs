@@ -732,7 +732,7 @@ mod tests {
             assert_eq!(error.kind, Kind::SourceInvalid);
             assert!(error.message.contains("127.0.0.1"));
             assert_eq!(error.details.len(), 1);
-            assert!(error.details[0].contains("token=***&view=files"));
+            assert!(error.details[0].contains("token=***&view=***"));
             assert!(!error.details[0].contains("private-value"));
             assert!(error.help.unwrap().contains("report"));
         }

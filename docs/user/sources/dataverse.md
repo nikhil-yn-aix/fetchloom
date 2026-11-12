@@ -35,6 +35,8 @@ fetchloom auth login dataverse --host demo.dataverse.org
 
 the first line is for harvard's installation. `DATAVERSE_API_TOKEN` also works when `DATAVERSE_URL` names the same installation, as pyDataverse reads them. `DATAVERSE_TOKEN` is not read.
 
+a link to the api that carries the key in its query, as `https://dataverse.harvard.edu/api/access/datafile/6867336?key=<key>`, is refused by `add` and the other project commands, since data.toml and data.lock are shared: sign in instead, and the key goes in a header to that installation alone.
+
 an installation on another port than 443 is signed in to with its port, as references name it: `fetchloom auth login dataverse --host dv.example.edu:8443`, or `DATAVERSE_URL=https://dv.example.edu:8443`. that key goes to that port only, and a key for port 443 never goes to another port.
 
 signing in and `fetchloom auth` check the key with the installation, even one on a private network, such as a university intranet, since you named that installation yourself. `add` reaches an installation you type on the command line for that run, at its https origin alone; a later sync, or a clone of the project, reaches one on a private network only when the [`allowed_origins`](../reference/environment.md) setting lists it, as `https://dv.example.edu:8443`. a sign-in offer after a dataset or file metadata refusal uses that same installation and port.

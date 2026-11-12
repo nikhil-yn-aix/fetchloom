@@ -790,7 +790,7 @@ fn check_paths(dataset: &Locked) -> Result<(), Error> {
 /// link carries nothing. a link from a list in [`lists::FOLDER`] is mended from git.
 fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
     // parsing each of a million links doubled the time a lock took to read. links mostly differ
-    // in the values of the same keys, and only keys decide, so a cleared link's keys are reused
+    // in the values of the same keys, so a cleared link's keys are reused where keys alone decide
     let mut cleared: Option<Vec<&str>> = None;
     for file in &dataset.files {
         let text = file.url.as_str();
@@ -818,7 +818,7 @@ fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
             let subject = format!("the link data.lock gives {}/{}", dataset.name, file.path);
             return Err(carried.refused(&subject).help(help));
         }
-        if is_plain {
+        if is_plain && !raw_keys(text).any(crate::net::depends_on_path) {
             cleared = Some(raw_keys(text).collect());
         }
     }
@@ -1598,6 +1598,25 @@ mod tests {
                 "the resolved link data.lock gives iris carries token, a secret fetchloom never pins"
             );
             assert_eq!(error.help.as_deref(), Some(token));
+            assert!(!format!("{error:?}").contains(CANARY), "{error:?}");
+        }
+    }
+
+    /// whether a key is a secret can turn on the link's path, as dataverse's `key` does, so a
+    /// link cleared before vouches for no other with the same keys.
+    #[test]
+    fn a_dataverse_key_is_refused_after_a_link_with_the_same_keys() {
+        const CANARY: &str = "canary-value";
+        let mut lock = sample();
+        lock.datasets[1].files[1].url = "https://example.org/a.csv?key=1".to_owned();
+        lock.datasets[1].files[0].url =
+            format!("https://dataverse.example.edu/api/access/datafile/2?key={CANARY}");
+        for read in every_form(&lock) {
+            let error = read.unwrap_err();
+            assert_eq!(
+                error.message,
+                "the link data.lock gives iris/b/iris.zip carries key, a secret fetchloom never pins"
+            );
             assert!(!format!("{error:?}").contains(CANARY), "{error:?}");
         }
     }

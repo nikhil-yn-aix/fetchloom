@@ -37,7 +37,7 @@ pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_m
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, DriveAnswered, Google, Private};
 pub(crate) use rate::Rate;
-pub(crate) use shown::{Shown, mask_query, secret};
+pub(crate) use shown::{Shown, depends_on_path, mask_query, secret};
 
 use self::failure::Failure;
 use crate::error::{Error, Kind};

@@ -164,19 +164,36 @@ impl Parsed {
                 "this link carries {key}, a secret that data.toml and data.lock would keep and share"
             ),
         );
+        let without =
+            "use a link that works without it, or download the file once with `fetchloom get`";
         Err(match &self.reference {
             Reference::Url(url) if url.host_str().and_then(bucket::account_of).is_some() => error
                 .help(
                     "keep the SAS out of the link: list the container in azure_containers and set AZURE_STORAGE_SAS_TOKEN to the SAS, or download the file once with `fetchloom get`",
                 ),
-            Reference::Url(_) | Reference::Dropbox(_) => error.help(
-                "use a link that works without it, or download the file once with `fetchloom get`",
-            ),
+            Reference::Url(url) if key == "key" => {
+                error.help(signing_in(url).unwrap_or_else(|| without.to_owned()))
+            }
+            Reference::Url(_) | Reference::Dropbox(_) => error.help(without),
             read => error.help(format!(
                 "leave {key} out of the link: fetchloom reads {read} without it, with your saved key where its source asks for one"
             )),
         })
     }
+}
+
+/// how to read a link to a dataverse installation's api without the key it carries: a key saved
+/// for the installation goes with each request to it.
+fn signing_in(url: &Url) -> Option<String> {
+    let host = match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str()?),
+        None => url.host_str()?.to_owned(),
+    };
+    let host = crate::auth::dataverse_host(&host)?;
+    let command = crate::auth::Account::Dataverse(host.clone()).command();
+    Some(format!(
+        "leave key out of the link: sign in once with `{command}`, and fetchloom sends your key to {host} itself"
+    ))
 }
 
 /// what a source says a dataset holds, at one exact version.
@@ -961,6 +978,18 @@ mod tests {
             help.contains("AZURE_STORAGE_SAS_TOKEN") && help.contains("azure_containers"),
             "{help}"
         );
+        let keyed = parse("https://demo.dataverse.org/api/access/datafile/42?key=abc");
+        let error = keyed.check_shareable().unwrap_err();
+        assert_eq!(
+            error.message,
+            "this link carries key, a secret that data.toml and data.lock would keep and share"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "leave key out of the link: sign in once with `fetchloom auth login dataverse --host demo.dataverse.org`, and fetchloom sends your key to demo.dataverse.org itself"
+            )
+        );
     }
 
     #[test]
@@ -1374,7 +1403,7 @@ mod tests {
             let error = Reference::parse(text).unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid);
             assert!(
-                error.message.contains("token=***"),
+                error.message.contains("oken=***"),
                 "reference error exposed its query: {}",
                 error.message
             );

@@ -810,11 +810,12 @@ fn secret_link_surfaces(suffix: &str, mode: &[&str]) -> Result<Vec<(String, Vec<
 
 /// a secret in a link's query shows on no surface a download leaves: stdout, stderr, a trace
 /// or the cache's record of the link. `net::shown::tests` holds every spelling of a secret's
-/// name; a token and a signature stand for them here.
+/// name; a token, a signature and a name no list knows, as dataverse's `key`, stand for them
+/// here.
 #[test]
 fn query_secrets_stay_out_of_each_output_surface() -> Result {
     let mut failures = Vec::new();
-    for key in ["token", "X-Amz-Signature"] {
+    for key in ["token", "X-Amz-Signature", "key"] {
         for mode in MODES {
             for (name, bytes) in
                 secret_link_surfaces(&format!("?{key}={LINK_SECRET}&download=1"), mode)?
