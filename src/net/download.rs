@@ -257,21 +257,20 @@ pub(crate) struct Fetched {
 }
 
 impl Fetched {
-    /// how long the downloads among `fetched` took from `started` until their last byte arrived,
-    /// so the time a slow disk takes to keep them does not count against the link. with nothing
-    /// received, the time since `started`.
+    /// how long the downloads among `fetched` took from `started`: until their last byte
+    /// arrived, so the time a slow disk takes to keep them does not count against the link, and
+    /// until now, which counts it. with nothing received, the time since `started` for both.
     pub(crate) fn transfer<'a>(
         fetched: impl IntoIterator<Item = &'a Fetched>,
         started: Instant,
-    ) -> Duration {
-        fetched
+    ) -> units::Took {
+        let all = started.elapsed();
+        let arrived = fetched
             .into_iter()
             .filter_map(|fetched| fetched.arrived)
             .max()
-            .map_or_else(
-                || started.elapsed(),
-                |arrived| arrived.saturating_duration_since(started),
-            )
+            .map_or(all, |arrived| arrived.saturating_duration_since(started));
+        units::Took { arrived, all }
     }
 }
 

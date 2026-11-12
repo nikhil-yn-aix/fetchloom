@@ -34,22 +34,54 @@ pub(crate) fn rate(bytes: u64, elapsed: Duration) -> String {
 /// a rate above zero but below one byte a second.
 const TRICKLE: &str = "<1 B/s";
 
+/// how long downloads took: until their last byte `arrived`, and `all` of it, the time the disk
+/// took to keep them included, as `Fetched::transfer` measures both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Took {
+    pub(crate) arrived: Duration,
+    pub(crate) all: Duration,
+}
+
+impl From<Duration> for Took {
+    fn from(elapsed: Duration) -> Took {
+        Took {
+            arrived: elapsed,
+            all: elapsed,
+        }
+    }
+}
+
 /// what downloads brought, from each file's size and the bytes this run moved for it:
 /// `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the rate counts only the
-/// bytes moved, so a resumed file does not look faster than the link, and `elapsed` ends at the
-/// last byte that arrived, as `Fetched::transfer` gives it, so a slow disk does not make the
-/// link look slow either.
-pub(crate) fn downloaded(files: impl IntoIterator<Item = (u64, u64)>, elapsed: Duration) -> String {
+/// bytes moved, so a resumed file does not look faster than the link, and only the time until
+/// the last byte arrived, so a slow disk does not make the link look slow either. a disk that
+/// took a second or more to keep the files after that is named with the whole time:
+/// `1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`.
+pub(crate) fn downloaded(
+    files: impl IntoIterator<Item = (u64, u64)>,
+    took: impl Into<Took>,
+) -> String {
+    let Took { arrived, all } = took.into();
     let (mut total, mut moved, mut earlier) = (0_u64, 0_u64, 0_u64);
     for (file, moved_for_it) in files {
         total = total.saturating_add(file);
         moved = moved.saturating_add(moved_for_it);
         earlier = earlier.saturating_add(file.saturating_sub(moved_for_it));
     }
-    let mut text = format!("{} in {}", size(total), duration(elapsed));
-    if elapsed >= Duration::from_secs(1) {
+    let disk = all.saturating_sub(arrived);
+    let mut text = if disk >= Duration::from_secs(1) {
+        format!(
+            "{} in {}, {} of it waiting for the disk",
+            size(total),
+            duration(all),
+            duration(disk)
+        )
+    } else {
+        format!("{} in {}", size(total), duration(arrived))
+    };
+    if arrived >= Duration::from_secs(1) {
         text.push_str(" · ");
-        text.push_str(&rate(moved, elapsed));
+        text.push_str(&rate(moved, arrived));
     }
     if earlier > 0 {
         text.push_str(" · ");
@@ -286,6 +318,30 @@ mod tests {
             ),
             "80.0 MiB in 2.0 s · 35.0 MiB/s · 30.0 MiB from an earlier run",
             "a file fetched twice does not hide another's kept bytes"
+        );
+    }
+
+    /// a closing line says the whole time a person waited, naming the part the disk took to keep
+    /// the files once their last byte arrived, while the rate stays the link's.
+    #[test]
+    fn a_download_names_the_time_its_disk_took() {
+        const MIB: u64 = 1024 * 1024;
+        let took = |arrived: u64, all: u64| Took {
+            arrived: Duration::from_millis(arrived),
+            all: Duration::from_millis(all),
+        };
+        assert_eq!(
+            downloaded([(1024 * MIB, 1024 * MIB)], took(17_900, 30_200)),
+            "1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s"
+        );
+        assert_eq!(
+            downloaded([(20 * MIB, 20 * MIB)], took(22, 14_800)),
+            "20.0 MiB in 14.8 s, 14.8 s of it waiting for the disk"
+        );
+        assert_eq!(
+            downloaded([(80 * MIB, 80 * MIB)], took(2_000, 2_600)),
+            "80.0 MiB in 2.0 s · 40.0 MiB/s",
+            "a flush under a second is no wait worth a word"
         );
     }
 

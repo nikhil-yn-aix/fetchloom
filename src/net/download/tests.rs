@@ -1269,5 +1269,8 @@ fn the_transfer_time_ends_with_the_last_byte() {
         arrived: arrived.map(|seconds| started + Duration::from_secs(seconds)),
     };
     let files = [fetched(Some(3)), fetched(Some(1)), fetched(None)];
-    assert_eq!(Fetched::transfer(&files, started), Duration::from_secs(3));
+    assert_eq!(
+        Fetched::transfer(&files, started).arrived,
+        Duration::from_secs(3)
+    );
 }
