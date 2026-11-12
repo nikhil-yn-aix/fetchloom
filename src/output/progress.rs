@@ -26,6 +26,9 @@ const STALL: Duration = Duration::from_secs(2);
 /// how far into a transfer its rate starts over, once, so bytes that arrive at once when it
 /// begins, as those a server sent while this run checked what an earlier run kept, are no speed.
 const RERATE: Duration = Duration::from_secs(1);
+/// how often the point a bar's rate is measured from moves on, so the rate covers the last 10 to
+/// 20 s of the transfer and follows a link that speeds up or slows down.
+const WINDOW: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_millis(100);
 /// how long a batch runs before its first plain line, so a quick one adds no line at all.
 const MOMENT: Duration = Duration::from_secs(2);
@@ -60,6 +63,9 @@ struct Moved {
     /// whether the download waits for the disk to take what arrived, so its silence is the
     /// disk's rather than the network's.
     behind: AtomicBool,
+    /// when, and at how many bytes moved, the rate is measured from, the older first, each
+    /// moving on every [`WINDOW`].
+    marks: Mutex<[(Instant, u64); 2]>,
 }
 
 /// a download's next try, as its bar tells it.
@@ -82,7 +88,29 @@ impl Moved {
             started: AtomicU64::new(0),
             rerated: AtomicBool::new(false),
             behind: AtomicBool::new(false),
+            marks: Mutex::new([(Instant::now(), 0); 2]),
         }
+    }
+
+    /// measures the rate from `now`, with `moved` bytes moved so far.
+    fn mark(&self, now: Instant, moved: u64) {
+        *self.marks.lock().unwrap_or_else(PoisonError::into_inner) = [(now, moved); 2];
+    }
+
+    /// bytes a second over this transfer's last 10 to 20 s, with `moved` bytes moved by `now`.
+    fn rate(&self, moved: u64, now: Instant) -> f64 {
+        let mut marks = self.marks.lock().unwrap_or_else(PoisonError::into_inner);
+        if now.saturating_duration_since(marks[1].0) >= WINDOW {
+            *marks = [marks[1], (now, moved)];
+        }
+        let (since, from) = marks[0];
+        let seconds = now.saturating_duration_since(since).as_secs_f64();
+        if seconds <= 0.0 {
+            return 0.0;
+        }
+        #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
+        let bytes = moved.saturating_sub(from) as f64;
+        bytes / seconds
     }
 
     /// marks `now` as the start of a transfer, whose rate has yet to start over.
@@ -91,6 +119,7 @@ impl Moved {
         self.started
             .store(u64::try_from(millis).unwrap_or(u64::MAX), Ordering::Relaxed);
         self.rerated.store(false, Ordering::Relaxed);
+        self.mark(now, 0);
     }
 
     /// whether the rate starts over at `now`: once, [`RERATE`] into the transfer.
@@ -240,8 +269,9 @@ impl Bar {
         if let Some(bar) = &self.drawn {
             bar.inc(bytes);
             self.moved.now();
-            if self.moved.rerate(Instant::now()) {
-                bar.reset_eta();
+            let now = Instant::now();
+            if self.moved.rerate(now) {
+                self.moved.mark(now, bar.position());
             }
         }
     }
@@ -303,15 +333,21 @@ fn style(
                 let amount = waiting(done, total, moved.retrying(), behind)
                     .filter(|_| !stopping)
                     .unwrap_or_else(|| {
-                        measure(
-                            done,
-                            total,
-                            state.per_sec(),
-                            state.elapsed(),
-                            state.eta(),
-                            quiet,
-                            stopping,
-                        )
+                        // this run's bytes over its own time, as the time left is
+                        let rate = moved.rate(state.pos(), Instant::now());
+                        let left =
+                            state
+                                .len()
+                                .filter(|_| rate > 0.0)
+                                .map_or(Duration::ZERO, |length| {
+                                    #[expect(
+                                        clippy::cast_precision_loss,
+                                        reason = "a time left needs no exact count"
+                                    )]
+                                    let rest = length.saturating_sub(state.pos()) as f64;
+                                    Duration::from_secs_f64(rest / rate)
+                                });
+                        measure(done, total, rate, state.elapsed(), left, quiet, stopping)
                     });
                 let width = usize::from(console::Term::stderr().size().1);
                 let line = render(&name, &heading, &bar, &amount, width, color);
@@ -1061,6 +1097,18 @@ mod tests {
         assert!(!bar.moved.rerate(begun + Duration::from_millis(900)));
         assert!(bar.moved.rerate(begun + RERATE));
         assert!(!bar.moved.rerate(begun + 2 * RERATE), "once a transfer");
+        let mib = 1024 * 1024;
+        let second = Duration::from_secs(1);
+        // 7 MiB arrived at once, then 38 MiB a second: the rate starts over a second in
+        bar.moved.mark(begun + second, 7 * mib);
+        let rate = bar.moved.rate(7 * mib + 76 * mib, begun + 3 * second);
+        assert!((rate - 38.0 * 1_048_576.0).abs() < 1.0, "{rate}");
+        // a link that slows to 19 MiB a second shows it within 20 s
+        bar.moved.rate(7 * mib + 38 * mib * 11, begun + 12 * second);
+        let slower = bar
+            .moved
+            .rate(7 * mib + 38 * mib * 11 + 19 * mib * 20, begun + 32 * second);
+        assert!((slower - 19.0 * 1_048_576.0).abs() < 1.0, "{slower}");
     }
 
     #[test]
