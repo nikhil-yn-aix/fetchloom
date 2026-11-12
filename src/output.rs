@@ -2626,13 +2626,30 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
-    /// a terminal that records what bars draw on it.
+    /// a terminal that records what bars draw on it, and says when that changes.
     #[derive(Debug, Default, Clone)]
-    struct Screen(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    struct Screen(
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::Condvar>,
+    );
 
     impl Screen {
         fn record(&self, what: String) {
             self.0.lock().unwrap().push(what);
+            self.1.notify_all();
+        }
+
+        /// whether a record holds `text`, waiting for one up to 30 s, which only a broken test
+        /// reaches.
+        fn shows(&self, text: &str) -> bool {
+            let held = |records: &Vec<String>| records.iter().any(|record| record.contains(text));
+            let (records, _) = self
+                .1
+                .wait_timeout_while(self.0.lock().unwrap(), Duration::from_secs(30), |records| {
+                    !held(records)
+                })
+                .unwrap();
+            held(&records)
         }
     }
 
@@ -2785,17 +2802,7 @@ mod tests {
         ));
         terminal.untold = Duration::ZERO;
         let placing = terminal.lasting("Placing", "20,000 files".to_owned());
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while !screen
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|drawn| drawn.contains("Placing 20,000 files"))
-        {
-            assert!(std::time::Instant::now() < deadline, "no line");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(screen.shows("Placing 20,000 files"), "no line");
         drop(placing);
     }
 

@@ -992,9 +992,28 @@ mod tests {
         );
     }
 
-    /// a terminal that keeps what bars draw on it.
+    /// a terminal that keeps what bars draw on it, and says when that changes.
     #[derive(Debug, Default, Clone)]
-    struct Drawn(Arc<Mutex<Vec<String>>>);
+    struct Drawn(Arc<Mutex<Vec<String>>>, Arc<Condvar>);
+
+    impl Drawn {
+        fn draw(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_owned());
+            self.1.notify_all();
+        }
+
+        /// whether what was drawn holds `text`, waiting for it up to 30 s, which only a broken
+        /// test reaches.
+        fn shows(&self, text: &str) -> bool {
+            let drawn = self.0.lock().unwrap();
+            let held = |drawn: &Vec<String>| drawn.join("").contains(text);
+            let (drawn, _) = self
+                .1
+                .wait_timeout_while(drawn, Duration::from_secs(30), |drawn| !held(drawn))
+                .unwrap();
+            held(&drawn)
+        }
+    }
 
     impl TermLike for Drawn {
         fn width(&self) -> u16 {
@@ -1013,11 +1032,11 @@ mod tests {
             Ok(())
         }
         fn write_line(&self, line: &str) -> std::io::Result<()> {
-            self.0.lock().unwrap().push(line.to_owned());
+            self.draw(line);
             Ok(())
         }
         fn write_str(&self, text: &str) -> std::io::Result<()> {
-            self.0.lock().unwrap().push(text.to_owned());
+            self.draw(text);
             Ok(())
         }
         fn clear_line(&self) -> std::io::Result<()> {
@@ -1053,17 +1072,7 @@ mod tests {
             look,
             Arc::default(),
         );
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !screen
-            .0
-            .lock()
-            .unwrap()
-            .join("")
-            .contains("Opening the cache")
-        {
-            assert!(Instant::now() < deadline, "no line for a long step");
-            std::thread::sleep(TICK);
-        }
+        assert!(screen.shows("Opening the cache"), "no line for a long step");
         drop(setup);
     }
 
