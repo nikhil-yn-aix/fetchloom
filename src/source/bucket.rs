@@ -165,7 +165,7 @@ impl Bucket {
                     "put endpoint_url = {origin} in a profile in ~/.aws/config, with its keys in ~/.aws/credentials, or set AWS_ENDPOINT_URL_S3={origin} with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
                 )
             }
-            None => "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile in ~/.aws/credentials".to_owned(),
+            None => "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets".to_owned(),
         }
     }
 
