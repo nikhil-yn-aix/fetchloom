@@ -380,8 +380,10 @@ mod tests {
         }
     }
 
+    /// a secret is refused only in a list for a project, whose data.toml would keep it, so a
+    /// list for get is refused at its next bad line instead.
     #[test]
-    fn the_whole_list_is_checked_before_any_request() {
+    fn a_list_is_refused_at_its_first_unusable_line_with_any_secret_masked() {
         let lines = parse(
             "links.txt",
             "https://example.org/iris.csv\nhttps://example.org/wine.csv?token=hunter2\nzenodo:not-a-number\n",

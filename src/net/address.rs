@@ -710,8 +710,10 @@ mod tests {
         }
     }
 
+    /// the private rows cover each range a request could reach a local or metadata host by,
+    /// ipv4 carried in ipv6 included; the public rows sit just outside them.
     #[test]
-    fn private_addresses() {
+    fn reserved_and_metadata_ranges_are_private_and_the_rest_public() {
         for text in [
             "10.1.2.3",
             "172.16.0.1",

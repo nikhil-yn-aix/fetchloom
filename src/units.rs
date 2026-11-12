@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn sizes() {
+    fn sizes_round_to_a_tenth_and_move_up_a_unit_at_1024() {
         assert_eq!(size(0), "0 B");
         assert_eq!(size(1023), "1023 B");
         assert_eq!(size(1024), "1.0 KiB");
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn durations() {
+    fn durations_go_from_ms_to_tenths_of_a_second_to_minutes() {
         assert_eq!(duration(Duration::from_millis(41)), "41 ms");
         assert_eq!(duration(Duration::from_millis(3240)), "3.2 s");
         assert_eq!(duration(Duration::from_secs(245)), "4 min 05 s");
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn counts() {
+    fn counts_pick_one_or_many_and_group_thousands() {
         assert_eq!(count(1, "file", "files"), "1 file");
         assert_eq!(count(0, "file", "files"), "0 files");
         assert_eq!(count(1204, "file", "files"), "1,204 files");
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn rates() {
+    fn rates_round_like_sizes_and_nan_reads_as_zero() {
         assert_eq!(rate(88_080_384, Duration::from_secs(1)), "84.0 MiB/s");
         assert_eq!(speed(512.0), "512 B/s");
         assert_eq!(speed(3_565_158.4), "3.4 MiB/s");

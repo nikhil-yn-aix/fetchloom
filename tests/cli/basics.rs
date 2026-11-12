@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::support::{Result, Sandbox, command_help, text};
 
 #[test]
-fn version() -> Result {
+fn version_prints_the_package_version() -> Result {
     let output = Sandbox::new()?.run(&["--version"])?;
     assert!(output.status.success());
     assert_eq!(
@@ -16,7 +16,8 @@ fn version() -> Result {
 }
 
 /// `--help` lists every command and the options every command takes. the introduction above
-/// them is the welcome's, which `welcome` holds and `help_opens_like_the_first_run` finds here.
+/// them is the welcome's, which `a_bare_run_prints_a_short_welcome_with_a_first_command` holds
+/// and `help_opens_like_the_first_run` finds here.
 #[test]
 fn help_lists_every_command() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
@@ -321,7 +322,7 @@ const NAMED: [&str; 4] = [
 ];
 
 #[test]
-fn welcome() -> Result {
+fn a_bare_run_prints_a_short_welcome_with_a_first_command() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;

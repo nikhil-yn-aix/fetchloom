@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn ranges_and_lengths() {
+    fn a_part_names_its_bytes_and_the_size_of_the_whole_file() {
         let partial = headers(&[(header::CONTENT_RANGE, "bytes 100-199/200")]);
         assert_eq!(range_start(&partial), Some(100));
         assert_eq!(range_end(&partial), Some(199));
@@ -323,6 +323,10 @@ mod tests {
         );
         let full = headers(&[(header::CONTENT_LENGTH, "4177")]);
         assert_eq!(total_length(&full, StatusCode::OK), Some(4177));
+    }
+
+    #[test]
+    fn only_a_bytes_unit_in_any_case_means_ranges_are_accepted() {
         assert!(accepts_ranges(&headers(&[(
             header::ACCEPT_RANGES,
             "Bytes"
@@ -331,7 +335,10 @@ mod tests {
             header::ACCEPT_RANGES,
             "none"
         )])));
-        assert!(!accepts_ranges(&full));
+        assert!(!accepts_ranges(&headers(&[(
+            header::CONTENT_LENGTH,
+            "4177"
+        )])));
     }
 
     #[test]

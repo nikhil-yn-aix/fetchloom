@@ -230,8 +230,10 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
     assert_eq!(choice(&actual), expected, "observation {bytes:?}");
 }
 
+/// twelve file states under every mix of force, copy, writable and shared, each checked
+/// against `reference`, a small model of who owns the file.
 #[test]
-fn placement_decision_observations() {
+fn every_observed_file_gets_the_decision_the_ownership_model_predicts() {
     let run = tempfile::tempdir().unwrap();
     let project = Project {
         root: run.path().join("project"),
@@ -289,7 +291,7 @@ fn a_damaged_file_is_replaced_without_force() {
 /// which records sync removes, keeps or forgets: only those of a dataset the run works on that
 /// no target wants, whatever else the run's scope names.
 #[test]
-fn unwanted_observations() {
+fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
     let run = tempfile::tempdir().unwrap();
     let project = Project {
         root: run.path().join("project"),

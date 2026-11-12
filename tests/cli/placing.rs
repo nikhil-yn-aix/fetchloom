@@ -12,6 +12,9 @@ use crate::support::{
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
 
+/// whether this disk takes `other` for `original`, as macos and windows do. the alias tests
+/// run only where it does, and `a_respelled_file_is_extra_where_the_disk_tells_names_apart`
+/// only where it does not.
 fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
     let probe = sandbox.folder(".names")?;
     fs::write(probe.join(original), b"names")?;
@@ -55,7 +58,7 @@ fn clean_alias(sandbox: &Sandbox, server: &Server) -> Result {
 }
 
 #[test]
-fn case_alias() -> Result {
+fn a_file_renamed_in_another_case_still_matches_its_pin() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
         return Ok(());
@@ -74,7 +77,7 @@ fn case_alias() -> Result {
 }
 
 #[test]
-fn force_alias() -> Result {
+fn force_restores_pinned_bytes_in_a_file_renamed_in_another_case() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
         return Ok(());
@@ -92,8 +95,9 @@ fn force_alias() -> Result {
     clean_alias(&sandbox, &server)
 }
 
+/// a name in another unicode form matches its pin both ways: the file respelled, then the lock.
 #[test]
-fn unicode_alias() -> Result {
+fn a_name_in_another_unicode_form_still_matches_its_pin() -> Result {
     let sandbox = Sandbox::new()?;
     let original = "caf\u{e9}.csv";
     let other = "cafe\u{301}.csv";
@@ -112,7 +116,7 @@ fn unicode_alias() -> Result {
 }
 
 #[test]
-fn data_dir_alias() -> Result {
+fn a_data_folder_in_another_case_matches_and_data_dir_takes_its_spelling() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "data", "Data")? {
         return Ok(());
@@ -138,8 +142,9 @@ fn data_dir_alias() -> Result {
     Ok(())
 }
 
+/// the state then records the file under the lock's spelling.
 #[test]
-fn locked_alias() -> Result {
+fn a_lock_path_in_another_case_matches_the_placed_file() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
         return Ok(());
@@ -160,8 +165,9 @@ fn locked_alias() -> Result {
     Ok(())
 }
 
+/// both the file and the data folder are spelled in another case than data.toml and the lock say.
 #[test]
-fn alias_removal() -> Result {
+fn remove_deletes_a_placed_file_spelled_in_another_case() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
         return Ok(());
@@ -186,8 +192,10 @@ fn alias_removal() -> Result {
     Ok(())
 }
 
+/// status calls the pin missing and the respelled file extra, and force puts the pin back
+/// beside the respelled file, which stays.
 #[test]
-fn distinct_names() -> Result {
+fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
     for (original, other, url) in [
         ("iris.csv", "Iris.csv", "/files/iris.csv"),
         ("caf\u{e9}.csv", "cafe\u{301}.csv", "/files/caf%C3%A9.csv"),
@@ -272,7 +280,7 @@ fn distinct_inodes_do_not_alias() -> Result {
 }
 
 #[test]
-fn ambiguous_aliases() -> Result {
+fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_extra() -> Result {
     let sandbox = Sandbox::new()?;
     if names_alias(&sandbox, "data", "Data")? || !sandbox.links()?.hardlink {
         return Ok(());

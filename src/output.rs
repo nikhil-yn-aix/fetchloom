@@ -2005,6 +2005,8 @@ mod tests {
         );
     }
 
+    /// a row for each rule in `fix`'s doc: placeholders, examples, guesses, a person's terminal,
+    /// hand fixes first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
