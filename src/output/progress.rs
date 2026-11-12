@@ -1153,6 +1153,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut output =
             super::super::Output::new(style, super::super::Level::Normal, false, false);

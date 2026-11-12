@@ -1697,6 +1697,7 @@ pub(crate) mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
         (dir, project, context)
@@ -1781,6 +1782,7 @@ pub(crate) mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
         context.offline = crate::net::Offline::Flag;

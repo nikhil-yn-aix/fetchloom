@@ -944,6 +944,48 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     Ok(())
 }
 
+/// with `FETCHLOOM_ACCESSIBLE=1`, the datasets a search finds are a numbered list drawn once,
+/// without an escape code to move the cursor, and the number typed picks one: a number out of
+/// range asks again, and q cancels as at the picker.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut catalogs = Vec::new();
+    let mut command = sandbox.command(&["add", "iris", "--dry-run"]);
+    for (variable, body) in SEARCHED {
+        let json = || reply("200 OK", &[("Content-Type", "application/json")], body);
+        let catalog = Server::start("/", (0..4).map(|_| json()).collect())?;
+        command.env(variable, &catalog.url);
+        catalogs.push(catalog);
+    }
+    command.env("FETCHLOOM_ACCESSIBLE", "1");
+    let asked = "or q to cancel: ";
+    let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", asked, "12\r2\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(screen.matches(asked).count(), 2, "{screen}");
+    let second = screen
+        .lines()
+        .find_map(|line| line.strip_prefix("    2 "))
+        .and_then(|row| row.split_whitespace().next())
+        .ok_or_else(|| format!("no second row: {screen}"))?;
+    assert!(screen.contains(&format!("  Chose {second}\n")), "{screen}");
+    assert!(!screen.contains('\u{1b}'), "{screen:?}");
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &command, "", asked, "q\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(2), "{screen}");
+    assert!(
+        screen.contains("  Cancelled the choice of a dataset, so nothing changed\n"),
+        "{screen}"
+    );
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{screen}");
+    Ok(())
+}
+
 /// no or ctrl-c at the question about a large download an add needs is a cancel, and the add has
 /// changed nothing by then: it writes data.toml and data.lock only once every file is in.
 #[cfg(target_os = "linux")]

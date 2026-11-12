@@ -1456,6 +1456,7 @@ mod tests {
                 interactive: false,
                 watched: false,
                 links: false,
+                accessible: false,
             },
             crate::output::Level::Quiet,
             false,

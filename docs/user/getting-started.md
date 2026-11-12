@@ -12,7 +12,7 @@ a terminal is a window where you type a command and press enter to run it.
 
 type each command below on its own line and press enter after it.
 
-with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines, with no colors, redrawn progress bars or symbols such as `·`, and asks no questions: a download over 1 GiB needs `--yes`, and plain words such as `iris` print the matching datasets for you to add by their id, instead of opening a list to move through.
+with a screen reader, run `export FETCHLOOM_ACCESSIBLE=1` in that terminal first, or `$env:FETCHLOOM_ACCESSIBLE = '1'` in powershell. fetchloom then draws nothing over again: progress comes as plain lines instead of redrawn bars, a question such as whether to download a file over 1 GiB is a plain line you answer with y or n, and plain words such as `iris` list the matching datasets with numbers, so you type the number of the one to add instead of moving through a list. add `export TERM=dumb`, or `$env:TERM = 'dumb'`, to drop colors and symbols such as `·` as well.
 
 ## install
 

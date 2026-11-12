@@ -1512,6 +1512,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                 interactive: false,
                 watched: false,
                 links: false,
+                accessible: false,
             },
             crate::output::Level::Quiet,
             false,

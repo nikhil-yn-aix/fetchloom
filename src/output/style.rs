@@ -248,6 +248,9 @@ pub(crate) struct Style {
     pub(crate) watched: bool,
     /// the terminal turns OSC 8 sequences into links a person can click.
     pub(crate) links: bool,
+    /// a person at a terminal asked with `FETCHLOOM_ACCESSIBLE` for what a screen reader reads
+    /// well: questions on plain lines, a choice by its number, and nothing drawn over again.
+    pub(crate) accessible: bool,
 }
 
 impl Style {
@@ -261,6 +264,7 @@ impl Style {
             interactive: is_interactive(terminal, &var),
             watched: terminal && std::io::stdout().is_terminal() && !by_agent(&var),
             links: is_interactive(terminal, &var) && makes_links(&var),
+            accessible: is_accessible(terminal, &var),
         }
     }
 
@@ -286,6 +290,16 @@ fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> boo
     terminal
         && var("CI").is_none_or(|v| v.is_empty())
         && var("TERM").is_none_or(|v| v != "dumb")
+        && !by_agent(var)
+}
+
+/// whether `FETCHLOOM_ACCESSIBLE` is `1` or `true` at a terminal, `TERM=dumb` included, outside
+/// CI and coding agents, which a question would leave waiting.
+fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    terminal
+        && var("FETCHLOOM_ACCESSIBLE")
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        && var("CI").is_none_or(|v| v.is_empty())
         && !by_agent(var)
 }
 
@@ -460,6 +474,22 @@ mod tests {
         assert!(!is_interactive(false, &env(&[])));
         assert!(!is_interactive(true, &env(&[("CI", "true")])));
         assert!(!is_interactive(true, &env(&[("TERM", "dumb")])));
+    }
+
+    #[test]
+    fn accessible_asks_a_person_at_a_terminal_but_never_ci_or_an_agent() {
+        let asked = ("FETCHLOOM_ACCESSIBLE", "1");
+        assert!(is_accessible(true, &env(&[asked])));
+        assert!(is_accessible(true, &env(&[asked, ("TERM", "dumb")])));
+        assert!(is_accessible(
+            true,
+            &env(&[("FETCHLOOM_ACCESSIBLE", "True")])
+        ));
+        assert!(!is_accessible(false, &env(&[asked])));
+        assert!(!is_accessible(true, &env(&[asked, ("CI", "true")])));
+        assert!(!is_accessible(true, &env(&[asked, ("CLAUDECODE", "1")])));
+        assert!(!is_accessible(true, &env(&[("FETCHLOOM_ACCESSIBLE", "0")])));
+        assert!(!is_accessible(true, &env(&[])));
     }
 
     #[test]

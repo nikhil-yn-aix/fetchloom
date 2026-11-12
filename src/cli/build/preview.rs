@@ -644,6 +644,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut context = Context::new(Output::new(
             style,

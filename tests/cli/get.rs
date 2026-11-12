@@ -1341,6 +1341,58 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
     Ok(())
 }
 
+/// with `FETCHLOOM_ACCESSIBLE=1`, a terminal that cannot redraw, as under `TERM=dumb`, still
+/// gets the question about a large download, on plain lines without one escape code, and yes
+/// downloads it. CI, a coding agent and --json still never ask.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_accessible_terminal_asks_on_plain_lines_and_ci_never_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, (0..8).map(|_| file(IRIS, "\"v1\"")).collect())?;
+    let get = |args: &[&str], unattended: Option<(&str, &str)>| {
+        let mut command =
+            sandbox.command(&[&["get", &server.url, "-o", "iris.csv"], args].concat());
+        // the plain line that tells the download begins comes as its size is known, as the
+        // question does, and never inside it
+        command
+            .env("FETCHLOOM_ASK_ABOVE", "1")
+            .env("FETCHLOOM_ACCESSIBLE", "1")
+            .env("FETCHLOOM_TEST_TICKER", "on")
+            .env("TERM", "dumb");
+        if let Some((name, value)) = unattended {
+            command.env(name, value);
+        }
+        command
+    };
+    for (args, unattended) in [
+        (&[][..], Some(("CI", "true"))),
+        (&[][..], Some(("CLAUDECODE", "1"))),
+        (&["--json"][..], None),
+    ] {
+        let Some((code, screen)) =
+            crate::support::typed(&sandbox.work(), &get(args, unattended), "", "", "")?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(1), "{args:?} {unattended:?}: {screen}");
+        assert!(
+            !screen.contains("[y/N]"),
+            "{args:?} {unattended:?}: {screen}"
+        );
+    }
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &get(&[], None), "", "[y/N] ", "y\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    let asked = format!("download iris.csv ({} B)? [y/N] y\n", IRIS.len());
+    assert!(screen.contains(&asked), "{screen}");
+    assert!(!screen.contains('\u{1b}'), "{screen:?}");
+    assert_eq!(fs::read(sandbox.work().join("iris.csv"))?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn the_server_can_name_the_file() -> Result {
     let sandbox = Sandbox::new()?;

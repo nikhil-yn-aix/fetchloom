@@ -578,6 +578,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
 
@@ -646,6 +647,7 @@ mod tests {
                 interactive: false,
                 watched: false,
                 links: false,
+                accessible: false,
             },
             Level::Quiet,
             false,
@@ -703,6 +705,7 @@ mod tests {
                 interactive: false,
                 watched: false,
                 links: false,
+                accessible: false,
             },
             Level::Quiet,
             false,
@@ -756,6 +759,7 @@ mod tests {
                     interactive: false,
                     watched: false,
                     links: false,
+                    accessible: false,
                 },
                 Level::Quiet,
                 false,

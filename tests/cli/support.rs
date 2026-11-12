@@ -379,14 +379,23 @@ pub(crate) fn typed(
     };
     let screen =
         |(bytes, _): &(Vec<u8>, bool)| String::from_utf8_lossy(bytes).replace("\r\n", "\n");
+    // a command that ended can show nothing more, so its waiting ends there too
     if !after.is_empty()
         && let Err(err) = shown.wait(&format!("{after:?} on the screen"), |state| {
-            screen(state).contains(after)
+            screen(state).contains(after) || state.1
         })
     {
         let _ = child.kill();
         let _ = child.wait();
         return Err(format!("{err}\n{}", shown.read(screen)).into());
+    }
+    if !after.is_empty() && !shown.read(|state| screen(state).contains(after)) {
+        let _ = child.wait();
+        return Err(format!(
+            "the command ended before {after:?} showed\n{}",
+            shown.read(screen)
+        )
+        .into());
     }
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(keys.as_bytes())?;

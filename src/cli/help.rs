@@ -111,6 +111,8 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
   FETCHLOOM_NO_HINTS   1 drops the hint: and next: lines
+  FETCHLOOM_ACCESSIBLE 1 asks on plain lines, takes a choice by its number and
+                       draws no live progress, for screen readers
   FETCHLOOM_KEYRING    0 keeps keys out of the system's credential store
   FETCHLOOM_BUILDING   set by fetchloom build for its steps: the project
                        a fetchloom inside a step may not lock

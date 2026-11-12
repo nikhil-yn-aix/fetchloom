@@ -54,8 +54,9 @@ pub(crate) struct Output {
     json: bool,
     bars: Option<MultiProgress>,
     /// lines told while a person answers a question, written once the answer is in. every line
-    /// is written while holding it, so a first ctrl-c holding it keeps all others back.
-    held: Mutex<Option<Vec<String>>>,
+    /// is written while holding it, a batch's plain lines too, so a first ctrl-c holding it keeps
+    /// all others back.
+    held: Arc<Mutex<Option<Vec<String>>>>,
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
     warnings: Mutex<Vec<Warned>>,
@@ -297,14 +298,16 @@ impl Output {
         let unread = style::load_palette();
         // indicatif colors through the console crate, which decides on its own unless told
         console::set_colors_enabled_stderr(style.color);
-        let bars = (style.interactive && !json && !logs && level >= Level::Normal)
-            .then(|| MultiProgress::with_draw_target(progress::terminal()));
+        // a screen reader reads every redraw again, so accessible output tells progress in lines
+        let bars =
+            (style.interactive && !style.accessible && !json && !logs && level >= Level::Normal)
+                .then(|| MultiProgress::with_draw_target(progress::terminal()));
         let output = Output {
             style,
             level,
             json,
             bars,
-            held: Mutex::new(None),
+            held: Arc::default(),
             question: Mutex::new(()),
             warnings: Mutex::new(Vec::new()),
             failed: Mutex::new(None),
@@ -450,6 +453,7 @@ impl Output {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut output = Output::new(style, Level::Normal, false, false);
         output.bars = Some(MultiProgress::with_draw_target(
@@ -780,11 +784,18 @@ impl Output {
         let color = self.style.color;
         let unicode = self.style.unicode;
         let columns = self.columns;
+        let held = Arc::clone(&self.held);
         Ticker::start(verb, what, known, moment, move |verb, text| {
             let line = verb_line(verb, text, Tone::Work, color);
             let line = shown(&line, unicode);
-            match columns {
-                Some(columns) => write_line(color, &fit::fit(&line, columns)),
+            let line = match columns {
+                Some(columns) => fit::fit(&line, columns),
+                None => line.into_owned(),
+            };
+            // a question holds the lines told meanwhile, as [`Output::asking`] says
+            let mut waiting = held.lock().unwrap_or_else(PoisonError::into_inner);
+            match waiting.as_mut() {
+                Some(lines) => lines.push(line),
                 None => write_line(color, &line),
             }
         })
@@ -801,9 +812,11 @@ impl Output {
     }
 
     /// whether a person can answer a question here: stderr and stdin are terminals, outside CI,
-    /// and `--json` was not asked for.
+    /// and `--json` was not asked for. `FETCHLOOM_ACCESSIBLE` asks at a dumb terminal too.
     pub(crate) fn can_ask(&self) -> bool {
-        !self.json && self.style.interactive && std::io::stdin().is_terminal()
+        !self.json
+            && (self.style.interactive || self.style.accessible)
+            && std::io::stdin().is_terminal()
     }
 
     /// a yes or no question whose enter key means `default`, or none when nobody can answer. an
@@ -827,7 +840,7 @@ impl Output {
                             Edit::Typed(_) => shown += 1,
                             Edit::Erased(_) => shown -= 1,
                         }
-                        echo(&terminal, edit);
+                        echo(&terminal, edit, self.style.interactive);
                     },
                     default,
                 );
@@ -864,7 +877,7 @@ impl Output {
                     || terminal.read_key_raw(),
                     |edit| {
                         if !hidden {
-                            echo(&terminal, edit);
+                            echo(&terminal, edit, self.style.interactive);
                         }
                     },
                 );
@@ -883,7 +896,10 @@ impl Output {
                 };
                 let blank = text.trim().is_empty();
                 if hidden && !blank {
-                    let _ = terminal.clear_last_lines(1);
+                    // a terminal that reads no escape codes keeps the empty line it showed
+                    if self.style.interactive {
+                        let _ = terminal.clear_last_lines(1);
+                    }
                     let _ = terminal.write_line(&format!("{label}{}", masked(&text)));
                 }
                 if !blank {
@@ -923,7 +939,8 @@ impl Output {
         }
     }
 
-    /// asks which option to use, or returns none when nobody can answer.
+    /// asks which option to use, or returns none when nobody can answer. accessible output lists
+    /// the options once, numbered, and reads the number typed.
     pub(crate) fn choose(
         &self,
         question: &str,
@@ -933,7 +950,13 @@ impl Output {
         if !self.can_ask() {
             return Ok(None);
         }
-        let ask = || picker::choose(question, options, footer, self.style);
+        let ask = || {
+            if self.style.accessible {
+                picker::numbered(question, options, footer, self.style)
+            } else {
+                picker::choose(question, options, footer, self.style)
+            }
+        };
         self.asking(ask)
     }
 
@@ -1032,17 +1055,19 @@ impl Output {
 
     /// runs `ask`, a question to a person, with the bars cleared and hidden but free to move.
     /// holding their lock until a person answers, as suspending them does, would stop every
-    /// download that reports progress meanwhile. lines told meanwhile wait for the answer.
+    /// download that reports progress meanwhile. lines told meanwhile wait for the answer, with
+    /// bars or without, as in accessible output.
     fn asking<R>(&self, ask: impl FnOnce() -> R) -> R {
-        let Some(bars) = &self.bars else {
-            return ask();
-        };
         let _alone = self.question.lock().unwrap_or_else(PoisonError::into_inner);
         *self.held.lock().unwrap_or_else(PoisonError::into_inner) = Some(Vec::new());
-        let _ = bars.clear();
-        bars.set_draw_target(ProgressDrawTarget::hidden());
+        if let Some(bars) = &self.bars {
+            let _ = bars.clear();
+            bars.set_draw_target(ProgressDrawTarget::hidden());
+        }
         let answer = ask();
-        bars.set_draw_target(progress::terminal());
+        if let Some(bars) = &self.bars {
+            bars.set_draw_target(progress::terminal());
+        }
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let lines = held.take().unwrap_or_default();
         self.write_lines(&lines);
@@ -1835,13 +1860,20 @@ fn answer(
     }
 }
 
-/// shows on `terminal` a change to an answer as it is typed.
-fn echo(terminal: &console::Term, edit: Edit) {
+/// shows on `terminal` a change to an answer as it is typed. a terminal that reads no escape
+/// codes, as under `TERM=dumb`, has an erased character written over with backspaces.
+fn echo(terminal: &console::Term, edit: Edit, escapes: bool) {
     let mut bytes = [0; 4];
     let _ = match edit {
         Edit::Typed(typed) => terminal.write_str(typed.encode_utf8(&mut bytes)),
         Edit::Erased(erased) => {
-            terminal.clear_chars(console::measure_text_width(erased.encode_utf8(&mut bytes)))
+            let width = console::measure_text_width(erased.encode_utf8(&mut bytes));
+            if escapes {
+                terminal.clear_chars(width)
+            } else {
+                let back = "\u{8}".repeat(width);
+                terminal.write_str(&format!("{back}{}{back}", " ".repeat(width)))
+            }
         }
     };
 }
@@ -2404,6 +2436,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut colored_story = Output::new(style(true), Level::Normal, false, false);
         colored_story.report_color = false;
@@ -2814,6 +2847,7 @@ mod tests {
             interactive: false,
             watched,
             links: false,
+            accessible: false,
         };
         let shows =
             |watched, level, json| Output::new(style(watched), level, json, false).shows_next();
@@ -2841,6 +2875,7 @@ mod tests {
             interactive: true,
             watched: true,
             links: false,
+            accessible: false,
         };
         let output = Output::new(style, Level::Normal, false, false);
         let bars = output.bars.as_ref().unwrap();
@@ -2979,10 +3014,32 @@ mod tests {
             interactive,
             watched: interactive,
             links: false,
+            accessible: false,
         };
         let mut output = Output::new(style, Level::Normal, false, false);
         output.bars = None;
         output
+    }
+
+    /// lines told while a person answers a question wait for the answer, a batch's plain lines
+    /// too, so none is written over the question where no bars hide behind it, as in accessible
+    /// output.
+    #[test]
+    fn lines_told_during_a_question_wait_for_the_answer() {
+        let output = telling(false);
+        output.asking(|| {
+            output.step("Resolving", "iris");
+            let _batch = output.ticker("Downloading", "iris.csv".to_owned(), [Some(81)]);
+            assert_eq!(
+                output.said(),
+                Vec::<String>::new(),
+                "nothing before the answer"
+            );
+        });
+        let said = output.said();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("Resolving iris"), "{said:?}");
+        assert!(said[1].contains("Downloading iris.csv"), "{said:?}");
     }
 
     /// a terminal drops what a program wrote but had not yet shown when a ctrl-c comes, so a
@@ -3096,6 +3153,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut output = Output::new(style, Level::Normal, false, false);
         let screen = Screen::default();

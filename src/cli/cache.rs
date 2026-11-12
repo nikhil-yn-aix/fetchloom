@@ -1090,6 +1090,7 @@ mod tests {
             interactive: true,
             watched: true,
             links: false,
+            accessible: false,
         };
         let quiet = Output::new(style, Level::Quiet, false, false);
         let unhinted = Output::new(style, Level::Normal, false, false).without_hints(true);

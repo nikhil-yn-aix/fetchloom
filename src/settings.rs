@@ -80,7 +80,7 @@ const CLEARED: [&str; 6] = [
     "push_to",
 ];
 /// the variables fetchloom reads besides those of the settings file's keys.
-const OTHERS: [&str; 12] = [
+const OTHERS: [&str; 13] = [
     "FETCHLOOM_SETTINGS",
     "FETCHLOOM_NO_CONFIG",
     "FETCHLOOM_OFFLINE",
@@ -92,6 +92,7 @@ const OTHERS: [&str; 12] = [
     "FETCHLOOM_BUILDING",
     "FETCHLOOM_COLORS",
     "FETCHLOOM_NO_HINTS",
+    "FETCHLOOM_ACCESSIBLE",
     "FETCHLOOM_KEYRING",
 ];
 

@@ -806,6 +806,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         Arc::new(Context::new(Output::new(style, Level::Quiet, false, false)))
     }

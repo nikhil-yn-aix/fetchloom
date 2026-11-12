@@ -42,6 +42,82 @@ pub(super) fn choose(
     answer
 }
 
+/// a choice for a person who reads the screen a line at a time, as with a screen reader: the
+/// options listed once with their numbers, then the number typed, read as a yes or no answer is.
+/// nothing is drawn over again.
+pub(super) fn numbered(
+    question: &str,
+    options: &[String],
+    footer: &str,
+    style: Style,
+) -> Result<Option<usize>, Error> {
+    if options.is_empty() {
+        return Err(cancelled());
+    }
+    let terminal = Term::stderr();
+    let width = terminal
+        .size_checked()
+        .map_or(usize::MAX, |(_, columns)| usize::from(columns));
+    let bold = paint(style.color, Paint::new().bold());
+    let dim = paint(style.color, Paint::new().dimmed());
+    let _ = terminal.write_line(&format!("  {bold}{}{bold:#}", plain(question)));
+    let column = column(options);
+    for (index, option) in options.iter().enumerate() {
+        let _ = terminal.write_line(&row(option, index, usize::MAX, style, width, column));
+    }
+    if !footer.is_empty() {
+        let _ = terminal.write_line(&format!("    {dim}{}{dim:#}", plain(footer)));
+    }
+    let count = options.len();
+    loop {
+        let _ = terminal.write_str(&format!(
+            "  type a number from 1 to {count} and press enter, or q to cancel: "
+        ));
+        let typed = super::typed_line(
+            || terminal.read_key_raw(),
+            |edit| super::echo(&terminal, edit, style.interactive),
+        );
+        // keys read one by one bring no line break of their own
+        let _ = terminal.write_line("");
+        let line = match typed {
+            Ok(line) => line,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                return Err(Error::new(Kind::Interrupted, "stopped").cancelled("the choice"));
+            }
+            Err(_) => return Err(cancelled()),
+        };
+        match picked(&line, count) {
+            Picked::One(index) => return Ok(Some(index)),
+            Picked::Cancel => return Err(cancelled().cancelled("the choice")),
+            Picked::Again => {}
+        }
+    }
+}
+
+/// what a line typed at a numbered choice picks.
+#[derive(Debug, PartialEq, Eq)]
+enum Picked {
+    /// the option at this index.
+    One(usize),
+    /// none, as q or n says.
+    Cancel,
+    /// nothing it can read, such as a number out of range, so the choice is asked again.
+    Again,
+}
+
+/// `line`, typed at a numbered choice of `count` options: a number from 1 to `count`, or q or n
+/// in either case to cancel, as at the picker.
+fn picked(line: &str, count: usize) -> Picked {
+    let line = line.trim();
+    if line.eq_ignore_ascii_case("q") || line.eq_ignore_ascii_case("n") {
+        return Picked::Cancel;
+    }
+    match line.parse::<usize>() {
+        Ok(number) if (1..=count).contains(&number) => Picked::One(number - 1),
+        _ => Picked::Again,
+    }
+}
+
 /// whether stderr reads cursor escape codes. a windows console reads them only once asked to;
 /// when that fails, console's own cursor calls still work.
 fn escapes() -> bool {
@@ -137,13 +213,7 @@ fn frame(
         .copied()
         .unwrap_or("");
     let mut lines = vec![format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}")];
-    // what follows the widest reference, so a row with a blank title keeps its columns
-    let column = options
-        .iter()
-        .map(|option| reference(option).chars().count() + 2)
-        .max()
-        .unwrap_or_default()
-        .min(super::REFERENCE_COLUMN + 2);
+    let column = column(options);
     for (index, option) in options.iter().enumerate() {
         lines.push(row(option, index, cursor, style, width, column));
     }
@@ -153,6 +223,17 @@ fn frame(
         lines.push(format!("    {dim}{}{dim:#}", plain(&footer)));
     }
     lines
+}
+
+/// where the titles start: after the widest reference, so a row with a blank title keeps its
+/// columns.
+fn column(options: &[String]) -> usize {
+    options
+        .iter()
+        .map(|option| reference(option).chars().count() + 2)
+        .max()
+        .unwrap_or_default()
+        .min(super::REFERENCE_COLUMN + 2)
 }
 
 fn reference(option: &str) -> &str {
@@ -257,6 +338,7 @@ mod tests {
             interactive: true,
             watched: true,
             links: false,
+            accessible: false,
         }
     }
 
@@ -277,6 +359,22 @@ mod tests {
             selection_key(Ok(Key::Enter), &mut cursor, 3).unwrap(),
             Some(1)
         );
+    }
+
+    #[test]
+    fn a_typed_number_picks_its_option_and_anything_else_asks_again() {
+        for (line, picked_one) in [
+            ("2", Picked::One(1)),
+            (" 12 ", Picked::One(11)),
+            ("13", Picked::Again),
+            ("0", Picked::Again),
+            ("", Picked::Again),
+            ("two", Picked::Again),
+            ("Q", Picked::Cancel),
+            ("n", Picked::Cancel),
+        ] {
+            assert_eq!(picked(line, 12), picked_one, "{line:?}");
+        }
     }
 
     #[test]

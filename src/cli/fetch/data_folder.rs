@@ -375,6 +375,7 @@ mod tests {
                 interactive: false,
                 watched: false,
                 links: false,
+                accessible: false,
             },
             Level::Quiet,
             false,

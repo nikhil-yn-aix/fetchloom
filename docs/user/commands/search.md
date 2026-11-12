@@ -58,6 +58,19 @@ paths never reach a search site. a path such as `./flowers.csv`, `~/data` or `fi
 
 with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns. up/down or j/k moves, enter selects the current row, and 1-9 selects a numbered row. q or esc cancels with exit 2, and ctrl-c with exit 130; either way stderr shows `Cancelled the choice of a dataset, so nothing changed`, not an error. `--yes` approves downloads but never selects a dataset.
 
+with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same rows come once, numbered, and nothing on the screen moves: type the number of a row and press enter. a number not on the list asks again, and q cancels, as above. from a real run at a 100-column terminal, shortened:
+
+```text
+  Searching hugging face, kaggle and zenodo for "iris"
+  which one?
+    1 hf:datasets/scikit-learn/iris                                       18.1 KiB   12k downloads
+    2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  959k downloads
+    3 zenodo:23233774                      IRIS: ICESat-2 River Surface…   1.1 GiB  2.4k downloads
+    more matches: fetchloom search iris --limit 20
+  type a number from 1 to 9 and press enter, or q to cancel: 2
+      Chose kaggle:uciml/iris
+```
+
 without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 100-column terminal with `TERM=dumb`, shortened:
 
 ```text

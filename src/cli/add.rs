@@ -2726,6 +2726,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
         let root = std::path::Path::new(std::path::MAIN_SEPARATOR_STR);
@@ -2753,6 +2754,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         let output = Output::new(style, Level::Normal, false, false);
         let system: Vec<String> = (0..1001).map(|n| format!("f{n}/.DS_Store")).collect();

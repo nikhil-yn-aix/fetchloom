@@ -880,6 +880,7 @@ mod tests {
             interactive: false,
             watched: false,
             links: false,
+            accessible: false,
         };
         Output::new(style, Level::Quiet, true, false)
     }
