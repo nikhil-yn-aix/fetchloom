@@ -21,6 +21,9 @@ const REACH: u32 = 60;
 const STEADY: Duration = Duration::from_secs(30);
 /// how long a download receives nothing before its bar says so instead of showing a fading rate.
 const STALL: Duration = Duration::from_secs(5);
+/// how far into a transfer its rate starts over, once, so bytes that arrive at once when it
+/// begins, as those a server sent while this run checked what an earlier run kept, are no speed.
+const RERATE: Duration = Duration::from_secs(1);
 const TICK: Duration = Duration::from_millis(100);
 /// how long a batch runs before its first plain line, so a quick one adds no line at all.
 const MOMENT: Duration = Duration::from_secs(2);
@@ -48,6 +51,10 @@ struct Moved {
     kept: AtomicU64,
     /// the try a download waits to make after one failed, until a try gets an answer.
     retry: Mutex<Option<Retrying>>,
+    /// milliseconds from `born` to the start of the transfer, and whether its rate started over
+    /// [`RERATE`] into it.
+    started: AtomicU64,
+    rerated: AtomicBool,
 }
 
 /// a download's next try, as its bar tells it.
@@ -67,7 +74,25 @@ impl Moved {
             stopping,
             kept: AtomicU64::new(0),
             retry: Mutex::new(None),
+            started: AtomicU64::new(0),
+            rerated: AtomicBool::new(false),
         }
+    }
+
+    /// marks `now` as the start of a transfer, whose rate has yet to start over.
+    fn restart(&self, now: Instant) {
+        let millis = now.saturating_duration_since(self.born).as_millis();
+        self.started
+            .store(u64::try_from(millis).unwrap_or(u64::MAX), Ordering::Relaxed);
+        self.rerated.store(false, Ordering::Relaxed);
+    }
+
+    /// whether the rate starts over at `now`: once, [`RERATE`] into the transfer.
+    fn rerate(&self, now: Instant) -> bool {
+        let since = now
+            .saturating_duration_since(self.born)
+            .saturating_sub(Duration::from_millis(self.started.load(Ordering::Relaxed)));
+        since >= RERATE && !self.rerated.swap(true, Ordering::Relaxed)
     }
 
     /// what the bar says of a try it waits to make, if it waits for one.
@@ -172,10 +197,13 @@ impl Bar {
             if let Some(total) = total {
                 bar.set_length(total.saturating_sub(resumed));
             }
-            // back to 0, which indicatif reads as a fresh start of its estimate
+            // back to 0, which indicatif reads as a fresh start of its estimate, with the time
+            // this transfer takes counted from now, not from an earlier try or a check
             bar.set_position(0);
             bar.reset_eta();
+            bar.reset_elapsed();
             self.moved.now();
+            self.moved.restart(Instant::now());
         }
     }
 
@@ -194,6 +222,9 @@ impl Bar {
         if let Some(bar) = &self.drawn {
             bar.inc(bytes);
             self.moved.now();
+            if self.moved.rerate(Instant::now()) {
+                bar.reset_eta();
+            }
         }
     }
 
@@ -778,6 +809,40 @@ mod tests {
             Some((0, Some(1000))),
             "a fresh start keeps nothing"
         );
+    }
+
+    /// a transfer's time counts from its start, not from when its bar appeared, as when the
+    /// bar waited for the server or checked what an earlier run kept, so its rate settles over
+    /// this run's transfer alone; and the rate starts over once, a second in, leaving out the
+    /// bytes that arrived at once as it began, which once read as `58.5 MiB/s` from a server
+    /// sending 38.1.
+    #[test]
+    fn a_resumed_transfer_rates_from_its_own_start() {
+        let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
+        let bar = Bar::add(
+            &bars,
+            "Downloading",
+            "res.bin".to_owned(),
+            (false, false),
+            Arc::default(),
+        );
+        let drawn = bar
+            .drawn
+            .clone()
+            .unwrap()
+            .with_elapsed(Duration::from_secs(5));
+        assert!(drawn.elapsed() >= Duration::from_secs(5));
+        bar.start(Some(300), 152);
+        assert!(
+            drawn.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            drawn.elapsed()
+        );
+        let begun = Instant::now();
+        bar.moved.restart(begun);
+        assert!(!bar.moved.rerate(begun + Duration::from_millis(900)));
+        assert!(bar.moved.rerate(begun + RERATE));
+        assert!(!bar.moved.rerate(begun + 2 * RERATE), "once a transfer");
     }
 
     #[test]
