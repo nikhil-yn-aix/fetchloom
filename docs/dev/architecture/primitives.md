@@ -43,7 +43,7 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 | work | default and cap behavior |
 |---|---|
 | async runtime | up to four workers, reduced by the thread cap |
-| archive readers | up to `min(4, ceil(logical CPUs / 4))`; the cap shares a budget between active readers and their writers |
+| archive readers | up to `min(4, ceil(logical CPUs / 4))`; an explicit cap counts only readers with an archive still pending before sharing the budget with their writers |
 | archive writers | up to eight per archive, no more than logical CPUs; zero writer budget stores on the reader |
 | placement, object lookup and survey hashing | up to eight workers, no more than logical CPUs, with at most one per 64 items |
 | cache verification | logical CPU count, reduced by the cap |

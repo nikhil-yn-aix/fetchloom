@@ -24,6 +24,7 @@ every change measured with the current harness, one row each: what it gained whe
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | flushing | the first 64 files of every batch flushed on their own | ext4 s1 1.078, peak memory 1.151 | dropped | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
+| archives | budget an explicit thread cap only for pending readers | xfs time 0.689 glibc / 0.703 musl; small musl +2.03 MiB, within the default budget | kept, reported memory cost | [reader budgets](#pending-archive-reader-budgets-2026-11-12) |
 | archives | archive staging spread over 16 folders | ext4 s4 0.798, xfs s4 0.830 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | no-replace rename for new objects | ext4 s4 1.090 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | xfs staging through `O_TMPFILE` | xfs s4 0.955 [0.914, 1.026] | dropped, no win | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -359,6 +360,48 @@ a stopped run pays the whole bound when a blocking task outlives it: `status --v
 | 1 s | 1,001.12 ms | 1,001.12 ms |
 
 a second SIGINT sent as `Stopped` showed did not shorten the wait at 100 ms or 1 s, since the run's listener goes with the runtime; a second ctrl-c while the command still runs exits 130 from a runtime thread without the wait.
+
+## pending archive reader budgets, 2026-11-12
+
+with 12 available CPUs and an explicit cap of eight threads, unpacking asked for three archive readers and budgeted one writer for each. when only one archive needed reading, two reader reservations went unused. the change clamps that explicit reader count to the archives still pending after cache reuse, leaving one reader and seven writers for this case. the unset default keeps the same budget as before; no flush, publication or placement policy changes.
+
+one switched release build per libc, from d0176dd7, compared fresh `sync --locked` runs with `FETCHLOOM_THREADS=8`. each arm used the same project and cache paths, a new empty cache, the same loopback HTTP source and an independently checked zip. the larger fixture held 10,000 distinct 4 KiB files; the small control held 32. the table gives 12 clean interleaved pairs per row, after warmups, with paired bootstrap intervals. ext4 was on nvme; xfs, btrfs and FAT32 were mounted images on that storage. only bounded wall-time batches held the shared lock, on cores 12–23. flagged load bursts stay in the raw records, not in these time estimates.
+
+| files and filesystem | build | before s [range] | after s [range] | time ratio [95%] | peak RSS MiB, before to after | peak RSS ratio [95%] |
+|---|---|---|---|---|---|---|
+| 10,000 × 4 KiB, xfs | glibc | 2.152 [2.084, 2.332] | 1.493 [1.408, 1.541] | 0.689 [0.672, 0.700] | 36.26 to 37.62 | 1.019 [0.904, 1.211] |
+| 10,000 × 4 KiB, xfs | musl | 2.200 [2.084, 2.285] | 1.557 [1.417, 1.606] | 0.703 [0.682, 0.715] | 127.84 to 127.63 | 0.991 [0.951, 1.057] |
+| 10,000 × 4 KiB, ext4 | glibc | 1.296 [1.252, 1.352] | 0.710 [0.655, 0.741] | 0.545 [0.533, 0.552] | 36.61 to 36.18 | 0.891 [0.852, 1.135] |
+| 10,000 × 4 KiB, ext4 | musl | 1.325 [1.286, 1.511] | 0.717 [0.660, 0.764] | 0.538 [0.501, 0.547] | 119.80 to 127.78 | 1.049 [0.993, 1.109] |
+| 10,000 × 4 KiB, btrfs | glibc | 2.120 [2.031, 2.321] | 1.956 [1.880, 2.071] | 0.926 [0.902, 0.935] | 31.45 to 30.80 | 0.978 [0.918, 1.013] |
+| 10,000 × 4 KiB, btrfs | musl | 2.080 [1.987, 2.281] | 2.011 [1.881, 2.161] | 0.959 [0.936, 0.978] | 121.61 to 109.91 | 0.909 [0.872, 0.951] |
+| 32 × 4 KiB, ext4 | glibc | 0.026 [0.025, 0.028] | 0.022 [0.021, 0.023] | 0.843 [0.797, 0.859] | 13.35 to 13.52 | 1.010 [0.989, 1.027] |
+| 32 × 4 KiB, ext4 | musl | 0.028 [0.026, 0.033] | 0.023 [0.022, 0.028] | 0.829 [0.803, 0.846] | 30.69 to 32.72 | 1.066 [1.064, 1.071] |
+| 32 × 4 KiB, FAT32 | glibc | 0.044 [0.043, 0.047] | 0.038 [0.037, 0.046] | 0.860 [0.835, 0.873] | 13.43 to 13.61 | 1.021 [0.996, 1.032] |
+| 32 × 4 KiB, FAT32 | musl | 0.045 [0.044, 0.046] | 0.039 [0.038, 0.042] | 0.875 [0.866, 0.887] | 30.70 to 32.71 | 1.066 [0.996, 1.066] |
+
+more of the requested threads now do useful work, at a measured memory cost. on musl, the small ext4 case added 2.03 MiB at the median, 6.6% [6.4%, 7.1%]; the 10,000-file ext4 case added 7.99 MiB, though its paired RSS interval was wide. the largest candidate peak in these cap-eight cases was 138.70 MiB (145.4 MB). these costs fit the owner's default memory budget of about 150 MB; they are not described as memory-neutral. peak RSS came from GNU time's child `wait4`, not the python harness's inherited RSS floor. a separate unlocked 12-pair memory counter also found growth on the small musl case, 1.036 [1.003, 1.148]; its wall samples are not qualification evidence.
+
+| control | build | pairs | before s [range] | after s [range] | time ratio [95%] | peak RSS ratio [95%] |
+|---|---|---|---|---|---|---|
+| 10,000 files, ext4, unset cap | glibc | 12 | 0.707 [0.681, 0.717] | 0.704 [0.680, 0.766] | 0.996 [0.990, 1.022] | 1.150 [0.898, 1.219] |
+| 10,000 files, ext4, unset cap | musl | 12 | 0.717 [0.670, 0.762] | 0.712 [0.677, 0.757] | 1.000 [0.988, 1.011] | 0.993 [0.930, 1.041] |
+| 10,000 files, xfs, unset cap | glibc | 12 | 1.460 [1.416, 1.517] | 1.479 [1.429, 1.619] | 1.005 [0.991, 1.035] | 1.001 [0.869, 1.051] |
+| 10,000 files, xfs, unset cap | musl | 12 | 1.503 [1.448, 1.599] | 1.497 [1.411, 1.748] | 0.991 [0.982, 1.038] | 1.022 [0.962, 1.047] |
+| 32 files, xfs, cap 1 | glibc | 12 | 0.034 [0.032, 0.037] | 0.033 [0.033, 0.036] | 0.984 [0.978, 1.024] | 0.995 [0.985, 0.998] |
+| 32 files, xfs, cap 1 | musl | 12 | 0.035 [0.032, 0.045] | 0.034 [0.032, 0.036] | 0.987 [0.949, 1.013] | 1.000 [0.995, 1.000] |
+| 3 archives × 1,000 files, xfs, cap 8 | glibc | 12 | 0.459 [0.429, 0.466] | 0.458 [0.432, 0.489] | 1.000 [0.982, 1.048] | 0.988 [0.947, 1.003] |
+| 3 archives × 1,000 files, xfs, cap 8 | musl | 12 | 0.453 [0.427, 0.477] | 0.461 [0.428, 0.622] | 1.010 [0.970, 1.093] | 0.986 [0.904, 1.047] |
+| 1 × 64 MiB member, xfs, cap 8 | glibc | 12 | 0.260 [0.246, 0.429] | 0.265 [0.247, 0.360] | 1.005 [0.958, 1.030] | 0.954 [0.884, 1.133] |
+| 1 × 64 MiB member, xfs, cap 8 | musl | 24 | 0.329 [0.234, 0.361] | 0.344 [0.238, 0.367] | 1.016 [0.994, 1.035] | 0.990 [0.975, 1.029] |
+
+the one-thread lean control keeps its inline, zero-writer path and showed no memory increase. this does not introduce resource levels or promise that any larger lean preset has been qualified. default, one-thread and three-archive controls keep the same effective budgets. the musl single-large-member control first gave 1.029 [1.014, 1.058]; an independent 12-pair confirmation, retaining the first pairs, gave the pooled result above. no control crossed the earlier lab's time-regression guard, a lower 95% bound above 1.02. that is not proof of exact equivalence: the large-member control still leaves a small effect unresolved.
+
+the combined settled-sync control, 10,000 files and 12 pairs, gave time ratios 1.007 [0.989, 1.019] on glibc and 0.998 [0.982, 1.013] on musl, with RSS ratios 1.001 and 1.000. startup had 60 pairs per build, ratios 1.004 [0.998, 1.014] and 0.982 [0.976, 0.995], with unchanged median RSS; startup takes neither changed path, so that fluctuation is not a speedup claim. every completed command's result and placed bytes were checked. exact commands, binary and harness hashes, samples, excluded rounds and the one intentionally cancelled window remain with the sweep outside the repository.
+
+the fixed-input budget regression expected one reader and seven writers for requested readers = 3, pending archives = 1 and cap = 8. the old calculation returned three readers and one writer. removing the clamp after the green run reproduced that failure. the cap-budget invariant also covers fewer pending readers.
+
+the change meets the 10% time-gain rule on ext4 and xfs, and the reported memory cost fits the updated budget rule. it is kept with the switch removed. this fixes an explicit-cap underutilization, not the default xfs gap against curl plus unzip.
 
 ## reusing racy hashes within a survey, 2026-11-12
 

@@ -48,11 +48,11 @@ impl Threads {
 
     /// shares the archive budget between readers and their writers. zero writers means the
     /// reader stores members itself, so a cap of one never needs a second thread to drain a queue.
-    pub(crate) fn archives(self, requested: usize) -> (usize, Option<usize>) {
+    pub(crate) fn archives(self, requested: usize, pending: usize) -> (usize, Option<usize>) {
         let Some(cap) = self.0 else {
             return (requested, None);
         };
-        let readers = requested.max(1).min(cap.get());
+        let readers = requested.max(1).min(pending.max(1)).min(cap.get());
         (readers, Some(cap.get() / readers - 1))
     }
 }
@@ -170,7 +170,7 @@ mod tests {
             let threads = Threads::read(&|_| value.map(Into::into)).unwrap();
             assert!(!threads.is_limited());
             assert_eq!(threads.limit(512), 512);
-            assert_eq!(threads.archives(4), (4, None));
+            assert_eq!(threads.archives(4, 4), (4, None));
         }
         for (text, cap) in [("1", 1), (" 8 ", 8), ("256", 256)] {
             let threads = Threads::read(&|_| Some(text.into())).unwrap();
@@ -205,13 +205,31 @@ mod tests {
         for cap in 1..=256 {
             let threads = Threads::read(&|_| Some(cap.to_string().into())).unwrap();
             for requested in 1..=4 {
-                let (readers, writers) = threads.archives(requested);
-                assert!(readers >= 1 && readers <= requested);
-                assert!(readers * (writers.unwrap() + 1) <= cap);
+                for pending in 1..=4 {
+                    let (readers, writers) = threads.archives(requested, pending);
+                    assert!(readers >= 1 && readers <= requested.min(pending));
+                    assert!(readers * (writers.unwrap() + 1) <= cap);
+                }
             }
         }
         let one = Threads::read(&|_| Some("1".into())).unwrap();
-        assert_eq!(one.archives(4), (1, Some(0)));
+        assert_eq!(one.archives(4, 4), (1, Some(0)));
+    }
+
+    #[test]
+    fn archive_caps_budget_only_pending_readers() {
+        let threads = Threads::read(&|_| Some("8".into())).unwrap();
+        for (pending, expected) in [
+            (1, (1, Some(7))),
+            (2, (2, Some(3))),
+            (3, (3, Some(1))),
+            (8, (3, Some(1))),
+        ] {
+            assert_eq!(threads.archives(3, pending), expected, "{pending} archives");
+        }
+        let one = Threads::read(&|_| Some("1".into())).unwrap();
+        assert_eq!(one.archives(3, 8), (1, Some(0)));
+        assert_eq!(Threads::default().archives(3, 1), (3, None));
     }
 
     #[test]
