@@ -305,6 +305,39 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
 /// `false`, `0`, unset or empty for no, as the settings read a switch. any other value fails
 /// rather than letting a run meant to be offline go online.
 fn offline(value: Option<std::ffi::OsString>) -> Result<bool, Error> {
+    switch(
+        "FETCHLOOM_OFFLINE",
+        value,
+        "set FETCHLOOM_OFFLINE to true to work offline, or unset it to work online",
+    )
+}
+
+/// the settings file this run reads, or leaves unread as `--no-config`, when `flag` says it was
+/// given, or `FETCHLOOM_NO_CONFIG` asks.
+fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Error> {
+    match no_config(flag, var("FETCHLOOM_NO_CONFIG"))? {
+        Some(by) => Ok(File::bypassed(var, by)),
+        None => File::read(var),
+    }
+}
+
+/// what leaves the settings file unread for this run: `--no-config`, as `flag` says, else
+/// `FETCHLOOM_NO_CONFIG`, which takes true or false as `FETCHLOOM_OFFLINE` does.
+fn no_config(flag: bool, value: Option<std::ffi::OsString>) -> Result<Option<&'static str>, Error> {
+    if flag {
+        return Ok(Some("--no-config"));
+    }
+    let bypassed = switch(
+        "FETCHLOOM_NO_CONFIG",
+        value,
+        "set FETCHLOOM_NO_CONFIG to true to leave the settings file unread, or unset it",
+    )?;
+    Ok(bypassed.then_some("FETCHLOOM_NO_CONFIG"))
+}
+
+/// the variable `name`'s `value` as true or false: unset or empty is false, and anything but
+/// true, false, 1 or 0 is a usage error whose help is `help`.
+fn switch(name: &str, value: Option<std::ffi::OsString>, help: &str) -> Result<bool, Error> {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return Ok(false);
     };
@@ -314,9 +347,9 @@ fn offline(value: Option<std::ffi::OsString>) -> Result<bool, Error> {
         "false" | "0" => Ok(false),
         _ => Err(Error::new(
             Kind::Usage,
-            format!("FETCHLOOM_OFFLINE is \"{text}\", which is not true or false"),
+            format!("{name} is \"{text}\", which is not true or false"),
         )
-        .help("set FETCHLOOM_OFFLINE to true to work offline, or unset it to work online")),
+        .help(help)),
     }
 }
 
@@ -536,7 +569,7 @@ pub(crate) fn run() -> ExitCode {
                 // a broken settings file is told by the commands that use it, not by --version
                 Cache::locate(
                     &var,
-                    File::read(&var)
+                    settings_file(global.no_config, &var)
                         .ok()
                         .and_then(|file| file.cache())
                         .as_deref()
@@ -575,7 +608,7 @@ pub(crate) fn run() -> ExitCode {
         }
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
-    let file = match File::read(&var) {
+    let file = match settings_file(global.no_config, &var) {
         Ok(file) => file,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     };

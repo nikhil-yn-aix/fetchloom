@@ -68,7 +68,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 - `fetchloom build` runs the project's code as the user, and `fetchloom build --accept` pins a rebuild that differs: show the commands from `fetchloom build --dry-run --json` first.
 - `fetchloom lock --upgrade` pins what the sources serve now, and `fetchloom cache gc --now` frees files less than a day old.
 - signing in: the user runs `fetchloom auth login <source>` in their own terminal. never ask for a key in chat.
-- trust settings are the user's: never set `allowed_origins` or `FETCHLOOM_ALLOWED_ORIGINS` for a server on a private address, `s3_buckets` or `FETCHLOOM_S3_BUCKETS` for a private bucket read with their AWS keys, `gcs_buckets` or `FETCHLOOM_GCS_BUCKETS` for one read with their google credentials, and never turn off `mirrors_only` or `FETCHLOOM_MIRRORS_ONLY`.
+- trust settings are the user's: never set `allowed_origins` or `FETCHLOOM_ALLOWED_ORIGINS` for a server on a private address, `s3_buckets` or `FETCHLOOM_S3_BUCKETS` for a private bucket read with their AWS keys, `gcs_buckets` or `FETCHLOOM_GCS_BUCKETS` for one read with their google credentials, and never turn off `mirrors_only` or `FETCHLOOM_MIRRORS_ONLY`. never pass `--no-config` or set `FETCHLOOM_NO_CONFIG` unless the user asks: it leaves their whole settings file unread, `mirrors_only` and the cache folder included.
 - `push` puts data where everyone who can read the folder can copy it: never choose the folder yourself.
 
 ## rules that keep data safe

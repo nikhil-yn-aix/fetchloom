@@ -75,8 +75,9 @@ const CLEARED: [&str; 6] = [
     "push_to",
 ];
 /// the variables fetchloom reads besides those of the settings file's keys.
-const OTHERS: [&str; 11] = [
+const OTHERS: [&str; 12] = [
     "FETCHLOOM_SETTINGS",
+    "FETCHLOOM_NO_CONFIG",
     "FETCHLOOM_OFFLINE",
     "FETCHLOOM_RATE",
     "FETCHLOOM_THREADS",
@@ -154,6 +155,8 @@ pub(crate) struct File {
     /// its values by key, when it was there.
     values: Vec<(String, Value)>,
     pub(crate) found: bool,
+    /// what left the file unread for this run, `--no-config` or `FETCHLOOM_NO_CONFIG`.
+    pub(crate) bypassed: Option<&'static str>,
 }
 
 impl File {
@@ -165,22 +168,16 @@ impl File {
     /// `usage` when the file named by the variable is missing, or when the file holds a key it does
     /// not take or a value that is not text or a whole number; `local.io` when it cannot be read.
     pub(crate) fn read(var: Var<'_>) -> Result<File, Error> {
-        let named = var("FETCHLOOM_SETTINGS")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
-        let path = named
-            .clone()
-            .or_else(|| crate::auth::store::folder(var).map(|folder| folder.join(FILE)));
+        let (path, named) = located(var);
         let Some(path) = path else {
             return Ok(File::default());
         };
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound && named.is_none() => {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && !named => {
                 return Ok(File {
                     path: Some(path),
-                    values: Vec::new(),
-                    found: false,
+                    ..File::default()
                 });
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -194,7 +191,7 @@ impl File {
                 .help("unset FETCHLOOM_SETTINGS, or set it to a settings file that exists"));
             }
             Err(err) => {
-                let help = if named.is_some() {
+                let help = if named {
                     "unset FETCHLOOM_SETTINGS, or set it to a settings file fetchloom may read"
                 } else {
                     "check its permissions, or set FETCHLOOM_SETTINGS to a settings file fetchloom may read"
@@ -211,7 +208,20 @@ impl File {
             path: Some(path),
             values,
             found: true,
+            bypassed: None,
         })
+    }
+
+    /// the settings file left unread, as `by` asks: where it is, or would be, and whether it is
+    /// there, so a run goes on the variables and defaults past a file that would stop it.
+    pub(crate) fn bypassed(var: Var<'_>, by: &'static str) -> File {
+        let (path, _) = located(var);
+        File {
+            found: path.as_deref().is_some_and(Path::is_file),
+            path,
+            values: Vec::new(),
+            bypassed: Some(by),
+        }
     }
 
     fn get(&self, key: &str) -> Option<&Value> {
@@ -233,6 +243,17 @@ impl File {
             _ => folder,
         })
     }
+}
+
+/// where the settings file is: the one `FETCHLOOM_SETTINGS` names, which must then be there, else
+/// `settings.toml` in fetchloom's folder, or none without a folder for it.
+fn located(var: Var<'_>) -> (Option<PathBuf>, bool) {
+    let named = var("FETCHLOOM_SETTINGS")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let is_named = named.is_some();
+    let path = named.or_else(|| crate::auth::store::folder(var).map(|folder| folder.join(FILE)));
+    (path, is_named)
 }
 
 /// a value in the settings file: text, or for a key that holds a list, the list's items.
@@ -946,6 +967,7 @@ mod tests {
             path: Some(path),
             values,
             found: true,
+            bypassed: None,
         })
     }
 

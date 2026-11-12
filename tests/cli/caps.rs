@@ -95,6 +95,52 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
+/// `--no-config`, or `FETCHLOOM_NO_CONFIG`, runs a command on the defaults past a settings file
+/// that would stop it, and `settings` says the file was bypassed. without it the file still
+/// stops the run, and data.toml is read either way.
+#[test]
+fn no_config_bypasses_the_settings_file_for_one_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(&path, "jbos = 4\n")?;
+    let refused = sandbox.run(&["--json", "settings"])?;
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout)?);
+    let told = sandbox.run(&["--no-config", "settings"])?;
+    let stderr = text(&told.stderr)?;
+    assert_eq!(told.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" (bypassed by --no-config)\n"), "{stderr}");
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_NO_CONFIG", "1")
+            .output()?,
+    )?;
+    assert_eq!(document["status"], "ok", "{document}");
+    assert_eq!(
+        document["result"]["file"]["path"],
+        path.display().to_string()
+    );
+    assert_eq!(document["result"]["file"]["bypassed"], true);
+    assert_eq!(shown(&document, "jobs")["origin"], "default");
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.iris]\nref = \"zenodo:1\"\nselectt = \"*.csv\"\n",
+    )?;
+    let project = json(&sandbox.run(&["--json", "--no-config", "status"])?)?;
+    assert_eq!(project["errors"][0]["kind"], "project.invalid", "{project}");
+    let unread = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_NO_CONFIG", "maybe")
+            .output()?,
+    )?;
+    assert_eq!(
+        unread["errors"][0]["message"],
+        "FETCHLOOM_NO_CONFIG is \"maybe\", which is not true or false"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     let sandbox = Sandbox::new()?;

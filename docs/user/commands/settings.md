@@ -45,7 +45,11 @@ warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it chan
   help: did you mean FETCHLOOM_CACHE?
 ```
 
-`settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file.
+`settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file. `--no-config`, or `FETCHLOOM_NO_CONFIG=1`, leaves the file unread for the run, so the variables and defaults show, and stderr says so:
+
+```text
+   Settings ~/.config/fetchloom/settings.toml (bypassed by --no-config)
+```
 
 JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 

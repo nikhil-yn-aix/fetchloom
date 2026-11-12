@@ -20,7 +20,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 
 ## other commands
 
-- [commands](docs/user/commands/README.md): every command, the global options `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C` and `--mirror`, `fetchloom help` and its topics, and what goes to stdout and stderr
+- [commands](docs/user/commands/README.md): every command, the global options `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C`, `--mirror` and `--no-config`, `fetchloom help` and its topics, and what goes to stdout and stderr
 - [get](docs/user/commands/get.md): `fetchloom get` downloads once without a project, into a folder `-d` names, or one checked file at the path `-o` names, replaced only with `--force`; `--sha256` checks a single file, `-i` reads a list of links, and `--select`, `--exclude` and `--no-extract` choose files
 - [search](docs/user/commands/search.md): `fetchloom search` finds datasets on hugging face, kaggle and zenodo; `--source` and `--limit` narrow or widen it
 - [build](docs/user/commands/build.md): `fetchloom build` runs the recipes' steps and pins and places what they made; `-n` shows the commands first, `--check` runs them again to compare with data.lock, `--accept` pins a rebuild that differs, `--locked` never writes data.lock, and `--prepare` fetches what a build reads

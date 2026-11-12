@@ -49,6 +49,7 @@ struct Machine {
 struct File {
     path: Option<String>,
     found: bool,
+    bypassed: bool,
 }
 
 pub(super) fn run(context: &Context) -> Report {
@@ -70,6 +71,10 @@ pub(super) fn run(context: &Context) -> Report {
     output.step("Machine", &about.join(" \u{b7} "));
     let file = &context.settings.file;
     match &file.path {
+        Some(path) if let Some(by) = file.bypassed => output.step(
+            "Settings",
+            &format!("{} (bypassed by {by})", units::path(path)),
+        ),
         Some(path) if file.found => output.step("Settings", &units::path(path)),
         Some(path) => output.step("Settings", &format!("{} (no file yet)", units::path(path))),
         None => output.step("Settings", "no folder for a settings file"),
@@ -85,6 +90,7 @@ pub(super) fn run(context: &Context) -> Report {
         file: File {
             path: file.path.as_ref().map(|path| path.display().to_string()),
             found: file.found,
+            bypassed: file.bypassed.is_some(),
         },
     }
 }

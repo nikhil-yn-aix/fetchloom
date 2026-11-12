@@ -35,6 +35,7 @@ options:
   -C <dir>            run as if fetchloom started in <dir>
       --mirror <url>  ask the mirror at this web address or folder for files
                       before their sources. repeat it for more
+      --no-config     leave the settings file unread for this run
   -h, --help          print help
   -V, --version       print the version
 

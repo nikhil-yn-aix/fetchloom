@@ -34,6 +34,7 @@ a variable one typo from one of these, such as `FETCHLOM_CACHE`, changes nothing
 | `FETCHLOOM_PUSH_TO` | the folder [`fetchloom push`](../commands/push.md) copies pinned files to when `--to` names none, such as `/mnt/lab/fetchloom`. a relative folder is taken from the working folder, after `-C`. unset or empty names none, and push then needs `--to`. push writes folders only, so a web address, such as `https://data.lab.example/fetchloom`, fails with `usage`, exit 2: copy the folder to a server or a bucket with a tool such as rclone |
 | `FETCHLOOM_BUILD_FLOOR` | a size such as `20G`: the least free space a [recipe](../recipes.md)'s step may leave on the disk holding the cache. `fetchloom build` looks at that disk as the step runs and stops it once less is free, with `local.io`, exit 50, leaving `data.lock` and the data folder as they were. a disk with less free than that before any step runs stops the build there, with `--yes` too. unset or empty means the larger of 1 GiB and 1% of that disk. it is never read from `data.toml` |
 | `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
+| `FETCHLOOM_NO_CONFIG` | `true` or `1` leaves the [settings file](#settings-file) unread for the run, as `--no-config` does, also one that would stop it. `false` or `0` reads it; unset or empty means false. any other value fails with `usage`, exit 2. data.toml, data.lock and keys are read as always |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
 | `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](../../dev/architecture/network.md#the-1-mbs-handover). a `FETCHLOOM_RATE` cap turns off the adaptive trigger; `1` and a resumed download whose later ranges are kept still split |
@@ -78,7 +79,7 @@ a settings file keeps settings for every run, so a shared machine or a big scrat
 | macos | `~/Library/Application Support/fetchloom/settings.toml` |
 | windows | `%APPDATA%\fetchloom\settings.toml` |
 
-`FETCHLOOM_SETTINGS` names another file. no file at the default place is fine; a file the variable names must exist.
+`FETCHLOOM_SETTINGS` names another file. no file at the default place is fine; a file the variable names must exist. `--no-config`, or `FETCHLOOM_NO_CONFIG=1`, leaves the file unread for one run, also a file that would stop it, and `fetchloom settings` then says it was bypassed.
 
 ```toml
 cache = "/scratch/lab/fetchloom-cache"

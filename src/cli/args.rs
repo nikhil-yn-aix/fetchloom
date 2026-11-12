@@ -476,6 +476,10 @@ pub(crate) struct Global {
     /// for more
     #[arg(long, value_name = "url", global = true, help_heading = "options")]
     pub(crate) mirror: Vec<String>,
+
+    /// leave the settings file unread for this run
+    #[arg(long, global = true, help_heading = "options")]
+    pub(crate) no_config: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]

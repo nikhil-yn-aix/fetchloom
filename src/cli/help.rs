@@ -86,6 +86,7 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
   FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in
                        fetchloom's folder
+  FETCHLOOM_NO_CONFIG  1 leaves the settings file unread, as --no-config does
   FETCHLOOM_ALLOWED_ORIGINS
                        servers on your network that data.toml may name, as
                        http://lab.local:8080, separated by commas
