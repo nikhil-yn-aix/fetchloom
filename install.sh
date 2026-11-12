@@ -32,21 +32,14 @@ if command -v curl > /dev/null 2>&1; then
             --output "$2" "$1"
     }
 elif command -v wget > /dev/null 2>&1; then
-    # gnu wget takes the options rustup's installer passes: --secure-protocol=TLSv1_2 speaks only
-    # tls 1.2, and --https-only keeps a recursive fetch on https. busybox wget knows neither, so
-    # it downloads without them, as rustup's installer does too
-    wget_help=$(wget --help 2>&1 || true)
-    case $wget_help in
-        *--https-only*--secure-protocol* | *--secure-protocol*--https-only*) wget_tls=1 ;;
-        *)
-            wget_tls=''
-            echo "warning: this wget lacks --https-only or --secure-protocol, so tls 1.2 is not enforced; curl would enforce it" >&2
-            ;;
+    # gnu wget takes the options rustup's installer passes. busybox wget knows neither, and a
+    # download it cannot hold to https lets anyone on the way swap the archive and its sum alike
+    case $(wget --help 2>&1 || true) in
+        *--https-only*--secure-protocol* | *--secure-protocol*--https-only*) ;;
+        *) fail "this wget cannot hold the download to https and tls 1.2, since it lacks --https-only or --secure-protocol, so nothing was installed. install curl, then run the installer again" ;;
     esac
     download() {
-        if [ -z "$wget_tls" ]; then
-            wget -q -O "$2" "$1"
-        elif [ "$protocols" = '=https' ]; then
+        if [ "$protocols" = '=https' ]; then
             wget --https-only --secure-protocol=TLSv1_2 -q -O "$2" "$1"
         else
             wget --secure-protocol=TLSv1_2 -q -O "$2" "$1"

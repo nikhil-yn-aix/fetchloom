@@ -140,6 +140,25 @@ class InstallerChecks(LocalRelease):
         self.assertTrue(profile.startswith("# existing profile\n"))
         self.assertEqual(profile.count('export PATH="$HOME/.local/bin:$PATH"'), 1)
 
+    def test_a_wget_that_cannot_hold_to_https_is_refused_before_any_download(self):
+        self.package()
+        tools = self.root / "tools"
+        tools.mkdir()
+        for tool in TOOLS:
+            found = shutil.which(tool)
+            if found and tool not in ("curl", "wget"):
+                (tools / tool).symlink_to(found)
+        # busybox's wget, which knows neither --https-only nor --secure-protocol
+        wget = tools / "wget"
+        wget.write_text('#!/bin/sh\n[ "$1" = --help ] && { echo "Usage: wget [-cq] [-O FILE] URL"; exit 0; }\n'
+                        'printf ran > "$HOME/downloaded"\nexit 1\n', encoding="utf-8")
+        wget.chmod(0o755)
+        result = self.install(path=[str(tools)])
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("install curl", result.stderr)
+        self.assertFalse((self.home / "downloaded").exists())
+        self.assertEqual(self.bin.read_bytes(), b"previous installation\n")
+
 
 class InstallerDestinationTests(LocalRelease):
     def test_directory_destination_is_refused_without_overwriting_its_contents(self):
