@@ -64,7 +64,10 @@ class LocalRelease(unittest.TestCase):
         self.tools = tool_folders()
         handler = functools.partial(QuietHandler, directory=str(self.release))
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        # shutdown waits out one poll, which is half a second by default
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
         thread.start()
         self.addCleanup(thread.join)
         self.addCleanup(server.server_close)

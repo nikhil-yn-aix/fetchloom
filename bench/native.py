@@ -100,7 +100,8 @@ def serve(www):
     handler = functools.partial(Quiet, directory=str(www))
     server = Server(("127.0.0.1", 0), handler)
     server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # shutdown waits out one poll, which is half a second by default
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     return server
 
 

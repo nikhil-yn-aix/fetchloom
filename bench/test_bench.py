@@ -211,7 +211,7 @@ class MeasurementTests(unittest.TestCase):
             class Slow(tools.Tool):
                 def command(self, scenario, workdir):
                     return tools.script(workdir / "command.sh", [tools.shell(["bash", "-c", 'echo $$ > "$0"; exec sleep 60', child])])
-            with mock.patch.object(lab, "PREPARE_TIMEOUT", 1):
+            with mock.patch.object(lab, "PREPARE_TIMEOUT", 0.3):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     Slow("fetchloom").untimed({}, root)
             with self.assertRaises(ProcessLookupError):
