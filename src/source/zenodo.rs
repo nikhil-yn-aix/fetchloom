@@ -126,7 +126,7 @@ impl Record {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("check the record on zenodo.org and report the invalid listing to its owner")
+        .help(crate::error::report_answer())
     }
 }
 
@@ -360,7 +360,8 @@ mod tests {
         }
     }
 
-    /// a record answer fetchloom cannot trust is refused for its reason, with help.
+    /// a record answer fetchloom cannot trust is refused for its reason, and the help sends it to
+    /// fetchloom's issues, since the record's owner cannot change zenodo's answers.
     #[test]
     fn a_record_that_cannot_be_trusted_says_why() {
         type Change = fn(&mut serde_json::Value);
@@ -395,7 +396,14 @@ mod tests {
             };
             assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
             assert!(error.message.contains(reason), "{row}: {}", error.message);
-            assert!(error.help.is_some(), "{row}");
+            assert!(
+                error
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains(crate::error::ISSUES)),
+                "{row}: {:?}",
+                error.help
+            );
         }
     }
 

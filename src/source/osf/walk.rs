@@ -7,7 +7,7 @@ use url::Url;
 
 use super::Node;
 use crate::digest::{Md5, Sha256};
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Access, Listing, Reference, Remote};
 
@@ -143,7 +143,11 @@ impl Walk {
             format!("{parent}/{}", entry.attributes.name)
         };
         if let Some(reason) = crate::name::escapes(&path) {
-            return Err(node.invalid(&format!("the path \"{}\" {reason}", path.escape_debug())));
+            return Err(crate::source::refused_name(
+                &node.to_string(),
+                &path,
+                reason,
+            ));
         }
         match entry.attributes.kind {
             EntryKind::File => self.files.push(entry.remote(node, path)?),
@@ -225,7 +229,14 @@ impl Entry {
 
     fn remote(self, node: &Node, path: String) -> Result<Remote, Error> {
         if self.attributes.provider != "osfstorage" {
-            return Err(node.invalid(&format!("\"{path}\" is not stored in OSF storage")));
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "{node} keeps \"{}\" outside OSF storage, so it has no OSF version to pin",
+                    path.escape_debug()
+                ),
+            )
+            .help("ask the project's owner to move that file into OSF storage, then run the same command again"));
         }
         let url = self.download(node, self.version(node)?)?;
         let hashes = self

@@ -220,12 +220,16 @@ fn disabled_downloads_do_not_look_empty() {
     assert_eq!(error.kind, Kind::AuthRequired);
 }
 
+/// an answer for another version is figshare's to explain, so its help goes to fetchloom's
+/// issues rather than the article's owner.
 #[test]
 fn requested_versions_cannot_silently_change() {
     let url = "https://api.figshare.com/v2/articles/34744689/versions/2";
     let recorded = Recorded::default().fixture(url, "figshare/version.json");
     let error = block_on(Article::parse("34744689@2").unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
+    let help = error.help.unwrap_or_default();
+    assert!(help.contains(crate::error::ISSUES), "{help}");
 }
 
 #[test]

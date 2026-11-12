@@ -177,7 +177,8 @@ fn unversioned_files_are_refused() {
     let recorded = with_root(body);
     let error = block_on(Node::parse("ezcuj").unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
-    assert!(error.help.is_some());
+    let help = error.help.unwrap_or_default();
+    assert!(help.contains(crate::error::ISSUES), "{help}");
 }
 
 #[test]
@@ -204,12 +205,20 @@ fn absent_hashes_do_not_invent_digests() {
     assert_eq!(listing.files[0].md5, None);
 }
 
+/// a file kept in storage another service runs has no OSF version to pin, and only the project's
+/// owner can move it into OSF storage.
 #[test]
 fn external_storage_versions_are_not_treated_as_osf_versions() {
     let body = changed_root(|value| value["data"][0]["attributes"]["provider"] = "dropbox".into());
     let recorded = with_root(body);
     let error = block_on(Node::parse("ezcuj").unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "ask the project's owner to move that file into OSF storage, then run the same command again"
+        )
+    );
 }
 
 #[test]

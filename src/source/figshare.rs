@@ -198,7 +198,7 @@ impl Article {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("check the article on figshare.com and report the invalid listing to its owner")
+        .help(crate::error::report_answer())
     }
 }
 

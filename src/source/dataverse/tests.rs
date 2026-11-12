@@ -129,12 +129,14 @@ fn restricted_files_are_all_named_instead_of_skipped() {
     assert_eq!(listing.files.len(), 3);
 }
 
-/// a listing fetchloom cannot trust is refused for its reason, with help to choose another
-/// version.
+/// a listing fetchloom cannot trust is refused for its reason. a draft's help says to choose a
+/// published version, which the person can; the rest are dataverse's answers, so their help goes
+/// to fetchloom's issues.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);
-    let rows: [(&str, Change, &str); 5] = [
+    let issues = crate::error::ISSUES;
+    let rows: [(&str, Change, &str, &str); 5] = [
         (
             "a tabular file without its original size",
             |value| {
@@ -144,21 +146,25 @@ fn a_listing_that_cannot_be_trusted_says_why() {
                     .remove("originalFileSize");
             },
             "the original name or size for",
+            issues,
         ),
         (
             "a broken checksum",
             |value| value["data"]["files"][1]["dataFile"]["checksum"]["value"] = "broken".into(),
             "an MD5 is 32 hex digits",
+            issues,
         ),
         (
             "a draft",
             |value| value["data"]["versionState"] = "DRAFT".into(),
             "the version is not published",
+            "choose a published version",
         ),
         (
             "an answer for another dataset",
             |value| value["data"]["datasetPersistentId"] = "doi:10.7910/DVN/OTHER".into(),
             "the persistent id does not match",
+            issues,
         ),
         (
             "no file list",
@@ -166,16 +172,18 @@ fn a_listing_that_cannot_be_trusted_says_why() {
                 value["data"].as_object_mut().unwrap().remove("files");
             },
             "the dataset version has no file list",
+            issues,
         ),
     ];
-    for (row, change, reason) in rows {
+    for (row, change, reason, helps) in rows {
         let recorded = Recorded::default().on(LATEST, 200, changed(change));
         let Err(error) = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)) else {
             panic!("{row}: the listing was used");
         };
         assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
         assert!(error.message.contains(reason), "{row}: {}", error.message);
-        assert!(error.help.is_some(), "{row}");
+        let help = error.help.unwrap_or_default();
+        assert!(help.contains(helps), "{row}: {help}");
     }
 }
 

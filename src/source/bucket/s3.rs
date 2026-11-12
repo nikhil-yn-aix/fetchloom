@@ -79,8 +79,10 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
                 } else {
                     format!("S3 moved {prefix} to a region it did not name")
                 };
-                return Err(Error::new(Kind::NetworkStatus, what)
-                .help("try again later, or report it at https://github.com/nikhil-yn-aix/fetchloom/issues if it keeps happening"));
+                return Err(Error::new(Kind::NetworkStatus, what).help(format!(
+                    "try again later, or report it at {} if it keeps happening",
+                    crate::error::ISSUES
+                )));
             }
             let code = said.and_then(|said| said.text_of("Code"));
             let message = said.and_then(|said| said.text_of("Message"));

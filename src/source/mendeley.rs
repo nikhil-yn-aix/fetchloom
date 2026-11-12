@@ -257,7 +257,7 @@ impl Dataset {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("check the dataset on data.mendeley.com and report the invalid listing to mendeley")
+        .help(crate::error::report_answer())
     }
 }
 

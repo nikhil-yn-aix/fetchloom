@@ -157,7 +157,7 @@ impl Version {
         var: Var<'_>,
     ) -> Result<(), Error> {
         if self.state != "RELEASED" || self.major == 0 {
-            return Err(dataset.invalid("the version is not published"));
+            return Err(dataset.unpublished());
         }
         if let Item::Dataset(pid) = &dataset.item
             && !self.dataset_persistent_id.eq_ignore_ascii_case(pid)

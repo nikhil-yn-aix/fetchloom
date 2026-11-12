@@ -143,7 +143,7 @@ fn unusable(listed: impl fmt::Display, reason: &str) -> Error {
         Kind::SourceInvalid,
         format!("kaggle sent a listing of {listed} that fetchloom cannot use: {reason}"),
     )
-    .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+    .help(crate::error::report_answer())
 }
 
 /// an owner or a dataset name: letters, digits, `-`, `_` and `.`, but not only dots, which would
@@ -222,7 +222,7 @@ mod tests {
             );
             assert_eq!(
                 error.help.as_deref(),
-                Some("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+                Some(crate::error::report_answer().as_str())
             );
         }
     }

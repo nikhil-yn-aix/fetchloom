@@ -50,8 +50,9 @@ pub fn main() -> std::process::ExitCode {
         std::panic::set_hook(Box::new(move |info| {
             eprintln!(
                 "fetchloom stopped on a bug of its own, not anything you did. please report it at \
-                 https://github.com/nikhil-yn-aix/fetchloom/issues with the command you ran and the \
-                 output of `fetchloom --version -v`. what it said:"
+                 {} with the command you ran and the output of `fetchloom --version -v`. what it \
+                 said:",
+                error::ISSUES
             );
             rust(info);
         }));

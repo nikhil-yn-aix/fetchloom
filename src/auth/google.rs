@@ -211,7 +211,7 @@ impl Credentials {
                 Kind::SourceInvalid,
                 format!("google's token endpoint sent {what}"),
             )
-            .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+            .help(crate::error::report_answer())
         };
         let answer = answer.ok_or_else(|| unusable("an answer fetchloom could not read"))?;
         if answer

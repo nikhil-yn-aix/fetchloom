@@ -107,7 +107,7 @@ fn a_page_that_would_mislead_the_walk_is_refused_before_another_request() {
         (
             "a folder named to climb out",
             |value| value["data"][0]["attributes"]["name"] = "../outside".into(),
-            "the path \"../outside\"",
+            "lists \"../outside\", which fetchloom refuses",
         ),
     ];
     for (row, change, reason) in rows {
@@ -170,6 +170,10 @@ fn unsafe_osf_paths_are_escaped_before_the_walk_stops() {
                 error.message
             );
             assert!(error.message.contains(&path.escape_debug().to_string()));
+            assert_eq!(
+                error.help.as_deref(),
+                Some("ask the dataset's owner to rename it, then run the same command again")
+            );
             assert_eq!(recorded.asked(), [NODE, FIRST]);
         }
     }

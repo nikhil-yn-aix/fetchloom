@@ -89,9 +89,15 @@ pub(crate) struct Response {
 impl Response {
     pub(crate) fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
         serde_json::from_slice(&self.body).map_err(|err| {
-            Error::new(Kind::SourceInvalid, format!("{} sent an answer fetchloom could not read: {err}", host(&self.url)))
-                .detail(format!("from {}", super::Shown(&self.url)))
-                .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+            Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "{} sent an answer fetchloom could not read: {err}",
+                    host(&self.url)
+                ),
+            )
+            .detail(format!("from {}", super::Shown(&self.url)))
+            .help(crate::error::report_answer())
         })
     }
 

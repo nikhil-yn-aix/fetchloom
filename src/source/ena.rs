@@ -230,7 +230,7 @@ impl Accession {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("check the accession in ENA's browser and report the invalid listing at https://github.com/nikhil-yn-aix/fetchloom/issues")
+        .help(crate::error::report_answer())
     }
 }
 

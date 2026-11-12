@@ -2,6 +2,15 @@
 
 use std::{fmt, io};
 
+/// where people report what fetchloom gets wrong, such as a service's answer it cannot read.
+pub(crate) const ISSUES: &str = "https://github.com/nikhil-yn-aix/fetchloom/issues";
+
+/// the help for a service's answer fetchloom cannot read. the service most likely changed, which
+/// only a newer fetchloom fixes, so neither the person nor the dataset's owner can.
+pub(crate) fn report_answer() -> String {
+    format!("this usually means the service changed. please report it at {ISSUES}")
+}
+
 /// a stable name for each kind of failure, and the exit code it ends with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {

@@ -29,6 +29,6 @@ a storage link OSF says has expired is asked for again. a pinned download that a
 
 public projects need no account. a private one needs a key whose account may read it, from `fetchloom auth login osf` or `OSF_TOKEN`.
 
-the walk reads osfstorage only, and refuses an unsafe name before it enters a folder, with control characters escaped in the error.
+the walk reads osfstorage only, and refuses an unsafe name before it enters a folder, with control characters escaped in the error and help to ask the dataset's owner to rename it. a file kept in storage another service runs, linked to the project, has no OSF version to pin, so it is refused with help to ask the project's owner to move it into OSF storage.
 
 it does not enter a project's components, which keep their files in storage of their own. a project with components gets a warning giving their number, also in `--json`'s `warnings`; add each component you need as its own dataset, as `osf:<id>`.

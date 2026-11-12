@@ -329,7 +329,7 @@ fn unreadable(item: &Item, reason: &str) -> Error {
             folder::link(&item.id)
         ),
     )
-    .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+    .help(crate::error::report_answer())
 }
 
 fn link_error(err: url::ParseError) -> Error {

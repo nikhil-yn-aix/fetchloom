@@ -226,7 +226,7 @@ fn unreadable(item: &Item, reason: &str) -> Error {
             link(&item.id)
         ),
     )
-    .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues")
+    .help(crate::error::report_answer())
 }
 
 /// a folder's link as drive shares it.

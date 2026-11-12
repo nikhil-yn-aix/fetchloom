@@ -111,7 +111,7 @@ impl Node {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("open the project or file on osf.io and report the unsupported listing to its owner")
+        .help(crate::error::report_answer())
     }
 }
 

@@ -352,7 +352,14 @@ fn an_answer_that_cannot_be_trusted_says_why() {
         };
         assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
         assert!(error.message.contains(reason), "{row}: {}", error.message);
-        assert!(error.help.is_some(), "{row}");
+        assert!(
+            error
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains(crate::error::ISSUES)),
+            "{row}: {:?}",
+            error.help
+        );
     }
 }
 

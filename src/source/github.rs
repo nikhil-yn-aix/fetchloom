@@ -211,7 +211,7 @@ impl Release {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("check the release on github.com and report the invalid listing at https://github.com/nikhil-yn-aix/fetchloom/issues")
+        .help(crate::error::report_answer())
     }
 }
 

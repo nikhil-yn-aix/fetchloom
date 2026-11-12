@@ -81,7 +81,7 @@ impl Repo {
                 ),
             )
             .detail(format!("id \"{}\", commit \"{}\"", info.id, info.sha))
-            .help("report this response at https://github.com/nikhil-yn-aix/fetchloom/issues"));
+            .help(crate::error::report_answer()));
         }
         if let Some(requested) = &self.revision
             && is_commit(requested)

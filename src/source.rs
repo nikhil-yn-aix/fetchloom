@@ -821,14 +821,7 @@ fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> 
     let mut seen = HashSet::with_capacity(count);
     for path in listing.paths() {
         if let Some(reason) = name::escapes(path) {
-            let path = path.escape_debug();
-            return Err(Error::new(
-                Kind::SourceInvalid,
-                format!(
-                    "{reference} lists a file at \"{path}\", which fetchloom refuses because {reason}"
-                ),
-            )
-            .help("ask the dataset's owner to rename that file, then run the same command again"));
+            return Err(refused_name(&reference, path, reason));
         }
         if !seen.insert(path) {
             return Err(Error::new(
@@ -839,6 +832,19 @@ fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> 
         }
     }
     Ok(listing)
+}
+
+/// the error for a file or folder `reference` lists at `path`, a name fetchloom refuses
+/// `because` of what it holds, which only the dataset's owner can change.
+pub(crate) fn refused_name(reference: &str, path: &str, because: &str) -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{reference} lists \"{}\", which fetchloom refuses because {because}",
+            path.escape_debug()
+        ),
+    )
+    .help("ask the dataset's owner to rename it, then run the same command again")
 }
 
 /// whether a top-level file only describes a dataset: a readme, a license or citation, or git's

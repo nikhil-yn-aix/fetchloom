@@ -194,12 +194,22 @@ impl Dataset {
         Ok(url)
     }
 
+    /// the error for an answer with a version not yet published, which the person avoids by
+    /// choosing a published one.
+    fn unpublished(&self) -> Error {
+        Error::new(
+            Kind::SourceInvalid,
+            format!("{self} sent an invalid listing: the version is not published"),
+        )
+        .help("open the dataset's page and choose a published version")
+    }
+
     fn invalid(&self, reason: &str) -> Error {
         Error::new(
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("open the dataset's page and choose a published version with complete file metadata")
+        .help(crate::error::report_answer())
     }
 }
 

@@ -307,7 +307,7 @@ impl Dataset {
             Kind::SourceInvalid,
             format!("{self} sent an invalid listing: {reason}"),
         )
-        .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+        .help(crate::error::report_answer())
     }
 }
 

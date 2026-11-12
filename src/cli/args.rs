@@ -413,7 +413,7 @@ fn linked(root: clap::Command) -> clap::Command {
         .collect();
     let mut root = append(
         root,
-        format!("docs: {SITE}\nreport a bug: https://github.com/nikhil-yn-aix/fetchloom/issues"),
+        format!("docs: {SITE}\nreport a bug: {}", crate::error::ISSUES),
     );
     for (name, inner) in names {
         root = root.mut_subcommand(&name, |mut command| {
