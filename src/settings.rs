@@ -1397,6 +1397,16 @@ mod tests {
                 origin: Origin::Machine
             }
         );
+        // 12 GiB available: a 3 GiB budget below the cap, which lean's own 128 MiB never shrinks
+        let sized = Set {
+            value: 1_572_864,
+            origin: Origin::Machine,
+        };
+        assert_eq!(most(Some(12 * gib), &[]), sized);
+        assert_eq!(
+            most(Some(12 * gib), &[("FETCHLOOM_RESOURCES", "lean")]),
+            sized
+        );
         // a small pod never lists fewer than fetchloom always allowed
         assert_eq!(
             most(Some(100 << 20), &[]),

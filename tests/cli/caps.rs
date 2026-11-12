@@ -96,8 +96,8 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
 }
 
 /// `FETCHLOOM_RESOURCES=lean` shows in `settings` with where it came from, and each knob it sets
-/// shows as set by it, while `most_files` stays as the default level gives it and a knob set by
-/// name keeps its own value.
+/// shows as set by it, while `most_files` is not sized from lean's memory and a knob set by name
+/// keeps its own value.
 #[test]
 fn settings_show_what_a_resources_level_derives() -> Result {
     let sandbox = Sandbox::new()?;
@@ -125,7 +125,14 @@ fn settings_show_what_a_resources_level_derives() -> Result {
     }
     let default = settings(&[])?;
     assert_eq!(shown(&default, "resources")["value"], "default");
-    assert_eq!(shown(&lean, "most_files"), shown(&default, "most_files"));
+    // each run sizes most_files from the memory free at that moment, so two runs can differ;
+    // sized from lean's 128 MiB it would be the floor of 100,000
+    let most_files = shown(&lean, "most_files");
+    assert_eq!(
+        most_files["origin"],
+        shown(&default, "most_files")["origin"]
+    );
+    assert_ne!(most_files["value"], 100_000, "{most_files}");
     let named = settings(&[("FETCHLOOM_RESOURCES", "lean"), ("FETCHLOOM_JOBS", "5")])?;
     assert_eq!(shown(&named, "jobs")["value"], 5);
     assert_eq!(shown(&named, "jobs")["origin"], "environment");
