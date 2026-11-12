@@ -191,6 +191,21 @@ relocking then still looked up each new dataset in lists of all the others, four
 
 a trace of after's 40,000 links shows relocking at 0.35 s, from 11.3 s before; placing them still takes 7.5 s, against 0.6 s for 10,000.
 
+placing then still looked for each dataset's folder through every folder named before it, so its time grew with the square of the datasets; a profile of 40,000 links put a quarter of all cpu cycles in comparing folder names there. since 937fa9b, `add -i` leaves the datasets it adds out of those lines but for `-v`, so the search now runs when `sync` places many datasets, as in a fresh copy of such a project. it now finds each folder with one map lookup and still names the folders in the order they first come. release builds of 74b0d10 (before) and of the change (after), three rounds each, the order swapped each round, at a load average of 6 to 8. sync is `sync` into an empty folder holding only the project's data.toml and data.lock, with every file in the cache; add is the `add -i` above. the whole run's time and peak RSS come from `/usr/bin/time`, placing's from the `place` span of a traced run of its own:
+
+| command | links | measure | before, median and range | after, median and range | after/before |
+|---|---:|---|---|---|---:|
+| sync | 10,000 | whole run | 0.91 s, 0.91 to 0.93 | 0.70 s, 0.67 to 0.70 | 0.769 |
+| sync | 10,000 | placing | 0.40 s, 0.39 to 0.40 | 0.16 s, 0.16 to 0.17 | 0.400 |
+| sync | 10,000 | peak RSS | 45.9 MiB, 45.5 to 46.1 | 46.2 MiB, 46.2 to 46.4 | 1.008 |
+| sync | 40,000 | whole run | 9.68 s, 9.42 to 9.75 | 6.33 s, 6.18 to 6.61 | 0.654 |
+| sync | 40,000 | placing | 4.04 s, 3.60 to 4.37 | 0.68 s, 0.66 to 0.70 | 0.168 |
+| sync | 40,000 | peak RSS | 145.6 MiB, 145.4 to 146.3 | 145.9 MiB, 145.7 to 146.2 | 1.002 |
+| add | 10,000 | whole run | 4.13 s, 3.65 to 4.68 | 4.35 s, 3.67 to 4.44 | 1.053 |
+| add | 40,000 | whole run | 14.71 s, 14.69 to 15.14 | 15.02 s, 14.94 to 15.26 | 1.021 |
+
+placing in sync now grows about in step with the datasets, and the time saved is cpu time: user time fell from 9.23 s to 5.84 s for 40,000. add's placing took the same both ways, 0.16 to 0.17 s for 10,000 links and 0.68 to 0.73 s for 40,000, since its datasets skip the search. its 40,000-link run came out 2% slower after, with after going second in two of the three rounds; six more rounds with the order balanced gave 15.34 s before and 15.05 s after. peak RSS rose 0.4 MiB for 10,000 datasets and stayed within its spread for 40,000. a sync of 2,000 datasets, three of them sharing a folder, printed the same lines byte for byte from both builds.
+
 ## a second run on a shared cache, 2026-11-12
 
 j6-m4's shape at a smaller size: run A syncs a pinned 1 GiB file and 1,000 files of about 100 KB from a server on this machine paced to 40 MB/s, into an empty cache; 3 s later run B syncs the 1,000 files in another project on the same cache. before, A named its finished downloads 256 at a time or when every one of its downloads ended, so B waited on A's last group until A's large file was done. one release build of 28c136b with the change behind a switch ran each variant in every round, the order rotated each round; three rounds each, the bound's own rows two. nvme is ext4 on the machine's nvme drive; root disk is ext4 on its shared cloud disk, where a `dd` left 3 GB of another program's unwritten data just before A started.

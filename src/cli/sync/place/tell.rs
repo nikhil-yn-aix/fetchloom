@@ -1,7 +1,7 @@
 //! the lines a placement prints: what each dataset cost, what was removed, and every file left
 //! alone or put back, with the reason.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::put::Tally;
 use super::{
@@ -40,19 +40,19 @@ pub(super) fn tell(
     }
     // datasets that share a folder share its line, where the first of them comes
     let mut folders: Vec<(String, Tally)> = Vec::new();
+    let mut at_folder: HashMap<String, usize> = HashMap::new();
     let told = told.filter(|_| !output.shows_details());
     for (dataset, tally) in tallies
         .iter()
         .filter(|(dataset, _)| !told.is_some_and(|told| told.contains(**dataset)))
     {
         let folder = plan::folder(manifest, dataset);
-        let at = folders
-            .iter()
-            .position(|(seen, _)| *seen == folder)
-            .unwrap_or_else(|| {
-                folders.push((folder, Tally::default()));
-                folders.len() - 1
-            });
+        #[cfg(test)]
+        tests::looking();
+        let at = *at_folder.entry(folder).or_insert_with_key(|folder| {
+            folders.push((folder.clone(), Tally::default()));
+            folders.len() - 1
+        });
         let sum = &mut folders[at].1;
         sum.files += tally.files;
         sum.links += tally.links;
@@ -340,15 +340,13 @@ fn by_folder<'p>(
     by_dataset: impl IntoIterator<Item = (&'p String, &'p Vec<String>)>,
 ) -> Vec<(String, Vec<&'p String>)> {
     let mut folders: Vec<(String, Vec<&String>)> = Vec::new();
+    let mut at_folder: HashMap<String, usize> = HashMap::new();
     for (dataset, paths) in by_dataset {
         let folder = plan::folder(manifest, dataset);
-        let at = folders
-            .iter()
-            .position(|(seen, _)| *seen == folder)
-            .unwrap_or_else(|| {
-                folders.push((folder, Vec::new()));
-                folders.len() - 1
-            });
+        let at = *at_folder.entry(folder).or_insert_with_key(|folder| {
+            folders.push((folder.clone(), Vec::new()));
+            folders.len() - 1
+        });
         folders[at].1.extend(paths);
     }
     for (_, paths) in &mut folders {
@@ -938,6 +936,84 @@ mod tests {
         ] {
             assert_eq!(emptied(&holding, path, floor), folder, "{path}");
         }
+    }
+
+    thread_local! {
+        static LOOKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn looking() {
+        LOOKS.set(LOOKS.get() + 1);
+    }
+
+    /// datasets each in a folder of their own are told one line each, and each finds its folder
+    /// with one look: looking through every folder told before took placing 40,000 links from
+    /// 0.6 s to 7.6 s. datasets that share a path share the line where the first of them comes.
+    #[test]
+    fn each_dataset_finds_its_folder_with_one_look() {
+        use std::fmt::Write as _;
+
+        let mut text =
+            "[datasets.a-shared]\nref = \"x\"\npath = \"shared\"\n\n[datasets.b-alone]\nref = \"x\"\n\n[datasets.c-shared]\nref = \"x\"\npath = \"shared\"\n".to_owned();
+        for number in 0..2000 {
+            let _ = write!(text, "\n[datasets.d{number:04}]\nref = \"x\"\n");
+        }
+        let manifest = Manifest::parse(&text).unwrap();
+        let tallies: BTreeMap<&str, Tally> = manifest
+            .datasets
+            .keys()
+            .map(|name| {
+                let tally = Tally {
+                    files: 1,
+                    links: 1,
+                    ..Tally::default()
+                };
+                (name.as_str(), tally)
+            })
+            .collect();
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        let placer = Placer::new(std::path::Path::new("data"));
+        let looked = LOOKS.get();
+        tell(
+            &output,
+            &manifest,
+            &placer,
+            &tallies,
+            &Placement::default(),
+            None,
+            &Scope::All,
+        );
+        let looks = LOOKS.get() - looked;
+        assert!(
+            looks <= 2 * tallies.len(),
+            "{looks} looks for {} datasets",
+            tallies.len()
+        );
+        let said = output.said();
+        assert_eq!(said.len(), 2002, "{:?}", &said[..3]);
+        assert_eq!(
+            said[..3],
+            [
+                "     Placed data/shared - 2 files linked to the cache",
+                "     Placed data/b-alone - 1 file linked to the cache",
+                "     Placed data/d0000 - 1 file linked to the cache",
+            ]
+        );
+        assert_eq!(
+            said[2001],
+            "     Placed data/d1999 - 1 file linked to the cache"
+        );
     }
 
     /// a sync that puts back many files names the first five and counts the rest, with their
