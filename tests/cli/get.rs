@@ -671,6 +671,36 @@ fn output_refusing_a_file_the_source_changed_says_so() -> Result {
     Ok(())
 }
 
+/// the `-o` path turning into a folder while the file downloads is refused: fetchloom puts no file
+/// where a folder now stands, and leaves the folder as it was made.
+#[test]
+fn an_output_path_that_becomes_a_folder_while_downloading_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let target = sandbox.work().join("data.csv");
+    let blocked = target.clone();
+    let mut response = vec![Part::Action(Box::new(move || {
+        fs::create_dir(&blocked).unwrap();
+    }))];
+    response.extend(file(IRIS, "\"v1\""));
+    let server = Server::start(PATH, vec![response])?;
+    let refused = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stdout)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "data.csv became a folder while downloading"
+    );
+    assert_eq!(error["help"], "choose another name with -o");
+    assert_eq!(fs::read_dir(&target)?.count(), 0, "the folder stays empty");
+    Ok(())
+}
+
 /// a link to nothing at the `-o` path is named as what it is, and stays until `--force` replaces
 /// the link itself.
 #[cfg(unix)]
