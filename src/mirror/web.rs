@@ -1,6 +1,5 @@
-//! a mirror on a web server, read over http or https by the network that reads sources: its
-//! files come through the download pipeline, resumed, retried and checked like any pinned file,
-//! and its marker and trees through requests whose answers are read whole, at most 64 MiB.
+//! a mirror on a web server: its files come through the download pipeline, checked like any pinned
+//! file, and its marker and trees through answers read whole, at most 64 MiB.
 
 use url::Url;
 
@@ -20,7 +19,6 @@ pub(crate) enum Look {
     Failed(Error),
 }
 
-/// a tree a web mirror gave.
 pub(crate) enum Tree {
     Bytes(Vec<u8>),
     /// none there, or one too large to read whole, so the archive itself is needed.
@@ -29,11 +27,7 @@ pub(crate) enum Tree {
     Failed(Error),
 }
 
-/// asks the web mirror at `base` for its marker, once.
-///
-/// # Errors
-///
-/// `interrupted` when a stop is asked.
+/// asks the web mirror at `base` for its marker, once, failing only when a stop is asked.
 pub(crate) async fn probe(net: &Net, base: &Url) -> Result<Look, Error> {
     let answer = match net.mirror_get(&joined(base, &[MARKER])).await {
         Ok(answer) => answer,
@@ -60,11 +54,7 @@ pub(crate) fn object(base: &Url, wanted: &Wanted) -> Fetch {
     }
 }
 
-/// the tree whose bytes hash to `tree`, as the web mirror at `base` holds it.
-///
-/// # Errors
-///
-/// `interrupted` when a stop is asked.
+/// the tree whose bytes hash to `tree` on the web mirror at `base`, failing only on a stop.
 pub(crate) async fn read_tree(net: &Net, base: &Url, tree: &Sha256) -> Result<Tree, Error> {
     let answer = match net.mirror_get(&joined(base, &below("trees", tree))).await {
         Ok(answer) => answer,

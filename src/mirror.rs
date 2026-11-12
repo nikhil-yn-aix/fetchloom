@@ -1,8 +1,6 @@
-//! mirrors: folders and web servers that hold pinned files under their SHA-256, so a lab disk, a
-//! usb drive or a company server can stand in for a file's source. a mirror is never trusted:
-//! every file and tree it gives is checked against its pin before the cache keeps it.
-//!
-//! a mirror is laid out the same on a disk and on a web server:
+//! mirrors: folders and web servers standing in for a file's source, holding pinned files under
+//! their SHA-256. a mirror is never trusted: the cache keeps only what matches its pin. both lay
+//! files out alike:
 //!
 //! ```text
 //! fetchloom-mirror           first line "fetchloom mirror 1"
@@ -26,12 +24,9 @@ pub(crate) const MARKER: &str = "fetchloom-mirror";
 pub(crate) const MARKER_LINE: &str = "fetchloom mirror 1";
 /// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
 pub(crate) const LARGEST_TREE: u64 = 64 * 1024 * 1024;
-/// the folder of a mirror that holds pinned files.
 pub(crate) const OBJECTS: &str = "objects";
-/// the folder of a mirror that holds trees.
 pub(crate) const TREES: &str = "trees";
 
-/// where a mirror is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Location {
     Folder(PathBuf),
@@ -40,13 +35,8 @@ pub(crate) enum Location {
 }
 
 impl Location {
-    /// reads a mirror as a person writes it: text holding `://` is a web address and anything
-    /// else a folder, so `C:\lab` is a folder. a relative folder is taken from `base` when one is
-    /// given, as the settings file's folder is for the file's mirrors.
-    ///
-    /// # Errors
-    ///
-    /// why the text is no mirror, with what to write instead, for a usage error to carry.
+    /// reads a mirror as a person writes it: text with `://` is a web address and anything else a
+    /// folder, as `C:\lab`, a relative one from `base` when given. a [`Refusal`] says what to do.
     pub(crate) fn parse(text: &str, base: Option<&Path>) -> Result<Location, Refusal> {
         let text = text.trim();
         if !text.contains("://") {
@@ -150,7 +140,6 @@ impl Mirrors {
         }
     }
 
-    /// the web mirrors' addresses.
     pub(crate) fn web(&self) -> impl Iterator<Item = &Url> {
         self.list.iter().filter_map(|location| match location {
             Location::Web(base) => Some(base),
@@ -159,8 +148,7 @@ impl Mirrors {
     }
 }
 
-/// where a mirror keeps a file or a tree, below its top: `objects` or `trees`, then the first two
-/// hex digits of `digest`, then the other 62.
+/// the path below a mirror's top where it keeps `digest` under `kind`, as the module doc lays out.
 pub(crate) fn below(kind: &str, digest: &Sha256) -> [String; 3] {
     let hex = digest.hex();
     let (fan, rest) = hex.split_at(2);

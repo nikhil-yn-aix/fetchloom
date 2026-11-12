@@ -1,7 +1,5 @@
-//! a mirror on a disk this machine reads, such as a lab nas, a usb drive or a network share. its
-//! files are copied into the cache, cloned where the disk can, and never linked, so a later
-//! change on the mirror cannot reach a project. `fetchloom push` writes one through [`Target`]:
-//! each file is written under a temporary name, checked, and only then given its own.
+//! a mirror on a disk this machine reads, as a lab nas or a usb drive. its files are copied, never
+//! linked, so a change there never reaches a project. [`Target`] writes one, checking each file.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
@@ -43,7 +41,6 @@ pub(crate) enum Gave {
     Unreadable(io::Error),
 }
 
-/// a tree a folder mirror gave.
 pub(crate) enum Tree {
     Bytes(Vec<u8>),
     /// none there, or one too large to read, so the archive itself is needed.
@@ -82,13 +79,8 @@ pub(crate) fn probe(root: &Path) -> Result<(), Missing> {
     }
 }
 
-/// copies each of `wanted` the folder mirror at `root` holds into the cache, a few at once within
-/// `threads`, and says what each gave, in order. past `MOST_FLUSHED_ALONE` files they reach the
-/// disk with one flush, where the system can, before any takes its name.
-///
-/// # Errors
-///
-/// a failure to write the cache, and `Interrupted` when `stop` asks.
+/// copies each of `wanted` the folder mirror at `root` holds into the cache, each on the disk
+/// before any takes its name, saying what each gave in order. it fails on a cache write or a stop.
 pub(crate) fn copy_all(
     cache: &Cache,
     root: &Path,
@@ -138,12 +130,8 @@ pub(crate) fn copy_all(
     Ok(gave)
 }
 
-/// the tree whose bytes hash to `tree`, as the folder mirror at `root` holds it, read a block at a
-/// time and never past [`LARGEST_TREE`].
-///
-/// # Errors
-///
-/// a failure to read it, and `Interrupted` when `stop` asks.
+/// the tree whose bytes hash to `tree` on the folder mirror at `root`, read a block at a time and
+/// never past [`LARGEST_TREE`]. it fails on a read or a stop.
 pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<Tree> {
     let path = place(root, "trees", tree);
     let mut file = match read_unfollowed(&path) {
@@ -170,9 +158,8 @@ pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<T
     }
 }
 
-/// a copy on a folder mirror as it was when it hashed to its name: its size and when it was last
-/// written, so a later look can tell that it is still that copy. its number is left out, since a
-/// network disk may give a file a new one, as push finds.
+/// a copy on a folder mirror as it was when it hashed to its name: its size and modified time. its
+/// number is left out, since a network disk may give a file a new one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Seen {
     size: u64,
@@ -201,14 +188,9 @@ pub(crate) enum Held {
     Unreadable(io::Error),
 }
 
-/// what the folder mirror at `root` holds of each of `wanted`, a few at once within `threads`, in
-/// order. each copy is opened without following a link, as a reader opens it, and read whole and
-/// hashed, from its disk where the system allows, as push reads back what it writes. `read`
-/// hears how many bytes of `wanted` each look settles, as it goes.
-///
-/// # Errors
-///
-/// `Interrupted` when `stop` asks.
+/// what the folder mirror at `root` holds of each of `wanted`, in order, each copy opened without
+/// following a link and hashed whole from its disk where the system allows. `read` hears the bytes
+/// each look settles; only a stop fails it.
 pub(crate) fn check_all(
     root: &Path,
     wanted: &[Wanted],
@@ -272,8 +254,7 @@ fn check(path: &Path, want: &Wanted, stop: &Stop, read: &mut dyn FnMut(u64)) -> 
     }
 }
 
-/// whether the copy of `digest` on the folder mirror at `root` is still the one `seen` describes:
-/// a plain file there of the same size, last written at the same time. one look, no read.
+/// whether the copy of `digest` at `root` still looks as `seen` says, by one look and no read.
 pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
     fs::symlink_metadata(place(root, "objects", digest))
         .is_ok_and(|found| is_plain(&found) && Seen::of(&found) == *seen)
@@ -282,12 +263,11 @@ pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
 /// the folder a push writes files in before they take their names.
 const TMP: &str = "tmp";
 
-/// how long a file a push left unfinished in `tmp/` stays before a later push removes it, as a
-/// push that was killed leaves one.
+/// how long a killed push's unfinished file stays in `tmp/` before a later push removes it.
 const STALE: Duration = Duration::from_hours(24);
 
-/// a file a push writes into a mirror: a pinned file under [`OBJECTS`], or under [`TREES`] the
-/// list of what an archive unpacks to, each named by the SHA-256 its bytes must have.
+/// a file a push writes: a pinned file under [`OBJECTS`](super::OBJECTS) or an archive's file list
+/// under [`TREES`](super::TREES), named by the SHA-256 its bytes must have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Item {
     pub(crate) folder: &'static str,
@@ -346,9 +326,8 @@ pub(crate) enum Fault {
     OtherBytes,
     /// the mirror's copy, read back from its disk, holds other bytes than were written.
     ReadBack,
-    /// another file took the place of the one written before it was read back: another
-    /// account's, one of another size, or on windows any with a new number, as when something
-    /// else writes into the mirror.
+    /// another file took the place of the one written before it was read back: another account's,
+    /// one of another size, or on windows any with a new number.
     Replaced,
     /// writing the mirror failed, or a stop was asked, which is `Interrupted`.
     Mirror(io::Error),
@@ -397,12 +376,8 @@ struct Identity {
     owner: u32,
 }
 
-/// what is at `root`, a folder named as a mirror to push to, read without changing anything. a
-/// folder holding only the `tmp/` a push that stopped before its marker made is still new.
-///
-/// # Errors
-///
-/// why a push cannot write there.
+/// what is at `root`, a folder named as a mirror to push to, read without changing anything, or why
+/// a push cannot write there. a folder holding only a stopped push's `tmp/` is still new.
 pub(crate) fn look(root: &Path) -> Result<State, Refused> {
     match probe(root) {
         Ok(()) => return Ok(State::Mirror),
@@ -445,13 +420,8 @@ pub(crate) fn look(root: &Path) -> Result<State, Refused> {
 }
 
 /// looks once at the name of each of `items` in the folder mirror at `root`, as [`look`] found it,
-/// a few at once within `threads`, and says what is there, in order. the folders the items go in
-/// are checked once each through the mirror's top, so a link among them is refused, never
-/// followed; a mirror not started yet holds nothing.
-///
-/// # Errors
-///
-/// a folder that is a link or no folder, and a name that cannot be looked at.
+/// and says what is there, in order. each folder is checked once through the mirror's top, so a
+/// link among them fails it, as a name that cannot be looked at does; a new mirror holds nothing.
 pub(crate) fn survey(
     root: &Path,
     state: State,
@@ -519,9 +489,8 @@ fn no_folder(root: &Path, name: &Path, err: io::Error) -> io::Error {
     )
 }
 
-/// a folder mirror a push writes to. every folder in it is reached through a handle on the
-/// mirror's top without following a link, as placing reaches a project's folders, so a link
-/// someone planted in the mirror cannot send a write elsewhere.
+/// a folder mirror a push writes to, every folder reached through a handle on its top without
+/// following a link, so a link someone planted cannot send a write elsewhere.
 pub(crate) struct Target {
     root: PathBuf,
     /// never stopped itself, so a file left unfinished by a stop is still removed.
@@ -530,12 +499,8 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    /// opens the folder mirror at `root` for writing, and starts one there, the folder and then
-    /// its marker, when [`look`] finds none yet. says whether it started one.
-    ///
-    /// # Errors
-    ///
-    /// why a push cannot write there.
+    /// opens the folder mirror at `root` for writing, starting one, folder then marker, when
+    /// [`look`] finds none, and says whether it did; or why a push cannot write there.
     pub(crate) fn open(root: &Path, stop: std::sync::Arc<Stop>) -> Result<(Target, bool), Refused> {
         let state = look(root)?;
         let mut target = Target {
@@ -556,7 +521,6 @@ impl Target {
         Ok((target, started))
     }
 
-    /// the mirror's top folder.
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -584,9 +548,8 @@ impl Target {
         }
     }
 
-    /// flushes the mirror's top folder, which just gained the marker's name: a power cut could
-    /// otherwise keep pushed files and lose the marker, and every later push would refuse the
-    /// folder as holding files but no mirror.
+    /// flushes the mirror's top folder once it gained the marker's name, since a power cut could
+    /// keep pushed files and lose the marker, and every later push would then refuse the folder.
     fn keep_marker(&self) -> io::Result<()> {
         #[cfg(all(test, target_os = "linux"))]
         if let Some(folder) = tests::failing(tests::Failing::MarkerFlush, &self.root) {
@@ -595,12 +558,8 @@ impl Target {
         crate::project::sync_directory(&self.root)
     }
 
-    /// makes `tmp/` and the folders `items` go in, each checked once through the mirror's top: a
-    /// link among them is refused, never followed.
-    ///
-    /// # Errors
-    ///
-    /// a folder that is a link or no folder, or one that cannot be made.
+    /// makes `tmp/` and the folders `items` go in, each checked once through the mirror's top, so
+    /// a link among them fails it, never followed.
     pub(crate) fn prepare(&mut self, items: &[Item]) -> io::Result<()> {
         let tmp = self.root.join(TMP).join(MARKER);
         let names = std::iter::once(tmp).chain(
@@ -616,10 +575,8 @@ impl Target {
         Ok(())
     }
 
-    /// gives `temp`, which holds `item`'s checked bytes, the item's name, where [`survey`] found
-    /// `there`. it never takes the name from another file: a damaged copy is moved aside first
-    /// and removed once the new file has the name, and a name another push gave a file of the
-    /// item's size meanwhile keeps that file.
+    /// gives `temp`, holding `item`'s checked bytes, the item's name without taking it from another
+    /// file: a damaged copy moves aside until then, and a file another push named meanwhile stays.
     fn publish(&self, temp: &mut Temporary<'_>, item: &Item, there: There) -> Result<Put, Fault> {
         let name = place(&self.root, item.folder, &item.digest);
         let aside = match there {
@@ -658,20 +615,11 @@ impl Target {
         }
     }
 
-    /// writes each of `items`, from the bytes `source` gives for it, where [`survey`] found what
-    /// it says, a few at once within `threads`, and says what writing each gave, in order. each
-    /// goes into a new read-only file in `tmp/`, hashed as it is written. they reach the disk as
-    /// the cache's new objects do: each flushed on its own up to `MOST_FLUSHED_ALONE` files,
-    /// else, where the system can, all with one flush of their filesystem once the last is
-    /// written. only then is each read back from the disk, hashed again and named as
-    /// [`Target::publish`] names a file, so a name never points at bytes that were not on the disk.
-    /// `written` hears the size of each file written, and `named` that of each file named.
-    /// [`Target::prepare`] makes the folders first.
-    ///
-    /// # Errors
-    ///
-    /// the first file that could not be written, read back or named, or the flush. files named
-    /// before it keep their names; the others go.
+    /// writes each of `items` from `source` where [`survey`] found what it says, saying what each
+    /// gave, in order. every file goes read-only into `tmp/` and onto the disk before any is read
+    /// back, hashed again and named, so a name never points at bytes not on the disk. `written` and
+    /// `named` hear each file's size; [`Target::prepare`] makes the folders first. on a failure,
+    /// files named before it keep their names and the others go.
     pub(crate) fn put_all<S: Read>(
         &self,
         items: &[(Item, There)],
@@ -785,8 +733,7 @@ impl Target {
         self.publish(&mut written.temp, &item, written.there)
     }
 
-    /// removes the files pushes left unfinished in the mirror's `tmp/` more than a day before
-    /// `now`, as a push that was killed leaves them. nothing else there is touched.
+    /// removes unfinished push files in `tmp/` a day older than `now`, and nothing else there.
     pub(crate) fn sweep(&self, now: SystemTime) {
         let Ok(entries) = fs::read_dir(self.root.join(TMP)) else {
             return;
@@ -803,13 +750,8 @@ impl Target {
         }
     }
 
-    /// puts the names a push gave on the disk: the folders `written` went in, then the mirror's
-    /// own. a name a power cut lost before this would only make a later push copy its file
-    /// again.
-    ///
-    /// # Errors
-    ///
-    /// a folder that could not be flushed.
+    /// puts the names a push gave on the disk, the folders `written` went in then the mirror's own,
+    /// failing on one it cannot flush. a name lost to a power cut before this only costs a copy.
     pub(crate) fn flush(&self, written: &[Item]) -> io::Result<()> {
         let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
         for item in written {
@@ -892,8 +834,7 @@ fn holds(name: &Path, size: u64) -> bool {
     fs::symlink_metadata(name).is_ok_and(|found| is_plain(&found) && found.len() == size)
 }
 
-/// whether the folder mirror at `root` holds a plain file of `size` bytes where it keeps the
-/// object `digest`, as a reader finds it before checking its bytes.
+/// whether the folder mirror at `root` holds a plain file of `size` bytes for `digest`, unread.
 pub(crate) fn has(root: &Path, digest: &Sha256, size: u64) -> bool {
     holds(&place(root, super::OBJECTS, digest), size)
 }
@@ -927,9 +868,8 @@ fn gathered(puts: Vec<Option<Result<Put, Fault>>>) -> Result<Vec<Put>, Failed> {
     Ok(gave)
 }
 
-/// puts `file`, just written, on its disk now, unless `batch`'s one flush will: on linux when the
-/// file is on the batch's filesystem, and on macos after the plain fsync whose data the batch's
-/// full flush then takes out of the drive's cache, as the cache seals its objects.
+/// puts `file`, just written, on its disk now unless `batch`'s one flush will: on linux when the
+/// file is on its filesystem; on macos after a plain fsync, the batch emptying the drive's cache.
 fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
     let Some(batch) = batch else {
         return flush(file);
@@ -951,18 +891,10 @@ fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
     match *batch {}
 }
 
-/// lets `file`, opened again by the temporary name of `written`, be read back and named though
-/// its number is not the written file's: a network disk that forgot a file's number gives it a
-/// new one, as smb mounted with `noserverino` and sshfs without `use_ino` do. the account that
-/// owns the file written must own it, so no other account can change the bytes once named, and
-/// its size must be the item's; then it is made read-only like every pushed file and flushed on
-/// its own handle, since only bytes on the disk may take a name. `read_unfollowed` opens only
-/// plain files.
-///
-/// # Errors
-///
-/// [`Fault::Replaced`] for a file another account owns or of another size, which something else
-/// put there, or the flush's error.
+/// lets `file`, opened again by `written`'s temporary name, be read back and named though its
+/// number changed, as on a network disk that forgot it: smb with `noserverino`, sshfs without
+/// `use_ino`. it must be the item's size and owned by the written file's account, so no other can
+/// change it once named, else [`Fault::Replaced`], and is made read-only and flushed first.
 #[cfg(unix)]
 fn renumbered(file: &File, found: Identity, written: &Written<'_>) -> Result<(), Fault> {
     let held = file.metadata().map_err(Fault::Mirror)?;
@@ -977,9 +909,8 @@ fn renumbered(file: &File, found: Identity, written: &Written<'_>) -> Result<(),
     flush(file).map_err(Fault::Mirror)
 }
 
-/// makes `file`, at `path`, read-only through its own handle, from its `permissions`. a disk that
-/// refuses, as some network disks refuse a change of mode, leaves it as it was: its bytes are
-/// checked all the same, so it still takes its name.
+/// makes `file`, at `path`, read-only through its own handle. a disk that refuses, as some network
+/// disks do, leaves it as it was, and it still takes its name, its bytes checked all the same.
 #[cfg(unix)]
 fn read_only(file: &File, mut permissions: fs::Permissions, path: &Path) {
     permissions.set_readonly(true);
@@ -1014,9 +945,8 @@ fn identity(file: &File) -> io::Result<Identity> {
     }
 }
 
-/// holds a copy whose part is in `tmp/` until a stop is asked or the file
-/// `FETCHLOOM_TEST_HOLD_PUSH` names appears, so a CLI test can stop a push in the middle of a copy
-/// on any disk, even one that clones files at once. release builds never read it.
+/// holds a copy whose part is in `tmp/` until a stop or the file `FETCHLOOM_TEST_HOLD_PUSH` names
+/// appears, so a CLI test can stop a push mid-copy on any disk. release builds never read it.
 #[cfg(debug_assertions)]
 fn held(stop: &Stop) {
     let Some(release) = std::env::var_os("FETCHLOOM_TEST_HOLD_PUSH").map(PathBuf::from) else {
@@ -1027,8 +957,7 @@ fn held(stop: &Stop) {
     }
 }
 
-/// copies at most `most` bytes of `source` into `file`, hashing them, and says how many there
-/// were and their SHA-256. a stop is looked for between blocks.
+/// copies and hashes up to `most` bytes of `source` into `file`, looking for a stop between blocks.
 fn copy_hashed(
     source: &mut impl Read,
     file: &mut File,
@@ -1047,8 +976,7 @@ fn copy_hashed(
     }
 }
 
-/// what `file` holds on its disk, at most `most` bytes, read again from its start and hashed, as
-/// [`past_memory`] reads it.
+/// up to `most` bytes of `file` hashed from its start, read from its disk as [`past_memory`] asks.
 fn read_back(file: &mut File, most: u64, stop: &Stop) -> io::Result<(u64, Sha256)> {
     past_memory(file);
     file.seek(SeekFrom::Start(0))?;
@@ -1070,9 +998,8 @@ fn past_memory(file: &File) {
     let _ = file;
 }
 
-/// reads at most `most` bytes of `source` a block at a time, handing each block to `each` until
-/// it says no, and hashes them. says how many were read and their SHA-256. a stop asked between
-/// blocks is `Interrupted`.
+/// hashes up to `most` bytes of `source` a block at a time, handing each to `each` until it says
+/// no. a stop asked between blocks is `Interrupted`.
 fn hashed(
     source: &mut impl Read,
     most: u64,
@@ -1402,8 +1329,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// a push starts a mirror in a folder that is not there yet or is empty, and refuses one
-    /// that holds files without a marker, since it may be anything, or an unmounted disk's.
+    /// files without a marker may be anything, or an unmounted disk's, so their folder is refused.
     #[test]
     fn a_push_starts_a_mirror_only_where_nothing_is() {
         let folder = tempfile::tempdir().unwrap();
@@ -1435,9 +1361,8 @@ pub(crate) mod tests {
         ));
     }
 
-    /// two pushes start one new mirror at once: one finds no folder, and the other makes it, or
-    /// the whole mirror, before the first looks again. the first takes it as new or as the
-    /// other's mirror, and the other, or a later push, finds one mirror with its marker.
+    /// another push makes the folder, or the whole mirror, between this one's looks; this one takes
+    /// it as new or as that mirror, and a later push finds one mirror with its marker.
     #[test]
     fn a_folder_another_push_makes_between_two_looks_is_taken() {
         let folder_only: fn(&Path) = |root| fs::create_dir(root).unwrap();
@@ -1487,8 +1412,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// one look tells a good copy from a damaged one; the damaged one is replaced, the good one
-    /// left as it is.
+    /// one look tells them apart.
     #[test]
     fn a_wrong_object_on_the_target_is_replaced_and_a_good_one_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1574,8 +1498,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// files past the size the cache flushes one by one reach the disk together, then each is
-    /// read back and named.
+    /// past the count the cache flushes one by one, the files reach the disk together first.
     #[test]
     fn a_batch_of_files_is_named_once_it_is_on_the_disk() {
         let folder = tempfile::tempdir().unwrap();
@@ -1589,8 +1512,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// a flush that fails names nothing, since a name must never point at bytes that may not be
-    /// on the disk.
+    /// a name must never point at bytes that may not be on the disk.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_failed_batch_flush_names_nothing() {
@@ -1606,8 +1528,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// a push killed after writing its files and before naming them leaves each under its
-    /// temporary name, which no reader asks for and a later push sweeps, and no name at all.
+    /// each file stays under its temporary name, which no reader asks for and a later push sweeps.
     #[test]
     fn a_push_killed_before_naming_leaves_no_named_file() {
         let folder = tempfile::tempdir().unwrap();
@@ -1669,11 +1590,8 @@ pub(crate) mod tests {
         (value, text)
     }
 
-    /// a file that comes back under its temporary name with a new number, as a disk that forgot
-    /// its number shows it, still takes its name: it is the same account's, of the same size, and
-    /// is made read-only like every pushed file, flushed again on its own handle and read back.
-    /// windows never renumbers a file, so there any new file in its place was put there by
-    /// something else.
+    /// same account, same size: it is made read-only, flushed on its own handle and read back.
+    /// windows never renumbers a file, so there any new file in its place is someone else's.
     #[test]
     fn a_file_renumbered_before_its_read_back_still_takes_its_name() {
         let (put, named) = one_put(Between::Renumber);
@@ -1692,8 +1610,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// a renumbered file the disk will not make read-only still takes its name, since its bytes
-    /// are checked, and the refusal shows with `-vv`.
+    /// its bytes are checked anyway, and the refusal shows with `-vv`.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_renumbered_file_the_disk_will_not_make_read_only_is_named_anyway() {
@@ -1708,9 +1625,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// a file swapped for other bytes of the same size before its read-back never takes a name:
-    /// unix reads the swapped file back and finds the bytes changed, while windows refuses any
-    /// file with a new number as replaced.
+    /// unix reads the swapped file back and finds the bytes changed, while windows refuses any file
+    /// with a new number as replaced.
     #[test]
     fn a_file_swapped_before_its_read_back_never_takes_a_name() {
         let (put, named) = one_put(Between::Alter);
@@ -1727,8 +1643,7 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// another account's file in a pushed file's place never takes its name, even with the same
-    /// bytes, since that account could change them once it had.
+    /// even with the same bytes, since that account could change them once named.
     #[cfg(unix)]
     #[test]
     fn a_file_another_account_put_in_its_place_never_takes_a_name() {
@@ -1740,8 +1655,7 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// a file of another size in a pushed file's place never takes its name, and is refused
-    /// before it is flushed: on linux, where the test makes that flush fail, it is never tried.
+    /// on linux the test makes that flush fail, so a refusal shows it was never tried.
     #[test]
     fn a_file_of_another_size_in_its_place_is_refused_unflushed() {
         #[cfg(target_os = "linux")]
@@ -1756,8 +1670,7 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// a renumbered file takes its name only once flushed again: a flush that fails stops the
-    /// push with the disk's error, and the file never takes its name.
+    /// the failed flush stops the push with the disk's error.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_renumbered_file_that_cannot_be_flushed_never_takes_a_name() {
@@ -1772,8 +1685,7 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// a new mirror's marker is on the disk, its name in the top folder too, before any file is
-    /// pushed: a marker whose name cannot be flushed stops the push before it writes a file.
+    /// a new mirror's marker, its name included, is on the disk before any file is pushed.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_marker_that_cannot_be_flushed_stops_the_push_before_any_file() {
@@ -1835,8 +1747,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// a file a killed push left in `tmp/` goes once it is a day old; a younger one may be a
-    /// running push's, and other files are not a push's.
+    /// a younger one may be a running push's, and other files are no push's.
     #[test]
     fn old_unfinished_files_are_swept_and_others_kept() {
         let folder = tempfile::tempdir().unwrap();
