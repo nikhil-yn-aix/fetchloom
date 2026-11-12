@@ -577,32 +577,10 @@ pub(crate) fn misnamed(names: impl IntoIterator<Item = OsString>) -> Vec<(String
             if known().any(|known| known == compared) {
                 return None;
             }
-            let meant = known().find(|known| one_typo_apart(&compared, known))?;
+            let meant = known().find(|known| crate::name::one_typo(&compared, known))?;
             Some((name, meant))
         })
         .collect()
-}
-
-/// whether `a` and `b` differ by one typo: a character added, dropped or changed, or two
-/// neighbours swapped.
-fn one_typo_apart(a: &str, b: &str) -> bool {
-    if a.chars().count().abs_diff(b.chars().count()) > 1 {
-        return false;
-    }
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let start = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    let (a, b) = (&a[start..], &b[start..]);
-    let end = a
-        .iter()
-        .rev()
-        .zip(b.iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
-    match (&a[..a.len() - end], &b[..b.len() - end]) {
-        ([_], [_] | []) | ([], [_]) => true,
-        ([first, second], [other, another]) => first == another && second == other,
-        _ => false,
-    }
 }
 
 /// how to undo a bad value: unset the variable, or remove the key from the file.

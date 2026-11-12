@@ -293,9 +293,27 @@ pub(crate) fn nearest<'a>(
         .collect()
 }
 
-/// whether one typo turns `a` into `b`, as [`distance`] counts typos.
+/// whether one typo turns `a` into `b`, as [`distance`] counts typos: a character added,
+/// dropped or changed, or two neighbours swapped. it compares the two without [`distance`]'s
+/// table, since every run asks it of each variable it starts with.
 pub(crate) fn one_typo(a: &str, b: &str) -> bool {
-    distance(a, b) == 1
+    if a.chars().count().abs_diff(b.chars().count()) > 1 {
+        return false;
+    }
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let start = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[start..], &b[start..]);
+    let end = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    match (&a[..a.len() - end], &b[..b.len() - end]) {
+        ([_], [_] | []) | ([], [_]) => true,
+        ([first, second], [other, another]) => first == another && second == other,
+        _ => false,
+    }
 }
 
 /// the number of edits that turn `a` into `b`: adding, dropping or changing a character, or
@@ -976,6 +994,26 @@ mod tests {
             nearest("iris.csv", ["b.txt", "iris.tsv", "a.csv"], 2),
             ["iris.tsv", "a.csv"]
         );
+    }
+
+    /// `one_typo` skips `distance`'s table, so the two must agree on every pair of words up to four
+    /// letters long, from an alphabet with one two-byte letter.
+    #[test]
+    fn one_typo_is_a_distance_of_one() {
+        let mut words = vec![String::new()];
+        let mut longest = vec![String::new()];
+        for _ in 0..4 {
+            longest = longest
+                .iter()
+                .flat_map(|word| ['a', 'b', '\u{e9}'].map(|c| format!("{word}{c}")))
+                .collect();
+            words.extend(longest.iter().cloned());
+        }
+        for a in &words {
+            for b in &words {
+                assert_eq!(one_typo(a, b), distance(a, b) == 1, "{a:?} and {b:?}");
+            }
+        }
     }
 
     #[test]
