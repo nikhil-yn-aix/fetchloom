@@ -686,9 +686,11 @@ impl Survey {
         if files.is_empty() {
             return Ok(HashSet::new());
         }
+        let total = files.iter().fold(0_u64, |sum, (_, placed)| {
+            sum.saturating_add(placed.look.size)
+        });
         let _span = tracing::debug_span!("verify", files = files.len()).entered();
         let shown = output.map(|output| {
-            let total = files.iter().map(|(_, placed)| placed.look.size).sum();
             let what = units::count(files.len() as u64, "placed file", "placed files");
             let bar = output.bar("Checking", what.clone());
             bar.start(Some(total), 0);
@@ -700,7 +702,7 @@ impl Survey {
                 ticker.advance(bytes);
             }
         };
-        let intact = place::run_all(&files, self.threads, |(path, placed)| {
+        let intact = place::run_hashes(&files, total, self.threads, |(path, placed)| {
             let file = fs::File::open(root.join(path.as_str()))?;
             let block = Block::sized(placed.look.size.saturating_add(1));
             Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)

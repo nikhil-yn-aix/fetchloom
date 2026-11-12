@@ -1101,6 +1101,83 @@ fn work_spread_over_threads_comes_back_in_order() {
 }
 
 #[test]
+fn hashing_workers_use_bytes_without_spending_more_at_small_caps() {
+    for (items, bytes, processors, ceiling, expected) in [
+        (8, 512 << 20, 16, None, 8),
+        (8, 32 << 20, 16, None, 8),
+        (8, 8 << 20, 16, None, 2),
+        (8, 32 << 10, 16, None, 1),
+        (1, 512 << 20, 16, None, 1),
+        (0, 0, 16, None, 0),
+        (8, 512 << 20, 1, None, 1),
+        (8, 512 << 20, 2, None, 2),
+        (8, 512 << 20, 16, Some(2), 1),
+        (8, 512 << 20, 16, Some(4), 4),
+        (512, 2 << 20, 16, Some(2), 2),
+        (8, u64::MAX, 16, None, 8),
+    ] {
+        let cap = ceiling.map_or(Threads::default(), |cap| Threads::default().at_most(cap));
+        assert_eq!(
+            hash_workers(items, bytes, processors, cap),
+            expected,
+            "{items} files, {bytes} bytes, {processors} CPUs, {ceiling:?}"
+        );
+    }
+}
+
+#[test]
+fn hashing_jobs_keep_digests_and_interruptions_in_order_when_spawns_fail() {
+    struct Interrupted;
+    impl Read for Interrupted {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::Interrupted.into())
+        }
+    }
+    let expected = [
+        "299285fc41a44cdb038b9fdaf494c76ca9d0c866672b2b266c1a0c17dda60a05",
+        "61d678b48de600e6922df82ac9fb5d208d19e98064d0d1d5c14a2ee50481c593",
+        "a7e2d83a174914a1232152ca3df32818f5513532e4acd4b4efd87df038907f6a",
+        "0020e43347537f3440ee8627f986e6ad02edec405d62d679ee53ecc75c5e2911",
+        "0d991aba52ac92e65839edfe37cb9ba77003644998a0b571b1f1a3a21dabc684",
+        "efbe555ee4f0de9ad7ba0dfad1f7eef00200a93fabd66fa09c46e4dbef135919",
+        "7d14a820ca69354c4f496a91d87a593674beaaf5641ffbe718225bbd33d9f75d",
+        "806582984e335c4f5fb7d310dbf7a790d51df348d77dc797a3b27c6da316995e",
+    ];
+    let items: Vec<_> = (b'a'..=b'h').enumerate().collect();
+    for refuse in [false, true] {
+        let _refusing = refuse.then(|| crate::threads::refuse_after(0));
+        let caller = std::thread::current().id();
+        let seen: Vec<_> = items.iter().map(|_| AtomicUsize::new(0)).collect();
+        let digests = run_hashes(&items, 32 << 20, Threads::default(), |(index, byte)| {
+            if refuse {
+                assert_eq!(std::thread::current().id(), caller);
+            }
+            seen[*index].fetch_add(1, Ordering::Relaxed);
+            if *index == 3 {
+                crate::digest::Sha256::of_reader(Interrupted, crate::digest::Block::sized(1))
+                    .map(|digest| digest.hex())
+            } else {
+                let bytes = vec![*byte; 4 << 20];
+                crate::digest::Sha256::of_reader(
+                    bytes.as_slice(),
+                    crate::digest::Block::sized(bytes.len() as u64),
+                )
+                .map(|digest| digest.hex())
+            }
+        });
+        assert_eq!(digests.len(), expected.len());
+        for (index, digest) in digests.into_iter().enumerate() {
+            if index == 3 {
+                assert_eq!(digest.unwrap_err().kind(), io::ErrorKind::Interrupted);
+            } else {
+                assert_eq!(digest.unwrap(), expected[index]);
+            }
+            assert_eq!(seen[index].load(Ordering::Relaxed), 1);
+        }
+    }
+}
+
+#[test]
 fn one_worker_runs_local_jobs_on_the_calling_thread() {
     let threads = Threads::read(&|_| Some("1".into())).unwrap();
     let calling = std::thread::current().id();

@@ -25,7 +25,7 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 | `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | on linux a quarter of the memory available, from 256 MiB to 4 GiB; 256 MiB on macos and windows | as `default` |
 | local workers, as `FETCHLOOM_THREADS` caps them | 2, or 1 on a machine with one processor | up to the processors | as `default` |
 
-`max` leaves memory and local workers at the default, since no measure found a run faster with more of them.
+`max` leaves memory and local workers at the default, since no measure found a run faster with more of them. verification can use those spare workers for a few large files as well as many small ones. ceilings of one or two keep the old worker count, so lean adds no hash buffers.
 
 a setting you set by name, with its variable or its key in the settings file, wins over any level. `FETCHLOOM_RESOURCES=max FETCHLOOM_HOST_JOBS=8 fetchloom sync` runs 32 requests at once, but at most 8 to one host. lean caps local workers only when `FETCHLOOM_THREADS` is unset. with that derived ceiling, each download keeps a required MD5 beside SHA-256 on its existing worker, without extra queued byte batches.
 

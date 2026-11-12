@@ -39,6 +39,9 @@ const THREADS: usize = 8;
 /// calls.
 const PER_THREAD: usize = 64;
 
+/// hashing this many bytes repays starting a worker even for a short file list.
+const HASH_BYTES: u64 = 4 << 20;
+
 /// how a file was placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -877,7 +880,38 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     cap: Threads,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
-    let threads = workers(items.len(), cap);
+    run_work(items, workers(items.len(), cap), job)
+}
+
+/// runs hashing work in item order, using bytes as well as file count to repay worker startup.
+pub(crate) fn run_hashes<T: Sync, R: Send>(
+    items: &[T],
+    bytes: u64,
+    cap: Threads,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    run_work(
+        items,
+        hash_workers(items.len(), bytes, processors, cap),
+        job,
+    )
+}
+
+/// small ceilings keep their existing hash-buffer count; larger groups can spend spare CPUs.
+fn hash_workers(items: usize, bytes: u64, processors: usize, cap: Threads) -> usize {
+    let by_count = items / PER_THREAD;
+    let wanted = if cap.limit(THREADS) > 2 {
+        let by_bytes = usize::try_from(bytes / HASH_BYTES).unwrap_or(usize::MAX);
+        by_count.max(by_bytes)
+    } else {
+        by_count
+    };
+    cap.limit(processors.min(THREADS).min(wanted.max(1)))
+        .min(items)
+}
+
+fn run_work<T: Sync, R: Send>(items: &[T], threads: usize, job: impl Fn(&T) -> R + Sync) -> Vec<R> {
     if threads < 2 {
         return items.iter().map(job).collect();
     }

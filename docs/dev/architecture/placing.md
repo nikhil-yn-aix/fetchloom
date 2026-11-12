@@ -14,7 +14,7 @@ placement protects existing files while turning locked data and cached archive t
 | [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
 | [cli/sync/place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | batched placement and per-file observations | `Tally`, `put_all` |
 | [cli/sync/place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement summaries | `tell` |
-| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all` |
+| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_hashes` |
 | [place/synced.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/synced.rs) | cloud-sync folder detection | `client` |
 | [cli/get/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/folder.rs) | one-off destination policy | `Outcome`, `check`, `put_all` |
 | [cli/get/file.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/file.rs) | the one file `get -o` writes: what to do about a file there, a one-off moved out of the cache, and publication without replacing | `Existing`, `Step`, `decide`, `one_off`, `take`, `publish`, `forget` |
@@ -125,6 +125,14 @@ placement-order tests pause at the first metadata observation before later names
 ## related
 
 [sync loop](sync-loop.md), [cache](cache.md), [archives](archives.md), [filesystem CI](../engineering/ci.md), [copy measurements](../performance/measurements.md#storage-and-memory).
+
+## verification workers
+
+`Survey::verify` first selects only the files that still need reading. a same-survey `Placed::racy_intact` proof still skips a file unless it is in `damaged`; files outside the requested datasets and already edited or vouched files keep their existing exclusions. scheduling counts the bytes of this filtered list, not every record in the state.
+
+`place::run_hashes` shares these reads by both count and bytes: the larger of one worker per 64 files and one per 4 MiB, bounded by the actual files, available CPUs, eight workers and `FETCHLOOM_THREADS`. a ceiling of one or two keeps the original count-based choice, so lean does not add read buffers to a short list. an empty or single-worker group stays on the caller. a few large files can therefore use spare CPUs without sending every small check to a worker.
+
+the shared runner returns results in file order and joins every worker before returning errors. a refused thread keeps its work for the caller. each active hash uses the existing size-aware read buffer, at most 1 MiB plus page alignment, and reads each file once; no whole file or extra file contents are retained. the hash, damage classification and progress accounting are unchanged.
 
 ## folder-aware workers
 

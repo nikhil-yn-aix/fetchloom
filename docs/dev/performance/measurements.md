@@ -21,6 +21,7 @@ every change measured with the current harness, one row each: what it gained whe
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | SHA-256 and a required MD5 on separate workers | 512 MiB 0.776 glibc, 0.767 musl; musl median RSS 106.3 to 120.3 MiB, maximum 168.6 to 154.3 MiB | kept | [paired checksums](#overlapping-required-checksums-2026-11-12) |
+| hashing | placed-file verification scheduled by bytes as well as file count | 8 × 64 MiB warm 0.163 glibc, 0.151 musl; cold 0.263 and 0.262; median RSS +6.1 and +10.3 MiB, lean unchanged | kept | [verification](#byte-aware-placed-file-verification-2026-11-12) |
 | flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -600,6 +601,49 @@ large gzip is 24–25% faster and ZIP about 18% faster end to end on both libc b
 the second build kept both arms in the same binary again. busy GNU rounds were retained and replaced by bounded quiet batches, with any wait for lower load outside the measure lock. the table pools clean whole pairs only. the default writer budget and thread-cap-one paths used in these A/Bs are unchanged by the subsequently rebased reader-budget and resource-level changes.
 
 the old reader failed the paused-writer offload test. the first prototype failed the boundary-admission test. independent 8 MiB SHA-256 vectors check successful storage and refused-thread fallback; bounded-buffer reuse, interruption and all archive guard tests pass. deliberately replacing interrupted-channel handling with a writer error changed `Interrupted` to `LocalIo` and failed its assertion. deliberately enabling the handoff for a one-writer budget failed the inline-storage assertion; both were restored. the experiment switch is absent from the kept code.
+
+## byte-aware placed-file verification, 2026-11-12
+
+`status --verify` and `sync --verify` gave fewer than 128 files one hashing thread, however large they were. `Survey::verify` now sums the sizes of only the files still needing a check, then uses the shared ordered runner with byte-aware worker admission. the larger of one worker per 64 files and one per 4 MiB can run, bounded by the actual files, available CPUs, eight workers and the command's thread ceiling. ceilings of one or two keep the old count-based choice, so lean adds no hash buffers to a short list. the IO change's same-survey `racy_intact` skip stays intact, including its damaged-file exception.
+
+one switched release binary per libc was built over [the IO/resource-level base](https://github.com/nikhil-yn-aix/fetchloom/commit/7ba99701) plus the checksum and archive changes: fat LTO, one codegen unit, abort, frame pointers and line tables. the test ran real commands on the EPYC 7V13, cores 12–23 at nice 0, with settled projects and independently checked cache/placed files on ext4 NVMe. every output file was checked again with hashlib outside the clock. each pair's complete JSON report had to match after removing only `work.elapsed_ms`; requests stayed at zero. cold runs flushed and evicted only their own eight files, never a global cache. every cold child recorded exactly 1,048,576 input blocks of 512 bytes, the full 512 MiB payload.
+
+`abh.py` randomized both arms in four-pair blocks, with an initial warmup. early blocks took separate leases. to avoid repeated waits behind long network cases, only unfinished blocks were then grouped under bounded leases: the longest was 122.16 s. no accepted pair was repeated. a burst in either arm excluded the whole pair; rows and flags remain in the records. the table gives median times, paired median after/before ratios with 95% bootstrap intervals, and median child peak RSS from GNU time, not the harness parent's inherited floor.
+
+| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB before → after |
+|---|---|---:|---:|---:|---|---|
+| 8 × 64 MiB, warm | glibc | 9 | 0.4021 | 0.0655 | 0.163 [0.153, 0.204] | 11.8 → 17.9 |
+| 8 × 64 MiB, warm | musl | 12 | 0.3944 | 0.0593 | 0.151 [0.149, 0.153] | 15.4 → 25.7 |
+| 8 × 64 MiB, cold | glibc | 12 | 0.6609 | 0.1734 | 0.263 [0.261, 0.264] | 11.7 → 17.8 |
+| 8 × 64 MiB, cold | musl | 12 | 0.6589 | 0.1731 | 0.262 [0.261, 0.264] | 15.1 → 25.3 |
+| 8 × 64 MiB, lean | glibc | 12 | 0.3953 | 0.3963 | 1.001 [0.998, 1.005] | 11.6 → 11.6 |
+| 8 × 64 MiB, lean | musl | 12 | 0.3988 | 0.3983 | 1.000 [0.996, 1.002] | 14.9 → 14.9 |
+| 8 × 64 MiB, max | glibc | 11 | 0.3947 | 0.0622 | 0.158 [0.154, 0.180] | 11.6 → 17.8 |
+| 8 × 64 MiB, max | musl | 12 | 0.3991 | 0.0597 | 0.150 [0.148, 0.151] | 14.9 → 25.1 |
+| 8 × 64 MiB, thread cap 1 | glibc | 12 | 0.3950 | 0.3953 | 1.001 [0.999, 1.001] | 11.7 → 11.4 |
+| 8 × 64 MiB, thread cap 1 | musl | 12 | 0.3987 | 0.3983 | 1.001 [0.999, 1.003] | 14.9 → 14.9 |
+| 8 × 64 MiB, thread cap 2 | glibc | 10 | 0.3955 | 0.3943 | 0.998 [0.994, 1.002] | 11.6 → 11.7 |
+| 8 × 64 MiB, thread cap 2 | musl | 12 | 0.3989 | 0.3995 | 1.002 [1.000, 1.003] | 14.9 → 14.9 |
+| 8 × 64 MiB, thread cap 4 | glibc | 12 | 0.3966 | 0.1093 | 0.276 [0.275, 0.276] | 11.7 → 14.8 |
+| 8 × 64 MiB, thread cap 4 | musl | 12 | 0.4000 | 0.1074 | 0.268 [0.267, 0.271] | 14.9 → 19.1 |
+| 8 × 4 MiB | glibc | 7 | 0.0348 | 0.0169 | 0.472 [0.389, 0.509] | 11.5 → 17.5 |
+| 8 × 4 MiB | musl | 12 | 0.0323 | 0.0111 | 0.341 [0.339, 0.353] | 14.9 → 25.1 |
+| 8 × 1 MiB | glibc | 7 | 0.0140 | 0.0110 | 0.837 [0.763, 0.894] | 11.8 → 12.9 |
+| 8 × 1 MiB | musl | 12 | 0.0132 | 0.0101 | 0.763 [0.677, 0.780] | 14.9 → 17.1 |
+| 8 × 4 KiB | glibc | 6 | 0.0058 | 0.0058 | 0.981 [0.876, 1.153] | 10.6 → 10.8 |
+| 8 × 4 KiB | musl | 12 | 0.0059 | 0.0059 | 1.009 [0.950, 1.042] | 14.9 → 14.9 |
+| one 64 MiB file | glibc | 12 | 0.0560 | 0.0559 | 1.000 [0.996, 1.008] | 11.2 → 11.3 |
+| one 64 MiB file | musl | 12 | 0.0569 | 0.0567 | 0.994 [0.993, 1.007] | 14.9 → 15.0 |
+| settled status without verify | glibc | 12 | 0.0069 | 0.0068 | 1.005 [0.978, 1.027] | 10.7 → 10.8 |
+| settled status without verify | musl | 12 | 0.0072 | 0.0072 | 0.999 [0.985, 1.034] | 15.0 → 15.0 |
+| sync --verify, 8 × 64 MiB | glibc | 12 | 0.4006 | 0.0626 | 0.155 [0.154, 0.173] | 12.6 → 18.8 |
+| sync --verify, 8 × 64 MiB | musl | 12 | 0.4074 | 0.0612 | 0.150 [0.149, 0.153] | 18.0 → 26.3 |
+
+warm 512 MiB verification is 84–85% faster, cold verification about 74% faster. the largest clean candidate RSS across all cases was 19.1 MiB on glibc and 26.3 MiB on musl, within the default budget. the main warm case spends 6.1 MiB more median RSS on glibc and 10.3 MiB on musl; this is reported, not called memory neutral. lean and low thread ceilings retain the original reader count and show no established memory increase. the control intervals do not establish a time regression, but the wider tiny-command bounds are not proof of equivalence.
+
+an unlocked strace check, outside timing, counted exactly 64 MiB read from each of the eight files on both arms: one reading thread before, eight after, 536,870,912 bytes in each. the gain therefore does not come from skipping hashes. worker-choice tests use fixed CPUs, sizes and ceilings. independent 4 MiB SHA-256 vectors check result ordering and refused-thread fallback; interrupted reads stay errors. the count-only policy failed the new scheduling test. deliberately dropping the IO racy-proof filter failed its existing regression, and allowing extra readers under a small ceiling failed the lean-buffer test; restoration passed. the kept path has no experiment switch.
+
+raw commands, binary hashes, source patch, reports, per-file read counts and every paired run remain in the CPU sweep's `p1-*` records. these measurements cover warm/cold ext4 NVMe on linux, not rotational disks, network filesystems, native macos/windows or aarch64 throughput; those remain unmeasured rather than inferred from the CPU gain.
 
 ## evidence limits
 
