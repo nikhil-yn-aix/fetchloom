@@ -1,6 +1,6 @@
 # status
 
-`status` lists differences between the project's pins and local data without downloading anything.
+`status` lists how the data folder differs from what `data.lock` pins, without downloading anything.
 
 ```sh
 fetchloom status
@@ -22,14 +22,12 @@ fetchloom status [options]
 
 ## what happens
 
-1. read the manifest, lock and saved placement state.
-2. compare file sizes and modification times, hashing where those records need checking.
+1. read `data.toml`, `data.lock` and what the last sync placed.
+2. compare file sizes and modification times, hashing where those cannot vouch for a file.
 3. report changed manifest entries, missing or different files, extra paths, unavailable archive trees and recipe results nothing here holds, one row on stdout for each, so `fetchloom status | grep Missing` or `fetchloom status > status.txt` gets them. the closing line, hints and warnings go to stderr; `-q` prints no rows.
-4. in a git repository, warn of each list in [`data.lock.d`](../reference/data-lock.md#big-datasets) that data.lock names and git does not have, with `git add data.lock.d` as help, since a commit without it leaves clones unable to read data.lock. warn too of each file a [recipe](../recipes.md)'s `code` takes in that git does not have, such as a new file in a code folder, with the `git add` that adds it, since a clone without it cannot build the recipe from the same code; a file `.gitignore` leaves out gets its own warning, naming `git add -f` or moving it out of the code. the files are those the recipe's key hashes, so `__pycache__` and the other folders it skips never count. it asks git with `git ls-files`, which reads only git's index and ignore rules, once for every list and once for all the code, and says nothing without git or outside a repository. warn too, with or without git, of each list in `data.lock.d` that data.lock no longer names, as one a build wrote before `git checkout -- data.lock` put an older data.lock back: nothing reads it, and `git add data.lock.d` would commit it. the help names the exact command, as `delete data.lock.d/processed.e79792fc0b70.tsv.zst`, or `git rm data.lock.d/processed.e79792fc0b70.tsv.zst`, then commit, once git has it; status deletes nothing, and only data.lock's next write removes such a list.
+4. in a git repository, warn of each file git does not have that a clone needs: a list in [`data.lock.d`](../reference/data-lock.md#big-datasets) that data.lock names, and a file of a [recipe](../recipes.md)'s `code`, each with the `git add` that adds it. a code file `.gitignore` leaves out gets its own warning. with or without git, warn of each list in `data.lock.d` that data.lock no longer names, as after `git checkout -- data.lock` put an older one back, with the command that deletes it; status itself deletes nothing.
 
-a project still as the last complete sync left it, with `data.toml` and `data.lock` unchanged byte for byte and every placed file looking as placed, is settled, as `sync` finds it: status lists only files fetchloom did not place as extra. that holds even when the cache no longer records what an archive held, as after moving the project and running `fetchloom cache gc --now` before any sync there.
-
-status changes no project files. without `--verify` it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. `--verify` hashes every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
+status changes nothing. without `--verify` it is not a full integrity check: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`. `--verify` hashes every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. a project still as the last complete sync left it is settled, as `sync` finds it, and status lists only files fetchloom did not place.
 
 when `iris.csv` is missing and `notes.txt` is extra, stdout holds the rows:
 
@@ -63,41 +61,41 @@ and stderr the rest, since a dataset with `place = false` is no difference:
 
 | JSON field | difference |
 |---|---|
-| `unlocked` | a manifest entry is missing from the lock or has a changed spec or `extract`, or a [recipe](../recipes.md)'s result is not pinned as building it now would make; the line says what moved, such as `clean · clean.py changed`, and a hint points at `fetchloom build --dry-run` instead of sync. in a project with no data.lock at all, as a clone whose owner never committed it, each line says `data.lock does not exist`, and the hint says nothing pins the files' bytes yet: ask whoever shares the project to commit data.lock, or run `fetchloom lock` to pin what the sources serve today |
-| `removed` | a locked dataset is not in the manifest, as `Removed iris · not in data.toml, so \`fetchloom sync\` takes it out of data.lock`. a pin under a name data.toml does not have that answers a dataset data.toml has under another name, as after a rename in data.toml or in data.lock alone, is no removal: sync carries it over to that name and keeps its files, so status lists that dataset as `unlocked`, as `Unlocked iris · data.lock pins it as irisx, which data.toml does not have, and \`fetchloom sync\` keeps that pin under this name without asking the source`, and compares its files with that pin |
-| `candidates` | a recipe has a kept rebuild, files a build made that differ from what data.lock pins for the same key; the line names [`fetchloom build --accept`](build.md#a-rebuild-that-differs), which pins it, and `-v` lists each of its files that differs with the cache file holding the rebuild's bytes. one kept for another recipe or pin than data.lock has now, as after a checkout of another commit, which `--accept` refuses, says so instead, with a hint naming `fetchloom build --check`. it is no difference from data.lock, so it leaves the count alone. each record has `name`, `tree`, `stale`, true for such a rebuild, and `files`, each with `path`, `difference` (`changed`, `missing` or `extra`), `file`, the cache file of the rebuild's bytes, and `pinned`, the cache file of the bytes data.lock pins, either null where there is none |
-| `missing` | a target path is absent. sync puts it back and says so; to leave a file out for good, run [`fetchloom drop`](drop.md), or for a file of a recipe's result choose the files in its step, and for the only file of a dataset run `fetchloom remove` |
-| `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
+| `unlocked` | a dataset data.lock does not pin as data.toml asks, or a [recipe](../recipes.md) whose result is not pinned as building it now would make; the line says what changed, such as `clean · clean.py changed`. in a project with no data.lock, each line says `data.lock does not exist`, and the hint says to ask whoever shares the project to commit it, or to run `fetchloom lock` |
+| `removed` | a pinned dataset data.toml no longer has, as `Removed iris · not in data.toml, so \`fetchloom sync\` takes it out of data.lock`. a pin that answers a dataset data.toml has under another name, as after a rename, is no removal: that dataset is `unlocked`, and sync keeps the pin under its new name |
+| `candidates` | a recipe has a kept rebuild that differs from what data.lock pins, which [`fetchloom build --accept`](build.md#a-rebuild-that-differs) pins; `-v` names the cache file holding each file that differs. it is no difference from data.lock, so it leaves the count alone |
+| `missing` | a pinned file is absent. sync puts it back; to leave it out for good, run [`fetchloom drop`](drop.md) |
+| `edited` | a file fetchloom placed was changed; a change of its time alone is ignored when it still holds the pinned bytes |
 | `untracked` | a file fetchloom did not place stands at a path data.lock places one, with other bytes: sync keeps it, and `--force` replaces it |
 | `adoptable` | a file fetchloom did not place stands at a path data.lock places one, and already holds the pinned bytes, so a plain sync [adopts](sync.md#already-in-place) it without `--force`; the line says so, as `Untracked data/raw/tips.csv · it holds the pinned bytes, so \`fetchloom sync\` adopts it` |
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again |
-| `damaged` | a managed file holds other bytes, though no edit of this project's shows: a hardlink to the cache's copy, still shared with it or with other projects, after an edit through a link, here or in another project, changed that shared copy; or a file that shares its bytes with nothing, a copy, a reflink or a link left with a name of its own, whose size and modification time are unchanged, which hashing every placed file finds and a change mark puts in doubt too |
+| `damaged` | a file fetchloom placed holds other bytes, though no edit of this project's shows: a hardlink whose shared copy an edit through another link changed, or a file whose bytes changed under an unchanged size and time, which `--verify` finds |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
 | `extra` | a file in the data folder that no dataset places, which fetchloom did not place or which changed since, such as notes of your own: sync keeps it |
-| `unneeded` | a file fetchloom placed that no dataset needs now and that nobody changed, as one of a dataset gone from data.toml or one with `place = false`: the next sync removes it. its line says so, or the `Not placed` line of a dataset with `place = false` does for all of its files, as `Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so \`fetchloom sync\` removes it` |
-| `not_unpacked` | an archive's member record is unavailable here, as in a fresh clone, or in a project copied with its data folder to a machine whose cache never held the archive. its row says `Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked`: the archive itself is never placed, so it is not missing, and the files fetchloom placed of its dataset are neither extra nor unneeded until a sync reads the list, while a file of your own beside them is still extra |
-| `unbuilt` | a recipe's pinned result has files missing from the data folder, or placed for an older pin, whose bytes neither the cache, another file in place in the data folder nor a folder [mirror](../mirrors.md) holds, so a sync leaves it out and only [`fetchloom build`](build.md) makes it here. its files are in no other list; the line names the datasets it is made from that neither the cache nor the data folder holds, which the build fetches first, and a hint names the build. an `adoptable` file counts as held, since the build copies its bytes as it would a placed one, and so does an archive whose own bytes `cache gc` freed once the cache held the files its members table keeps, since the build reads those. status asks no web mirror, so with one set it lists the files as missing, since sync asks it |
-| `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line on stderr names it. while files an earlier sync placed of it are left, as right after you set `place = false`, a row on stdout says the next sync removes them, as `Not placed images · place = false in data.toml, so \`fetchloom sync\` removes its 13 files from data/images`, and `-v` names each; they are `unneeded` files, which JSON lists there and the count of differences includes, and the hint says the sync removes them |
+| `unneeded` | a file fetchloom placed that no dataset needs now and nobody changed, as one of a dataset gone from data.toml or one with `place = false`: the next sync removes it, and its line says so |
+| `not_unpacked` | this machine has no list of an archive's files, as in a fresh clone, so they are not checked: `Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked`. the files fetchloom placed from it are neither extra nor unneeded until a sync reads the list |
+| `unbuilt` | a recipe's pinned result is missing from the data folder, and neither the cache, the data folder nor a folder [mirror](../mirrors.md) holds it, so sync leaves it out and only [`fetchloom build`](build.md) makes it here. the line names what the build would fetch first. status asks no web mirror, so with one set it lists the files as missing instead |
+| `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), named on a faint `Not placed` line on stderr. files an earlier sync placed of it are `unneeded` until the next sync removes them, as `Not placed images · place = false in data.toml, so \`fetchloom sync\` removes its 13 files from data/images` |
 
-files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
+a file changed too soon after the sync that placed it is hashed, since a coarse filesystem clock can hide an edit.
 
-files placed as hardlinks are the cache's own copy of their bytes, which every project using that file shares. an edit made in place through any of those links, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back, keeping the changed copy beside it as `<path>.changed`:
+a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made through any link to it, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back, keeping the changed copy as `<path>.changed`, as [local changes](sync.md#local-changes) describes:
 
 ```text
     Damaged data/iris/iris.csv · linked to the cache's copy, which was changed
 ```
 
-this holds while the file is still the cache's copy, or the very copy the cache found changed, even after another project's sync gave the cache a new one. a file saved anew, as most editors save, is your own file and stays an edit. a changed hardlink whose shared copy the cache no longer knows appears as edited, followed by `· changed through a hardlink other projects may share`; sync keeps it with reason `shared`, as [local changes](sync.md#local-changes) describes.
+a file saved anew, as most editors save, is your own file and stays an edit. a changed hardlink whose shared copy the cache no longer knows appears as edited, followed by `· changed through a hardlink other projects may share`.
 
-an entry in a file's way is listed once as blocked, rather than each file behind it as missing, with what it is:
+an entry in a file's way is listed once as blocked, rather than each file behind it as missing:
 
 ```text
     Blocked data/iris · a file is where a folder belongs
 ```
 
-a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as unneeded, and the files behind it as missing.
+a plain `fetchloom sync` leaves it and warns, and `fetchloom sync --force` removes it, a link itself and never what it points to; a folder that holds anything stays even then.
 
-a pipe or a file gets every file on a row of its own, as `git status` gives them, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row, or the file itself when it held one:
+a pipe or a file gets every file on a row of its own, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row:
 
 ```text
     Missing data/many/part03/ · 30 files
@@ -106,7 +104,7 @@ a pipe or a file gets every file on a row of its own, as `git status` gives them
 
 and each kind shows at most 20 rows, then one that says how to see the rest, as ``and 5 more · `fetchloom status | less` shows all``.
 
-unlocked or removed datasets and not-unpacked archives are never cut short. JSON includes every difference. once something changed since the last complete sync, files placed from an archive this machine has no record of can also appear as extra.
+datasets and archives are never cut short, and JSON includes every difference.
 
 ## exit codes
 
