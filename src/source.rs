@@ -9,6 +9,7 @@ mod doi;
 mod drive;
 mod dropbox;
 mod dryad;
+mod ena;
 mod figshare;
 mod github;
 mod gitlab;
@@ -102,6 +103,7 @@ pub(crate) enum Reference {
     Mendeley(mendeley::Dataset),
     GitHub(github::Release),
     GitLab(gitlab::Release),
+    Ena(ena::Accession),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -299,6 +301,7 @@ impl Reference {
             "mendeley" => whole(Reference::Mendeley(mendeley::Dataset::parse(rest)?)),
             "github" => whole(Reference::GitHub(github::Release::parse(rest)?)),
             "gitlab" => whole(Reference::GitLab(gitlab::Release::parse(rest)?)),
+            "ena" => whole(Reference::Ena(ena::Accession::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -402,6 +405,7 @@ impl Reference {
             Reference::Mendeley(dataset) => dataset.resolve(api).await,
             Reference::GitHub(release) => release.resolve(api).await,
             Reference::GitLab(release) => release.resolve(api).await,
+            Reference::Ena(accession) => accession.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -426,6 +430,7 @@ impl fmt::Display for Reference {
             Reference::Mendeley(dataset) => write!(f, "{dataset}"),
             Reference::GitHub(release) => write!(f, "{release}"),
             Reference::GitLab(release) => write!(f, "{release}"),
+            Reference::Ena(accession) => write!(f, "{accession}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -571,6 +576,9 @@ fn link(text: &str) -> Result<Parsed, Error> {
             gitlab::Release::from_link(&url).map(|release| parsed(Reference::GitLab(release), None))
         })
         .or_else(|| {
+            ena::Accession::from_link(&url).map(|accession| parsed(Reference::Ena(accession), None))
+        })
+        .or_else(|| {
             figshare::Article::from_link(&url)
                 .map(|article| parsed(Reference::Figshare(article), None))
         });
@@ -653,6 +661,13 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "zenodo.org" | "www.zenodo.org" => "zenodo",
         "datadryad.org" | "www.datadryad.org" => "dryad",
         "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
+        "www.ebi.ac.uk" | "ebi.ac.uk"
+            if ["/ena/browser/view/", "/ena/data/view/"]
+                .iter()
+                .any(|page| url.path().starts_with(page)) =>
+        {
+            "ena"
+        }
         host if figshare::is_portal(host) && !url.path().starts_with("/ndownloader/") => "figshare",
         "osf.io" | "www.osf.io" => "osf",
         "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
@@ -933,6 +948,28 @@ mod tests {
             "https://example.org/org/repo/blob/main/data.csv",
         ] {
             assert_eq!(parse(unchanged).reference.to_string(), unchanged);
+        }
+    }
+
+    /// accessions of the read archives and of GEO, and the pages that show them, find their
+    /// source, written as each archive writes them.
+    #[test]
+    fn archive_accessions_and_pages_find_their_source() {
+        for (text, canonical) in [
+            ("ena:SRR390728", "ena:SRR390728"),
+            ("ena:srr390728", "ena:SRR390728"),
+            ("ena:submitted/ERR1160846", "ena:submitted/ERR1160846"),
+            ("ena:fastq/PRJNA172563", "ena:PRJNA172563"),
+            (
+                "https://www.ebi.ac.uk/ena/browser/view/SRX079566",
+                "ena:SRX079566",
+            ),
+            (
+                "https://www.ebi.ac.uk/ena/browser/view/PRJNA172563?show=reads",
+                "ena:PRJNA172563",
+            ),
+        ] {
+            assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
         }
     }
 

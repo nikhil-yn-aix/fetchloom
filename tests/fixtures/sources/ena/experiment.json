@@ -1,0 +1,5 @@
+[
+{"run_accession":"SRR390728","fastq_ftp":"ftp.sra.ebi.ac.uk/vol1/fastq/SRR390/SRR390728/SRR390728_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR390/SRR390728/SRR390728_2.fastq.gz","fastq_md5":"a04ed1f37028cda9486eec9726237796;3d440434c968624acaa4f787d48efe2f","fastq_bytes":"101304405;101858469","submitted_ftp":"","submitted_md5":"","submitted_bytes":"","submitted_format":"","sra_ftp":"","sra_md5":"","sra_bytes":"","study_title":"CGCI: Non-Hodgkin Lymphoma (NHL)"}
+,
+{"run_accession":"SRR292241","fastq_ftp":"ftp.sra.ebi.ac.uk/vol1/fastq/SRR292/SRR292241/SRR292241_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR292/SRR292241/SRR292241_2.fastq.gz","fastq_md5":"a5e0d2d51550127ea9ce3a0219deb375;e9ce7abd3bce9d5ff194d6e045a36c1c","fastq_bytes":"387227151;395115704","submitted_ftp":"","submitted_md5":"","submitted_bytes":"","submitted_format":"","sra_ftp":"","sra_md5":"","sra_bytes":"","study_title":"CGCI: Non-Hodgkin Lymphoma (NHL)"}
+]

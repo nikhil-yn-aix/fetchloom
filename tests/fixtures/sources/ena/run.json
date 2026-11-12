@@ -1,0 +1,3 @@
+[
+{"run_accession":"SRR390728","fastq_ftp":"ftp.sra.ebi.ac.uk/vol1/fastq/SRR390/SRR390728/SRR390728_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR390/SRR390728/SRR390728_2.fastq.gz","fastq_md5":"a04ed1f37028cda9486eec9726237796;3d440434c968624acaa4f787d48efe2f","fastq_bytes":"101304405;101858469","submitted_ftp":"","submitted_md5":"","submitted_bytes":"","submitted_format":"","sra_ftp":"","sra_md5":"","sra_bytes":"","study_title":"CGCI: Non-Hodgkin Lymphoma (NHL)"}
+]

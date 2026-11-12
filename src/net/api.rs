@@ -274,7 +274,13 @@ fn test_source(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
     if !matches!(
         host,
-        "datadryad.org" | "data.mendeley.com" | "api.github.com" | "github.com" | "gitlab.com"
+        "datadryad.org"
+            | "data.mendeley.com"
+            | "api.github.com"
+            | "github.com"
+            | "gitlab.com"
+            | "www.ebi.ac.uk"
+            | "ftp.sra.ebi.ac.uk"
     ) {
         return None;
     }

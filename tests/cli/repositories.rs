@@ -636,3 +636,207 @@ fn get_downloads_a_gitlab_release_link_at_its_path() -> Result {
     assert!(!folder.join("release.sha256").exists());
     Ok(())
 }
+
+const ENA_API: &str = "/www.ebi.ac.uk/ena/portal/api";
+
+/// a file a stand-in serves: its name, its bytes and the hash its source states.
+type Served<'a> = (&'a str, &'a [u8], &'a str);
+const ENA_FIELDS: &str = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,sra_ftp,sra_md5,sra_bytes,study_title";
+
+/// ENA's answers for `accession`: the count of its runs, and its report of each run's FASTQ
+/// files `(name, bytes, md5)` at their addresses on ftp.sra.ebi.ac.uk, with the bytes there. a
+/// run with no files is under controlled access, as ENA reports a run dbGaP holds.
+fn ena(accession: &str, runs: &[(&str, &[Served])]) -> Result<Routes> {
+    let mut routes = Vec::new();
+    let rows: Vec<_> = runs
+        .iter()
+        .map(|(run, files)| {
+            let at = |name: &str| format!("ftp.sra.ebi.ac.uk/vol1/fastq/{run}/{name}");
+            let joined = |part: &dyn Fn(&Served) -> String| {
+                files.iter().map(part).collect::<Vec<_>>().join(";")
+            };
+            let protected = files.is_empty();
+            serde_json::json!({
+                "run_accession": run,
+                "fastq_ftp": joined(&|(name, _, _)| at(name)),
+                "fastq_md5": joined(&|(_, _, md5)| (*md5).to_owned()),
+                "fastq_bytes": joined(&|(_, body, _)| body.len().to_string()),
+                "submitted_ftp": if protected { "Protected file(s). Go to dbGap" } else { "" },
+                "submitted_format": if protected { "PROTECTED" } else { "" },
+                "study_title": "a small study",
+            })
+        })
+        .collect();
+    routes.push((
+        format!("{ENA_API}/filereportcount?accession={accession}&result=read_run&format=json"),
+        answer(&serde_json::json!({"count": runs.len().to_string()}))?,
+    ));
+    routes.push((
+        format!(
+            "{ENA_API}/filereport?accession={accession}&result=read_run&fields={ENA_FIELDS}&format=json&limit={}",
+            runs.len()
+        ),
+        answer(&serde_json::Value::from(rows))?,
+    ));
+    for (run, files) in runs {
+        for (name, body, md5) in *files {
+            routes.push((
+                format!("/ftp.sra.ebi.ac.uk/vol1/fastq/{run}/{name}"),
+                file(body, &format!("\"{md5}\"")),
+            ));
+        }
+    }
+    Routes::start(routes)
+}
+
+/// a pasted page of ENA's browser is pinned with the MD5 ENA states for each of the run's files,
+/// and a teammate's empty cache gets the same bytes from the lock alone.
+#[test]
+fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let reads = md5(ROWS);
+    let routes = ena(
+        "ERR1160846",
+        &[("ERR1160846", &[("ERR1160846.fastq.gz", ROWS, &reads)])],
+    )?;
+    let page = "https://www.ebi.ac.uk/ena/browser/view/ERR1160846";
+    let output = command(&sandbox, &routes, &["add", page, "--as", "blank"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.blank]\nref = \"ena:ERR1160846\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "md5 = \"{reads}\", url = \"https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR1160846/ERR1160846.fastq.gz\""
+        )),
+        "{lock}"
+    );
+    assert_eq!(fs::read(work.join("data/blank/ERR1160846.fastq.gz"))?, ROWS);
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(
+        fs::read(teammate.join("data/blank/ERR1160846.fastq.gz"))?,
+        ROWS
+    );
+    assert!(
+        routes.targets()[listed..]
+            .iter()
+            .all(|target| target.starts_with("/ftp.sra.ebi.ac.uk/")),
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// a study's runs under controlled access are left out, and the add says so, as a warning a
+/// script can match.
+#[test]
+fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (md5(ROWS), md5(NOTES));
+    let routes = ena(
+        "PRJNA172563",
+        &[
+            ("SRR036297", &[]),
+            (
+                "SRR1236466",
+                &[
+                    ("SRR1236466_1.fastq.gz", ROWS, &one),
+                    ("SRR1236466_2.fastq.gz", NOTES, &two),
+                ],
+            ),
+        ],
+    )?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "ena:PRJNA172563", "--as", "nhl"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let warning = &document["warnings"][0];
+    assert_eq!(warning["kind"], "source.partial", "{document}");
+    assert_eq!(
+        warning["message"],
+        "1 of the 2 runs is under controlled access, so its files are left out"
+    );
+    let folder = sandbox.work().join("data/nhl/SRR1236466");
+    assert_eq!(fs::read(folder.join("SRR1236466_1.fastq.gz"))?, ROWS);
+    assert!(!sandbox.work().join("data/nhl/SRR036297").exists());
+    Ok(())
+}
+
+/// `get` takes an experiment's runs, and `--select` picks one run by its accession.
+#[test]
+fn get_selects_one_run_of_an_ena_experiment_by_its_accession() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (md5(ROWS), md5(NOTES));
+    let routes = ena(
+        "SRX079566",
+        &[
+            ("SRR292241", &[("SRR292241_1.fastq.gz", ROWS, &one)]),
+            ("SRR390728", &[("SRR390728_1.fastq.gz", NOTES, &two)]),
+        ],
+    )?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &[
+            "get",
+            "ena:SRX079566",
+            "--select",
+            "SRR390728/*",
+            "--dir",
+            "runs",
+        ],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let folder = sandbox.work().join("runs");
+    assert_eq!(
+        fs::read(folder.join("SRR390728/SRR390728_1.fastq.gz"))?,
+        NOTES
+    );
+    assert!(!folder.join("SRR292241").exists());
+    Ok(())
+}
+
+/// the MD5 ENA states checks the bytes its file server sends: other bytes are never placed.
+#[test]
+fn bytes_that_differ_from_enas_md5_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let stated = md5(NOTES);
+    let routes = ena(
+        "ERR1160846",
+        &[("ERR1160846", &[("ERR1160846.fastq.gz", ROWS, &stated)])],
+    )?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "ena:ERR1160846", "--as", "blank"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(
+        !sandbox
+            .work()
+            .join("data/blank/ERR1160846.fastq.gz")
+            .exists()
+    );
+    Ok(())
+}

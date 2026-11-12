@@ -34,6 +34,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [dataverse](sources/dataverse.md) | use public dataset or file versions |
 | [dryad](sources/dryad.md) | pin published dataset versions, downloaded with a dryad API key |
 | [mendeley data](sources/mendeley.md) | pin published dataset versions and their folders |
+| [ENA](sources/ena.md) | list the read files of runs, experiments, samples and studies |
 | [OSF](sources/osf.md) | fetch osfstorage files and understand node changes |
 | [hugging face](sources/hugging-face.md) | pin repository commits and configure approved access |
 | [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
