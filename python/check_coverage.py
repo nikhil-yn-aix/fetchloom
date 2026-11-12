@@ -7,16 +7,24 @@ from pathlib import Path
 from ci_journey import ROOT, require
 
 
+def executed(report, root, name):
+    path = (root / name).resolve()
+    files = [file for file in report['files'] if Path(file['filename']).resolve() == path]
+    return len(files) == 1 and files[0]['summary']['functions']['covered'] > 0
+
+
 def summary(document, root):
     require(document['type'] == 'llvm.coverage.json.export', 'not an LLVM coverage export')
     reports = document['data']
     require(len(reports) == 1, 'expected one coverage report')
     report = reports[0]
-    main = (root / 'src/main.rs').resolve()
-    entrypoints = [file for file in report['files'] if Path(file['filename']).resolve() == main]
-    require(len(entrypoints) == 1 and entrypoints[0]['summary']['functions']['covered'] > 0,
+    require(executed(report, root, 'src/main.rs'),
             'CLI child-process coverage is missing: src/main.rs was not executed')
-    lines = ['## linux coverage', '', 'CLI subprocess profiles include src/main.rs.', '',
+    # only the binary calls fetchloom::main, so lib.rs runs only when the binary's library is
+    # instrumented too
+    require(executed(report, root, 'src/lib.rs'),
+            "the binary's library has no coverage: src/lib.rs was not executed")
+    lines = ['## linux coverage', '', 'CLI subprocess profiles include src/main.rs and src/lib.rs.', '',
              '| measure | covered | total | percent |', '|---|---:|---:|---:|']
     for name in ['lines', 'functions', 'regions']:
         counts = report['totals'][name]

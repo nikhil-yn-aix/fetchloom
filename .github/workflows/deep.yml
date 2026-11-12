@@ -50,7 +50,8 @@ jobs:
           workspaces: . -> target/coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo llvm-cov clean --workspace
-      - run: cargo build --locked --example recipe_step --target-dir target/coverage
+      # nextest builds recipe_step along with the tests. building it first with plain cargo gives
+      # the binary an uninstrumented library: cargo reuses it when only the coverage wrapper changes
       - name: instrumented unit and CLI tests
         run: cargo llvm-cov nextest --locked --profile ci --no-report
       - name: retain coverage and summarize CLI profiles

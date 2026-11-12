@@ -1,10 +1,12 @@
 """deep checks reject absent subprocess coverage and unbounded mutation selection."""
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from check_coverage import summary
+from ci_journey import ROOT
 from run_mutants import require_selection, selection, source_file
 
 
@@ -14,8 +16,8 @@ class CoverageTests(unittest.TestCase):
                   for name in ['lines', 'functions', 'regions']}
         return {'type': 'llvm.coverage.json.export', 'data': [{
             'totals': totals,
-            'files': [{'filename': str(root / 'src/main.rs'),
-                       'summary': {'functions': {'covered': covered}}}],
+            'files': [{'filename': str(root / name), 'summary': {'functions': {'covered': covered}}}
+                      for name in ['src/main.rs', 'src/lib.rs']],
         }]}
 
     def test_child_executable_must_contribute_coverage(self):
@@ -31,6 +33,14 @@ class CoverageTests(unittest.TestCase):
         document['data'][0]['files'][0]['filename'] = str(root / 'other/src/main.rs')
         with self.assertRaises(AssertionError):
             summary(document, root)
+
+    def test_a_binary_that_linked_a_plain_library_fails(self):
+        # run 43177722472's export, cut to its src/main.rs and src/lib.rs records: the binary ran,
+        # but around a library built without instrumentation
+        fixture = ROOT / 'tests/fixtures/coverage/plain-library.json'
+        document = json.loads(fixture.read_text(encoding='utf-8'))
+        with self.assertRaisesRegex(AssertionError, 'src/lib.rs'):
+            summary(document, Path('/home/runner/work/fetchloom/fetchloom'))
 
 
 class MutationTests(unittest.TestCase):

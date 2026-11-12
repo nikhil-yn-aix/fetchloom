@@ -1,0 +1,12 @@
+{
+  "type": "llvm.coverage.json.export",
+  "version": "3.1.0",
+  "cargo_llvm_cov": {"version": "0.9.1", "manifest_path": "/home/runner/work/fetchloom/fetchloom/Cargo.toml"},
+  "data": [{
+    "files": [
+      {"filename": "/home/runner/work/fetchloom/fetchloom/src/lib.rs", "summary": {"branches": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0.0}, "mcdc": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0.0}, "functions": {"count": 3, "covered": 0, "percent": 0.0}, "instantiations": {"count": 3, "covered": 0, "percent": 0.0}, "lines": {"count": 12, "covered": 0, "percent": 0.0}, "regions": {"count": 15, "covered": 0, "notcovered": 15, "percent": 0.0}}},
+      {"filename": "/home/runner/work/fetchloom/fetchloom/src/main.rs", "summary": {"branches": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0.0}, "mcdc": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0.0}, "functions": {"count": 1, "covered": 1, "percent": 100.0}, "instantiations": {"count": 2, "covered": 1, "percent": 50.0}, "lines": {"count": 3, "covered": 3, "percent": 100.0}, "regions": {"count": 3, "covered": 3, "notcovered": 0, "percent": 100.0}}}
+    ],
+    "totals": {"branches": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0}, "functions": {"count": 9061, "covered": 7067, "percent": 77.9935989405143}, "instantiations": {"count": 11605, "covered": 8002, "percent": 68.95303748384318}, "lines": {"count": 81649, "covered": 63833, "percent": 78.1797695011574}, "mcdc": {"count": 0, "covered": 0, "notcovered": 0, "percent": 0}, "regions": {"count": 140737, "covered": 109111, "notcovered": 31626, "percent": 77.52829746264308}}
+  }]
+}
