@@ -64,6 +64,9 @@ const KEYS: [(&str, &str); 17] = [
 const LISTS: [&str; 3] = ["allowed_origins", "s3_buckets", "mirrors"];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 1] = ["mirrors_only"];
+/// the keys an empty variable clears rather than leaving to the settings file: where requests go
+/// and where push writes, so blanking one for a run cannot leave the file's choice in force.
+const CLEARED: [&str; 3] = ["mirrors", "mirrors_only", "push_to"];
 
 /// where a setting's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -431,13 +434,8 @@ impl Given<'_> {
     /// the items `key` lists, where they came from, and how to name it in a message: text
     /// separated by commas, or the items of a list in the settings file as they are.
     fn list(&self, key: &str) -> Option<(Vec<String>, Origin, String)> {
-        let variable = variable(key);
-        if let Some(value) = (self.var)(variable).filter(|value| !value.is_empty()) {
-            return Some((
-                split(&value.to_string_lossy()),
-                Origin::Environment,
-                variable.to_owned(),
-            ));
+        if let Some((value, named)) = self.environment(key) {
+            return Some((split(&value.to_string_lossy()), Origin::Environment, named));
         }
         let items = match self.file.get(key)? {
             Value::Text(text) => split(text),
@@ -453,9 +451,8 @@ impl Given<'_> {
     /// the text `key` holds as it is, never split at commas, since a folder's name may hold one,
     /// with where it came from and how to name it in a message.
     fn text(&self, key: &str) -> Option<(OsString, Origin, String)> {
-        let variable = variable(key);
-        if let Some(value) = (self.var)(variable).filter(|value| !value.is_empty()) {
-            return Some((value, Origin::Environment, variable.to_owned()));
+        if let Some((value, named)) = self.environment(key) {
+            return Some((value, Origin::Environment, named));
         }
         let Value::Text(text) = self.file.get(key)? else {
             return None;
@@ -465,6 +462,15 @@ impl Given<'_> {
             Origin::File,
             format!("{key} in the settings file {}", self.file_path().display()),
         ))
+    }
+
+    /// what the variable for `key` holds, and its name: a nonempty value, or an empty one for a
+    /// key an empty variable clears.
+    fn environment(&self, key: &str) -> Option<(OsString, String)> {
+        let variable = variable(key);
+        (self.var)(variable)
+            .filter(|value| !value.is_empty() || CLEARED.contains(&key))
+            .map(|value| (value, variable.to_owned()))
     }
 
     fn file_path(&self) -> &Path {
@@ -703,7 +709,10 @@ fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Err
         });
     };
     if text.trim().is_empty() {
-        return Ok(Set::default(None));
+        return Ok(Set {
+            value: None,
+            origin,
+        });
     }
     let base = match origin {
         Origin::File => given.file_path().parent(),
@@ -731,12 +740,14 @@ fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Err
     }
 }
 
-/// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default`.
+/// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default` when it is unset
+/// or empty.
 fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Error> {
     let Some((text, origin, named)) = given.get(key) else {
         return Ok(Set::default(default));
     };
     let value = match text.trim().to_ascii_lowercase().as_str() {
+        "" => default,
         "true" | "1" => true,
         "false" | "0" => false,
         _ => {
@@ -1325,6 +1336,61 @@ mod tests {
         );
         let wrong = file("mirrors_only = [true]\n").unwrap_err();
         assert_eq!(wrong.kind, Kind::Usage);
+    }
+
+    /// an empty or blank variable for where requests go or where push writes clears what the
+    /// settings file names there, so a run meant to reach the sources cannot take the file's
+    /// mirror. other settings still fall back to the file.
+    #[test]
+    fn an_empty_variable_clears_the_files_mirrors_and_push_folder() {
+        let filed = file(
+            "mirrors = [\"/mnt/lab\"]\nmirrors_only = true\npush_to = \"/mnt/lab\"\njobs = 32\n",
+        )
+        .unwrap();
+        for empty in ["", " "] {
+            let set = Settings::read(
+                &env(&[
+                    ("FETCHLOOM_MIRRORS", empty),
+                    ("FETCHLOOM_MIRRORS_ONLY", empty),
+                    ("FETCHLOOM_PUSH_TO", empty),
+                    ("FETCHLOOM_JOBS", ""),
+                ]),
+                filed.clone(),
+                machine(None),
+            )
+            .unwrap();
+            assert_eq!(
+                set.mirrors,
+                Set {
+                    value: Vec::new(),
+                    origin: Origin::Environment
+                },
+                "{empty:?}"
+            );
+            assert_eq!(
+                set.mirrors_only,
+                Set {
+                    value: false,
+                    origin: Origin::Environment
+                },
+                "{empty:?}"
+            );
+            assert_eq!(
+                set.push_to,
+                Set {
+                    value: None,
+                    origin: Origin::Environment
+                },
+                "{empty:?}"
+            );
+            assert_eq!(
+                set.jobs,
+                Set {
+                    value: 32,
+                    origin: Origin::File
+                }
+            );
+        }
     }
 
     #[test]

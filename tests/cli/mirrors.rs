@@ -154,6 +154,47 @@ fn the_settings_list_each_mirror_and_refuse_what_is_no_mirror() -> Result {
     Ok(())
 }
 
+/// an empty `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` and `FETCHLOOM_PUSH_TO` clear what the
+/// settings file names, so a check meant to reach the sources never takes the file's mirror, and
+/// push never writes to the file's folder.
+#[test]
+fn empty_variables_clear_the_mirrors_and_push_folder_the_file_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let lab = sandbox.folder("lab")?;
+    mirror_of(&sandbox, &lab.join("mirror"))?;
+    let settings = lab.join("settings.toml");
+    fs::write(
+        &settings,
+        "mirrors = [\"mirror\"]\nmirrors_only = true\npush_to = \"pushed\"\n",
+    )?;
+    let asked = source.requests().len();
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let cleared = |arguments: &[&str]| {
+        sandbox
+            .command_in(&folder, arguments)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_SETTINGS", &settings)
+            .env("FETCHLOOM_MIRRORS", "")
+            .env("FETCHLOOM_MIRRORS_ONLY", "")
+            .env("FETCHLOOM_PUSH_TO", "")
+            .output()
+    };
+    let output = cleared(&["--json", "sync", "--locked"])?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    assert_eq!(json(&output)?["work"]["mirror_objects"], 0);
+    assert_eq!(source.requests().len(), asked + 2);
+    let output = cleared(&["--json", "push"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["message"],
+        "push needs a folder to copy the files into"
+    );
+    assert!(!lab.join("pushed").exists());
+    Ok(())
+}
+
 #[test]
 fn a_cold_clone_syncs_from_a_folder_mirror_without_asking_the_source() -> Result {
     let sandbox = Sandbox::new()?;
