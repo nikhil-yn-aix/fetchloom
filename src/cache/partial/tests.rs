@@ -732,3 +732,86 @@ fn a_lasting_denial_comes_back_as_it_was() {
         assert_eq!(calls, expected, "tries {tries}");
     }
 }
+
+/// a download starts the disk writing once it has written its first bytes, then each time it
+/// has written a few more, every range written meanwhile, one per stream.
+#[test]
+fn writeback_waits_for_the_first_bytes_then_starts_every_few() {
+    let mut writeback = Writeback::new(64, 32);
+    let started: Vec<_> = (0..160)
+        .step_by(16)
+        .map(|at| writeback.wrote(at, 16))
+        .collect();
+    let none = Vec::new;
+    assert_eq!(
+        started,
+        [
+            none(),
+            none(),
+            none(),
+            vec![(0, 64)],
+            none(),
+            vec![(64, 96)],
+            none(),
+            vec![(96, 128)],
+            none(),
+            vec![(128, 160)],
+        ]
+    );
+    let mut split = Writeback::new(64, 32);
+    assert_eq!(split.wrote(1000, 40), none());
+    assert_eq!(
+        split.wrote(1040, 0),
+        none(),
+        "an empty write starts nothing"
+    );
+    assert_eq!(split.wrote(0, 30), [(1000, 1040), (0, 30)]);
+    assert_eq!(split.wrote(30, 31), none());
+    assert_eq!(split.wrote(1040, 1), [(30, 61), (1040, 1041)]);
+}
+
+/// a download that starts the disk writing as it goes keeps the same bytes, through one stream
+/// and when another stream wrote its second half first.
+#[test]
+fn starting_writeback_early_keeps_a_downloads_bytes() {
+    let bytes: Vec<u8> = (0..=250).cycle().take(3 << 20).collect();
+    let chunk = 48 << 10;
+    for early in [false, true] {
+        for split in [false, true] {
+            let (_dir, cache) = cache();
+            let partial = owned(&cache, "https://example.org/large");
+            let length = Some(bytes.len() as u64);
+            let mut writer = partial
+                .writer(0, length, Validators::default(), false, split)
+                .unwrap();
+            writer.writeback = early.then(|| Writeback::new(64 << 10, 32 << 10));
+            let half = if split { bytes.len() / 2 } else { bytes.len() };
+            for (at, part) in bytes[half..].chunks(chunk).enumerate() {
+                writer.write_at((half + at * chunk) as u64, part).unwrap();
+            }
+            for part in bytes[..half].chunks(chunk) {
+                writer.write_all(part).unwrap();
+            }
+            let stored = writer.finish().unwrap();
+            assert_eq!(
+                stored.digest,
+                crate::digest::sha256(&bytes),
+                "{early} {split}"
+            );
+            let object = fs::read(cache.object_path(&stored.digest)).unwrap();
+            assert!(object == bytes, "{early} {split}");
+        }
+    }
+}
+
+/// a download on linux starts writing to the disk as it goes; elsewhere it leaves that to the
+/// system and its closing flush.
+#[test]
+fn only_linux_starts_writeback_early() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/large");
+    let writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    assert_eq!(writer.writeback.is_some(), cfg!(target_os = "linux"));
+}

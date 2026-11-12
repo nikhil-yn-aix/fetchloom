@@ -25,6 +25,11 @@ use hashing::HashPipe;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
+/// how much a download writes before it starts writing to the disk while it arrives, so a small
+/// one leaves that to the system.
+const WRITEBACK_AFTER: u64 = 64 << 20;
+/// how much more it writes between those starts.
+const WRITEBACK_EVERY: u64 = 32 << 20;
 const BUFFER: usize = 1024 * 1024;
 /// the largest download hashed without a thread of its own.
 const SMALL: u64 = 1024 * 1024;
@@ -299,6 +304,8 @@ impl Partial {
             begun,
             runs: Vec::new(),
             read_back: 0,
+            writeback: cfg!(target_os = "linux")
+                .then(|| Writeback::new(WRITEBACK_AFTER, WRITEBACK_EVERY)),
             saved: Instant::now(),
             bytes: self.bytes.clone(),
             record_path: self.record.clone(),
@@ -503,6 +510,8 @@ pub(crate) struct PartialWriter {
     runs: Vec<Run>,
     /// bytes read back from the file to hash them, since another stream wrote them.
     read_back: u64,
+    /// what was written since the disk last started writing it, on linux.
+    writeback: Option<Writeback>,
     saved: Instant,
     bytes: PathBuf,
     record_path: PathBuf,
@@ -568,6 +577,7 @@ impl PartialWriter {
             }
             if bytes.len() >= BUFFER {
                 write_all_at(&self.file, at, bytes)?;
+                self.wrote(at, bytes.len());
             }
             self.hasher.update(bytes.clone())?;
             if bytes.len() < BUFFER {
@@ -577,6 +587,7 @@ impl PartialWriter {
             self.absorb()?;
         } else {
             write_all_at(&self.file, at, bytes)?;
+            self.wrote(at, bytes.len());
             if let Some(run) = self.runs.iter_mut().find(|run| run.end == at) {
                 run.hasher.update(bytes);
                 run.end = end;
@@ -620,9 +631,20 @@ impl PartialWriter {
         if !self.pending.is_empty() {
             let at = self.prefix - self.pending.len() as u64;
             write_all_at(&self.file, at, &self.pending)?;
+            self.wrote(at, self.pending.len());
             self.pending.clear();
         }
         Ok(())
+    }
+
+    /// notes `len` bytes written at `at`, and starts the disk writing what was written since it
+    /// last did, once [`Writeback`] says to.
+    fn wrote(&mut self, at: u64, len: usize) {
+        if let Some(writeback) = &mut self.writeback {
+            for (start, end) in writeback.wrote(at, len as u64) {
+                start_writeback(&self.file, start, end);
+            }
+        }
     }
 
     /// takes on the ranges an earlier run recorded past the prefix whose bytes still hash to
@@ -768,6 +790,70 @@ impl PartialWriter {
 fn folder_of(path: &Path) -> &Path {
     path.parent().unwrap_or(path)
 }
+
+/// when a download starts the disk writing what it wrote, rather than leave every byte waiting
+/// for the flush after its last one: once it has written `after` bytes, and each time it has
+/// written `every` more.
+#[derive(Debug)]
+struct Writeback {
+    after: u64,
+    every: u64,
+    /// all the bytes written.
+    written: u64,
+    /// the ranges written since the disk last started, one per stream, and their bytes.
+    waiting: Vec<(u64, u64)>,
+    waiting_bytes: u64,
+}
+
+impl Writeback {
+    fn new(after: u64, every: u64) -> Writeback {
+        Writeback {
+            after,
+            every,
+            written: 0,
+            waiting: Vec::new(),
+            waiting_bytes: 0,
+        }
+    }
+
+    /// notes `len` bytes written at `at`, and says which ranges the disk should start writing
+    /// now: every one written since it last started, once it is time.
+    fn wrote(&mut self, at: u64, len: u64) -> Vec<(u64, u64)> {
+        if len == 0 {
+            return Vec::new();
+        }
+        self.written += len;
+        self.waiting_bytes += len;
+        match self.waiting.iter_mut().find(|range| range.1 == at) {
+            Some(range) => range.1 = at + len,
+            None => self.waiting.push((at, at + len)),
+        }
+        if self.written < self.after || self.waiting_bytes < self.every {
+            return Vec::new();
+        }
+        self.waiting_bytes = 0;
+        std::mem::take(&mut self.waiting)
+    }
+}
+
+/// starts the disk writing the bytes of `file` from `start` up to `end`, without waiting for it.
+/// `fadvise` with `DONTNEED` starts write-back of a range's dirty pages as `sync_file_range` with
+/// `SYNC_FILE_RANGE_WRITE` does, which neither rustix nor std offers without unsafe code. pages
+/// just written are still dirty or being written, which it keeps in memory; one whose write
+/// already finished may leave.
+#[cfg(target_os = "linux")]
+fn start_writeback(file: &File, start: u64, end: u64) {
+    // no length would mean the rest of the file
+    let Some(len) = std::num::NonZeroU64::new(end.saturating_sub(start)) else {
+        return;
+    };
+    if let Err(err) = rustix::fs::fadvise(file, start, Some(len), rustix::fs::Advice::DontNeed) {
+        tracing::debug!(%err, "could not start writing a download to the disk");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_writeback(_: &File, _: u64, _: u64) {}
 
 impl Write for PartialWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
