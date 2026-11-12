@@ -111,7 +111,7 @@ $ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv
 error: other.csv already exists and holds other bytes than the link serves now
   help: add --force to replace it, or choose another name with -o
 $ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv --force
-    Checked iris.csv · unchanged on 127.0.0.1
+    Checked iris.csv · the cache holds what 127.0.0.1 serves now
    Replaced other.csv
 /home/me/work/other.csv
 ```
@@ -127,7 +127,7 @@ batch destination checks use those final folders, after downloads have supplied 
 a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a snapshot where the first link is cached and the second answers 404. `[port]` replaces the fixture server's port:
 
 ```text
-    Checked iris.csv · unchanged on 127.0.0.1
+    Checked iris.csv · the cache holds what 127.0.0.1 serves now
          Ok iris/iris.csv is already up to date
      Failed http://127.0.0.1:[port]/gone.csv · 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
 error: 1 of 2 links could not be fetched
