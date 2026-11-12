@@ -11,6 +11,8 @@ every change measured with the current harness, one row each: what it gained whe
 | network | request slots released during retry and quota sleeps | mixed 2/2 case: glibc 0.619, musl 0.622; healthy/default controls within noise | kept | [sleeping requests](#network-slots-while-a-request-waits-2026-11-12) |
 | network | one recovery probe after an unknown-quota 429 | 429 counts stay at 13–14 per run, below the required 20% reduction | dropped, no request-count win | [quota probe](#probing-after-an-unknown-quota-2026-11-12) |
 | network | successful metadata reused within one run | 100 selections at 50 ms: glibc 0.166, musl 0.163; 100 requests to 5; +0.18 MiB on a one-dataset run, musl | kept | [metadata memo](#a-per-run-metadata-memo-2026-11-12) |
+| network | max's requests at once doubled from the default's while each doubling brought data in 25% faster | 100 links from a server that waits 50 ms: 1.709 [1.223, 2.386] against max's fixed 32 and 16; 1,000 links from a local server: peak memory 0.847 | dropped, far case slower | [max's requests at once](#maxs-requests-at-once-on-near-and-far-servers-2026-11-12) |
+| network | max's requests at once narrowed to the default's once the first round showed each connection fast | 50 ms server flat (glibc 0.997, musl 1.000); local server peak memory glibc 0.897 [0.879, 0.913], musl 0.951 [0.924, 0.975] | dropped, memory below the 10% bar | [max's requests at once](#maxs-requests-at-once-on-near-and-far-servers-2026-11-12) |
 | network | several connections per host for file bodies | far s2 0.288, poor s2 0.424; lan and home flat | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | network | hosts interleaved in the download queue | two-host fixture 0.764 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | network | download jobs built at admission | peak memory 228 to 205 MB at 100,000 pins | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -347,6 +349,23 @@ all of them, b3b182a against the changes, median times:
 | `sync` and `status` of all, in either project, and `--version` | 0.967 to 0.999 | 0.990 to 1.004 |
 
 no peak memory interval started above 1.001. beside 100,000 files, `path` of 3 still reads all of the state's 24 MB of json to pass over its records: 25 ms on musl and 45 ms on glibc, nearly all of what is left. going further needs a state that keeps each dataset's records apart.
+
+## max's requests at once on near and far servers, 2026-11-12
+
+max runs 32 requests at once, 16 to one host. against a server that waits 50 ms before each answer that wins 3.6 times over the default level; against one nearby it only holds more downloads in memory at once: `add -i` of 1,000 links of 90 to 110 kB from a local server peaked at 31.2 MiB at max and 24.3 at the default level on glibc, 109.0 and 92.9 on musl. two ways to spend those connections only where they win were built and measured, each in one experiment build of 5fe2be57 where `FETCHLOOM_EXP_FIXED_MAX=1` restored the fixed 32 and 16 for the base arm, with the default level as a third arm. cases: `add -i` of 100 links of 4 KiB from a python server that sleeps 50 ms before each answer, and of the 1,000 links from a local python server, both on tmpfs; the servers ran on cores 0-11, the client under the measure lock on cores 12-23, interleaved seeded rounds after a warmup, with ratios against the fixed arm and 95% paired bootstrap intervals from `bench/ab.py`.
+
+| change | case | libc | n | time ratio [95%] | peak memory ratio [95%] |
+|---|---|---|---:|---|---|
+| start at 4 to one host and 8 in all, double while a round of finished requests brings data in 25% faster than the round before, go back a step when one does not | 50 ms server | glibc | 12 | 1.709 [1.223, 2.386], 637 ms to 1.157 s | 0.962 [0.943, 0.991] |
+| | local server | glibc | 15 | 0.933 [0.758, 1.065] | 0.847 [0.810, 0.876], 31.4 to 26.4 MiB |
+| start at 16 and 32, narrow to 4 and 8 once the first round of finished requests brings each connection 8 MB a second or more | 50 ms server | glibc | 12 | 0.997 [0.992, 1.007] | 1.007 [0.984, 1.032] |
+| | | musl | 10 | 1.000 [0.983, 1.005] | 0.972 [0.944, 1.000] |
+| | local server | glibc | 20 | 0.972 [0.911, 1.017] | 0.897 [0.879, 0.913], 31.2 to 28.1 MiB |
+| | | musl | 20 | 1.015 [0.997, 1.034] | 0.951 [0.924, 0.975], 109.0 to 102.1 MiB |
+
+the default level against fixed max, in the same rounds: the 50 ms server 3.565 [3.525, 3.575] on glibc and 3.545 [3.501, 3.565] on musl; the local server's peak memory 0.765 [0.749, 0.778] and 0.848 [0.835, 0.869].
+
+growing from the default's numbers loses max's win where it is the point: a debug log of one run showed the first doubling, measured on a round that still held requests begun before it, bringing data in only 1.34 times faster, and other runs went back a step there, which the wide interval shows. starting at max and narrowing keeps the far case, but the first round has already run 16 downloads at once, so the local case keeps about half of max's extra memory, 10% on glibc and 5% on musl, neither interval clearing a 10% bar for the code it adds. both were dropped; max stays a fixed 32 and 16, which [resources](../../user/resources.md#which-to-pick) already tells people to pick for far servers. a level that knew a server was near before its first round could do better; nothing read today says so.
 
 ## an indexed project state, 2026-11-12
 
