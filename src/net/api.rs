@@ -19,6 +19,12 @@ const LARGEST: usize = 64 * 1024 * 1024;
 /// says to try again, and every other answer comes back for the source to read.
 pub(crate) trait Api: Sync {
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send;
+
+    /// one try at a GET, for a hint a person can do without: an answer a retry or a wait for a
+    /// rate limit would get past fails at once instead.
+    fn get_once(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
+        self.get(url)
+    }
 }
 
 /// what a server answered, with the few headers sources read.
@@ -55,6 +61,27 @@ impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
         self.get_for(url, false).await
     }
+
+    async fn get_once(&self, url: &Url) -> Result<Response, Error> {
+        let url = self.asking(url)?;
+        if self
+            .paces
+            .holds(&host(&url).to_ascii_lowercase(), std::time::Instant::now())
+        {
+            return Err(Error::new(
+                Kind::NetworkStatus,
+                format!("{} asked for a pause", host(&url)),
+            ));
+        }
+        let _permits = self.permit(&url).await?;
+        match self.answer(&url, false).await {
+            Ok(response) => Ok(response),
+            Err(Failure::Final(err)) => Err(err),
+            Err(Failure::Transient { reason, .. } | Failure::Limited { reason, .. }) => {
+                Err(Error::new(Kind::NetworkStatus, reason))
+            }
+        }
+    }
 }
 
 impl Net {
@@ -65,25 +92,7 @@ impl Net {
     }
 
     async fn get_for(&self, url: &Url, mirror: bool) -> Result<Response, Error> {
-        if self.offline.enabled() {
-            return Err(Error::new(
-                Kind::OfflineMissing,
-                format!("offline, and this needs an answer from {}", host(url)),
-            )
-            .help(self.offline.retry()));
-        }
-        #[cfg(debug_assertions)]
-        let local = test_endpoint(url);
-        #[cfg(debug_assertions)]
-        let url = if let Some(local) = &local {
-            self.typed(local);
-            local
-        } else {
-            url
-        };
-        self.typed
-            .check(url)
-            .map_err(|reason| failure::refused(url, &reason))?;
+        let url = &self.asking(url)?;
         let _permits = self.permit(url).await?;
         let mut retry = Retry::new(self, url);
         loop {
@@ -99,6 +108,32 @@ impl Net {
                 }) => retry.wait(reason, retry_after, false).await?,
             }
         }
+    }
+
+    /// where a request for `url` goes, once offline mode and the origins this run may reach let
+    /// it: in debug builds, a test server that stands in for a source's API.
+    fn asking(&self, url: &Url) -> Result<Url, Error> {
+        if self.offline.enabled() {
+            return Err(Error::new(
+                Kind::OfflineMissing,
+                format!("offline, and this needs an answer from {}", host(url)),
+            )
+            .help(self.offline.retry()));
+        }
+        #[cfg(debug_assertions)]
+        let url = match test_endpoint(url) {
+            Some(local) => {
+                self.typed(&local);
+                local
+            }
+            None => url.clone(),
+        };
+        #[cfg(not(debug_assertions))]
+        let url = url.clone();
+        self.typed
+            .check(&url)
+            .map_err(|reason| failure::refused(&url, &reason))?;
+        Ok(url)
     }
 
     async fn answer(&self, url: &Url, mirror: bool) -> Result<Response, Failure> {

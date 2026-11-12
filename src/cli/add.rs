@@ -495,7 +495,7 @@ async fn resolve_typed(
 /// kaggle give alike, signed in or not, for one that does not exist and for a private one, with
 /// the help of a typo: the command the person meant, when the source lists a public dataset of
 /// the same owner one typo from the link. a sign-in could not help then, so none is offered. it
-/// asks once, and never for `--json` or offline.
+/// asks once, with no second try, and never for `--json` or offline.
 async fn near_miss(
     context: &Context,
     net: &Net,

@@ -325,7 +325,8 @@ struct Published {
 
 /// the public dataset one typo from `reference`, a hugging face or kaggle dataset its source would
 /// not show, among those its owner publishes there, the most downloaded first on hugging face.
-/// one request, and none for any other reference; one that fails finds none.
+/// one try at one request, and none for any other reference; a request that fails, or that a
+/// rate limit would hold, finds none.
 pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> {
     let (owner, name, prefix, url) = match reference {
         Reference::HuggingFace(repo) => {
@@ -353,7 +354,7 @@ pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> 
         _ => return None,
     };
     let url = url.ok()?;
-    let response = api.get(&url).await.ok()?;
+    let response = api.get_once(&url).await.ok()?;
     let ids: Vec<String> = match reference {
         Reference::HuggingFace(_) => super::json::<Vec<Owned>>(&url, &response)
             .ok()?

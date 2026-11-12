@@ -1338,36 +1338,46 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     Ok(())
 }
 
+/// an answer of `status` with `body` as JSON.
+#[cfg(debug_assertions)]
+fn json_answer(status: &str, body: &str) -> Vec<Part> {
+    let length = body.len().to_string();
+    reply(
+        status,
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Length", length.as_str()),
+        ],
+        body.as_bytes(),
+    )
+}
+
+/// where fetchloom asks hugging face about the dataset `scikit-learn/<name>`.
+#[cfg(debug_assertions)]
+fn revision(name: &str) -> String {
+    format!(
+        "/api/datasets/scikit-learn/{name}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
+    )
+}
+
+/// where fetchloom asks hugging face for the datasets of `scikit-learn`.
+#[cfg(debug_assertions)]
+const OWNED: &str =
+    "/api/datasets?author=scikit-learn&sort=downloads&direction=-1&limit=100&expand%5B%5D=private";
+
 /// a hugging face and a kaggle on this machine that answer for a dataset they do not show as
 /// both answer for a typo, hugging face with `hidden`: 401 without a key or with one it refuses,
 /// 404 with one it takes. they list the datasets of its owner, `scikit-learn` and `uciml`, a
 /// private one a typo away first.
 #[cfg(debug_assertions)]
 fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
-    let json = |status: &str, body: &str| {
-        let length = body.len().to_string();
-        reply(
-            status,
-            &[
-                ("Content-Type", "application/json"),
-                ("Content-Length", length.as_str()),
-            ],
-            body.as_bytes(),
-        )
-    };
-    let revision = |name: &str| {
-        format!(
-            "/api/datasets/scikit-learn/{name}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
-        )
-    };
     let refusal = r#"{"error":"Invalid username or password."}"#;
     let hub = Routes::start(vec![
-        (revision("irsi"), json(hidden, refusal)),
-        (revision("zzzz"), json(hidden, refusal)),
+        (revision("irsi"), json_answer(hidden, refusal)),
+        (revision("zzzz"), json_answer(hidden, refusal)),
         (
-            "/api/datasets?author=scikit-learn&sort=downloads&direction=-1&limit=100&expand%5B%5D=private"
-                .to_owned(),
-            json(
+            OWNED.to_owned(),
+            json_answer(
                 "200 OK",
                 r#"[{"id":"scikit-learn/irsx","private":true},{"id":"scikit-learn/wine","private":false},{"id":"scikit-learn/iris","private":false}]"#,
             ),
@@ -1376,11 +1386,11 @@ fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
     let kaggle = Routes::start(vec![
         (
             "/v1/datasets/view/uciml/irsi".to_owned(),
-            json("403 Forbidden", "{}"),
+            json_answer("403 Forbidden", "{}"),
         ),
         (
             "/v1/datasets/list?user=uciml&page=1".to_owned(),
-            json(
+            json_answer(
                 "200 OK",
                 r#"[{"ref":"uciml/mushroom-classification","title":"Mushrooms"},{"ref":"uciml/iris","title":"Iris Species"}]"#,
             ),
@@ -1506,6 +1516,66 @@ fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
             "{hidden}: {stderr}"
         );
     }
+    Ok(())
+}
+
+/// the list of the owner's datasets is a hint the person can do without, so it gets one try:
+/// a source that answers it with 429 or 500, or whose rate limit is used up, gets no further
+/// request, and the error comes at once, with no suggestion.
+#[cfg(debug_assertions)]
+#[test]
+fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let add = |hub: &Routes| {
+        sandbox
+            .command(&["add", "hf:datasets/scikit-learn/irsi"])
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .output()
+    };
+    let asked = |hub: &Routes| {
+        hub.targets()
+            .iter()
+            .filter(|target| *target == OWNED)
+            .count()
+    };
+    for (status, retry) in [
+        ("429 Too Many Requests", "2"),
+        ("500 Internal Server Error", ""),
+    ] {
+        let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
+        let mut headers = vec![("Content-Length", "0")];
+        if !retry.is_empty() {
+            headers.push(("Retry-After", retry));
+        }
+        hub.change(vec![(OWNED.to_owned(), reply(status, &headers, b""))]);
+        let output = add(&hub)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert!(!stderr.contains("did you mean"), "{stderr}");
+        assert_eq!(asked(&hub), 1, "{status}: {stderr}");
+    }
+    let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
+    hub.change(vec![(
+        revision("irsi"),
+        reply(
+            "401 Unauthorized",
+            &[
+                ("Content-Length", "0"),
+                ("X-RateLimit-Remaining", "0"),
+                ("X-RateLimit-Reset", "60"),
+            ],
+            b"",
+        ),
+    )]);
+    let output = add(&hub)?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(!stderr.contains("did you mean"), "{stderr}");
+    assert_eq!(
+        asked(&hub),
+        0,
+        "a used-up limit is not waited for: {stderr}"
+    );
     Ok(())
 }
 

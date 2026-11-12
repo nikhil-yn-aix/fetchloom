@@ -289,6 +289,24 @@ impl Paces {
         })
     }
 
+    /// whether a request to `host` at `now` would wait for one of its limits to reset, as
+    /// [`Paces::admit`] would say, without counting a request.
+    pub(super) fn holds(&self, host: &str, now: Instant) -> bool {
+        let Some(shared) = self
+            .hosts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(host)
+            .cloned()
+        else {
+            return false;
+        };
+        let pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        pace.limits.values().any(|known| {
+            known.reset > now && known.remaining <= pace.pending && known.reset - now <= LONGEST
+        })
+    }
+
     /// records the limits the answer to the ticket's request stated, at `at`.
     pub(super) fn heard(mut ticket: Ticket, limits: Vec<Limit>, at: Instant) {
         let Some(shared) = ticket.pace.take() else {
