@@ -962,6 +962,7 @@ async fn add_list_held(
         .zip(&listings)
         .map(|((line, parsed), listing)| listed_entry(&list.name, line, parsed, listing, extract))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut lines = FromLine::each(&list);
     if !dry_run {
         learn_names(
             context,
@@ -970,13 +971,16 @@ async fn add_list_held(
             listings.iter_mut().collect(),
             extract,
         )
-        .await?;
+        .await
+        .map_err(|error| on_lines(error, &lines))?;
     }
     let mut text = adding.text.clone().unwrap_or_default();
     let mut manifest = adding.manifest.clone();
     let (mut names, mut given, mut promised, mut already) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for (((line, parsed), listing), listed) in list.lines.iter().zip(listings).zip(entries) {
+    for ((((line, parsed), listing), listed), from) in
+        list.lines.iter().zip(listings).zip(entries).zip(&mut lines)
+    {
         let at = line.named(&list.name);
         if let Some(name) = present(&adding.manifest, old.as_ref(), &listed.entry, &listing) {
             same_settings(&adding.manifest.datasets[&name], &listed.entry, &name, &at)?;
@@ -1001,6 +1005,7 @@ async fn add_list_held(
             });
         }
         given.push(Given::Listing(name.clone(), listing));
+        from.dataset = Some(name.clone());
         names.push(name);
     }
     let work = Loop::new(context, project, net, cache);
@@ -1018,13 +1023,9 @@ async fn add_list_held(
         (&names, given),
         &promised,
     )
-    .await?;
-    if starting {
-        context.output.step(
-            "Started",
-            &format!("a project in {}", project.root.display()),
-        );
-    }
+    .await
+    .map_err(|error| on_lines(error, &lines))?;
+    tell_started(&work, starting);
     ignore_data(&work, &manifest)?;
     tell_list(&work, &manifest, &names, &already, here)?;
     Ok(Report {
@@ -1186,9 +1187,97 @@ async fn resolve_lines(
     }
     if let Some((index, error)) = failed {
         let at = list.lines[index].0.named(&list.name);
-        return Err(links::on_line(error, &at));
+        return Err(on_line(error, &at));
     }
     Ok(listings.into_iter().flatten().collect())
+}
+
+/// a line of a list as messages name it, such as `line 2 of links.txt`, the link it holds as
+/// messages show it, and the dataset it became, so a failure met later says which line to fix.
+struct FromLine {
+    at: String,
+    shown: String,
+    dataset: Option<String>,
+}
+
+impl FromLine {
+    /// each line of `list`, before any became a dataset.
+    fn each(list: &List) -> Vec<FromLine> {
+        list.lines
+            .iter()
+            .map(|(line, parsed)| FromLine {
+                at: line.named(&list.name),
+                shown: parsed.reference.shown(),
+                dataset: None,
+            })
+            .collect()
+    }
+}
+
+/// `error`, about the link on `at`, saying so. a link with nothing at it is fixed on that line,
+/// since data.toml has no entry for it yet.
+fn on_line(error: Error, at: &str) -> Error {
+    let moved = error.help.as_deref() == Some(crate::net::MOVED_HELP);
+    let error = links::on_line(error, at);
+    if moved {
+        error.help(moved_on(at))
+    } else {
+        error
+    }
+}
+
+fn moved_on(at: &str) -> String {
+    format!("check the link on {at} in a browser. if it moved, put the new link there")
+}
+
+/// `error` from downloading what the lines of a list name, each failed file with the line it
+/// came from: the line whose link its message names, or whose dataset holds the file.
+fn on_lines(mut error: Error, lines: &[FromLine]) -> Error {
+    let from = |file: &str, message: &str| {
+        lines
+            .iter()
+            .find(|line| {
+                message.contains(&line.shown)
+                    || line.dataset.as_deref().is_some_and(|name| {
+                        file.strip_prefix(name)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                    })
+            })
+            .map(|line| line.at.as_str())
+    };
+    let mut ats: Vec<&str> = Vec::new();
+    for failure in &mut error.failures {
+        let Some(at) = from(&failure.file, &failure.message) else {
+            continue;
+        };
+        failure.message = format!("{at}: {}", failure.message);
+        if failure.help.as_deref() == Some(crate::net::MOVED_HELP) {
+            failure.help = Some(moved_on(at));
+        }
+        if !ats.contains(&at) {
+            ats.push(at);
+        }
+    }
+    match &*error.failures {
+        // the one failed file is the error itself
+        [failure] => {
+            error.message.clone_from(&failure.message);
+            error.help = failure.help.as_deref().map(Into::into);
+            error
+        }
+        [] => match from("", &error.message) {
+            Some(at) => on_line(error, at),
+            None => error,
+        },
+        _ => match ats.split_last() {
+            Some((last, [])) => error.detail(format!("the link on {last} failed")),
+            Some((last, rest)) => error.detail(format!(
+                "the links on {} and {last} failed",
+                rest.join(", ")
+            )),
+            None => error,
+        },
+    }
 }
 
 /// a SHA-256 a line of a list gave for its dataset's one file, checked once relocking knows the
@@ -1540,14 +1629,19 @@ fn render_add(
     here: &Path,
     starting: bool,
 ) -> Result<(), Error> {
+    tell_started(work, starting);
+    ignore_data(work, manifest)?;
+    tell_added(work, manifest, name, here)
+}
+
+/// says that the add started its project, when it did.
+fn tell_started(work: &Loop<'_>, starting: bool) {
     if starting {
         work.context.output.step(
             "Started",
             &format!("a project in {}", work.project.root.display()),
         );
     }
-    ignore_data(work, manifest)?;
-    tell_added(work, manifest, name, here)
 }
 
 /// says, after an add of a link a person typed, that its origin is on a private address, such as

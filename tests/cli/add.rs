@@ -8,7 +8,7 @@ use crate::project::{Background, IRIS, PATH, added};
 use crate::project::{partial_bytes, told_a_stop};
 #[cfg(unix)]
 use crate::support::wait_until;
-use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text};
+use crate::support::{Part, Result, Routes, Sandbox, Server, file, json, reply, text};
 
 #[test]
 fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
@@ -1134,5 +1134,40 @@ fn a_typed_name_on_a_private_address_gets_the_same_hint() -> Result {
         )),
         "{stderr}"
     );
+    Ok(())
+}
+
+/// a link on line 3 of a list that has nothing at it fails the add naming that line, in text and
+/// in json, and the help says to fix the line, since data.toml has no entry for it yet.
+#[test]
+fn a_missing_link_in_a_list_names_its_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![("/files/a.csv".to_owned(), file(b"a\n1\n", "\"a1\""))])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!(
+            "# inputs\n{0}/files/a.csv\n{0}/files/missing.csv\n",
+            server.url
+        ),
+    )?;
+    let at = "line 3 of links.txt";
+    let message = format!(
+        "{at}: 127.0.0.1 has nothing at {}/files/missing.csv (404)",
+        server.url
+    );
+    let help = format!("check the link on {at} in a browser. if it moved, put the new link there");
+    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["message"], message);
+    assert_eq!(error["help"], help);
+    assert_eq!(error["failures"][0]["message"], message);
+    let story = text(&sandbox.run(&["add", "-i", "links.txt"])?.stderr)?;
+    assert!(
+        story.contains(&format!("error: {message}\n  help: {help}")),
+        "{story}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
 }
