@@ -1,6 +1,5 @@
-//! links as fetchloom shows them, and the secrets it never keeps in a link. a query or fragment
-//! value shows only under a name known to be harmless, so a token under a name no list knows,
-//! such as dataverse's `key`, never reaches a message, a log or a trace.
+//! links as fetchloom shows them, and the secrets it never keeps in one. a query or fragment value
+//! shows only under a name known to be harmless, so no unknown token reaches a message or a log.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -20,9 +19,8 @@ const SECRET_ENDINGS: [&str; 7] = [
     "apikey",
 ];
 
-/// whole names of keys whose values grant access, once case and separators are ignored: azure's
-/// `sig`, with the expiry `se` and permissions `sp` of its SAS, cloudfront's `Key-Pair-Id`, and
-/// the names a login, a session or a web token goes by.
+/// whole names of keys whose values grant access, once case and separators are ignored, such as
+/// azure's SAS `sig`, `se` and `sp`, cloudfront's `Key-Pair-Id` and a login's or session's names.
 const SECRET_NAMES: [&str; 12] = [
     "sig",
     "se",
@@ -38,11 +36,8 @@ const SECRET_NAMES: [&str; 12] = [
     "sessionid",
 ];
 
-/// names whose values show as written, ignoring case: switches, formats and versions, including
-/// the object versions S3 (`versionId`) and cloud storage (`generation`) links pin, the ids
-/// dataverse's pages take, the keys dropbox (`rlkey`) and drive (`resourcekey`) share links need
-/// to work, which data.toml keeps anyway, and the numbers that page through an api's listing.
-/// a paging cursor stays masked, since some apis hand back a token there.
+/// names whose values show as written, ignoring case. dropbox's `rlkey` and drive's `resourcekey`
+/// are in data.toml anyway; a paging cursor stays masked, since some apis hand back a token there.
 const HARMLESS: [&str; 16] = [
     "dl",
     "raw",
@@ -62,9 +57,8 @@ const HARMLESS: [&str; 16] = [
     "size",
 ];
 
-/// the first query or fragment key of `url` whose value grants access, when it has one: a name
-/// [`is_secret`] knows, or `key` on a path of dataverse's api, which takes a person's api key
-/// there.
+/// the first query or fragment key of `url` whose value grants access: a name [`is_secret`]
+/// knows, or `key` on a path of dataverse's api, which takes a person's api key there.
 pub(crate) fn secret(url: &Url) -> Option<String> {
     url.query_pairs()
         .chain(url::form_urlencoded::parse(
@@ -78,9 +72,8 @@ pub(crate) fn secret(url: &Url) -> Option<String> {
         .map(|key| key.to_ascii_lowercase())
 }
 
-/// whether `name`, a query or fragment key as a link writes it, is a secret on some paths only,
-/// as dataverse's `key` is, so that what [`secret`] says of one link says nothing of another
-/// with the same keys.
+/// whether `name` is a secret on some paths only, as dataverse's `key` is, so what [`secret`]
+/// says of one link says nothing of another with the same keys.
 pub(crate) fn depends_on_path(name: &str) -> bool {
     normalized(&percent_decode_str(name).decode_utf8_lossy()) == "key"
 }
@@ -137,7 +130,7 @@ pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
     if let Some(masked) = mask_normalized(text) {
         return Cow::Owned(masked);
     }
-    // pasted, wholly encoded URLs are still sensitive when rejected as arguments.
+    // pasted, wholly encoded URLs are still sensitive when rejected as arguments
     if !text.contains(':') && text.contains('%') {
         let decoded = percent_decode_str(text).decode_utf8_lossy();
         if let Some(masked) = mask_normalized(&decoded) {
@@ -148,7 +141,7 @@ pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
 }
 
 fn mask_normalized(text: &str) -> Option<String> {
-    // URL parsing removes these characters, even from the scheme or authority.
+    // URL parsing removes these characters, even from the scheme or authority
     let normalized = if text.contains(['\t', '\r', '\n']) {
         Cow::Owned(text.replace(['\t', '\r', '\n'], ""))
     } else {
@@ -164,9 +157,8 @@ fn mask_normalized(text: &str) -> Option<String> {
     }
 }
 
-/// replaces the `user:password@` of a web link's authority with `***@`. the authority starts
-/// after any number of slashes, as a URL parser reads `https:host` and `https:///host` too, and
-/// only web schemes count, so `figshare:1@2` keeps its version.
+/// replaces the `user:password@` of a web link's authority with `***@`, after any number of
+/// slashes, as a URL parser reads them. only web links count, so `figshare:1@2` keeps its version.
 fn mask_login(text: &str) -> Cow<'_, str> {
     let Some((scheme, rest)) = text.split_once(':') else {
         return Cow::Borrowed(text);
@@ -348,8 +340,7 @@ mod tests {
         }
     }
 
-    /// dataverse's api takes a person's api key as `key`, which elsewhere names a file or a
-    /// setting.
+    /// where it holds a person's api key; elsewhere `key` names a file or a setting.
     #[test]
     fn a_key_is_a_secret_on_dataverse_api_paths() {
         for link in [
@@ -368,8 +359,7 @@ mod tests {
         }
     }
 
-    /// a value shows only under a name known to be harmless, since any other may grant access
-    /// under a name no list knows. a name without a value shows as written.
+    /// since any other may grant access; a name without a value shows as written.
     #[test]
     fn values_show_only_under_names_known_to_be_harmless() {
         for (text, shown) in [

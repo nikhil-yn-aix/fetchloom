@@ -90,9 +90,8 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
     }
 }
 
-/// a client that carries the requests `send` shapes to a local server instead of their hosts. it
-/// is the test's own, so it installs the crypto provider fetchloom installs only when it first
-/// goes online.
+/// a client that carries the requests `send` shapes to a local server. it installs the crypto
+/// provider itself, since fetchloom installs it only when it first goes online.
 fn transport() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
@@ -146,7 +145,7 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
                 away,
                 format!("https://{host}/back"),
             ]);
-            // only the transport is local; send still selects credentials and follows each origin.
+            // only the transport is local; send still selects credentials and follows each origin
             let answer = block_on(net.send(&start, |request| {
                 let request = request.build().unwrap();
                 client.get(local.clone()).headers(request.headers().clone())
@@ -244,8 +243,7 @@ fn keyed(hosts: &[&str]) -> Net {
     )
 }
 
-/// a dataverse on another port gets its key there, while a key for port 443 never reaches
-/// another port of the same host, nor the other way round, as curl's CVE-2022-27776 was.
+/// and a key for port 443 never reaches another port of its host, as curl's CVE-2022-27776 let one.
 #[test]
 fn a_key_for_another_port_reaches_that_port_only() {
     let net = keyed(&["dv.lab:8443", "dv.lab"]);
@@ -307,8 +305,7 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
     }
 }
 
-/// a github key goes to its API alone: never to github.com, where release files are, nor to the
-/// storage github sends their downloads on to.
+/// the key goes to github's API alone, though release files sit on github.com.
 #[test]
 fn a_github_key_never_reaches_github_com_or_its_storage() {
     let net = net();

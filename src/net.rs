@@ -241,9 +241,8 @@ pub(crate) struct Net {
     google: Google,
     /// which requests to azure containers carry a SAS.
     azure: Azure,
-    /// buckets that refused this run an old version of an object whose version as it is now
-    /// matched its pin: they likely refuse every old version, so their objects are asked for as
-    /// they are now first.
+    /// buckets that refused an old version this run, though the object as it is now matched its
+    /// pin: they likely refuse every old version, so their objects are asked for as they are now.
     refuse_versions: Mutex<std::collections::HashSet<crate::source::Bucket>>,
     /// in mirror-only mode, the web mirrors' addresses, each ending in `/`: a request goes only
     /// below one of them, and only as a mirror's request.
@@ -473,10 +472,8 @@ impl Net {
         self.typed.add(url);
     }
 
-    /// trusts origins a person gave on the command line or in the settings, such as a dataverse
-    /// install on a university network or a mirror on a lab server, each alone: another port or
-    /// scheme of its host gets no more trust than a host in data.toml, which a cloned project
-    /// could point at this machine's network.
+    /// trusts origins a person gave on the command line or in the settings, such as a lab server,
+    /// each alone: another port or scheme of its host is trusted no more than a host in data.toml.
     pub(crate) fn trust(&self, origins: impl IntoIterator<Item = url::Origin>) {
         self.typed.allow(origins);
     }
@@ -511,8 +508,7 @@ impl Net {
     }
 
     /// refuses `url` in mirror-only mode unless it is a `mirror`'s request below a mirror's
-    /// address: the same scheme, host and port, and a path inside the mirror's. a hop a redirect
-    /// gave names the origin that sent it, which may be a mirror on the same host.
+    /// address: the same origin and a path inside it. a refused redirect names its sender.
     fn may_ask(&self, url: &Url, mirror: bool, sent_by: Option<&Url>) -> Result<(), Failure> {
         let Some(bases) = &self.mirrors_only else {
             return Ok(());
@@ -591,17 +587,9 @@ impl Net {
         Ok(response)
     }
 
-    /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
-    /// hop is checked the way its connection will be made before it is sent, and waits while its
-    /// host's rate limit is used up. a credential goes only to its own host, and never once a
-    /// redirect has left the first one, except a saved login, which answers its own host on any
-    /// hop as curl's does. a request for an S3 bucket that `s3_buckets` lists goes again once,
-    /// signed, when S3 refuses it without a key, and signed from the start once it did; keys that
-    /// a program could not give fail the request rather than let it go without them, and a
-    /// redirect never carries the signature on. a request for a cloud storage bucket that
-    /// `gcs_buckets` lists does the same with a google token, and goes once more with a new
-    /// token when cloud storage refuses one with a 401. in mirror-only mode every hop must be a
-    /// `mirror`'s request below a mirror's address, checked before any name is looked up.
+    /// a GET to `url`, shaped by `shape`, following redirects one checked hop at a time and
+    /// waiting out its host's rate limit. which credential, signature or token each hop carries is
+    /// told in docs/dev/architecture/network.md, under trust boundaries.
     async fn send_on(
         &self,
         lane: Lane,
@@ -775,9 +763,8 @@ impl Net {
         Ok(response)
     }
 
-    /// the request for `hop`, as `shape` makes it, with what it may carry: an S3 signature from
-    /// `signer`, or else the stored credential of its host while it is on the `first_origin`,
-    /// a google token and an azure credential, each as its own hop allows.
+    /// the request for `hop`, as `shape` makes it: signed by `signer`, or else with its host's
+    /// stored credential while on the `first_origin`, a google token and an azure credential.
     fn hop_request(
         &self,
         client: &reqwest::Client,
@@ -806,9 +793,8 @@ impl Net {
             .map_err(Failure::Final)
     }
 
-    /// whether S3 refused `response`, the answer to `hop`, because the keys a program gave for
-    /// `signer` expired, which are then forgotten so the request goes again with new ones. the
-    /// refusal's body is read to learn why, and put back for whoever reads the answer.
+    /// whether S3 refused `response` because the keys a program gave for `signer` expired, which
+    /// are then forgotten. the refusal's body is read to learn why, then put back to read again.
     async fn keys_expired(
         &self,
         signer: Option<&crate::source::Signer>,
@@ -835,9 +821,8 @@ impl Net {
         Ok(true)
     }
 
-    /// the body of `response`, up to `most` bytes, and `response` made again around them, with
-    /// its status, headers and extensions, so whoever reads it next reads the same answer. a
-    /// longer body is cut at `most`.
+    /// the body of `response`, up to `most` bytes, and `response` made again around them with its
+    /// status, headers and extensions, so whoever reads it next reads the same answer, cut there.
     async fn read_back(
         &self,
         mut response: reqwest::Response,
@@ -882,9 +867,8 @@ impl Net {
         Ok((reqwest::Response::from(again), body))
     }
 
-    /// a GET with the user agent and, when `credentials` allows, the credential for this exact
-    /// host and port, over https only. a key for port 443 never goes to another port of its
-    /// host, as curl's CVE-2022-27776 let one.
+    /// a GET with, when `credentials` allows, the credential for this exact host and port, over
+    /// https only, so a key for port 443 never reaches another port (curl's CVE-2022-27776).
     fn request(
         &self,
         client: &reqwest::Client,
@@ -1138,10 +1122,7 @@ mod tests {
         assert_eq!(sent, ["new"]);
     }
 
-    /// a sign-in cookie, as earthdata hands out, reaches the added streams of a split download
-    /// too.
-    /// an AWS key or session token holding a character no header can carry, such as a line break,
-    /// is refused before the request goes, rather than sent without the header it spoils.
+    /// before the request goes, rather than sent without the header it spoils.
     #[test]
     fn a_signature_no_request_header_can_carry_is_refused() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1165,6 +1146,7 @@ mod tests {
         );
     }
 
+    /// so a sign-in cookie, as earthdata hands out, reaches a split download's added streams too.
     #[test]
     fn both_clients_keep_cookies_in_one_jar() {
         use crate::net::scripted::{reply, serve};
@@ -1293,9 +1275,7 @@ mod tests {
             .with_mirrors_only(bases.iter().map(|base| Url::parse(base).unwrap()).collect())
     }
 
-    /// in mirror-only mode a request goes to a mirror's address alone, and only as a mirror's:
-    /// any other is refused before a name is looked up, so a host that does not exist is refused
-    /// rather than unknown.
+    /// so a host that does not exist is refused rather than unknown.
     #[test]
     fn mirror_only_refuses_other_hosts_before_any_lookup() {
         use crate::source::recorded::block_on;

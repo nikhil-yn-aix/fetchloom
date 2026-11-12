@@ -1,6 +1,5 @@
-//! a server on this machine for network tests: it answers each connection with the next scripted
-//! response, byte for byte, then hangs up, so a test can send what real servers send and polite
-//! fakes cannot, such as a body cut short.
+//! a local server for network tests that answers each connection with the next scripted bytes,
+//! then hangs up, so a test can send what polite fakes cannot, such as a body cut short.
 
 use std::fmt::Write as _;
 use std::io::{Read, Write as _};
@@ -10,9 +9,8 @@ use std::time::Duration;
 
 use url::Url;
 
-/// serves `responses`, one connection each, and keeps the head of every request it took. a
-/// request is read whole and its head kept before its response is sent, so every request a
-/// finished client made is there.
+/// serves `responses`, one connection each, keeping each request's head before its response
+/// goes, so every request a finished client made is there.
 pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
@@ -62,9 +60,8 @@ pub(super) fn route(
     (url, asked)
 }
 
-/// reads one request from `stream`, its head and then the body its `Content-Length` gives, and
-/// returns the head. a connection closed with bytes unread is reset, and windows then drops the
-/// part of the answer its client has not read yet.
+/// reads one request from `stream`, its head and then its `Content-Length` body, and returns the
+/// head. a connection closed with bytes unread is reset, and windows then drops the unread answer.
 fn request(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -110,8 +107,7 @@ pub(super) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<
     response
 }
 
-/// a request's body is read before its answer goes out, so the connection ends after the answer
-/// rather than with a reset.
+/// so the connection ends after the answer rather than with a reset.
 #[test]
 fn a_request_body_is_read_before_the_answer() {
     let (url, asked) = serve(vec![reply("200 OK", &[], b"token")]);

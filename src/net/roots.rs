@@ -1,7 +1,5 @@
-//! the certificates a client trusts, on linux and the other systems whose verifier reads a
-//! certificate bundle: the system's, read once a run into the one TLS configuration every client
-//! shares. a container built without any would stop every download, so fetchloom carries
-//! mozilla's. macos and windows ask the system's own verifier instead.
+//! the certificates a client trusts where the verifier reads a bundle: the system's, else the
+//! mozilla roots fetchloom carries, so a container built without any still downloads.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -25,9 +23,8 @@ enum Roots {
     },
 }
 
-/// what to trust, given how many roots could be read and the variables `var` reads. a variable
-/// someone set is never overruled: certificates it names that cannot be read are an error, not a
-/// reason to trust other roots.
+/// what to trust, given how many roots could be read. a variable someone set is never overruled:
+/// certificates it names that cannot be read are an error, not a reason to trust other roots.
 fn choose(found: usize, var: &dyn Fn(&str) -> Option<OsString>) -> Roots {
     if found > 0 {
         return Roots::System;
@@ -40,9 +37,8 @@ fn choose(found: usize, var: &dyn Fn(&str) -> Option<OsString>) -> Roots {
     Roots::Carried
 }
 
-/// the TLS configuration of a client, offering HTTP/1.1 alone when `http1_only`, else HTTP/2 as
-/// well. every client of a run shares one root store and its verifier, since each verifier of its
-/// own would read the whole store again: the system's roots, or mozilla's where it has none.
+/// the TLS configuration of a client, offering HTTP/2 too unless `http1_only`. every client of a
+/// run shares one root store and verifier, since each of its own would read the whole store again.
 ///
 /// # Errors
 ///

@@ -1,6 +1,5 @@
-//! AWS signature version 4, which S3 and the services that copy its API check on a request made
-//! with a key: a hash of the request's method, link and chosen headers, signed with a key that
-//! the secret yields for one day, region and service. the secret itself never leaves the machine.
+//! AWS signature version 4, as S3-compatible stores check it: a hash of the request signed with a
+//! key the secret yields for one day, region and service, so the secret itself is never sent.
 
 use std::fmt::{self, Write as _};
 use std::time::SystemTime;
@@ -262,9 +261,8 @@ mod tests {
         }
     }
 
-    /// cases from the signing test suite AWS publishes with its common runtime, in
-    /// awslabs/aws-c-auth: a session token, a space in the path signed escaped once, as S3
-    /// takes it, and a query sorted by its escaped names.
+    /// cases from the signing suite AWS publishes in awslabs/aws-c-auth: a session token, a space
+    /// in the path escaped once, as S3 takes it, and a query sorted by its escaped names.
     #[test]
     fn the_signing_suite_signs_as_aws_publishes() {
         let token = "6e86291e8372ff2a2260956d9b8aae1d763fbf315fa00fa31553b73ebf194267";

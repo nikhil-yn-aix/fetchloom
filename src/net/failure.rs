@@ -241,9 +241,8 @@ pub(super) fn broke(url: &Url, what: &str, err: &reqwest::Error) -> Failure {
     ))
 }
 
-/// a status that ends the download: a missing file, a refusal, or a transient failure to retry.
-/// a 429 whose limit resets soon enough is waited out; one that resets later asks for that wait,
-/// which fails as a rate limit.
+/// a status that ends the download, or a transient failure to retry. a 429 whose limit resets
+/// soon is waited out; one that resets later asks for that wait, which fails as a rate limit.
 pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Failure {
     let code = status.as_u16();
     if is_transient(status) {
@@ -315,10 +314,8 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
     Failure::Final(error)
 }
 
-/// a proxy on the way to `url` asked for a login, which no other try would give it. a proxy
-/// whose `scheme` asks for a name and password takes them in its address; any other, as one
-/// asking for NTLM or Negotiate, or a tunnel's refusal, which names none, most likely wants a
-/// windows sign-in.
+/// a proxy on the way to `url` asked for a login, which no other try would give it. any `scheme`
+/// but basic, or none, as a tunnel's refusal gives, most likely wants a windows sign-in.
 fn proxy_login(url: &Url, scheme: Option<&str>) -> Error {
     let message = match address::proxy_of(url) {
         Some(proxy) => format!(
@@ -377,9 +374,8 @@ pub(super) fn proxy_down(url: &Url, carrier: &address::Carrier, reason: &str) ->
     ))
 }
 
-/// whether `err` ended a request before the proxy carrying it answered, so the proxy itself may
-/// be what cannot be reached. a tunnel the proxy refused, or asked a login for, was answered;
-/// hyper-util keeps those errors' type private, so their own words tell them apart.
+/// whether `err` ended a request before the proxy carrying it answered. a tunnel it refused or
+/// asked a login for was answered: hyper-util keeps those errors private, so their words tell.
 pub(super) fn before_proxy(err: &reqwest::Error) -> bool {
     if !err.is_connect() {
         return false;
@@ -488,9 +484,8 @@ fn unconnected(url: &Url, err: &reqwest::Error) -> String {
     format!("could not connect to {at}")
 }
 
-/// a reply that is not valid HTTP, with what the parser `said` of it. a server sends the same
-/// reply on every try, so no other try is made; a proxy in the way may have sent it instead, and
-/// a proxy can recover, so a reply through one is tried again.
+/// a reply that is not valid HTTP, with what the parser `said` of it: final from a server, which
+/// sends the same reply every time, but tried again through a proxy, which can recover.
 fn garbled(url: &Url, carrier: Option<&address::Carrier>, said: &str) -> Failure {
     if let Some(carrier) = carrier {
         return transient(format!(
@@ -646,9 +641,8 @@ fn rate_limited(url: &Url, asked: Duration) -> Error {
     .help("run the same command again later")
 }
 
-/// how long to wait before the next try: a random share of a ceiling that starts at `first` and
-/// doubles each try, never less than the server asked for. a server asking for more than a
-/// minute is an error, not a wait.
+/// how long to wait before the next try: a random share of a ceiling that doubles each try from
+/// `first`, never less than the server asked. a server asking for over a minute is an error.
 fn backoff(first: Duration, attempt: u32, asked: Option<Duration>) -> Result<Duration, Duration> {
     if let Some(asked) = asked
         && asked > LONGEST_WAIT
@@ -679,8 +673,7 @@ fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Op
 mod tests {
     use super::*;
 
-    /// a refusal on a host where other origins are trusted names each of them, and how to reach
-    /// this one too.
+    /// and says how to reach this one too.
     #[test]
     fn a_refusal_names_every_origin_trusted_on_its_host() {
         let url = Url::parse("http://lab.local:9090/a.zip").unwrap();
@@ -858,8 +851,7 @@ mod tests {
         }
     }
 
-    /// a connection refused names the host and port, which tell which server is not there, and
-    /// its help says what a refusal means, where `could not connect to 127.0.0.1` named neither.
+    /// and its help says what a refusal means.
     #[test]
     fn a_refused_connection_names_its_host_and_port() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -970,9 +962,8 @@ mod tests {
         assert!(super::untrusted(&reset).is_none());
     }
 
-    /// a certificate this machine does not trust ends a request at once, worded so a person
-    /// behind a proxy that inspects https knows what to fix. the server here signs its own
-    /// certificate, from tests/fixtures/tls, which no system trusts.
+    /// at once, worded so a person behind a proxy that inspects https knows what to fix. the
+    /// server's certificate, from tests/fixtures/tls, signs itself, so no system trusts it.
     #[test]
     fn a_certificate_this_machine_does_not_trust_ends_the_request_and_says_why() {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -1023,8 +1014,7 @@ mod tests {
         );
     }
 
-    /// a proxy that cannot be reached is named, without retry advice: by the variable that set
-    /// it, or by the system's settings, with the variable that would replace them.
+    /// without retry advice; the system's settings come with the variable that would replace them.
     #[test]
     fn a_proxy_that_cannot_be_reached_is_named_with_where_it_was_set() {
         let url = Url::parse("https://data.example.org/iris.csv").unwrap();
@@ -1046,9 +1036,8 @@ mod tests {
         );
     }
 
-    /// tries that ran out through a proxy name the setting that chose it, the one for the link's
-    /// scheme, and where the proxy settings are listed. a link the proxy does not carry, as one
-    /// `NO_PROXY` names, says nothing of a proxy.
+    /// the one for the link's scheme, and where the proxy settings are listed. a link the proxy
+    /// does not carry, as one `NO_PROXY` names, says nothing of a proxy.
     #[test]
     fn running_out_of_tries_through_a_proxy_names_its_setting() {
         let url = Url::parse("http://data.example.org/iris.csv").unwrap();
@@ -1071,9 +1060,8 @@ mod tests {
         assert!(!direct.contains("proxy"), "{direct}");
     }
 
-    /// a reply that is not valid HTTP, here a status line with a control character, comes the
-    /// same from a server on every try: it is told as the server's, by its host, without blaming
-    /// this machine's connection, and the server is asked once.
+    /// here a status line with a control character, which a server sends the same every time: it
+    /// is named by its host, without blaming this machine's connection.
     #[test]
     fn a_reply_that_is_not_http_is_the_servers_and_is_asked_once() {
         use crate::net::api::Api;
@@ -1105,8 +1093,7 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1);
     }
 
-    /// a proxy in the way may be what sent a reply that is not valid HTTP, and a proxy can
-    /// recover, so a reply through one is tried again, naming the proxy.
+    /// since the proxy may have sent it and can recover; the retry names the proxy.
     #[test]
     fn a_reply_that_is_not_http_through_a_proxy_is_tried_again() {
         let url = Url::parse("http://data.example.org/iris.csv").unwrap();
@@ -1251,8 +1238,7 @@ mod tests {
         }
     }
 
-    /// a try that broke after one wait for the host's rate limit is numbered among the tries its
-    /// retries allow, not among waits for a limit the host may never set again.
+    /// even after one wait for the host's rate limit, which the host may never set again.
     #[tokio::test(start_paused = true)]
     async fn a_broken_try_is_numbered_by_the_retries_left() {
         use crate::net::{Notice, Options, Splitting};
