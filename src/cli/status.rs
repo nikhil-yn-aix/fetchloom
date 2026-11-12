@@ -166,25 +166,23 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         if status.lockless {
             output.hint(&format!(
                 "nothing pins the files' bytes yet: {}",
-                super::project::UNPINNED
+                super::project::unpinned()
             ));
         } else if status.needs_sync() {
-            output.hint(match (status.places(), status.unneeded.is_empty()) {
-                (false, false) => {
-                    "`fetchloom sync` removes the files fetchloom placed that no dataset needs now"
-                }
+            let does = match (status.places(), status.unneeded.is_empty()) {
+                (false, false) => "removes the files fetchloom placed that no dataset needs now",
                 (true, false) => {
-                    "`fetchloom sync` places missing or updated files, removes those no dataset needs now and reports any conflicts it keeps"
+                    "places missing or updated files, removes those no dataset needs now and reports any conflicts it keeps"
                 }
-                (_, true) => {
-                    "`fetchloom sync` places missing or updated files and reports any conflicts it keeps"
-                }
-            });
+                (_, true) => "places missing or updated files and reports any conflicts it keeps",
+            };
+            output.hint(&format!("`{}` {does}", super::project::command("sync")));
         }
         if !status.hashed_only.is_empty() {
-            output.hint(
-                "`fetchloom sync --verify` checks every file the same way and puts back those whose bytes changed",
-            );
+            output.hint(&format!(
+                "`{}` checks every file the same way and puts back those whose bytes changed",
+                super::project::command("sync --verify")
+            ));
         }
         if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
             output.hint(&format!(
@@ -193,16 +191,20 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
             ));
         }
         if !status.building.is_empty() {
-            output.hint("`fetchloom build --dry-run` shows the commands that would build them");
+            output.hint(&format!(
+                "`{}` shows the commands that would build them",
+                super::project::command("build --dry-run")
+            ));
         }
         match status.unbuilt.as_slice() {
             [] => {}
             [name] => output.hint(&format!(
-                "`fetchloom build {name}` makes it on this machine"
+                "`{}` makes it on this machine",
+                super::project::command(&format!("build {name}"))
             )),
             names => output.hint(&format!(
-                "`fetchloom build {}` makes them on this machine",
-                names.join(" ")
+                "`{}` makes them on this machine",
+                super::project::command(&format!("build {}", names.join(" ")))
             )),
         }
     }
@@ -210,9 +212,10 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         output.hint(&super::build::again(&kept.name));
     }
     if !status.candidates.is_empty() && !output.shows_details() {
-        output.hint(
-            "`fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are",
-        );
+        output.hint(&format!(
+            "`{}` lists where the files of each kept rebuild that differ from data.lock are",
+            super::project::command("status -v")
+        ));
     }
     Ok(status)
 }
@@ -223,7 +226,10 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     let output = &context.output;
     warn_git(output, project)?;
     if sum_up(output, &status) {
-        output.hint("`fetchloom status` lists what differs");
+        output.hint(&format!(
+            "`{}` lists what differs",
+            super::project::command("status")
+        ));
     }
     Ok(status)
 }
@@ -296,7 +302,10 @@ fn warn_unnamed(output: &Output, project: &Project) {
                 super::shell_word(first)
             ),
             (false, true) => format!("delete {}", parts.join(", ")),
-            (false, false) => format!("delete {them}; `fetchloom status -v` names each"),
+            (false, false) => format!(
+                "delete {them}; `{}` names each",
+                super::project::command("status -v")
+            ),
         };
         output.warn_with(&format!("{said}, so nothing reads {them}"), &help);
         if parts.len() > 1 {

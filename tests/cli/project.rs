@@ -342,6 +342,61 @@ fn a_force_after_a_run_with_c_names_its_project() -> Result {
     Ok(())
 }
 
+/// two datasets imported from folders of this machine, birds and cows, each one file.
+#[cfg(target_os = "linux")]
+fn birds_and_cows(sandbox: &Sandbox) -> Result {
+    for name in ["birds", "cows"] {
+        let folder = sandbox.folder(name)?;
+        fs::write(folder.join(format!("{name}.csv")), format!("{name}\n"))?;
+        let output = sandbox.run(&["add", &format!("../{name}")])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    Ok(())
+}
+
+/// after a run with -C, each hint and `next:` that names a fetchloom command for the project
+/// names it after -C too, so it works as typed in the folder the person ran it from; the sync's
+/// `next:` names the dataset it just placed.
+#[cfg(target_os = "linux")]
+#[test]
+fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    birds_and_cows(&sandbox)?;
+    let work = sandbox.work();
+    let typed = work.to_string_lossy();
+    let cows = work.join("data").join("cows").join("cows.csv");
+    delete(&cows)?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let on_a_terminal =
+        |args: &[&str]| sandbox.on_a_terminal_running(&sandbox.command_in(&elsewhere, args));
+    let Some(status) = on_a_terminal(&["-C", &typed, "status"])? else {
+        return Ok(());
+    };
+    assert!(
+        status.contains(&format!("hint: `fetchloom -C {typed} sync` places missing")),
+        "{status}"
+    );
+    let alone = on_a_terminal(&["-C", &typed])?.unwrap_or_default();
+    assert!(
+        alone.contains(&format!(
+            "hint: `fetchloom -C {typed} status` lists what differs"
+        )),
+        "{alone}"
+    );
+    let synced = on_a_terminal(&["-C", &typed, "sync"])?.unwrap_or_default();
+    assert!(
+        synced.contains(&format!(
+            "next: `fetchloom -C {typed} path cows` tells your scripts where cows is"
+        )),
+        "{synced}"
+    );
+    assert!(
+        synced.contains(&format!("run `fetchloom -C {typed} remove cows`")),
+        "{synced}"
+    );
+    Ok(())
+}
+
 /// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
 /// made in place through it is damage to that copy: status says so, and sync puts the pinned file
 /// back and keeps the changed copy beside it. a reflink or a copy is the project's own, and its

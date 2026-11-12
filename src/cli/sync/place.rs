@@ -63,6 +63,9 @@ pub(crate) struct Placement {
     /// to start afresh. a sync fills them again without a warning.
     #[serde(skip)]
     pub(crate) refilled: BTreeSet<String>,
+    /// the datasets the run places or replaces files of.
+    #[serde(skip)]
+    pub(crate) filled: BTreeSet<String>,
     /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
     /// a mirror holds them and only `fetchloom build` makes them.
     pub(crate) unbuilt: Vec<String>,
@@ -141,6 +144,21 @@ impl Placement {
         for target in targets {
             *planned.entry(target.dataset).or_default() += 1;
         }
+        self.filled = targets
+            .iter()
+            .zip(actions)
+            .filter(|(_, action)| {
+                matches!(
+                    action,
+                    Action::Place
+                        | Action::Freed(_)
+                        | Action::Replace
+                        | Action::Overwrite(_)
+                        | Action::Unblock(_)
+                )
+            })
+            .map(|(target, _)| target.dataset.to_owned())
+            .collect();
         let back: HashSet<&str> = self.put_back.iter().map(String::as_str).collect();
         let holding = tell::holding(survey.disk.keys());
         for target in targets

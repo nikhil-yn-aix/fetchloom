@@ -549,26 +549,25 @@ fn tell_synced(
     } else {
         let (verb, text) = synced(manifest, scope, placement.kept.len(), &placement.unbuilt);
         context.output.done(verb, &text);
-        // `path` answers only a dataset placed in the data folder
-        let placed = |name: &&String| manifest.datasets[*name].place;
-        let first = match scope {
-            Scope::All => manifest
-                .datasets
-                .keys()
-                .filter(placed)
-                .find(|name| !placement.unbuilt.contains(*name)),
-            Scope::Only(names) => names.iter().find(placed),
-        };
+        // `path` answers only a dataset placed in the data folder, and the line names one this
+        // sync just placed
+        let first = placement.filled.iter().find(|name| {
+            scope.includes(name)
+                && manifest
+                    .datasets
+                    .get(*name)
+                    .is_some_and(|entry| entry.place)
+                && !placement.unbuilt.contains(*name)
+        });
         if lock_changed {
             context.output.next(&format!(
                 "commit {}, so other clones use these pins",
                 committed(project)
             ));
-        } else if let Some(name) = first
-            && placement.placed + placement.replaced > 0
-        {
+        } else if let Some(name) = first {
             context.output.next(&format!(
-                "`fetchloom path {name}` tells your scripts where {name} is"
+                "`{}` tells your scripts where {name} is",
+                command(&format!("path {name}"))
             ));
         }
     }
@@ -787,7 +786,8 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
-            "run `fetchloom sync` to update {}/, then commit {}",
+            "run `{}` to update {}/, then commit {}",
+            command("sync"),
             manifest.data_dir,
             committed(&project)
         ));
@@ -914,7 +914,12 @@ async fn preview_lock(
 
 /// the two ways on for a project without data.lock, such as a clone whose owner never committed
 /// it: the owner's pins, or new pins of what the sources serve now.
-pub(super) const UNPINNED: &str = "ask whoever shares the project to commit data.lock, or run `fetchloom lock` to pin what the sources serve today";
+pub(super) fn unpinned() -> String {
+    format!(
+        "ask whoever shares the project to commit data.lock, or run `{}` to pin what the sources serve today",
+        command("lock")
+    )
+}
 
 /// what `--locked` asks: data.lock exists and its entries for the datasets of `scope` are up to
 /// date with data.toml, or the command fails without writing it. `instead` is the other way out
@@ -931,9 +936,12 @@ pub(super) fn locked(
             Kind::Outdated,
             "there is no data.lock, so nothing pins the files' bytes yet",
         )
-        .help(UNPINNED));
+        .help(unpinned()));
     };
-    let help = format!("run `fetchloom lock` and commit data.lock, or {instead}");
+    let help = format!(
+        "run `{}` and commit data.lock, or {instead}",
+        command("lock")
+    );
     check(project, manifest, Some(lock), scope)
         .map(drop)
         .map_err(|error| match error.kind {
@@ -1002,7 +1010,7 @@ fn check(
         for line in stale {
             error = error.detail(line);
         }
-        return Err(error.help("run `fetchloom lock` and commit data.lock"));
+        return Err(error.help(format!("run `{}` and commit data.lock", command("lock"))));
     }
     if let Some(error) = needs_building(&unbuilt) {
         return Err(error);
@@ -1545,9 +1553,10 @@ pub(super) fn known_with_rest(
                 );
                 error.help(format!("did you mean `{shown}`?"))
             }
-            None if manifest.datasets.is_empty() => {
-                error.help("data.toml has no datasets yet. add one with `fetchloom add <link>`")
-            }
+            None if manifest.datasets.is_empty() => error.help(format!(
+                "data.toml has no datasets yet. add one with `{}`",
+                self::command("add <link>")
+            )),
             None => {
                 let names: Vec<&str> = manifest.datasets.keys().map(String::as_str).collect();
                 let shown = super::meant(

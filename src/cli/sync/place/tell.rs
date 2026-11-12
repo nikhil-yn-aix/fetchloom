@@ -152,7 +152,7 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
         many => format!("{} archives", many.len()),
     };
     let first = found.paths.first().map_or("", String::as_str);
-    let command = format!("fetchloom drop {}", crate::cli::shell_word(first));
+    let command = crate::cli::project::command(&format!("drop {}", crate::cli::shell_word(first)));
     let (what, help) = match found.paths.len() {
         1 => ("a file".to_owned(), format!("run `{command}`")),
         count => (
@@ -643,17 +643,23 @@ fn warn_retired(output: &Output, placement: &Placement) {
                 format!(
                     "{folder} still holds {only}, a file fetchloom did not place, so the folder stays"
                 ),
-                "`fetchloom status` lists it as extra; delete it when you no longer need it",
+                format!(
+                    "`{}` lists it as extra; delete it when you no longer need it",
+                    crate::cli::project::command("status")
+                ),
             ),
             [first, ..] => (
                 format!(
                     "{folder} still holds {} files fetchloom did not place, such as {first}, so the folder stays",
                     retired.unplaced.len()
                 ),
-                "`fetchloom status` lists them as extra; delete them when you no longer need them",
+                format!(
+                    "`{}` lists them as extra; delete them when you no longer need them",
+                    crate::cli::project::command("status")
+                ),
             ),
         };
-        output.warn_with(&said, help);
+        output.warn_with(&said, &help);
         for path in &retired.unplaced {
             output.detail(path);
         }
@@ -763,8 +769,9 @@ fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) 
             "{path} has changed, so it stays, but {them} {verb} the bytes data.lock pins for {dataset}, not this edit"
         ),
         format!(
-            "to build from the fix, make it in a step of {either}, or copy the file out of {}/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for {either} to read",
-            manifest.data_dir
+            "to build from the fix, make it in a step of {either}, or copy the file out of {}/ and add it as a dataset of its own with `{}` for {either} to read",
+            manifest.data_dir,
+            crate::cli::project::command("add <copy> --as <name>")
         ),
     )
 }
@@ -799,11 +806,14 @@ fn forcing(manifest: &Manifest, scope: &Scope, datasets: &BTreeSet<&str>) -> Str
 fn left_alone(manifest: &Manifest, dataset: &str) -> String {
     if manifest.datasets.contains_key(dataset) {
         format!(
-            "it belongs to {dataset}: run `fetchloom sync {dataset}` first, or `fetchloom sync` for every dataset"
+            "it belongs to {dataset}: run `{}` first, or `{}` for every dataset",
+            crate::cli::project::command(&format!("sync {dataset}")),
+            crate::cli::project::command("sync")
         )
     } else {
         format!(
-            "it belongs to {dataset}, which data.toml no longer has: `fetchloom sync` syncs every dataset and removes it"
+            "it belongs to {dataset}, which data.toml no longer has: `{}` syncs every dataset and removes it",
+            crate::cli::project::command("sync")
         )
     }
 }

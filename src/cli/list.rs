@@ -78,9 +78,10 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
         }
     } else if report.datasets.is_empty() {
         output.done("Ok", "data.toml has no datasets yet");
-        output.hint(
-            "add one with `fetchloom add <link>`, or find one with `fetchloom search <words>`",
-        );
+        output.hint(&format!(
+            "add one with `{}`, or find one with `fetchloom search <words>`",
+            super::project::command("add <link>")
+        ));
     } else {
         output.answer(&table(&report.datasets, output.answer_width()));
     }
@@ -92,7 +93,10 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
 fn one(output: &crate::output::Output, dataset: &Listed) {
     let Some(files) = &dataset.held else {
         output.done("Ok", &format!("{} is not locked yet", dataset.name));
-        output.hint("run `fetchloom sync` to lock it and fetch its files");
+        output.hint(&format!(
+            "run `{}` to lock it and fetch its files",
+            super::project::command("sync")
+        ));
         return;
     };
     let about: Vec<&str> = [&dataset.title, &dataset.license, &dataset.doi]

@@ -63,7 +63,7 @@ fetchloom help --json
 
 ## project discovery
 
-project commands find the nearest `data.toml` at or above the working directory, inside the git repository the working directory is in. `-C` chooses where that search starts, and is how you use a project above the repository. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one. [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule.
+project commands find the nearest `data.toml` at or above the working directory, inside the git repository the working directory is in. `-C` chooses where that search starts, and is how you use a project above the repository. after a run with `-C`, a hint or `next:` line that names a command for the project names its folder after `-C` as a full path, as `` hint: `fetchloom -C /home/ada/first sync` places missing or updated files``, so it works as typed in the folder you ran it from. a line about what other clones run keeps the plain command. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one. [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule.
 
 ## typos
 
