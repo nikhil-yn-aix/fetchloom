@@ -412,12 +412,12 @@ impl Output {
             .then(|| usize::from(console::Term::stdout().size().1))
     }
 
-    /// one numbered choice: what to type, padded to `pad`, then its title and dim facts, both
+    /// one match of a search: what to type, padded to `pad`, then its title and dim facts, both
     /// already padded into columns, the facts on a line of their own under what to type when
-    /// `below` says so. what is cut on a narrow terminal is the end, never what to type.
+    /// `below` says so. it has no number, since nothing reads one. what is cut on a narrow
+    /// terminal is the end, never what to type.
     pub(crate) fn candidate(
         &self,
-        number: usize,
         typed: &str,
         pad: usize,
         title: &str,
@@ -427,22 +427,21 @@ impl Output {
             return;
         }
         if below {
-            self.candidate(number, typed, pad, title, ("", false));
+            self.candidate(typed, pad, title, ("", false));
             let dim = paint(self.style.color, Paint::new().dimmed());
             self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(facts)));
             return;
         }
         let color = self.style.color;
-        let cyan = paint(color, accent().bold());
         let accent = paint(color, accent());
         let dim = paint(color, Paint::new().dimmed());
         let typed = plain(typed);
         let title = plain(title);
-        let head = format!("{cyan}{number:>11}{cyan:#} {accent}{typed:pad$}{accent:#}");
+        let head = format!("{:>11} {accent}{typed:pad$}{accent:#}", "");
         let head_width = 12 + typed.chars().count().max(pad);
         let width = self.width().unwrap_or(usize::MAX);
         let mut line = if head_width > width {
-            format!("{cyan}{number:>3}{cyan:#} {accent}{typed}{accent:#}")
+            format!("    {accent}{typed}{accent:#}")
         } else {
             head
         };

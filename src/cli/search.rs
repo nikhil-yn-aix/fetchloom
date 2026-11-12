@@ -32,9 +32,8 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         let parts = parts(output, &report.candidates, output.width(), LIST_LEAD);
         let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
             .min(crate::output::REFERENCE_COLUMN);
-        for (number, shown) in parts.iter().enumerate() {
+        for shown in &parts {
             output.candidate(
-                number + 1,
                 &shown.reference,
                 pad,
                 &shown.title,
@@ -148,7 +147,7 @@ pub(super) async fn pick(
     }
 }
 
-/// the columns before a reference in the list `search` prints, its number among them.
+/// the columns before a reference in the list `search` prints.
 const LIST_LEAD: usize = 12;
 /// the columns before a reference in the picker, its cursor and number among them.
 const PICKER_LEAD: usize = 6;

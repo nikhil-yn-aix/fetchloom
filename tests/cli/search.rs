@@ -58,6 +58,12 @@ fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
         ),
         "{screen}"
     );
+    // no row is numbered, since `fetchloom add 1` would search for "1"
+    assert!(
+        screen.contains("\n            hf:datasets/scikit-learn/iris "),
+        "{screen}"
+    );
+    assert!(!screen.contains("          1 "), "{screen}");
     Ok(())
 }
 
