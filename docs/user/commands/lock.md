@@ -40,7 +40,7 @@ with `--json`, `result.datasets` names the datasets whose pins changed, as `sync
 
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
-`lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.
+`lock --check` that passes ends with `Ok data.lock matches data.toml` on stderr, and with `-q` prints nothing. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.
 
 a [recipe](../recipes.md) is pinned only by `fetchloom build`, so `lock` keeps a recipe's pin as it is while `data.toml` has the recipe, and drops it with the recipe. `lock --check` reads each recipe's code and fails with `build.needed`, exit 60, when data.lock pins no result for it or something it is made from moved since, after any `lock.outdated` finding. `lock` itself still exits 0 then: it warns about each such recipe as `sync` does, naming what moved, and its last line names the recipes that need a build instead of calling data.lock up to date. stderr after mc's code, c.py, changed, from a real run:
 

@@ -745,7 +745,9 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
     if args.check {
-        return check(&project, &manifest, old.as_ref(), &Scope::All);
+        let report = check(&project, &manifest, old.as_ref(), &Scope::All)?;
+        context.output.done("Ok", "data.lock matches data.toml");
+        return Ok(report);
     }
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,

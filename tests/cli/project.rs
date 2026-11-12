@@ -653,7 +653,14 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
         1,
         "a new filter on the same version downloads nothing"
     );
-    assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    // a check that passes says so, as lock does, and -q keeps it quiet
+    let checked = sandbox.run(&["lock", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0));
+    assert_eq!(
+        text(&checked.stderr)?,
+        "         Ok data.lock matches data.toml\n"
+    );
+    assert_eq!(text(&sandbox.run(&["-q", "lock", "--check"])?.stderr)?, "");
     assert_eq!(sandbox.run(&["sync", "--locked"])?.status.code(), Some(0));
     let empty = sandbox.folder("empty")?;
     fs::write(empty.join("data.toml"), "")?;
