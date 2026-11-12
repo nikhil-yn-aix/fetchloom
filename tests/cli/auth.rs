@@ -46,7 +46,7 @@ fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
             .any(|a| a["account"] == "login:urs.earthdata.nasa.gov")
     );
     assert!(accounts.iter().all(|a| a["signed_in"] == false));
-    for account in ["aws", "google"] {
+    for account in ["aws", "google", "azure"] {
         assert!(
             accounts.iter().any(|a| a["account"] == account),
             "{account}: {document}"
@@ -65,7 +65,7 @@ fn auth_alone_lists_every_account() -> Result {
     let story = text(&plain.stderr)?;
     assert!(
         story.lines().any(|line| line
-            == "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google"),
+            == "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure"),
         "{story}"
     );
     let status = sandbox.run(&["--json", "auth", "status", "--offline"])?;
@@ -1042,6 +1042,204 @@ fn auth_names_googles_credentials_by_file_and_kind() -> Result {
             "{said}"
         );
         assert!(story.contains(&format!("  {said}\n")), "{story}");
+    }
+    Ok(())
+}
+
+/// the az cli in a folder of its own, which leaves the file `ran` if it ever runs, and two folders
+/// with its profile: one signed in, as ada@lab.example in the default subscription, and one signed
+/// out. the az cli writes its profile with a byte order mark, and lists no subscription once
+/// signed out.
+fn az_settings(
+    sandbox: &Sandbox,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    let bin = sandbox.folder("az-bin")?;
+    let az = bin.join(if cfg!(windows) { "az.cmd" } else { "az" });
+    #[cfg(unix)]
+    crate::buckets::program(
+        &az,
+        &format!(": > '{}'", sandbox.work().join("ran").display()),
+    )?;
+    #[cfg(windows)]
+    std::fs::write(&az, b"not a program")?;
+    let signed_in = sandbox.folder("az-signed-in")?;
+    std::fs::write(
+        signed_in.join("azureProfile.json"),
+        "\u{feff}{\"installationId\": \"1\", \"subscriptions\": [{\"id\": \"a\", \"isDefault\": false, \"user\": {\"name\": \"bo@lab.example\", \"type\": \"user\"}}, {\"id\": \"b\", \"isDefault\": true, \"user\": {\"name\": \"ada@lab.example\", \"type\": \"user\"}}]}",
+    )?;
+    let signed_out = sandbox.folder("az-signed-out")?;
+    std::fs::write(
+        signed_out.join("azureProfile.json"),
+        "\u{feff}{\"installationId\": \"1\"}",
+    )?;
+    Ok((az, signed_in, signed_out))
+}
+
+/// what of the azure settings these tests write no output may show: the SAS's signature, and the
+/// account key as it is written and as the bytes it stands for.
+const AZURE_SECRETS: [&str; 4] = [
+    crate::azure::SECRETS[0],
+    crate::azure::SECRETS[1],
+    crate::azure::KEY,
+    "secret-key",
+];
+
+/// the row of `account` signed in with what `from` gives, as `auth --json` lists it.
+fn signed_in_row(account: &str, from: &str, user: Option<&str>, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "account": account, "signed_in": true, "from": from, "user": user, "valid": null,
+        "kind": kind,
+    })
+}
+
+/// `auth` names where the credentials azure containers would be read with come from, as the az
+/// cli's variables and login give them: a SAS or an account key kept to the account
+/// `AZURE_STORAGE_ACCOUNT` names, listed as that account's, and for every other account a SAS for
+/// any, the az cli's login, which it never runs, or this machine's managed identity, which it
+/// never asks. neither a SAS nor a key shows.
+#[test]
+fn auth_names_where_azure_credentials_would_come_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (az, signed_in, signed_out) = az_settings(&sandbox)?;
+    let vars = |pairs: &[(&'static str, &str)]| {
+        let pairs = pairs
+            .iter()
+            .map(|(name, value)| (*name, (*value).to_owned()));
+        pairs.collect::<Vec<_>>()
+    };
+    let bin = az.parent().unwrap_or(&az).display().to_string();
+    let cli = |profile: &std::path::Path| {
+        vars(&[
+            ("PATH", &bin),
+            ("AZURE_CONFIG_DIR", &profile.display().to_string()),
+        ])
+    };
+    let row = signed_in_row;
+    let none = serde_json::json!({
+        "account": "azure", "signed_in": false, "from": null, "user": null, "valid": null,
+        "kind": null,
+    });
+    let later = "when a container needs a token";
+    let identity = "0b4f5c1e-1a2b-4c3d-8e9f-000000000001";
+    let shown = az.display();
+    for (env, rows, said) in [
+        (
+            vars(&[("AZURE_STORAGE_SAS_TOKEN", crate::azure::SAS)]),
+            vec![row("azure", "AZURE_STORAGE_SAS_TOKEN", None, "sas")],
+            vec!["Signed in to azure with a SAS \u{b7} AZURE_STORAGE_SAS_TOKEN".to_owned()],
+        ),
+        (
+            [
+                cli(&signed_out),
+                vars(&[
+                    ("AZURE_STORAGE_KEY", crate::azure::KEY),
+                    ("AZURE_STORAGE_ACCOUNT", "lab"),
+                ]),
+            ]
+            .concat(),
+            vec![row("azure:lab", "AZURE_STORAGE_KEY", None, "key"), none.clone()],
+            vec![
+                "Signed in to azure account lab with its key \u{b7} AZURE_STORAGE_KEY".to_owned(),
+                "Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure".to_owned(),
+            ],
+        ),
+        (
+            [
+                cli(&signed_in),
+                vars(&[
+                    ("AZURE_STORAGE_SAS_TOKEN", crate::azure::SAS),
+                    ("AZURE_STORAGE_KEY", crate::azure::KEY),
+                    ("AZURE_STORAGE_ACCOUNT", "Lab"),
+                ]),
+            ]
+            .concat(),
+            vec![
+                row("azure:lab", "AZURE_STORAGE_SAS_TOKEN", None, "sas"),
+                row("azure", &shown.to_string(), Some("ada@lab.example"), "az_cli"),
+            ],
+            vec![
+                "Signed in to azure account lab with a SAS \u{b7} AZURE_STORAGE_SAS_TOKEN".to_owned(),
+                format!("Signed in to azure as ada@lab.example \u{b7} the az cli at {shown}, which runs {later}"),
+            ],
+        ),
+        (
+            [
+                cli(&signed_in),
+                vars(&[
+                    ("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
+                    ("AZURE_CLIENT_ID", identity),
+                ]),
+            ]
+            .concat(),
+            vec![row("azure", "AZURE_TOKEN_CREDENTIALS", Some(identity), "managed_identity")],
+            vec![format!(
+                "Signed in to azure as managed identity {identity} \u{b7} AZURE_TOKEN_CREDENTIALS, asked {later}"
+            )],
+        ),
+        (
+            vars(&[("AZURE_TOKEN_CREDENTIALS", "prod")]),
+            vec![row("azure", "AZURE_TOKEN_CREDENTIALS", None, "managed_identity")],
+            vec![format!(
+                "Signed in to azure as this machine's managed identity \u{b7} AZURE_TOKEN_CREDENTIALS, asked {later}"
+            )],
+        ),
+    ] {
+        let (accounts, story) = auth_says(&sandbox, &env, &AZURE_SECRETS)?;
+        let azure: Vec<_> = accounts
+            .into_iter()
+            .filter(|row| row["account"].as_str().is_some_and(|a| a.starts_with("azure")))
+            .collect();
+        assert_eq!(azure, rows, "{said:?}");
+        for said in said {
+            assert!(story.contains(&format!("  {said}\n")), "{said}: {story}");
+        }
+        assert!(!sandbox.work().join("ran").exists(), "{env:?} ran the az cli");
+    }
+    Ok(())
+}
+
+/// azure settings fetchloom cannot use are said in a warning of their own kind, with what would
+/// fix them: a key without its account leaves azure with no credential, while a sign-in it does
+/// not read still leaves the key of the account it is kept to.
+#[test]
+fn auth_warns_of_azure_settings_it_cannot_use() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (env, warned, signed_in) in [
+        (
+            &[("AZURE_STORAGE_KEY", crate::azure::KEY)][..],
+            "AZURE_STORAGE_KEY is set, but AZURE_STORAGE_ACCOUNT is not",
+            Vec::<&str>::new(),
+        ),
+        (
+            &[
+                ("AZURE_STORAGE_KEY", crate::azure::KEY),
+                ("AZURE_STORAGE_ACCOUNT", "lab"),
+                ("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential"),
+            ],
+            "AZURE_TOKEN_CREDENTIALS asks for EnvironmentCredential, which fetchloom does not read",
+            vec!["azure:lab"],
+        ),
+    ] {
+        let output = sandbox
+            .command(&["auth", "--json"])
+            .envs(env.iter().copied())
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let document = json(&output)?;
+        let warning = &document["warnings"][0];
+        assert_eq!(warning["kind"], "auth.unusable", "{document}");
+        assert_eq!(warning["message"], warned, "{document}");
+        let accounts = document["result"]["accounts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let azure: Vec<_> = accounts
+            .iter()
+            .filter(|row| row["signed_in"] == true)
+            .filter_map(|row| row["account"].as_str())
+            .collect();
+        assert_eq!(azure, signed_in, "{document}");
+        assert_eq!(row(&accounts, "azure")["signed_in"], false, "{document}");
     }
     Ok(())
 }

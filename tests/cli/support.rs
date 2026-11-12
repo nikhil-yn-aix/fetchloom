@@ -565,6 +565,7 @@ fn leaks(name: &str) -> bool {
         || name.starts_with("AWS_")
         || name.starts_with("GOOGLE_")
         || name.starts_with("CLOUDSDK_")
+        || name.starts_with("AZURE_")
         || name.ends_with("_PROXY")
         || name.ends_with("_TOKEN")
         || matches!(

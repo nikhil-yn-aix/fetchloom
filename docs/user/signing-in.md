@@ -46,7 +46,7 @@ azure_containers = ["azure:lab/raw"]
 | google drive, shared with some people | `drive_folders` | the same google credentials, with drive's scope: a service account the folder is shared with, or your own login through an oauth client you make |
 | azure blob storage | `azure_containers` | `az login`, a SAS in `AZURE_STORAGE_SAS_TOKEN` or in the container's entry, an account key in `AZURE_STORAGE_KEY` with `AZURE_STORAGE_ACCOUNT`, or a virtual machine's managed identity with `AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential` |
 
-each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys and google credentials it would use, without running a program or asking a server. each store's page has the rest: [private S3 buckets](sources/buckets.md#private-s3-buckets), [private cloud storage buckets](sources/buckets.md#private-cloud-storage-buckets), [private drive files and folders](sources/google-drive.md#private-files-and-folders) and [private azure containers](sources/azure.md#private-containers).
+each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys, google credentials and azure credentials it would use, without running a program or asking a server. each store's page has the rest: [private S3 buckets](sources/buckets.md#private-s3-buckets), [private cloud storage buckets](sources/buckets.md#private-cloud-storage-buckets), [private drive files and folders](sources/google-drive.md#private-files-and-folders) and [private azure containers](sources/azure.md#private-containers).
 
 ## when a download is refused
 

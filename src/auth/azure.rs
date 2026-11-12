@@ -332,6 +332,128 @@ fn read_cli(printed: &[u8]) -> Result<(String, SystemTime), &'static str> {
     Ok((token.to_owned(), UNIX_EPOCH + Duration::from_secs(seconds)))
 }
 
+/// where `fetchloom auth` says azure containers would get their credentials, from the variables
+/// and the az cli's saved login alone: it never runs the az cli or asks the metadata service.
+#[derive(Debug)]
+pub(crate) struct Described {
+    /// the account `AZURE_STORAGE_ACCOUNT` names, and the SAS, else the key, kept to it.
+    pub(crate) kept: Option<(String, Kept)>,
+    /// what a container of any other account gets, or what is wrong with how
+    /// `AZURE_TOKEN_CREDENTIALS` asks for a token.
+    pub(crate) rest: Result<Rest, Error>,
+}
+
+/// what the environment keeps to one account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kept {
+    Sas,
+    Key,
+}
+
+/// what a container gets when nothing is kept to its account.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Rest {
+    None,
+    /// the SAS `AZURE_STORAGE_SAS_TOKEN` holds, which no account is named for.
+    Sas,
+    /// a token of the az cli at `path`, signed in as `user` when its profile says who.
+    Cli {
+        path: PathBuf,
+        user: Option<String>,
+    },
+    /// a token of this machine's managed identity, the user-assigned one with `client_id`.
+    Managed {
+        client_id: Option<String>,
+    },
+}
+
+/// the credentials [`find`] would give the `listed` containers, as `fetchloom auth` lists them.
+/// the az cli counts only once its profile lists a subscription, as `az login` leaves it.
+///
+/// # Errors
+///
+/// what [`find`] finds wrong with the variables.
+pub(crate) fn describe(var: Var<'_>, listed: &[AzureContainer]) -> Result<Described, Error> {
+    let storage = find(var, listed)?;
+    let kept = storage.account.clone().and_then(|account| {
+        let kept = if storage.sas.is_some() {
+            Kept::Sas
+        } else {
+            storage.key.as_ref().map(|_| Kept::Key)?
+        };
+        Some((account, kept))
+    });
+    let rest = if storage.sas.is_some() && storage.account.is_none() {
+        Ok(Rest::Sas)
+    } else {
+        storage.sign_in.map(|sign_in| match sign_in {
+            SignIn::None => Rest::None,
+            SignIn::Cli(path) => match cli_login(var) {
+                Login::Out => Rest::None,
+                Login::In(user) => Rest::Cli { path, user },
+            },
+            SignIn::Managed { client_id } => Rest::Managed { client_id },
+        })
+    };
+    Ok(Described { kept, rest })
+}
+
+/// what the az cli's profile says of its login.
+#[derive(Debug, PartialEq, Eq)]
+enum Login {
+    Out,
+    /// signed in, as the user of the default subscription when the profile names one.
+    In(Option<String>),
+}
+
+#[derive(serde::Deserialize)]
+struct Profile {
+    #[serde(default)]
+    subscriptions: Vec<Subscription>,
+}
+
+#[derive(serde::Deserialize)]
+struct Subscription {
+    #[serde(default, rename = "isDefault")]
+    default: bool,
+    user: Option<ProfileUser>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProfileUser {
+    name: String,
+}
+
+/// the login `azureProfile.json` in `AZURE_CONFIG_DIR` or `~/.azure` keeps, after the byte order
+/// mark the az cli writes: none without a subscription, of no known user when unreadable.
+fn cli_login(var: Var<'_>) -> Login {
+    let folder = var("AZURE_CONFIG_DIR")
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| Some(crate::source::home(var)?.join(".azure")));
+    let Some(folder) = folder else {
+        return Login::Out;
+    };
+    let bytes = match std::fs::read(folder.join("azureProfile.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Login::Out,
+        Err(_) => return Login::In(None),
+    };
+    let text = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(&bytes);
+    let Ok(profile) = serde_json::from_slice::<Profile>(text) else {
+        return Login::In(None);
+    };
+    if profile.subscriptions.is_empty() {
+        return Login::Out;
+    }
+    let chosen = profile
+        .subscriptions
+        .iter()
+        .find(|subscription| subscription.default)
+        .or_else(|| profile.subscriptions.first());
+    Login::In(chosen.and_then(|subscription| Some(subscription.user.as_ref()?.name.clone())))
+}
+
 /// the bytes `text` writes in base64, with the standard alphabet and its padding.
 fn decoded(text: &str) -> Option<Vec<u8>> {
     let digits = text.trim_end_matches('=');
@@ -374,6 +496,34 @@ mod tests {
                 .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    /// the az cli's profile says whether it is signed in, and as whom: the default
+    /// subscription's user, else the first's. a profile fetchloom cannot read leaves that to the
+    /// az cli.
+    #[test]
+    fn the_az_clis_profile_says_whether_it_is_signed_in() {
+        let folder = tempfile::tempdir().unwrap();
+        let config = folder.path().as_os_str().to_owned();
+        let var = move |name: &str| (name == "AZURE_CONFIG_DIR").then(|| config.clone());
+        assert_eq!(cli_login(&var), Login::Out, "no profile");
+        let first = Login::In(Some("bo@lab.example".to_owned()));
+        for (written, login) in [
+            (r#"{"installationId": "1"}"#, Login::Out),
+            (r#"{"subscriptions": []}"#, Login::Out),
+            (
+                r#"{"subscriptions": [{"user": {"name": "bo@lab.example"}}, {"user": {"name": "ada@lab.example"}}]}"#,
+                first,
+            ),
+            (
+                r#"{"subscriptions": [{"isDefault": true}]}"#,
+                Login::In(None),
+            ),
+            ("not json", Login::In(None)),
+        ] {
+            std::fs::write(folder.path().join("azureProfile.json"), written).unwrap();
+            assert_eq!(cli_login(&var), login, "{written}");
         }
     }
 

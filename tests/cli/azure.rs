@@ -17,9 +17,10 @@ const A_MD5: &str = "7IgFjUFwc9UPsxF0OL2kYw==";
 const B_CSV: &[u8] = b"site,value\nfield,2\n";
 const B_MD5: &str = "wDwK+pN4pPcTmE3sjbu0wQ==";
 /// a SAS as the azure portal gives one, its values escaped as they come.
-const SAS: &str = "sv=2022-11-02&sr=c&sp=rl&se=2099-01-01T00%3A00%3A00Z&sig=lab-signature%3D";
+pub(crate) const SAS: &str =
+    "sv=2022-11-02&sr=c&sp=rl&se=2099-01-01T00%3A00%3A00Z&sig=lab-signature%3D";
 /// what of [`SAS`] must never show: its signature, as it comes and unescaped.
-const SECRETS: [&str; 2] = ["lab-signature%3D", "lab-signature="];
+pub(crate) const SECRETS: [&str; 2] = ["lab-signature%3D", "lab-signature="];
 
 /// the listing fetchloom asks azure for, of `prefix` in `container` at `account`, and with
 /// the SAS when `sas` is given.
@@ -251,7 +252,7 @@ fn a_listed_private_container_is_read_with_its_sas_after_a_refusal() -> Result {
 }
 
 /// an account key as the azure portal gives one, the base64 of `KEY_BYTES`.
-const KEY: &str = "c2VjcmV0LWtleQ==";
+pub(crate) const KEY: &str = "c2VjcmV0LWtleQ==";
 const KEY_BYTES: &[u8] = b"secret-key";
 
 /// base64 with the standard alphabet and padding.

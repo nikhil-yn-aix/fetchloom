@@ -38,8 +38,9 @@ pub(super) struct State {
     user: Option<String>,
     /// whether the source accepted the key: none when it was not asked
     valid: Option<bool>,
-    /// how keys for buckets come, for AWS and google, which `auth` never asks: `keys`,
-    /// `credential_process`, `sso`, `role`, `service_account` or `authorized_user`
+    /// how keys for buckets and containers come, for AWS, google and azure, which `auth` never
+    /// asks: `keys`, `credential_process`, `sso`, `role`, `service_account`, `authorized_user`,
+    /// `sas`, `key`, `az_cli` or `managed_identity`
     kind: Option<&'static str>,
 }
 
@@ -149,6 +150,11 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     }
     accounts.extend(aws_keys(output, &mut missing));
     accounts.push(google_credentials(output, &mut missing));
+    accounts.extend(azure_credentials(
+        output,
+        &mut missing,
+        &context.settings.azure_containers.value,
+    ));
     if !missing.is_empty() {
         output.faint_step("Signed in", &format!("to none of {}", missing.join(", ")));
     }
@@ -239,6 +245,97 @@ fn google_credentials(output: &crate::output::Output, missing: &mut Vec<String>)
             "authorized_user"
         }),
     }
+}
+
+/// the rows of azure's credentials: a SAS or key kept to one account, as `azure:<account>`, then
+/// `azure` for the others. nothing runs and nothing is asked; unusable settings are warned of.
+fn azure_credentials(
+    output: &crate::output::Output,
+    missing: &mut Vec<String>,
+    listed: &[crate::source::AzureContainer],
+) -> Vec<State> {
+    use crate::auth::azure::{Kept, Rest};
+    let described = match auth::azure::describe(&auth::env, listed) {
+        Ok(described) => described,
+        Err(error) => {
+            unusable(output, &error);
+            missing.push("azure".to_owned());
+            return vec![State::none("azure")];
+        }
+    };
+    let signed_in = |account: String, from: String, user: Option<String>, kind| State {
+        account,
+        signed_in: true,
+        from: Some(from),
+        user,
+        valid: None,
+        kind: Some(kind),
+    };
+    let mut rows = Vec::new();
+    if let Some((account, kept)) = described.kept {
+        let (from, with, kind) = match kept {
+            Kept::Sas => ("AZURE_STORAGE_SAS_TOKEN", "a SAS", "sas"),
+            Kept::Key => ("AZURE_STORAGE_KEY", "its key", "key"),
+        };
+        output.step(
+            "Signed in",
+            &format!("to azure account {account} with {with} \u{b7} {from}"),
+        );
+        rows.push(signed_in(
+            format!("azure:{account}"),
+            from.to_owned(),
+            None,
+            kind,
+        ));
+    }
+    let later = "when a container needs a token";
+    let rest = described.rest.unwrap_or_else(|error| {
+        unusable(output, &error);
+        Rest::None
+    });
+    let azure = "azure".to_owned();
+    match rest {
+        Rest::None => {
+            missing.push(azure);
+            rows.push(State::none("azure"));
+        }
+        Rest::Sas => {
+            let from = "AZURE_STORAGE_SAS_TOKEN";
+            output.step("Signed in", &format!("to azure with a SAS \u{b7} {from}"));
+            rows.push(signed_in(azure, from.to_owned(), None, "sas"));
+        }
+        Rest::Cli { path, user } => {
+            let who = user
+                .as_ref()
+                .map_or_else(String::new, |user| format!(" as {user}"));
+            output.step(
+                "Signed in",
+                &format!(
+                    "to azure{who} \u{b7} the az cli at {}, which runs {later}",
+                    units::path(&path)
+                ),
+            );
+            rows.push(signed_in(azure, path.display().to_string(), user, "az_cli"));
+        }
+        Rest::Managed { client_id } => {
+            let from = "AZURE_TOKEN_CREDENTIALS";
+            let who = client_id.as_ref().map_or_else(
+                || "this machine's managed identity".to_owned(),
+                |id| format!("managed identity {id}"),
+            );
+            output.step(
+                "Signed in",
+                &format!("to azure as {who} \u{b7} {from}, asked {later}"),
+            );
+            rows.push(signed_in(
+                azure,
+                from.to_owned(),
+                client_id,
+                "managed_identity",
+            ));
+        }
+    }
+    rows
 }
 
 /// warns of keys or credentials set up in a way fetchloom cannot use, as `error` says.
