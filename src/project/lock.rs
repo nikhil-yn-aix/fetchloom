@@ -369,6 +369,18 @@ impl Lock {
         resolve(parse(text)?, Some(root))
     }
 
+    /// [`Lock::read`] of only the datasets `keep` accepts by name: the others are left out, and
+    /// their lists beside data.lock are not read.
+    pub(crate) fn read_only(
+        text: &str,
+        root: &Path,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Result<Lock, Error> {
+        let mut parsed = parse(text)?;
+        parsed.retain(|entry| keep(entry.name()));
+        resolve(parsed, Some(root))
+    }
+
     /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
     /// name: as read, in either reader, and as a sync settles it.
     pub(crate) fn get(&self, name: &str) -> Option<&Locked> {

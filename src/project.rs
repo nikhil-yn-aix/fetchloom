@@ -285,12 +285,28 @@ impl Project {
 
     /// data.lock with the text it was read from, or nothing when the project has none yet.
     pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
+        self.lock_by(|text| Lock::read(text, &self.root))
+    }
+
+    /// [`Project::lock_and_text`] of only the datasets `keep` accepts by name, reading only their
+    /// lists.
+    pub(crate) fn lock_only(
+        &self,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Result<Option<(Lock, String)>, Error> {
+        self.lock_by(|text| Lock::read_only(text, &self.root, keep))
+    }
+
+    fn lock_by(
+        &self,
+        read: impl FnOnce(&str) -> Result<Lock, Error>,
+    ) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                let lock = Lock::read(&text, &self.root)
-                    .map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
+                let lock =
+                    read(&text).map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
                 Ok(Some((lock, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),

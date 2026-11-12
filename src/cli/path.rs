@@ -12,7 +12,7 @@ use super::args;
 use super::project::{
     Run, Waited, find, hold_until, ignore_data, known_with_rest, locked, sync_all,
 };
-use super::sync::disk::Survey;
+use super::sync::disk::{Survey, is_inside};
 use super::sync::place::Seen;
 use super::sync::{self, Loop, Scope};
 use super::{Context, open_cache};
@@ -44,7 +44,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     };
     let rest = &args.target[name.len()..];
     answerable(&manifest, name, rest)?;
-    let lock = project.lock()?;
+    let lock = pins(&project, &manifest, name)?;
     unbuilt(&manifest, lock.as_ref(), name)?;
     let mut cache = None;
     let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
@@ -177,6 +177,31 @@ fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> 
     Err(error.help(format!(
         "set place = true on datasets.{name} in data.toml, then run `fetchloom sync {name}`"
     )))
+}
+
+/// data.lock with only the pins of [`needed`] for `name`, or none when the project has none yet.
+fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Lock>, Error> {
+    let needed = needed(manifest, name);
+    Ok(project
+        .lock_only(&|other| needed.contains(other))?
+        .map(|(lock, _)| lock))
+}
+
+/// the datasets path reads from data.lock to answer for `name`: it, and those whose folders are
+/// its own, hold it or lie in it, so planning them finds every clash with its files, with the
+/// datasets the recipes among them read.
+fn needed(manifest: &Manifest, name: &str) -> BTreeSet<String> {
+    let folder = crate::name::fold(&plan::folder(manifest, name));
+    let touching = manifest
+        .datasets
+        .keys()
+        .filter(|other| {
+            let theirs = crate::name::fold(&plan::folder(manifest, other));
+            is_inside(&theirs, &folder) || is_inside(&folder, &theirs)
+        })
+        .cloned()
+        .collect();
+    sync::with_inputs(manifest, touching)
 }
 
 /// warns about the recipe `name` as [`sync::tell_stale`] does, once another run made it ready,
@@ -382,7 +407,7 @@ async fn hold_path(
         before = current;
         let (_, manifest) = project.manifest()?;
         answerable(&manifest, name, rest)?;
-        let lock = project.lock()?;
+        let lock = pins(project, &manifest, name)?;
         ready_path(
             context,
             project,
@@ -453,6 +478,35 @@ mod tests {
             complete: true,
         });
         state
+    }
+
+    /// path reads the pins of its dataset, of those whose folders meet its folder, which a clash
+    /// could involve, and of what the recipes among them read: never the rest.
+    #[test]
+    fn path_reads_only_the_pins_its_dataset_needs() {
+        let text = concat!(
+            "[datasets.a]\nref = 'https://example.org/a'\n\n",
+            "[datasets.inner]\nref = 'https://example.org/inner'\npath = 'A/inner'\n\n",
+            "[datasets.ab]\nref = 'https://example.org/ab'\n\n",
+            "[datasets.raw]\nref = 'https://example.org/raw'\nplace = false\n\n",
+            "[datasets.clean]\nfrom = ['raw']\nrun = ['t', '{raw}', '{out}']\n\n",
+            "[datasets.tidy]\nfrom = ['clean']\nrun = ['t', '{clean}', '{out}']\n",
+        );
+        let manifest = Manifest::parse(text).unwrap();
+        assert_eq!(needed_in(&manifest, "a"), ["a", "inner"]);
+        assert_eq!(needed_in(&manifest, "inner"), ["a", "inner"]);
+        assert_eq!(needed_in(&manifest, "ab"), ["ab"]);
+        assert_eq!(needed_in(&manifest, "tidy"), ["clean", "raw", "tidy"]);
+        let whole = Manifest::parse(&format!(
+            "{text}\n[datasets.all]\nref = 'https://example.org/all'\npath = '.'\n"
+        ))
+        .unwrap();
+        assert_eq!(needed_in(&whole, "ab"), ["ab", "all"]);
+        assert_eq!(needed_in(&whole, "all").len(), 7);
+    }
+
+    fn needed_in(manifest: &Manifest, name: &str) -> Vec<String> {
+        needed(manifest, name).into_iter().collect()
     }
 
     #[tokio::test(start_paused = true)]

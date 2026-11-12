@@ -1331,6 +1331,27 @@ impl<'a> Loop<'a> {
     }
 }
 
+/// the datasets a run of `names` reads from data.lock: them, and the datasets each recipe among
+/// them reads, and theirs in turn, whose pins tell whether the recipe is stale.
+pub(super) fn with_inputs(manifest: &Manifest, mut names: BTreeSet<String>) -> BTreeSet<String> {
+    let mut recipes: Vec<String> = names.iter().cloned().collect();
+    while let Some(recipe) = recipes.pop() {
+        let Some(recipe) = manifest
+            .datasets
+            .get(&recipe)
+            .and_then(|entry| entry.recipe())
+        else {
+            continue;
+        };
+        for input in &recipe.from {
+            if names.insert(input.clone()) {
+                recipes.push(input.clone());
+            }
+        }
+    }
+    names
+}
+
 /// warns about each recipe in `scope` whose result `lock` does not pin as building it now
 /// would make: one not built yet, and one whose code, command, variables or inputs moved since
 /// it was built, whose pinned result a run places as it is. a run of named datasets relocks none
