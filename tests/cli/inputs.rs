@@ -399,3 +399,27 @@ fn members_left_under_an_old_name_ask_to_finish_the_rename() -> Result {
     assert!(!sandbox.work().join("data/sounds/a1.wav").exists());
     Ok(())
 }
+
+/// two archives of one dataset that unpack a file to one path are refused naming both and the
+/// path, with a dataset for each beside keeping them packed.
+#[test]
+fn a_clash_between_two_archives_names_both() -> Result {
+    let sandbox = Sandbox::new()?;
+    let fold = sandbox.folder("fold")?;
+    for (shard, bytes) in [("fold-000000.zip", b"0\n"), ("fold-000001.zip", b"1\n")] {
+        fs::write(fold.join(shard), zipped(&[("train/0000.txt", bytes)])?)?;
+    }
+    let output = sandbox.run(&["add", "../fold"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("error: two files would land on data/fold/train/0000.txt: one from fold-000000.zip and one from fold-000001.zip\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: pass --no-extract to keep archives packed, or give each archive a dataset of its own, whose folder keeps its files apart"),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}

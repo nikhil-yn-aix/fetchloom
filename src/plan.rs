@@ -52,6 +52,13 @@ impl<'a> Target<'a> {
     fn unpacked(&self) -> bool {
         self.file().is_some_and(|file| file.unpacks_to.is_some())
     }
+
+    /// the path in its dataset of the archive the target unpacks from, if it is in one.
+    fn archive(&self) -> Option<&'a str> {
+        self.file()
+            .filter(|file| file.unpacks_to.is_some())
+            .map(|file| file.path.as_str())
+    }
 }
 
 /// every file a lock places, and the archives whose files this machine does not know yet.
@@ -734,7 +741,13 @@ fn clash(
 ) -> Error {
     let datasets = format!("datasets {} and {}", first.dataset, second.dataset);
     let message = match (first.path == second.path, first.dataset == second.dataset) {
-        (true, true) => format!("two files would land on {}", first.path),
+        (true, true) => match (first.archive(), second.archive()) {
+            (Some(one), Some(other)) if one != other => format!(
+                "two files would land on {}: one from {one} and one from {other}",
+                first.path
+            ),
+            _ => format!("two files would land on {}", first.path),
+        },
         (true, false) => format!("{datasets} would both place {}", first.path),
         (false, true) => format!(
             "{} and {} would be the same file on a disk that ignores case",
@@ -772,7 +785,13 @@ fn fix(
     if let (Some(member), Some(listed)) = (unpacked, listed) {
         return beside(member, listed, targets, patterns);
     }
-    leave_out("one of them", unpacked.unwrap_or(second), patterns)
+    let left_out = leave_out("one of them", unpacked.unwrap_or(second), patterns);
+    match (first.archive(), second.archive()) {
+        (Some(one), Some(other)) if one != other => format!(
+            "{left_out}, or give each archive a dataset of its own, whose folder keeps its files apart"
+        ),
+        _ => left_out,
+    }
 }
 
 /// how to resolve a clash in one dataset between `member`, a file inside one of its archives, and
@@ -1353,6 +1372,26 @@ mod tests {
 
     /// a file beside an archive that holds one of the same name: either can be left out, the
     /// archive's only when the members table leaves it another file, or the archive kept packed.
+    /// two archives of one dataset that unpack a file to one path are both named with that path,
+    /// and the remedies keep leaving one out and keeping them packed, beside a dataset for each.
+    #[test]
+    fn a_clash_between_two_archives_names_both() {
+        let (manifest, locked) = pinned(ONE, &[("a", &["fold-000000.tar", "fold-000001.tar"])]);
+        let same: &[&str] = &["train/0000.txt"];
+        let shards = [("fold-000000.tar", same), ("fold-000001.tar", same)];
+        let error = placed_from(&manifest, &locked, &shards).unwrap_err();
+        assert_eq!(
+            error.message,
+            "two files would land on data/a/train/0000.txt: one from fold-000000.tar and one from fold-000001.tar"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "leave one of them out with exclude in [datasets.a.members.\"fold-000000.tar\"] in data.toml, or set extract = false on datasets.a to keep its archives packed, or give each archive a dataset of its own, whose folder keeps its files apart"
+            )
+        );
+    }
+
     #[test]
     fn a_clash_with_an_archives_file_suggests_leaving_either_out_or_keeping_it_packed() {
         for (listed, members, help) in [
