@@ -2,6 +2,58 @@
 
 what the linux lab measured for this release, the a/b passes behind its performance decisions, and the historical observations before them.
 
+## ledger
+
+every change measured with the current harness, one row each: what it gained where it aimed, what it cost, and whether it stayed. a ratio is new over old, so under 1 is faster or smaller; the section a row links to holds its fixture, rounds, intervals and keep rule. changes measured before 2026-11-09, without retained run records, are in [observations](#observations-and-rejected-experiments).
+
+| area | change | result | outcome | details |
+|---|---|---|---|---|
+| network | several connections per host for file bodies | far s2 0.288, poor s2 0.424; lan and home flat | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | hosts interleaved in the download queue | two-host fixture 0.764 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | download jobs built at admission | peak memory 228 to 205 MB at 100,000 pins | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | download permits released before publication | ext4 s3 0.925 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | no closing resume record for small downloads | xfs s3 0.757, ext4 s3 0.840 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | unfinished downloads spread over 16 folders | xfs s5 0.712, ext4 s3 0.902 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | a large download written to the disk while it arrives | `get -o` of 10 GiB 0.531; small downloads flat | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| network | an unchanged bucket object reused by its listed ETag and size | `lock --upgrade` of a prefix: 7 to 2 requests, 12.2 to 2.0 MB | kept | [bucket prefix](#upgrading-a-bucket-prefix-2026-11-12) |
+| network | fast large files split into ranges from a link-rate probe | live hugging face 5.6 to 3.7 s, but lan 1 GiB 1.075 and 1.5 to 1.6 times the cpu | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | shorter download queues | xfs s1 1.108 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
+| flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
+| flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| flushing | the first 64 files of every batch flushed on their own | ext4 s1 1.078, peak memory 1.151 | dropped | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
+| archives | archive staging spread over 16 folders | ext4 s4 0.798, xfs s4 0.830 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| archives | no-replace rename for new objects | ext4 s4 1.090 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| archives | xfs staging through `O_TMPFILE` | xfs s4 0.955 [0.914, 1.026] | dropped, no win | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| archives | a new object published on btrfs by one rename | 0.970 | dropped, no win | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
+| placement | each dataset's folder found with one lookup | sync of 40,000 datasets 9.68 to 6.33 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
+| placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| project state | the same map built in merged chunks | 0.85, but on musl peak memory 1.05 to 1.06 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| project state | project state written as a stream | no measured win | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| lock and names | fast lock reader for commented locks | list at 100,000 files 0.213 to 0.100 s; peak memory 334 to 78 MB | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| lock and names | `add -i` writes data.toml once for the whole list | 10,000 links 415 to 4.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
+| lock and names | relocking looks datasets up in sets and maps | 40,000 links 31.7 to 21.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
+| lock and names | `path` and `sync <name>` read only the named folder, state records, pins and lock lines (five changes) | `path` of 3 files beside 100,000 415 to 29 ms, peak memory 0.305; `sync` 392 to 30 ms | kept | [named commands](#commands-that-name-a-dataset-2026-11-12) |
+| lock and names | the number of processors read once a run | 0.997 | dropped, no win | [named commands](#commands-that-name-a-dataset-2026-11-12) |
+| lock and names | waiting `path` calls finish once the project is ready | 32 waiters 3.24 to 0.25 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
+| push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
+| push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
+| process | mimalloc for libc's own allocations on musl | no-op sync 0.833 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
+| process | `panic = unwind` for a clean thread error | no faster anywhere; binary 14.5% larger | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
+
 ## final benchmark on the linux lab, 2026-11-09
 
 the [lab](benchmark-design.md) on an azure Standard_NC24ads_A100_v4 (EPYC 7V13, 24 vCPU, nvme, loop-mounted ext4 and xfs), which another user's training job shared. "final" is the static musl build of d2bc3e7, as linux ships it; "main" is the static musl build of d168842, from before these passes. a lan case ran a warmup round and then seven measured ones, every tool once a round in a new random order; on 2026-11-08 the home cases ran three and the lossy s2 cases five, and lossy s1 ran fifteen. a time is the median of the measured rounds, and final/main the median of the paired ratios with its 95% bootstrap interval. the commands, round orders and every run's record stay with the lab's results, outside the repository.
