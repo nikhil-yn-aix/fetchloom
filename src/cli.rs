@@ -314,6 +314,7 @@ fn open_cache() -> Result<Cache, Error> {
         Some((output, stop)) => (Some(output.as_ref()), stop.as_ref()),
         None => (None, &unset),
     };
+    let _setup = output.map(|output| output.setup("Opening", "the cache"));
     // counts its seconds on a terminal until the cache is held
     let waiting = std::sync::Mutex::new(None);
     hold_cache(open_unheld()?, Access::Shared, stop, &|| {

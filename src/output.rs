@@ -15,7 +15,7 @@ use anstyle::Style as Paint;
 use indicatif::{MultiProgress, ProgressDrawTarget};
 use serde::Serialize;
 
-pub(crate) use progress::{Bar, Ticker, Wait};
+pub(crate) use progress::{Bar, Setup, Ticker, Wait};
 use style::Tone;
 pub(crate) use style::{ColorChoice, Style};
 
@@ -527,6 +527,23 @@ impl Output {
             drawn.push(weak);
         }
         bar
+    }
+
+    /// a step a command takes before its own work, as `verb` and `what`, such as `Locking the
+    /// project`: a debug line as it begins, and at a terminal a live line once it lasts a second,
+    /// for a slow disk or a network filesystem that makes such a step take seconds.
+    pub(crate) fn setup(&self, verb: &'static str, what: &'static str) -> Setup {
+        tracing::debug!(step = %format!("{verb} {what}").to_lowercase(), "setting up");
+        match &self.bars {
+            Some(bars) => Setup::start(
+                bars,
+                verb,
+                what,
+                (self.style.color, self.style.unicode),
+                self.stopping.clone(),
+            ),
+            None => Setup::quiet(),
+        }
     }
 
     /// a wait for another program, which a person may sit through for a while: on a terminal a

@@ -9,7 +9,7 @@ ask for the exact command, working directory, relevant manifest and lock entries
 | evidence | what it shows |
 |---|---|
 | `fetchloom --version -v` | package version, OS, architecture, embedded commit when available, and selected cache path; it does not report the compiler or build profile |
-| the same command with `-vv` | debug events on stderr with uptime timestamps in seconds since logging started, including request status, retries and phase context |
+| the same command with `-vv` | debug events on stderr with uptime timestamps in seconds since logging started, including request status, retries and phase context, and a `setting up` line as each step before a command's own work begins, such as `locking the project`, `opening the cache` or `reading the data folder`, so a long gap after one names the step a slow disk held |
 | the same command with `--json` | structured errors, partial results, warnings and work counters: requests, downloaded bytes, retries, resumes, objects written, downloads skipped, reflinks, hardlinks, copies and files placed from the cache |
 | `FETCHLOOM_TRACE=run.json` | a timeline of spans and arguments, including one `download` span per file; compare overlapping downloads and long phases |
 | `FETCHLOOM_LOG=fetchloom::net=debug,fetchloom::cli=debug` | target-filtered events when the full debug log is too noisy; add a narrower module target to isolate a subsystem |

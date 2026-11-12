@@ -481,7 +481,9 @@ fn settled_unheld(
         Ok(cache) => (cache, true),
         Err(_) => (peek_cache()?, false),
     };
+    let reading = context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(project, &manifest.data_dir, context.threads);
+    drop(reading);
     // hashing proved the files placed too recently to trust by time unchanged, and only asks
     // for the state to be written again, which this project cannot be. an edit hashing found
     // stays an edit
@@ -1146,7 +1148,9 @@ pub(super) async fn sync_all(
         read,
     } = run;
     refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    drop(reading);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
         survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
@@ -1283,7 +1287,9 @@ pub(super) async fn preview_all(
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
     refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    drop(reading);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
         survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
@@ -1457,6 +1463,7 @@ pub(super) async fn hold_until<T>(
     }
     let mut told = false;
     let mut told_owner = false;
+    let mut setup = Some(context.output.setup("Locking", "the project"));
     // counts its seconds on a terminal until the hold is taken
     let mut _waiting = None;
     loop {
@@ -1472,6 +1479,8 @@ pub(super) async fn hold_until<T>(
         match project.hold(command)? {
             Hold::Held(held) => return Ok(Waited::Held(held)),
             Hold::Busy(holder) if !told => {
+                // the line about the other fetchloom says what the wait is
+                drop(setup.take());
                 let who = holder.as_deref().unwrap_or("another fetchloom");
                 _waiting = Some(
                     context
@@ -1481,6 +1490,7 @@ pub(super) async fn hold_until<T>(
                 told = true;
             }
             Hold::Owner(message) if !told_owner => {
+                drop(setup.take());
                 _waiting = Some(context.output.waiting("Waiting", &message));
                 told = true;
                 told_owner = true;

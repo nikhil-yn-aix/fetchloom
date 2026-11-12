@@ -610,6 +610,86 @@ impl TermLike for Rested {
     }
 }
 
+/// a step a command takes before its own work, such as taking the project lock, which a slow
+/// disk or a network filesystem can make last seconds. at a terminal a live line names it once
+/// it has lasted [`UNTOLD`], until it ends, so the screen is never blank for long.
+pub(crate) struct Setup {
+    ended: Arc<(Mutex<bool>, Condvar)>,
+    thread: Option<JoinHandle<()>>,
+}
+
+/// how long a step before a command's own work goes untold at a terminal.
+const UNTOLD: Duration = Duration::from_secs(1);
+
+impl Setup {
+    pub(super) fn quiet() -> Setup {
+        Setup {
+            ended: Arc::default(),
+            thread: None,
+        }
+    }
+
+    /// shows `verb` and `what` on `bars` once the step has lasted [`UNTOLD`], in the bar's
+    /// `look`, until the step ends.
+    pub(super) fn start(
+        bars: &MultiProgress,
+        verb: &'static str,
+        what: &'static str,
+        look: (bool, bool),
+        stopping: Arc<AtomicBool>,
+    ) -> Setup {
+        Setup::after(UNTOLD, bars, (verb, what), look, stopping)
+    }
+
+    /// [`Setup::start`] with the line shown once the step has lasted `untold`.
+    fn after(
+        untold: Duration,
+        bars: &MultiProgress,
+        (verb, what): (&'static str, &'static str),
+        look: (bool, bool),
+        stopping: Arc<AtomicBool>,
+    ) -> Setup {
+        let ended: Arc<(Mutex<bool>, Condvar)> = Arc::default();
+        let watched = ended.clone();
+        let bars = bars.clone();
+        let began = Instant::now();
+        // without a thread the step goes untold, which costs nothing but the line
+        let thread = std::thread::Builder::new()
+            .name("setup".to_owned())
+            .spawn(move || {
+                let (over, wake) = &*watched;
+                let ended = over.lock().unwrap_or_else(PoisonError::into_inner);
+                let (ended, _) = wake
+                    .wait_timeout_while(ended, untold, |ended| !*ended)
+                    .unwrap_or_else(PoisonError::into_inner);
+                if *ended {
+                    return;
+                }
+                let bar = Bar::add(&bars, verb, what.to_owned(), look, stopping);
+                if let Some(drawn) = &bar.drawn {
+                    drawn.set_elapsed(began.elapsed());
+                }
+                let _ended = wake
+                    .wait_while(ended, |ended| !*ended)
+                    .unwrap_or_else(PoisonError::into_inner);
+                drop(bar);
+            })
+            .ok();
+        Setup { ended, thread }
+    }
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        let (over, wake) = &*self.ended;
+        *over.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        wake.notify_all();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// keeps a wait visible until its owner finishes.
 pub(crate) struct Wait {
     pub(super) _bar: Bar,
@@ -890,6 +970,45 @@ mod tests {
         fn flush(&self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// a step before a command's own work that lasts its moment gets a live line naming it, and
+    /// one that ends sooner draws nothing.
+    #[test]
+    fn a_long_setup_step_gets_a_line_and_a_short_one_none() {
+        let screen = Drawn::default();
+        let bars = MultiProgress::with_draw_target(ProgressDrawTarget::term_like(Box::new(
+            screen.clone(),
+        )));
+        let hour = Duration::from_secs(3600);
+        let look = (false, false);
+        drop(Setup::after(
+            hour,
+            &bars,
+            ("Locking", "the project"),
+            look,
+            Arc::default(),
+        ));
+        assert!(screen.0.lock().unwrap().is_empty());
+        let setup = Setup::after(
+            Duration::ZERO,
+            &bars,
+            ("Opening", "the cache"),
+            look,
+            Arc::default(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !screen
+            .0
+            .lock()
+            .unwrap()
+            .join("")
+            .contains("Opening the cache")
+        {
+            assert!(Instant::now() < deadline, "no line for a long step");
+            std::thread::sleep(TICK);
+        }
+        drop(setup);
     }
 
     /// a first ctrl-c redraws every bar at once to say it is stopping, rather than at its next
