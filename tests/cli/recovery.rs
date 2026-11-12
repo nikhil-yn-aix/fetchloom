@@ -427,3 +427,41 @@ fn offline_says_a_web_mirror_was_not_asked_and_names_a_folder_mirror() -> Result
     );
     Ok(())
 }
+
+/// an edit made in place through a hardlink changed the cache's copy, so sync must fetch the
+/// pinned bytes again. when it cannot, as offline, its error still says why it needed them and
+/// the edit stays; once it can, the file is put back with the edit kept beside it.
+#[test]
+fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/iris.csv",
+        vec![file(b"iris", "\"v1\""), file(b"iris", "\"v1\"")],
+    )?;
+    sandbox.allow(&server.url);
+    let added = crate::support::json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    if added["work"]["hardlinks"] != 1 {
+        return Ok(());
+    }
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    crate::support::edit(&placed, b"changed in place\n")?;
+    let output = sandbox.run(&["--json", "--offline", "sync"])?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let error = &crate::support::json(&output)?["errors"][0];
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "iris/iris.csv",
+            "data/iris/iris.csv is linked to the cache's copy, which was changed, so its pinned bytes must be fetched again"
+        ])
+    );
+    assert_eq!(fs::read(&placed)?, b"changed in place\n");
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(&placed)?, b"iris");
+    assert_eq!(
+        fs::read(placed.with_file_name("iris.csv.changed"))?,
+        b"changed in place\n"
+    );
+    Ok(())
+}

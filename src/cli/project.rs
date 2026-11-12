@@ -1214,9 +1214,11 @@ pub(super) async fn sync_all(
         lock,
         complete: false,
     });
+    let refetched = refetched(&survey, &work.scope);
     let placement = work
         .place(manifest, &lock, plan, force, survey, synced)
-        .await?;
+        .await
+        .map_err(|error| refetched.iter().cloned().fold(error, Error::detail))?;
     work.context.stop.finish();
     work.drop_unpacked(&lock);
     register(work);
@@ -1228,6 +1230,40 @@ pub(super) async fn sync_all(
 }
 
 /// what [`sync_all`] would do, told as it is found: the lock it would write when that changes,
+/// the lines a sync that stops before it places adds to its error for the files of `scope` linked
+/// to a cache copy someone changed, whose pinned bytes it must fetch again: why it needed them,
+/// since the error alone may name only the download. at most five, then how many more.
+fn refetched(survey: &Survey, scope: &Scope) -> Vec<String> {
+    let mut paths: Vec<&String> = survey
+        .elsewhere
+        .iter()
+        .filter(|path| {
+            survey
+                .state
+                .files
+                .get(*path)
+                .is_some_and(|placed| scope.includes(&placed.dataset))
+        })
+        .collect();
+    paths.sort_unstable();
+    let mut said: Vec<String> = paths
+        .iter()
+        .take(5)
+        .map(|path| {
+            format!(
+                "{path} is linked to the cache's copy, which was changed, so its pinned bytes must be fetched again"
+            )
+        })
+        .collect();
+    if paths.len() > 5 {
+        said.push(format!(
+            "and {} more files linked to changed cache copies",
+            paths.len() - 5
+        ));
+    }
+    said
+}
+
 /// the downloads and unpacking it would need, then what placing would change. it stops before
 /// anything [`sync_all`] changes: no download, unpacking, lock, state or registration, and cached
 /// objects are read without being sealed or marked. given `seen`, it takes the settled-sync

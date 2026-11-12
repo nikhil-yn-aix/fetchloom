@@ -137,6 +137,8 @@ warning: <path> was put back as pinned: it is linked to the cache's copy, which 
   help: to edit a dataset's files, set copy = true for it in data.toml
 ```
 
+when that download fails, as offline or when the source's address is refused, nothing is put back and the edited file stays as it is. the error then names each such file under the download's own message, as `data/iris/iris.csv is linked to the cache's copy, which was changed, so its pinned bytes must be fetched again`, so the cause shows beside the refusal; the next sync that can download puts the file back as above.
+
 a changed hardlink still shared by other projects whose shared copy the cache no longer holds or records, as after the cache folder was deleted, stays with kept reason `shared` until `fetchloom sync --force`, since nothing tells which project made the change.
 
 on windows, a folder's listing can keep a hardlink's old size and time after another link changed it, so `status` and `sync` open each file placed as a hardlink to read it as it is. an edit made through another project's link then shows here at once, as on linux.
