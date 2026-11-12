@@ -57,7 +57,7 @@ flowchart TD
     finish --> check["check expected size and hashes"]
 ```
 
-`attempt` checks response status and resume offsets through `starting_offset`, then chooses a whole or split stream. `stream` owns the writer queue and joins it before reporting an error or a handover; `read_stream` owns the chunk loop and idle/rate deadlines. `split` opens and joins the range writer around `run_split`, which schedules streams and records why they stopped.
+`attempt` checks response status and resume offsets through `starting_offset`, then chooses a whole or split stream. a whole stream under 1 KiB is read back through `PartialWriter::head` before it is published, and one that starts as a git-lfs pointer is refused with `source::lfs_pointer`, which names the link that serves the file itself; a larger file is never read for this, so the check costs the files people download nothing. `stream` owns the writer queue and joins it before reporting an error or a handover; `read_stream` owns the chunk loop and idle/rate deadlines. `split` opens and joins the range writer around `run_split`, which schedules streams and records why they stopped.
 
 known downloads of at most 1 MiB use `HashPipe::inline` on the writer thread. larger files and unknown lengths use the separate worker described below.
 

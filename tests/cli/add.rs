@@ -9,8 +9,8 @@ use crate::project::{partial_bytes, told_a_stop};
 #[cfg(unix)]
 use crate::support::wait_until;
 use crate::support::{
-    Part, Result, Routes, Running, Sandbox, Server, delete_folder, file, json, reply, sha256_hex,
-    text, warned, without_copy_warning,
+    Part, Result, Routes, Running, Sandbox, Server, delete_folder, file, json, ok, reply,
+    sha256_hex, text, warned, without_copy_warning,
 };
 
 #[test]
@@ -40,6 +40,34 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
             "help": "choose a name with --as <name>"
         }])
     );
+    Ok(())
+}
+
+/// a raw link to a file git-lfs keeps answers with the small pointer git keeps in its place,
+/// which is refused before data.lock pins it, while a larger file that starts the same way is
+/// data like any other.
+#[test]
+fn a_git_lfs_pointer_is_refused_rather_than_pinned() -> Result {
+    let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/model.bin", vec![file(pointer, "\"p1\"")])?;
+    let output = sandbox.run(&["--json", "add", &server.url])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = json(&output)?["errors"][0].clone();
+    assert_eq!(error["kind"], "source.invalid", "{error}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "{} sent a git-lfs pointer, not the file it stands for",
+            server.url
+        ),
+        "{error}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists());
+    let mut notes = pointer.to_vec();
+    notes.resize(1024, b'\n');
+    let larger = Server::start("/notes.txt", vec![file(&notes, "\"n1\"")])?;
+    ok(&sandbox.run(&["add", &larger.url])?)?;
     Ok(())
 }
 

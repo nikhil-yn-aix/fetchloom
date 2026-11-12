@@ -837,7 +837,16 @@ impl Net {
                 .stream(from, writer, response, total, &capped, monitor)
                 .await?
             {
-                Run::Whole(writer) => {
+                Run::Whole(mut writer) => {
+                    if writer.written() < LFS_LARGEST
+                        && is_lfs_pointer(
+                            &writer
+                                .head(LFS_POINTER.len())
+                                .map_err(|err| Failure::Final(local(&err)))?,
+                        )
+                    {
+                        return Err(Failure::Final(crate::source::lfs_pointer(&fetch.url)));
+                    }
                     on(Event::Arrived).map_err(Failure::Final)?;
                     return Ok(Answer::Stored {
                         received: self.after_body(&mut state.permits, finish(writer)).await?,
@@ -1379,6 +1388,18 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         .help("run the same command again later. if it keeps happening, the copy on the server may be damaged"));
     }
     Ok(())
+}
+
+/// how a git-lfs pointer starts: the few lines a repository keeps in place of a file git-lfs
+/// stores apart, which a raw link to that file serves.
+const LFS_POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1";
+/// files at least this large are never taken for a pointer, which keeps a few hundred bytes, so
+/// the files people mean to download are never read for one.
+const LFS_LARGEST: u64 = 1024;
+
+/// whether a small file whose first bytes are `head` is a git-lfs pointer.
+fn is_lfs_pointer(head: &[u8]) -> bool {
+    head.starts_with(LFS_POINTER)
 }
 
 /// a pinned size bounds the download, so an answer stating another length is refused unread.

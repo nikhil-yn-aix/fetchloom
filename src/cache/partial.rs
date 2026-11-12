@@ -524,6 +524,15 @@ impl PartialWriter {
         self.prefix
     }
 
+    /// the file's first `most` bytes, or all of a shorter prefix.
+    pub(crate) fn head(&mut self, most: usize) -> io::Result<Vec<u8>> {
+        self.flush_pending()?;
+        let mut head =
+            vec![0; usize::try_from(self.prefix).map_or(most, |prefix| prefix.min(most))];
+        read_exact_at(&self.file, 0, &mut head)?;
+        Ok(head)
+    }
+
     /// how many bytes past the prefix are written.
     pub(crate) fn kept(&self) -> u64 {
         self.runs.iter().map(|run| run.end - run.start).sum()

@@ -20,6 +20,8 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 
 `github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference. a link to a release's page lists its files, as [github and gitlab releases](releases.md) explains.
 
+a raw link to a file git-lfs keeps answers with git-lfs's pointer, a few lines git keeps in the file's place, rather than the file. a download under 1 KiB that starts as a pointer does is refused with `source.invalid`, exit 10, before anything is pinned or placed, and its help names the link that serves the file itself: `https://media.githubusercontent.com/media/...` for a github raw link, or gitlab's api with `lfs=true` for a gitlab one.
+
 a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../concepts.md#archives) as from any source.
 
 a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with a web page and nothing says the bytes are a file: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead, or publish the folder packed, as `tar czf many.tar.gz many`, and add the archive's link, which unpacks into the dataset's folder. a web page served under a name that looks like data gets a warning; check the file and use a download or raw link.

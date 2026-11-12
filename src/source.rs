@@ -31,6 +31,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use tracing::Instrument as _;
 use url::Url;
 
@@ -741,6 +742,53 @@ fn raw_link(url: &Url) -> Option<Url> {
     Some(raw)
 }
 
+/// the error for a link that answered with a git-lfs pointer, the few lines a repository keeps
+/// in place of a file git-lfs stores apart, which say nothing of the data itself.
+pub(crate) fn lfs_pointer(url: &Url) -> Error {
+    let error = Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{} sent a git-lfs pointer, not the file it stands for",
+            net::Shown(url)
+        ),
+    );
+    match lfs_link(url) {
+        Some(link) => error.help(format!(
+            "git-lfs keeps that file apart from the repository: use {link} instead"
+        )),
+        None => error.help(
+            "git-lfs keeps that file apart from the repository: use the link its site gives to download the file itself",
+        ),
+    }
+}
+
+/// the link that serves the file git-lfs keeps for a raw link to a repository's file: github's
+/// media host, or gitlab's api asked for the file rather than its pointer. it leaves out the
+/// link's query, which may hold a token.
+fn lfs_link(url: &Url) -> Option<String> {
+    match url.host_str()? {
+        "raw.githubusercontent.com" => Some(format!(
+            "https://media.githubusercontent.com/media{}",
+            url.path()
+        )),
+        "gitlab.com" => {
+            let (project, rest) = url.path().trim_start_matches('/').split_once("/-/raw/")?;
+            let (reference, path) = rest.split_once('/')?;
+            let encoded = |text: &str| {
+                let decoded = percent_decode_str(text).decode_utf8_lossy();
+                utf8_percent_encode(&decoded, NON_ALPHANUMERIC).to_string()
+            };
+            Some(format!(
+                "https://gitlab.com/api/v4/projects/{}/repository/files/{}/raw?ref={}&lfs=true",
+                encoded(project),
+                encoded(path),
+                encoded(reference)
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// the source a host belongs to, for links to its pages that are not datasets. downloading such a
 /// page would only give its HTML.
 fn known_host(url: &Url) -> Option<&'static str> {
@@ -1031,6 +1079,31 @@ mod tests {
             ("geo:GSE1000", false),
         ] {
             assert_eq!(parse(text).reference.fixes_bytes(), fixed, "{text}");
+        }
+    }
+
+    /// a git-lfs pointer's help names the link that serves the file itself, where the repository's
+    /// site has one, and never repeats the link's query.
+    #[test]
+    fn a_git_lfs_pointer_is_answered_with_the_link_of_its_file() {
+        for (link, help) in [
+            (
+                "https://raw.githubusercontent.com/lab/scans/main/data/model.bin?token=abc",
+                "git-lfs keeps that file apart from the repository: use https://media.githubusercontent.com/media/lab/scans/main/data/model.bin instead",
+            ),
+            (
+                "https://gitlab.com/lab/vision/scans/-/raw/v1.0/data/model%20one.bin",
+                "git-lfs keeps that file apart from the repository: use https://gitlab.com/api/v4/projects/lab%2Fvision%2Fscans/repository/files/data%2Fmodel%20one%2Ebin/raw?ref=v1%2E0&lfs=true instead",
+            ),
+            (
+                "https://example.org/model.bin",
+                "git-lfs keeps that file apart from the repository: use the link its site gives to download the file itself",
+            ),
+        ] {
+            let error = lfs_pointer(&Url::parse(link).unwrap());
+            assert_eq!(error.kind, Kind::SourceInvalid, "{link}");
+            assert_eq!(error.help.as_deref(), Some(help), "{link}");
+            assert!(!format!("{error:?}").contains("abc"), "{link}");
         }
     }
 
