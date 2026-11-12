@@ -352,7 +352,7 @@ mod tests {
         // FAT32 and exFAT can make neither a junction nor a hardlink, so no folder there is
         // named through a link
         if !crate::place::tests::makes_hardlinks(home.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let onedrive = home.path().join("OneDrive");
         fs::create_dir(&onedrive).unwrap();

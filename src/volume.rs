@@ -554,7 +554,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // FAT32 and exFAT cannot hardlink, so no placed file can share an object there
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let volume = volume(dir.path(), true);
         let object = dir.path().join("object");

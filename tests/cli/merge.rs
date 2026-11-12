@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, sha256_hex, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, sha256_hex, skipped, text};
 
 /// git in `folder`, as a person with a name runs it, without the machine's git settings. none
 /// when git is not installed.
@@ -42,7 +42,10 @@ pub(crate) fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Opt
         .output();
     match output {
         Ok(output) => Ok(Some(output)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            skipped("git", "git is not installed")?;
+            Ok(None)
+        }
         Err(err) => Err(err.into()),
     }
 }

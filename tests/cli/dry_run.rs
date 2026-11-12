@@ -519,7 +519,7 @@ fn a_dry_run_audits_damaged_read_only_hardlinks() -> Result {
 
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return crate::support::skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;

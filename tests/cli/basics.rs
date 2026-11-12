@@ -814,7 +814,10 @@ fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
     let links = sandbox.links()?;
     if !links.reflink && !links.hardlink {
-        return Ok(());
+        return crate::support::skipped(
+            "hardlinks",
+            "this disk makes neither reflinks nor hardlinks",
+        );
     }
     let server = crate::support::Server::start(
         "/files/iris.csv",

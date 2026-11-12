@@ -1057,7 +1057,7 @@ mod tests {
         let root = folder.path();
         let (cache, manifest, lock, raw, lab) = raw_and_clean(root);
         if fs::hard_link(cache.object_path(&raw), root.join("placed.csv")).is_err() {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let plan = planned(&cache, walked(root, &cache, &manifest, &lock), &[&lab]);
         assert_eq!(fates(&plan, "raw"), ["kept: Linked"]);

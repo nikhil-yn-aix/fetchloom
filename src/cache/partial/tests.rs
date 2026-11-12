@@ -80,7 +80,7 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     // FAT32 and exFAT cannot hardlink, so there a sealed download is never a second name of its
     // object, and a_sealed_download_is_dropped_on_fat covers them
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let url = "https://example.org/sealed";
     let object = store(&cache, b"abc");

@@ -1149,7 +1149,7 @@ pub(crate) mod tests {
     fn racing_publications_keep_one_new_name() {
         let (dir, cache) = cache();
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let ready = || {
             let mut object = cache.new_object().unwrap();
@@ -1570,7 +1570,7 @@ pub(crate) mod tests {
     fn repairing_a_read_only_object_preserves_placed_links() {
         let (dir, cache) = cache();
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let stored = store(&cache, b"good");
         let object = cache.object_path(&stored.digest);

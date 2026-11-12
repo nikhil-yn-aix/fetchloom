@@ -161,6 +161,9 @@ jobs:
       - name: record cargo test selections
         run: python3 python/ci_tests.py record
       - name: nextest
+        env:
+          # what each runner has, so a test that lacks one fails rather than skips
+          FETCHLOOM_TEST_REQUIRE: ${{ startsWith(matrix.os, 'windows') && 'git,hardlinks' || 'script,git,hardlinks' }}
         run: python3 python/ci_tests.py run native
       - name: doctests
         run: cargo test --locked --doc
@@ -250,6 +253,8 @@ jobs:
       - name: record cargo test selections
         run: python python/ci_tests.py record
       - name: nextest
+        env:
+          FETCHLOOM_TEST_REQUIRE: git,hardlinks
         run: python python/ci_tests.py run native
       - name: doctests
         run: cargo test --locked --doc

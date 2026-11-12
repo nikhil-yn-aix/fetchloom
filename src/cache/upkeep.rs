@@ -1042,7 +1042,7 @@ mod tests {
     fn a_sweep_reports_refused_removals() {
         let (_dir, mut cache) = cache();
         if !super::super::tests::hardlinks(cache.root()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let stored = store(&cache, b"cannot remove");
         let object = cache.object_path(&stored.digest);

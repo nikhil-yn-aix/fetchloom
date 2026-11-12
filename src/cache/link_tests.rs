@@ -42,7 +42,7 @@ fn owned(cache: &Cache, url: &str) -> super::Partial {
 fn cache_folders_cannot_be_links_to_another_folder() {
     // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
     if !hardlinks(tempfile::tempdir().unwrap().path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     for name in [
         "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
@@ -66,7 +66,7 @@ fn replacing_a_partial_folder_never_redirects_writes() {
     let (dir, cache) = super::tests::cache();
     // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let outside = dir.path().join("outside");
     fs::create_dir(&outside).unwrap();
@@ -86,7 +86,7 @@ fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
     let (dir, cache) = super::tests::cache();
     // FAT32 and exFAT cannot hardlink, so nobody can swap in a second name of a file
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let url = "https://example.org/data";
     let outside = dir.path().join("outside");
@@ -112,7 +112,7 @@ fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
 fn a_writable_partial_with_a_second_name_is_never_written_into() {
     let (dir, cache) = super::tests::cache();
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let url = "https://example.org/data";
     let outside = dir.path().join("outside");
@@ -175,7 +175,7 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     let (dir, cache) = super::tests::cache();
     // FAT32 and exFAT can make neither a junction nor a hardlink, so nobody can plant a link
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let outside = dir.path().join("outside");
     fs::create_dir(&outside).unwrap();
@@ -198,7 +198,7 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
 fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
     let (dir, cache) = super::tests::cache();
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let outside = dir.path().join("outside");
     fs::create_dir(&outside).unwrap();
@@ -232,7 +232,7 @@ fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
 fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
     let (dir, cache) = super::tests::cache();
     if !hardlinks(dir.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let outside = dir.path().join("outside");
     let stage = outside.join("0123456789abcdef.stage");

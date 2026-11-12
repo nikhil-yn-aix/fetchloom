@@ -31,6 +31,9 @@ mod work;
 #[cfg(test)]
 #[path = "../tests/support/paths.rs"]
 mod test_paths;
+#[cfg(test)]
+#[path = "../tests/support/skips.rs"]
+mod test_skips;
 
 /// runs fetchloom with the arguments of the current process and returns its exit code.
 #[must_use]

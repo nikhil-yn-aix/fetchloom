@@ -235,7 +235,7 @@ fn a_file_is_relinked_to_its_object_only_while_it_looks_as_it_did() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT make no hardlinks, so a found file stays as it is there
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let destination = folder.path().join("found.csv");
     fs::write(&destination, CONTENTS).unwrap();
@@ -263,7 +263,7 @@ fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT cannot hardlink, so nobody can swap in a second name of a file
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let destination = folder.path().join("placed.csv");
     let outside = folder.path().join("outside.csv");
@@ -827,7 +827,7 @@ fn the_whole_ladder_never_copies_within_one_volume() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT link nothing, so there every rung ends in a copy
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
 
@@ -872,7 +872,7 @@ fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT link nothing, so there no refusal is for one file only
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
 
@@ -897,7 +897,7 @@ fn too_many_links_copies_that_file_alone() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT make no hardlinks to fall back from
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
     placer.link_refusal = Some(|| io::ErrorKind::TooManyLinks.into());
@@ -1583,7 +1583,7 @@ fn pipelined_copy_keeps_all_bytes_when_its_reader_is_refused() {
 fn readonly_windows_placement_tries_hardlinks_before_clones() {
     let (folder, object) = cache(true);
     if !makes_hardlinks(folder.path()) {
-        return;
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let root = folder.path().join("data");
     let mut placer = Placer::new(&root);

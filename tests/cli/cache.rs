@@ -268,7 +268,10 @@ fn a_project_copied_without_hardlinks_is_reported() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlinks_read_only() {
         // its files were never linked, so a copy breaks no link
-        return Ok(());
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
     }
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;

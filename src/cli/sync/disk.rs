@@ -1504,7 +1504,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let project = Project {
             root: dir.path().to_path_buf(),
@@ -1601,7 +1601,7 @@ mod tests {
         let file = project.root.join("data/file");
         fs::write(&file, b"other").unwrap();
         if fs::hard_link(&file, project.root.join("another project's link")).is_err() {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let cache = Cache::open(project.root.join("cache")).unwrap();
         let mut survey = Survey::read(&project, "data", Threads::default());
@@ -1684,7 +1684,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let project = Project {
             root: dir.path().to_path_buf(),
@@ -1754,7 +1754,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         if !hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let project = Project {
             root: dir.path().to_path_buf(),
@@ -1842,7 +1842,10 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/A.txt"), b"a").unwrap();
         if !project.root.join("data/a.txt").is_file() {
-            return;
+            return crate::test_skips::skip(
+                "aliases",
+                "this disk keeps `a.txt` apart from `A.txt`",
+            );
         }
         let mut survey = Survey::read(&project, "data", Threads::default());
         let placed = record(&project.root, "data/a.txt", b"a", Method::Copy);
@@ -1919,7 +1922,10 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
         if !project.root.join("data/caf\u{e9}.txt").is_file() {
-            return;
+            return crate::test_skips::skip(
+                "aliases",
+                "this disk keeps two unicode forms of a name apart",
+            );
         }
         let mut survey = Survey::read(&project, "data", Threads::default());
         let listed = survey.disk.keys().next().unwrap().clone();
@@ -1944,7 +1950,10 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
         if !project.root.join("data/caf\u{e9}.txt").is_file() {
-            return;
+            return crate::test_skips::skip(
+                "aliases",
+                "this disk keeps two unicode forms of a name apart",
+            );
         }
         let mut survey = Survey::read(&project, "data", Threads::default());
         assert_eq!(survey.writable.len(), 1);
@@ -1967,7 +1976,10 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/A.txt"), b"a").unwrap();
         if !project.root.join("data/a.txt").is_file() {
-            return;
+            return crate::test_skips::skip(
+                "aliases",
+                "this disk keeps `a.txt` apart from `A.txt`",
+            );
         }
         let mut survey = Survey::read(&project, "data", Threads::default());
         let locked = locked("a.txt", b"a");

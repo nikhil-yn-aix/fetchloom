@@ -1890,7 +1890,7 @@ fn manifest_citations_do_not_echo_reference_secrets() -> Result {
 fn equal_untracked_read_only_files_get_the_requested_writable_copy() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return crate::support::skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     sandbox.allow(&server.url);

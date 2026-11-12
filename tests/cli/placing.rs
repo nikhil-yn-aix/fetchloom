@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, delete, edit, file, json, reply, text, zip_of,
+    Part, Result, Sandbox, Server, delete, edit, file, json, reply, skipped, text, zip_of,
 };
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -61,7 +61,10 @@ fn clean_alias(sandbox: &Sandbox, server: &Server) -> Result {
 fn a_file_renamed_in_another_case_still_matches_its_pin() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
-        return Ok(());
+        return skipped(
+            "aliases",
+            "this disk keeps `Iris.csv` apart from `iris.csv`",
+        );
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -80,7 +83,10 @@ fn a_file_renamed_in_another_case_still_matches_its_pin() -> Result {
 fn force_restores_pinned_bytes_in_a_file_renamed_in_another_case() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
-        return Ok(());
+        return skipped(
+            "aliases",
+            "this disk keeps `Iris.csv` apart from `iris.csv`",
+        );
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -102,7 +108,10 @@ fn a_name_in_another_unicode_form_still_matches_its_pin() -> Result {
     let original = "caf\u{e9}.csv";
     let other = "cafe\u{301}.csv";
     if !names_alias(&sandbox, original, other)? {
-        return Ok(());
+        return skipped(
+            "aliases",
+            "this disk keeps two unicode forms of a name apart",
+        );
     }
     let server = Server::start("/files/caf%C3%A9.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -119,7 +128,7 @@ fn a_name_in_another_unicode_form_still_matches_its_pin() -> Result {
 fn a_data_folder_in_another_case_matches_and_data_dir_takes_its_spelling() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "data", "Data")? {
-        return Ok(());
+        return skipped("aliases", "this disk keeps `Data` apart from `data`");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -147,7 +156,10 @@ fn a_data_folder_in_another_case_matches_and_data_dir_takes_its_spelling() -> Re
 fn a_lock_path_in_another_case_matches_the_placed_file() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
-        return Ok(());
+        return skipped(
+            "aliases",
+            "this disk keeps `Iris.csv` apart from `iris.csv`",
+        );
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -170,7 +182,10 @@ fn a_lock_path_in_another_case_matches_the_placed_file() -> Result {
 fn remove_deletes_a_placed_file_spelled_in_another_case() -> Result {
     let sandbox = Sandbox::new()?;
     if !names_alias(&sandbox, "iris.csv", "Iris.csv")? {
-        return Ok(());
+        return skipped(
+            "aliases",
+            "this disk keeps `Iris.csv` apart from `iris.csv`",
+        );
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -202,6 +217,10 @@ fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
     ] {
         let sandbox = Sandbox::new()?;
         if names_alias(&sandbox, original, other)? {
+            skipped(
+                "distinct-names",
+                &format!("this disk takes `{other}` for `{original}`"),
+            )?;
             continue;
         }
         let server = Server::start(url, vec![file(V1, "\"v1\"")])?;
@@ -241,7 +260,7 @@ fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
 fn distinct_inodes_do_not_alias() -> Result {
     let sandbox = Sandbox::new()?;
     if names_alias(&sandbox, "data", "Data")? {
-        return Ok(());
+        return skipped("distinct-names", "this disk takes `Data` for `data`");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -282,8 +301,11 @@ fn distinct_inodes_do_not_alias() -> Result {
 #[test]
 fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_extra() -> Result {
     let sandbox = Sandbox::new()?;
-    if names_alias(&sandbox, "data", "Data")? || !sandbox.links()?.hardlink {
-        return Ok(());
+    if names_alias(&sandbox, "data", "Data")? {
+        return skipped("distinct-names", "this disk takes `Data` for `data`");
+    }
+    if !sandbox.links()?.hardlink {
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -794,6 +816,7 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::p
 /// file. nothing, on a filesystem without hardlinks.
 fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBuf>> {
     if !sandbox.links()?.hardlink {
+        skipped("hardlinks", "this disk makes no hardlinks")?;
         return Ok(None);
     }
     sandbox.allow(&server.url);
@@ -986,7 +1009,7 @@ fn an_edit_through_one_link_shows_in_the_other_projects_status() -> Result {
 fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start(
         "/files/iris.csv",
@@ -1025,7 +1048,7 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> 
 fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_them_in_place() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start(
         "/files/iris.csv",
@@ -1175,7 +1198,7 @@ fn keep_time(project: &Path) -> Result {
 fn a_link_made_writable_is_sealed_again() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -1370,7 +1393,7 @@ fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Resul
 fn a_recovered_hardlink_becomes_writable_when_copies_are_requested() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox
@@ -1482,7 +1505,7 @@ fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
 fn an_adopted_link_is_recorded_as_a_hardlink() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -1890,7 +1913,7 @@ fn an_unreadable_marked_link_stops_sync_without_replacing_it() -> Result {
 
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox
@@ -1933,7 +1956,7 @@ fn an_unreadable_marked_link_stops_sync_without_replacing_it() -> Result {
 fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start(
         "/files/iris.csv",
@@ -2019,7 +2042,7 @@ fn get_never_takes_a_marked_object() -> Result {
 fn a_new_project_reseals_an_object_made_writable_through_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     if !sandbox.links()?.hardlink {
-        return Ok(());
+        return skipped("hardlinks", "this disk makes no hardlinks");
     }
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;

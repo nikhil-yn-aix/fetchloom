@@ -2264,7 +2264,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // FAT32 and exFAT cannot hardlink, and only a hardlink can be vouched for
         if !crate::cache::tests::hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let bytes = b"station,temperature\nlerwick,9.1\n";

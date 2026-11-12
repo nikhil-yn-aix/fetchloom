@@ -2083,8 +2083,13 @@ mod tests {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .spawn();
-            let Ok(mut child) = started else {
-                continue;
+            let mut child = match started {
+                Ok(child) => child,
+                Err(error) => {
+                    let reason = format!("{} cannot start: {error}", shell[0]);
+                    crate::test_skips::skip(shell[0], &reason);
+                    continue;
+                }
             };
             std::io::Write::write_all(child.stdin.as_mut().unwrap(), script.as_bytes()).unwrap();
             drop(child.stdin.take());

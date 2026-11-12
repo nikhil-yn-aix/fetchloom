@@ -1082,7 +1082,7 @@ mod tests {
     fn claiming_publishes_a_complete_owner_without_temporary_files() {
         let (_dir, project) = project(&[]);
         if !crate::cache::tests::hardlinks(&project.root) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         OWNER_PUBLISHED.set(Some(|path| {
             let bytes = fs::read(path).unwrap();
@@ -1430,7 +1430,7 @@ mod tests {
         let (_dir, project) = project(&[("data.toml", "")]);
         // FAT32 and exFAT can make neither a hardlink nor a junction.
         if fs::hard_link(project.manifest_path(), project.root.join("link-probe")).is_err() {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let outside = tempfile::tempdir().unwrap();
         let link = project.own_folder();

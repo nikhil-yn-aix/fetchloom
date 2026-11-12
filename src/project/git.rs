@@ -250,7 +250,11 @@ mod tests {
     /// git as the machine running the tests has it, of any version.
     fn git() -> Option<PathBuf> {
         let elsewhere = tempfile::tempdir().ok()?;
-        find(std::env::var_os("PATH").as_deref(), elsewhere.path())
+        let found = find(std::env::var_os("PATH").as_deref(), elsewhere.path());
+        if found.is_none() {
+            crate::test_skips::skip("git", "git is not installed");
+        }
+        found
     }
 
     /// runs git in `folder` with a fixed name and no settings of the machine's.

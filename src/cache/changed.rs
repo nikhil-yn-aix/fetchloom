@@ -464,7 +464,7 @@ mod tests {
         let mark = cache.changed_folder().join(digest.hex());
         // a filesystem without hardlinks, such as FAT, cannot hold this trap
         if fs::hard_link(&outside, &mark).is_err() {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
 
         cache.mark_changed(&digest).unwrap();
@@ -592,7 +592,7 @@ mod tests {
         };
         let placed = dir.path().join("placed");
         if fs::hard_link(&object, &placed).is_err() {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         rewrite(&object, b"good");
         let moved = born + std::time::Duration::from_secs(3600);
@@ -696,7 +696,7 @@ mod tests {
     fn a_mark_remembers_the_changed_copy_through_its_repair() {
         let (dir, cache) = cache();
         if !super::super::tests::hardlinks(dir.path()) {
-            return;
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
         let stored = store(&cache, b"good");
         let object = cache.object_path(&stored.digest);

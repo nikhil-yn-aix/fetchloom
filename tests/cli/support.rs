@@ -15,6 +15,10 @@ mod paths;
 mod programs;
 mod running;
 mod server;
+// marked as test code, which clippy lets print
+#[cfg(test)]
+#[path = "../support/skips.rs"]
+mod skips;
 
 pub(crate) use paths::workspace;
 pub(crate) use programs::{executable, recipe_step};
@@ -23,6 +27,16 @@ pub(crate) use running::Running;
 use server::{Connection, ServerTask, Shutdown};
 
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// ends a test this machine cannot run, saying why, as [`skips::skip`] does.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a test returns its skip as its result"
+)]
+pub(crate) fn skipped(capability: &str, reason: &str) -> Result {
+    skips::skip(capability, reason);
+    Ok(())
+}
 
 /// a working folder, a cache and a home of its own, so no test sees another's state or the
 /// machine's.
@@ -270,7 +284,10 @@ impl Sandbox {
                     .trim_start_matches('\r')
                     .to_owned(),
             )),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                skipped("script", "no script, so no terminal to run on")?;
+                Ok(None)
+            }
             Err(err) => Err(err.into()),
         }
     }
@@ -341,7 +358,10 @@ pub(crate) fn typed(
         .env_remove("BASH_ENV");
     let mut child = match script.spawn() {
         Ok(child) => child,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            skipped("script", "no script, so no terminal to run on")?;
+            return Ok(None);
+        }
         Err(err) => return Err(err.into()),
     };
     // what the screen showed, and whether the terminal closed, as it does once the command ends
