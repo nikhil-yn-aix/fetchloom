@@ -800,7 +800,7 @@ async fn unanswered(
     {
         return Failure::Final(failure::proxy_down(url, carrier, &reason));
     }
-    failure::classify(url, err, offline)
+    failure::classify(url, carrier, err, offline)
 }
 
 /// a redirect may name the download even when the final storage response does not.

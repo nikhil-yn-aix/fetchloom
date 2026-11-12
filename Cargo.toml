@@ -43,6 +43,9 @@ hmac = "0.13"
 # the type of link hyper-util's proxy matcher takes
 http = "1.5"
 httpdate = "1.0"
+# the error of the http client under reqwest, so a reply that is not valid HTTP is told apart
+# from a lost connection
+hyper = { version = "1.12", default-features = false }
 # the proxy matcher reqwest uses, so fetchloom knows when a proxy resolves a name in its place
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }

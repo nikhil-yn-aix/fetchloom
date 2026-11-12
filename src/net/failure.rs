@@ -328,9 +328,21 @@ fn untrusted<'e>(mut error: &'e (dyn std::error::Error + 'static)) -> Option<&'e
 }
 
 /// a request that failed before any answer came, sorted into what to retry and what not to.
-pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failure {
+/// `carrier` is the proxy that carried it, when one did.
+pub(super) fn classify(
+    url: &Url,
+    carrier: Option<&address::Carrier>,
+    err: &reqwest::Error,
+    mode: Offline,
+) -> Failure {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(current) = cause {
+        if let Some(parse) = current
+            .downcast_ref::<hyper::Error>()
+            .filter(|err| err.is_parse())
+        {
+            return garbled(url, carrier, &parse.to_string());
+        }
         if let Some(reason) = current.downcast_ref::<address::Refused>() {
             return Failure::Final(refused(url, reason));
         }
@@ -375,6 +387,27 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
             without_link(err)
         ))
     }
+}
+
+/// a reply that is not valid HTTP, with what the parser `said` of it. a server sends the same
+/// reply on every try, so no other try is made; a proxy in the way may have sent it instead, and
+/// a proxy can recover, so a reply through one is tried again.
+fn garbled(url: &Url, carrier: Option<&address::Carrier>, said: &str) -> Failure {
+    if let Some(carrier) = carrier {
+        return transient(format!(
+            "the reply for {} through the proxy at {} is not valid HTTP: {said}",
+            host(url),
+            carrier.shown
+        ));
+    }
+    Failure::Final(
+        Error::new(
+            Kind::NetworkStatus,
+            format!("{} sent a reply that is not valid HTTP", host(url)),
+        )
+        .detail(said.to_owned())
+        .help("check the link, its http or https and its port too. if the link is right, the server is broken, and only whoever runs it can fix it"),
+    )
 }
 
 /// the error's text, with the link reqwest puts in it shown the way messages show links.
@@ -838,6 +871,59 @@ mod tests {
         );
         let direct = help(None);
         assert!(!direct.contains("proxy"), "{direct}");
+    }
+
+    /// a reply that is not valid HTTP, here a status line with a control character, comes the
+    /// same from a server on every try: it is told as the server's, by its host, without blaming
+    /// this machine's connection, and the server is asked once.
+    #[test]
+    fn a_reply_that_is_not_http_is_the_servers_and_is_asked_once() {
+        use crate::net::api::Api;
+        use crate::net::scripted::serve;
+        use crate::net::{Options, Splitting};
+
+        let garbled = b"HTTP/1.1 200 \x01bad\r\nContent-Length: 2\r\n\r\nok".to_vec();
+        let (url, asked) = serve(vec![garbled; (RETRIES + 1) as usize]);
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::new(|_| {}),
+        );
+        net.typed(&url);
+        let error = crate::source::recorded::block_on(net.get(&url)).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkStatus, "{}", error.message);
+        assert_eq!(
+            error.message,
+            "127.0.0.1 sent a reply that is not valid HTTP"
+        );
+        let help = error.help.unwrap_or_default();
+        assert!(!help.contains("connection"), "{help}");
+        assert_eq!(asked.lock().unwrap().len(), 1);
+    }
+
+    /// a proxy in the way may be what sent a reply that is not valid HTTP, and a proxy can
+    /// recover, so a reply through one is tried again, naming the proxy.
+    #[test]
+    fn a_reply_that_is_not_http_through_a_proxy_is_tried_again() {
+        let url = Url::parse("http://data.example.org/iris.csv").unwrap();
+        let system = address::Proxies::with_lookup("http://system.lab:8080", |_, _| {
+            Box::pin(async { None })
+        });
+        let carrier = system.carrier(&url);
+        let Failure::Transient { reason, .. } = garbled(&url, carrier.as_ref(), "bad status")
+        else {
+            panic!("a reply through a proxy must be tried again");
+        };
+        assert_eq!(
+            reason,
+            "the reply for data.example.org through the proxy at http://system.lab:8080 is not valid HTTP: bad status"
+        );
     }
 
     #[test]

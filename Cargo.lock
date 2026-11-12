@@ -789,6 +789,7 @@ dependencies = [
  "hmac",
  "http",
  "httpdate",
+ "hyper",
  "hyper-util",
  "icu_normalizer",
  "indicatif",
