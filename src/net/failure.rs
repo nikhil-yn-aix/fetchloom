@@ -960,6 +960,59 @@ mod tests {
         assert!(super::untrusted(&reset).is_none());
     }
 
+    /// a certificate this machine does not trust ends a request at once, worded so a person
+    /// behind a proxy that inspects https knows what to fix. the server here signs its own
+    /// certificate, from tests/fixtures/tls, which no system trusts.
+    #[test]
+    fn a_certificate_this_machine_does_not_trust_ends_the_request_and_says_why() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let fixture = |name: &str| {
+            let tls = crate::test_paths::workspace().join("tests/fixtures/tls");
+            std::fs::read(tls.join(name)).unwrap()
+        };
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(fixture("self-signed.der"))],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(fixture("self-signed.key.der"))),
+            )
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!(
+            "https://{}/data.csv",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let connection = rustls::ServerConnection::new(std::sync::Arc::new(config)).unwrap();
+            let mut tls = rustls::StreamOwned::new(connection, stream);
+            // the handshake runs until the client refuses the certificate
+            let _ = std::io::Read::read(&mut tls, &mut [0; 1]);
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = crate::source::recorded::block_on(client.get(url.clone()).send()).unwrap_err();
+        server.join().unwrap();
+        let Failure::Final(error) = classify(&url, None, &err, Offline::No) else {
+            panic!("an untrusted certificate would be tried again: {err:?}");
+        };
+        assert_eq!(error.kind, Kind::NetworkUnreachable);
+        assert!(
+            error
+                .message
+                .starts_with("127.0.0.1 sent a certificate this machine does not trust: "),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "check the link and this machine's clock. behind a company proxy that inspects https, its certificate belongs in the system's certificate store"
+            )
+        );
+    }
+
     /// a proxy that cannot be reached is named, without retry advice: by the variable that set
     /// it, or by the system's settings, with the variable that would replace them.
     #[test]
