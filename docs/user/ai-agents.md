@@ -18,7 +18,7 @@ agents that read skills from another folder take the same `SKILL.md`.
 ## what agents rely on
 
 - `--json` turns stdout into one [document](reference/json-output.md), with no colors and no questions, whatever the terminal.
-- `errors[0].kind` and the [exit code](reference/exit-codes.md) say what failed; `errors[0].fix` is the command to run next, when there is one. it never deletes, overwrites or repins data, runs a build or says yes, so a null `fix` leaves the next step to the person.
+- `errors[0].kind` and the [exit code](reference/exit-codes.md) say what failed; `errors[0].fix` is the command to run next, when there is one. it never deletes, overwrites or repins data, runs a build, signs in or says yes, nor picks one of the ways a `help` offers with `or`, so a null `fix` leaves the next step to the person.
 - `fetchloom help --json` describes every command, option and example in one call.
 - without a terminal fetchloom never asks: it refuses to guess between search results, needs `--yes` for downloads over 1 GiB by default, and names `fetchloom auth login` instead of asking for a key.
 - an agent that runs commands in a real terminal is treated the same way when it says so: `VSCODE_AGENT`, `CLAUDECODE`, `AI_AGENT`, `CODEX_SANDBOX`, `GEMINI_CLI`, `CURSOR_AGENT` and a few others turn off questions, automatic colors and animated progress. a harness that sets none of them can set `AI_AGENT=1`.

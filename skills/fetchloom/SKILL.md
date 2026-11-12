@@ -36,7 +36,7 @@ project commands look for `data.toml` from the current folder up to the top of i
 
 read all of stdout as one document: in a pipe it is one line, at a terminal it is indented over many. every document has `schema` (1), `command`, `status` (`ok` or `error`), `result`, `warnings`, `errors` and `work` (counters). a warning has `kind`, `message`, `details` and `help`; act on its `kind`, such as `git.lock_part_untracked` or `git.code_untracked` (run the `git add` its help names), `place.kept` (an edit stayed), `license.restricted` (tell the user before sharing) or `network.private_origin` (a later run needs `allowed_origins`, the user's call).
 
-on failure, `errors[0]` has `kind`, `message`, `details`, `help` and `fix`: a runnable `fetchloom` command, or null when the next step is the user's call. a `fix` never deletes, overwrites or repins data, runs a build or answers with `--yes`; check that it fits what the user wants before running it.
+on failure, `errors[0]` has `kind`, `message`, `details`, `help` and `fix`: a runnable `fetchloom` command, or null when the next step is the user's call. a `fix` never deletes, overwrites or repins data, runs a build, signs in or answers with `--yes`, and a `help` that offers a choice of ways with `or` has none; check that it fits what the user wants before running it.
 
 never parse stderr. `-q`, `-v`, `--color` and `--progress` change only what a person reads there; `--progress` keeps plain progress lines beside the JSON. `fetchloom help --json` lists every command and option.
 

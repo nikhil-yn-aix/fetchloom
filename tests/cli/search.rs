@@ -547,6 +547,11 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
         name["errors"][0]["help"],
         "run `fetchloom add ./iris` to pin it, or `fetchloom search iris` to search"
     );
+    assert_eq!(
+        name["errors"][0]["fix"],
+        serde_json::Value::Null,
+        "which of the two the person meant is theirs to say"
+    );
     for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo] {
         assert_eq!(catalog.requests(), Vec::<String>::new());
     }

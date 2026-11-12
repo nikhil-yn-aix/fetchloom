@@ -240,8 +240,9 @@ struct Problem<'a> {
 /// that first needs a broken file deleted, a file edited by hand or the errors listed above fixed
 /// is not ready to run either. one that deletes, overwrites or repins what a person keeps, or
 /// runs the project's code, is a choice only a person makes, and so is what a help names after
-/// it, often the step that follows it. in a run that is `locked`, a command that may write
-/// data.lock is no fix either, since a script running it would undo `--locked`.
+/// it, often the step that follows it, and so is one of the ways a help offers with `or`. in a
+/// run that is `locked`, a command that may write data.lock is no fix either, since a script
+/// running it would undo `--locked`.
 fn fix(help: &str, locked: bool) -> Option<&str> {
     const NOT_A_FIX: [&str; 9] = [
         "as in",
@@ -255,8 +256,11 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
         "errors above, then run",
     ];
     let mut before = String::new();
-    for (at, part) in help.split('`').enumerate() {
-        if at % 2 == 0 {
+    let mut offset = 0;
+    for (index, part) in help.split('`').enumerate() {
+        let at = offset;
+        offset += part.len() + 1;
+        if index % 2 == 0 {
             before.push_str(part);
             continue;
         }
@@ -273,12 +277,46 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
                 return None;
             }
             if !locked || !crate::cli::changes_lock(part) {
-                return Some(part);
+                return (!offers_choice(help, at)).then_some(part);
             }
         }
         before.push_str(part);
     }
     None
+}
+
+/// whether the clause of `help` that holds the quoted command starting at byte `at` offers a
+/// choice of ways: `or` after a comma, at the clause's start, or between two quoted commands. a
+/// clause ends at a full stop, a colon, a semicolon or a question mark of the prose, so an `or`
+/// in a reason before it, as in "was refused, or has no access to it: `fetchloom auth` shows
+/// whose it is", offers none.
+fn offers_choice(help: &str, at: usize) -> bool {
+    const ENDS: [&str; 4] = [". ", ": ", "; ", "? "];
+    // what backticks quote is blanked, byte for byte, so only the prose is read
+    let mut prose = String::with_capacity(help.len());
+    let mut quoted = false;
+    for c in help.chars() {
+        if c == '`' {
+            quoted = !quoted;
+            prose.push(c);
+        } else if quoted {
+            prose.extend(std::iter::repeat_n('_', c.len_utf8()));
+        } else {
+            prose.push(c);
+        }
+    }
+    let start = ENDS
+        .iter()
+        .filter_map(|end| prose[..at].rfind(end).map(|found| found + end.len()))
+        .max()
+        .unwrap_or(0);
+    let end = ENDS
+        .iter()
+        .filter_map(|end| prose[at..].find(end).map(|found| at + found))
+        .min()
+        .unwrap_or(prose.len());
+    let clause = &prose[start..end];
+    clause.contains(", or ") || clause.starts_with("or ") || clause.contains("` or `")
 }
 
 #[derive(Serialize)]
@@ -2162,18 +2200,8 @@ mod tests {
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
-            super::fix(
-                "sign in with `fetchloom auth login hf`, then run the same command again",
-                false
-            ),
-            Some("fetchloom auth login hf")
-        );
-        assert_eq!(
-            super::fix(
-                "run `fetchloom add <link>` to start, or `fetchloom search iris`",
-                false
-            ),
-            Some("fetchloom search iris")
+            super::fix("run `fetchloom add <link>` to start a project here", false),
+            None
         );
         assert_eq!(
             super::fix("add --yes to download it without being asked", false),
@@ -2266,6 +2294,51 @@ mod tests {
         );
     }
 
+    /// signing in needs a person at a terminal to paste the key, so `auth login` is never a fix,
+    /// even as the one command a help names: an agent that ran it only failed.
+    #[test]
+    fn signing_in_is_never_a_fix() {
+        assert_eq!(
+            super::fix(
+                "if the dataset is private or restricted, sign in with `fetchloom auth login hf`, then run the same command again",
+                false
+            ),
+            None
+        );
+    }
+
+    /// a help that offers a choice, ways joined by `or`, has no fix, since which way to go is the
+    /// person's call: a fix that pinned a folder named like the search a person meant copied it
+    /// whole into the cache. an `or` inside one way's clause, or between two of its words, offers
+    /// no choice.
+    #[test]
+    fn a_help_that_offers_a_choice_has_no_fix() {
+        for (help, fix) in [
+            (
+                "run `fetchloom add ./flowers` to pin it, or `fetchloom search flowers` to search",
+                None,
+            ),
+            (
+                "run `fetchloom add <link>` to start, or `fetchloom search iris`",
+                None,
+            ),
+            (
+                "restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data",
+                None,
+            ),
+            (
+                "the key in HF_TOKEN was refused, or has no access to it: `fetchloom auth` shows where it comes from and whose it is",
+                Some("fetchloom auth"),
+            ),
+            (
+                "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again",
+                Some("fetchloom cache verify"),
+            ),
+        ] {
+            assert_eq!(super::fix(help, false), fix, "{help}");
+        }
+    }
+
     /// a command that deletes, overwrites or repins what a person keeps, runs the project's code
     /// or says yes for them is never a fix, and a help that names one first has none: an agent
     /// ran the fix of an add whose name data.toml had, and the dataset was gone. a dry run of one
@@ -2339,7 +2412,7 @@ mod tests {
             ),
             ("search", true, &["--source", "--limit"]),
             ("auth", true, &[]),
-            ("auth login", true, &["--host", "--with-token"]),
+            ("auth login", false, &[]),
             ("auth logout", false, &[]),
             ("completions", true, &["--names"]),
             ("help", true, &[]),
