@@ -12,7 +12,7 @@
 |---|---|---|
 | [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering, settled-run entry and dry runs | `sync`, `Run`, `sync_all`, `preview_all`, `selected`, `register` |
 | [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Scope`, `Upgrade`, `relock`, `relock_dry`, `preview`, `write_lock`, `place`, `pinned` |
-| [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `ToUnpack`, `jobs`, `learn`, `finish`, `filter` |
+| [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `jobs`, `learn`, `unknown_archives`, `finish`, `filter` |
 | [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs) | scan, racy hashes, aliases, hardlink audit, and what a removal leaves | `Survey`, `read_within`, `hash_racy`, `check_doubted`, `audit`, `retarget`, `smudge_edited`, `retired`, `left_behind` |
 | [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions, previews and state updates | `Placing`, `Placement`, `Preview`, `Changes`, `Action`, `Seen`, `untouched`, `decide`, `apply` |
 | [place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs), [place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell`, `tell_preview` |
