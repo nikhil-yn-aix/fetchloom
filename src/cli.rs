@@ -314,12 +314,16 @@ fn open_cache() -> Result<Cache, Error> {
         Some((output, stop)) => (Some(output.as_ref()), stop.as_ref()),
         None => (None, &unset),
     };
+    // counts its seconds on a terminal until the cache is held
+    let waiting = std::sync::Mutex::new(None);
     hold_cache(open_unheld()?, Access::Shared, stop, &|| {
         if let Some(output) = output {
-            output.step(
+            *waiting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(output.waiting(
                 "Waiting",
                 "for `fetchloom cache gc` to finish with the cache",
-            );
+            ));
         }
     })
 }

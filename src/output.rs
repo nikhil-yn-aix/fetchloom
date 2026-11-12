@@ -520,6 +520,17 @@ impl Output {
         }
     }
 
+    /// a wait for another program, which a person may sit through for a while: on a terminal a
+    /// live line that counts its seconds until dropped, elsewhere one line, as a log needs.
+    pub(crate) fn waiting(&self, verb: &'static str, text: &str) -> Bar {
+        if self.bars.is_some() {
+            self.bar(verb, text.to_owned())
+        } else {
+            self.step(verb, text);
+            Bar::hidden()
+        }
+    }
+
     /// a wait ends when dropped, with elapsed time on a terminal and occasional lines elsewhere.
     pub(crate) fn wait(&self, verb: &'static str, what: String) -> Wait {
         Wait {
@@ -2376,6 +2387,24 @@ mod tests {
         let piped = telling(false);
         piped.stopping();
         assert_eq!(piped.said(), [stopping]);
+    }
+
+    /// a wait for another program counts its seconds in a live line on a terminal, where a fixed
+    /// line once stood still for as long as the wait, and is one plain line in a log or a pipe.
+    #[test]
+    fn a_wait_for_another_program_counts_on_a_terminal() {
+        let text = "for `fetchloom add` (pid 7) working in this project";
+        let mut terminal = telling(false);
+        terminal.bars = Some(indicatif::MultiProgress::with_draw_target(
+            indicatif::ProgressDrawTarget::term_like(Box::new(Screen::default())),
+        ));
+        let live = terminal.waiting("Waiting", text);
+        assert_eq!(live.told().as_deref(), Some(text));
+        assert!(terminal.said().is_empty(), "{:?}", terminal.said());
+        let piped = telling(false);
+        let none = piped.waiting("Waiting", text);
+        assert_eq!(none.told(), None);
+        assert_eq!(piped.said(), [format!("    Waiting {text}")]);
     }
 
     #[test]

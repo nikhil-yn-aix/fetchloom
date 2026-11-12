@@ -39,7 +39,7 @@ in a git repository with no `data.toml` of its own, project commands fail with e
 | `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
 | `command` | subcommand name, without arguments or credentials |
 
-a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``.
+a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``. at a terminal that line counts the seconds it has waited, from 2 s on, until the project is free.
 
 fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty, and a power cut leaves a whole record, which the next command takes over. the temporary name is removed after the attempt.
 

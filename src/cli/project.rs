@@ -1457,6 +1457,8 @@ pub(super) async fn hold_until<T>(
     }
     let mut told = false;
     let mut told_owner = false;
+    // counts its seconds on a terminal until the hold is taken
+    let mut _waiting = None;
     loop {
         if context.stop.is_asked() {
             return Err(Error::new(
@@ -1471,13 +1473,15 @@ pub(super) async fn hold_until<T>(
             Hold::Held(held) => return Ok(Waited::Held(held)),
             Hold::Busy(holder) if !told => {
                 let who = holder.as_deref().unwrap_or("another fetchloom");
-                context
-                    .output
-                    .step("Waiting", &format!("for {who} working in this project"));
+                _waiting = Some(
+                    context
+                        .output
+                        .waiting("Waiting", &format!("for {who} working in this project")),
+                );
                 told = true;
             }
             Hold::Owner(message) if !told_owner => {
-                context.output.step("Waiting", &message);
+                _waiting = Some(context.output.waiting("Waiting", &message));
                 told = true;
                 told_owner = true;
             }
