@@ -1297,6 +1297,50 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     Ok(())
 }
 
+/// a second `-o` run of one link to the same file waits for the first, then keeps the file the
+/// first wrote, as a run started afterwards would, though the first moved its bytes out of the
+/// cache: a server asked again answers unchanged, and with `--sha256` nobody asks.
+#[test]
+fn a_second_output_of_one_link_keeps_the_file_the_first_wrote() -> Result {
+    for extra in [&[][..], &["--sha256", IRIS_SHA256][..]] {
+        let sandbox = Sandbox::new()?;
+        let mut slow = reply(
+            "200 OK",
+            &[
+                ("Content-Length", &IRIS.len().to_string()),
+                ("ETag", "\"v1\""),
+            ],
+            b"",
+        );
+        let (release, held) = std::sync::mpsc::channel();
+        slow.push(Part::Wait(held));
+        slow.push(Part::Bytes(IRIS.to_vec()));
+        let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+        let server = Server::start(PATH, vec![slow, unchanged])?;
+        let args = [&["get", &server.url, "-o", "out/data.csv"][..], extra].concat();
+        let first = crate::support::Running::start(&mut sandbox.command(&args))?;
+        server.wait_for_requests(1)?;
+        let second = crate::support::Running::start(
+            sandbox.command(&args).env("FETCHLOOM_TEST_TICKER", "on"),
+        )?;
+        let waiting = second.wait_for("Waiting iris.csv · another fetchloom is downloading it");
+        drop(release);
+        waiting?;
+        let second = second.finish()?;
+        let first = first.finish()?;
+        assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+        assert_eq!(second.status.code(), Some(0), "{}", text(&second.stderr)?);
+        let downloads = server
+            .requests()
+            .iter()
+            .filter(|head| !head.contains("if-none-match"))
+            .count();
+        assert_eq!(downloads, 1, "{extra:?}: the second run downloads nothing");
+        assert_eq!(fs::read(sandbox.work().join("out").join("data.csv"))?, IRIS);
+    }
+    Ok(())
+}
+
 /// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
 /// into a home folder.
 #[test]

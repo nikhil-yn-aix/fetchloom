@@ -110,6 +110,7 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 - read each placed file's size and time immediately after placement, not after the whole batch.
 - `get -o` makes the folders of its file through the placer, as a copy would, before it moves a one-off out of the cache. a rename into a folder that is not there fails, and the copy it would fall back to holds the bytes twice until the cache drops its own.
 - another run of the same link can write the `-o` file, or move the bytes out of the cache for its own file, between `settle`'s look at the path and its write. a write refused because the name is taken, or the cache's copy gone, makes it look again: a file holding the wanted bytes is kept as a rerun keeps it, and anything else stays and fails the run as before.
+- a run of `get -o` about to download takes the link's download claim first, waiting while another run holds it, and decides again once it waited. a run whose own download may leave the cache takes the claim again after downloading and holds it until its file has the bytes. a waiting run therefore finds them in the file or in the cache, never between the two; the claim is never held while calling the downloader, which takes it too.
 
 ## tests
 

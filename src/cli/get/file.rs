@@ -16,7 +16,7 @@ use super::{
     Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, tell_fetched, vet,
 };
 use crate::archive::{self, Packed};
-use crate::cache::{Cache, UrlRecord};
+use crate::cache::{Cache, Claim, Partial, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
@@ -269,10 +269,26 @@ async fn put(
             .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
         shown,
     };
-    let done = match decided_early(context, cache, remote, args, &destination, last)? {
+    let mut early = decided_early(context, cache, remote, args, &destination, last)?;
+    if matches!(early, Early::Download(_)) && !context.offline.enabled() {
+        // once another run's download of the link is over, the run decides again, as a rerun
+        // would, holding the link meanwhile so that run's bytes stay where it put them
+        let (_link, waited) = claimed(context, cache, remote, true).await?;
+        if waited {
+            early = decided_early(context, cache, remote, args, &destination, last)?;
+        }
+    }
+    let done = match early {
         Early::Kept(kept) => kept,
         Early::Download(known) => {
             let fetched = download(context, net, cache, remote, known.held).await?;
+            // bytes this run wrote may leave the cache for the file, so it holds the link until
+            // they are there, for a run waiting for the link to find them in one or the other
+            let _link = if context.work.cached_before(&fetched.digest) {
+                None
+            } else {
+                Some(claimed(context, cache, remote, false).await?.0)
+            };
             if let Some(expected) = &expected {
                 matches_sha256(&remote.path, &fetched.digest, expected)?;
             }
@@ -393,6 +409,40 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<Sha256> {
             .stated_md5(&md5, remote.url.as_str())
             .map(|(digest, _)| digest)
     })
+}
+
+/// how often a run waiting for another fetchloom's hold on its link asks again, as a download
+/// does.
+const WAITING: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// the link's claim, which its download takes too, once no other fetchloom on this machine
+/// holds it, and whether the run waited for it, saying so first when `tell` asks. while it is
+/// held, no download of the link starts and no `-o` run moves the link's bytes out of the cache.
+async fn claimed(
+    context: &Context,
+    cache: &Cache,
+    remote: &Remote,
+    tell: bool,
+) -> Result<(Partial, bool), Error> {
+    let mut waiting = None;
+    let mut waited = false;
+    loop {
+        match cache.claim(remote.url.as_str()) {
+            Ok(Claim::Owned(link)) => return Ok((link, waited)),
+            Ok(Claim::Busy) => waited = true,
+            Err(err) => return Err(Error::io("could not write to the cache", &err)),
+        }
+        if tell && waiting.is_none() {
+            waiting = Some(context.output.wait(
+                "Waiting",
+                format!("{} · another fetchloom is downloading it", remote.path),
+            ));
+        }
+        tokio::select! {
+            () = tokio::time::sleep(WAITING) => {}
+            () = context.stop.asked() => return Err(Stop::stopped()),
+        }
+    }
 }
 
 /// downloads the one file into the cache, or finds it there, and says so.
