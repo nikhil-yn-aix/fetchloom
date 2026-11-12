@@ -70,7 +70,7 @@ error: data.toml has no dataset called "smal"
   help: did you mean `fetchloom sync small`?
 ```
 
-with `--json`, `result.placement` counts small's files alone, `unchanged` too, even when the whole project was already in place. a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first, or every dataset.
+a project still as its last complete sync left it answers `sync small` from small alone: its pin, its records and its folder, so the check costs what small holds. with `--json`, `result.placement` counts small's files alone, `unchanged` too, even when the whole project was already in place. a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first, or every dataset.
 
 ## already in place
 

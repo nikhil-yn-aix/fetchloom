@@ -347,6 +347,13 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     };
     let (text, manifest) = project.manifest()?;
     let scope = selected(&manifest, &args.names, "sync")?;
+    if !dry_run
+        && !args.locked
+        && !args.verify
+        && let Some(report) = settled_named(context, &project, &manifest, &text, &scope)?
+    {
+        return Ok(report);
+    }
     let read = project.lock_and_text()?;
     if args.locked {
         locked(
@@ -447,6 +454,67 @@ pub(super) fn selected(
         known(manifest, name, command)?;
     }
     Ok(Scope::Only(names.iter().cloned().collect()))
+}
+
+/// a sync of named datasets that would write nothing, found from their pins and their folders
+/// alone, so it costs what they hold rather than what the project holds. none when that cannot
+/// tell: a run of every dataset, one that would place or record anything, or one whose hashing
+/// asks for the state to be written again, which needs every record. the whole run then starts
+/// over.
+fn settled_named(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    text: &str,
+    scope: &Scope,
+) -> Result<Option<Report>, Error> {
+    let Scope::Only(names) = scope else {
+        return Ok(None);
+    };
+    let needed = engine::with_inputs(manifest, names.clone());
+    let Some((lock, lock_text)) = project.lock_only(&|name| needed.contains(name))? else {
+        return Ok(None);
+    };
+    let seen = Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: Some(digest::sha256(lock_text.as_bytes())),
+    };
+    // a large lock's text would otherwise stay in memory through the survey
+    drop(lock_text);
+    let work =
+        Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope.clone());
+    refuse_unbuilt(manifest, Some(&lock), scope)?;
+    let folders: Vec<String> = names
+        .iter()
+        .map(|name| plan::folder(manifest, name))
+        .collect();
+    let reading = context.output.setup("Reading", "the data folder");
+    let mut survey = Survey::read_within(project, &manifest.data_dir, &folders, context.threads);
+    drop(reading);
+    survey.check_doubted(&project.root, &work.cache)?;
+    disk::audit(project, &survey, &work.cache)?;
+    let Some(placement) = place::untouched(project, manifest, &survey, &seen, true, scope)?
+        .filter(|_| !survey.needs_writing)
+    else {
+        return Ok(None);
+    };
+    work.tell_stale(manifest, &lock);
+    context
+        .stop
+        .check()
+        .map_err(|error| work.before_placing(error))?;
+    context.stop.finish();
+    register(&work);
+    ignore_data(&work, manifest)?;
+    tell_synced(context, project, manifest, scope, false, &placement, false);
+    Ok(Some(Report {
+        selected: Some(scope.clone()),
+        project: project.root.clone(),
+        datasets: Vec::new(),
+        lock_changed: false,
+        placement: Some(placement),
+        ..Report::default()
+    }))
 }
 
 /// a sync that would write nothing, found without the project's hold: data.toml and data.lock
