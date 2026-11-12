@@ -378,3 +378,52 @@ fn an_import_missing_offline_is_never_offered_a_download() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     Ok(())
 }
+
+/// offline, a run asks no web mirror, so the error for the files the cache lacks says the web
+/// mirror was not asked, not that it lacks them, and names a folder mirror beside a cache as the
+/// ways that need no network. a folder mirror a push filled then serves the same run offline.
+#[test]
+fn offline_says_a_web_mirror_was_not_asked_and_names_a_folder_mirror() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    assert!(sandbox.run(&["add", &server.url])?.status.success());
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let cache = sandbox.folder("clone-cache")?;
+    let sync = |mirror: &str| {
+        sandbox
+            .command_in(
+                &clone,
+                &[
+                    "--json",
+                    "--offline",
+                    "sync",
+                    "--locked",
+                    "--mirror",
+                    mirror,
+                ],
+            )
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    // offline, nothing listening there is ever reached
+    let output = sync("http://127.0.0.1:9/")?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = crate::support::json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "offline.missing");
+    assert_eq!(
+        document["errors"][0]["help"],
+        "offline asks no web mirror, so http://127.0.0.1:9 was not asked: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`"
+    );
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy();
+    let pushed = sandbox.run(&["--yes", "push", "--to", &mirror])?;
+    assert_eq!(pushed.status.code(), Some(0), "{}", text(&pushed.stderr)?);
+    let output = sync(&mirror)?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        fs::read(clone.join("data").join("iris").join("iris.csv"))?,
+        b"iris"
+    );
+    Ok(())
+}

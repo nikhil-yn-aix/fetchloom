@@ -4,4 +4,4 @@ expression: stderr
 ---
 error: offline, and 1 file data.lock names is not in the cache
   iris/iris.csv
-  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them
+  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`

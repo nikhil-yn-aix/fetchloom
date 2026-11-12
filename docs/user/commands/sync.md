@@ -220,6 +220,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 |---|---|---|
 | success leaves an edited input | sync preserves conflicts | inspect status and save the edit before choosing `--force` |
 | offline sync needs resolution | the manifest changed or pins are missing | prepare the project online before disconnecting |
+| `error: offline, and 2 files data.lock names are not in the cache`, though a web mirror holds them | offline asks no web mirror, and the help says so, as `offline asks no web mirror, so http://127.0.0.1:8000 was not asked` | go online, or use what needs no network: a cache that holds them in `FETCHLOOM_CACHE`, or a folder mirror that holds them with `--mirror <folder>` |
 | `error: flowers was imported from files, and this machine's cache does not hold them` offline, exit 20 with `offline.missing` | no link fetches an [imported](add.md#files-on-this-machine) file, so going online does not help, and the help offers no download | copy its files from the folder they came from into the dataset's folder by hand, then sync, or sync with `--mirror <folder>` naming a folder [mirror](../mirrors.md) that holds them; JSON's `fix` is null |
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |

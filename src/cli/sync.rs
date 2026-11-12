@@ -1268,6 +1268,9 @@ impl<'a> Loop<'a> {
             .fold(error, Error::detail))
     }
 
+    /// what an offline run says of the files it needs that the cache lacks: how to get them
+    /// online, and the ways that need no network, a cache or a folder mirror holding them. a web
+    /// mirror is never asked offline, so the help says so rather than leave it looking empty.
     fn offline_missing(&self, missing: &[&str]) -> Error {
         let mut error = Error::new(
             Kind::OfflineMissing,
@@ -1278,7 +1281,27 @@ impl<'a> Loop<'a> {
             ),
         );
         error = shown_five(error, missing);
-        error.help(self.net.offline().missing_help("them"))
+        let help = format!(
+            "{}, or name a folder mirror that holds them with `--mirror <folder>`",
+            self.net.offline().missing_help("them")
+        );
+        let web: Vec<String> = self
+            .context
+            .mirrors
+            .mirrors
+            .list
+            .iter()
+            .filter(|mirror| matches!(mirror, crate::mirror::Location::Web(_)))
+            .map(ToString::to_string)
+            .collect();
+        error.help(match web.as_slice() {
+            [] => help,
+            [mirror] => format!("offline asks no web mirror, so {mirror} was not asked: {help}"),
+            many => format!(
+                "offline asks no web mirror, so {} were not asked: {help}",
+                many.join(", ")
+            ),
+        })
     }
 
     /// what an offline run says of the files of `import`, of those `lacking`: missing offline as

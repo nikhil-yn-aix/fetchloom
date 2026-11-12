@@ -111,7 +111,7 @@ offline, push downloads nothing, and in [mirror-only mode](../mirrors.md) it ask
 ```text
 error: offline, and 1 file data.lock names is not in the cache
   pets/pets.zip
-  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them
+  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`
 ```
 
 a file in the data folder with other bytes than its pin counts as missing, even with the pinned size, so push downloads the pinned bytes instead and never changes it. push reads such a file once, as it copies it, after any [question](#data-you-may-not-share), so a file the state does not vouch for that turns out to hold other bytes is downloaded then.
