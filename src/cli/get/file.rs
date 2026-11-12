@@ -185,15 +185,16 @@ fn decide(existing: &Existing, wanted: &Sha256, force: bool) -> Step {
     }
 }
 
-/// looks at `path`, hashing a file there. a link is followed for its bytes, so a file reached
-/// through one that holds them stays; `--force` replaces the link itself.
-fn existing(path: &Path) -> Result<Existing, Error> {
+/// looks at the destination's path, hashing a file there. a link is followed for its bytes, so a
+/// file reached through one that holds them stays; `--force` replaces the link itself.
+fn existing(destination: &Destination) -> Result<Existing, Error> {
+    let path = destination.path.as_path();
     let unreadable =
         |err: &io::Error| Error::io(format_args!("could not read {}", path.display()), err);
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => Err(Error::new(
             Kind::LocalNotEmpty,
-            format!("{} became a folder while downloading", path.display()),
+            format!("{} became a folder while downloading", destination.shown),
         )
         .help("choose another name with -o")),
         Ok(metadata) if metadata.is_file() => {
@@ -386,7 +387,7 @@ fn decided_early(
             (record.sha256, Wanted::Recorded)
         }
     };
-    let found = existing(&destination.path)?;
+    let found = existing(destination)?;
     match decide(&found, &digest, args.force) {
         Step::Keep => {
             let size = fs::metadata(&destination.path)
@@ -459,7 +460,7 @@ fn held(cache: &Cache, record: &UrlRecord, destination: &Destination) -> Result<
             held: Some(record.sha256),
         });
     }
-    let found = existing(&destination.path)?;
+    let found = existing(destination)?;
     let held = matches!(found, Existing::Holds(digest) if digest == record.sha256)
         .then_some(record.sha256);
     Ok(Known {
@@ -563,7 +564,7 @@ fn settle(
 ) -> Result<(PathBuf, Done), Error> {
     let found = match &known.found {
         Some(found) if fetched.origin != Origin::Network => found.clone(),
-        _ => existing(&destination.path)?,
+        _ => existing(destination)?,
     };
     let step = decide(&found, &fetched.digest, force);
     let record = |method| {
@@ -604,7 +605,7 @@ fn settle(
     // bytes out of the cache to do so, and a file it wrote with them is kept as a rerun keeps it
     let holds_them = || {
         matches!(
-            existing(&destination.path),
+            existing(destination),
             Ok(Existing::Holds(found)) if found == fetched.digest
         )
     };
