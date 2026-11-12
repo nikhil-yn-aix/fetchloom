@@ -118,11 +118,6 @@ impl Members {
         self.tables.iter()
     }
 
-    /// whether a table's key is `key` as written, not as a pattern matches it.
-    pub(crate) fn contains_key(&self, key: &str) -> bool {
-        self.tables.contains_key(key)
-    }
-
     fn found(&self, archive: &str) -> Found<'_> {
         if let Some((key, _)) = self.tables.get_key_value(archive) {
             return Found::One(key);
@@ -184,9 +179,12 @@ impl Members {
         }
     }
 
-    /// the first table, in key order, whose key neither names one of `archives` nor matches one
-    /// as a pattern.
-    pub(crate) fn unmatched(&self, archives: &[&str]) -> Option<(&str, &MemberFilter)> {
+    /// the tables, in key order, whose keys neither name one of `archives` nor match one as a
+    /// pattern.
+    pub(crate) fn unmatched<'m>(
+        &'m self,
+        archives: &'m [&str],
+    ) -> impl Iterator<Item = (&'m str, &'m MemberFilter)> {
         let matched = |key: &str| {
             archives.contains(&key)
                 || self.globs.iter().any(|(glob_key, glob)| {
@@ -195,7 +193,7 @@ impl Members {
         };
         self.tables
             .iter()
-            .find(|(key, _)| !matched(key))
+            .filter(move |(key, _)| !matched(key))
             .map(|(key, filter)| (key.as_str(), filter))
     }
 }
@@ -1375,15 +1373,6 @@ pub(crate) fn with_exclusions(
     patterns: &[String],
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
-    let inline = |what: &str| {
-        Error::new(
-            Kind::ProjectInvalid,
-            format!("data.toml writes {what} inline, so fetchloom cannot add to it"),
-        )
-        .help(format!(
-            "write it as a [{what}] table, then run the same command again"
-        ))
-    };
     let dataset = document
         .get_mut("datasets")
         .and_then(Item::as_table_mut)
@@ -1417,6 +1406,59 @@ pub(crate) fn with_exclusions(
         }
     };
     exclude_once(table, patterns);
+    Ok(document.to_string())
+}
+
+/// the refusal to add to `what`, a part of data.toml written inline, which gets no new keys, as
+/// `add` refuses to add to inline datasets.
+fn inline(what: &str) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!("data.toml writes {what} inline, so fetchloom cannot add to it"),
+    )
+    .help(format!(
+        "write it as a [{what}] table, then run the same command again"
+    ))
+}
+
+/// data.toml's text with the members table of the dataset `name` under the glob key `from`
+/// copied under `archive`, its select and exclude as written, without the comments around them.
+/// a table under an archive's own path wins over a glob, so the one drop writes for an archive a
+/// glob covers starts as a copy, and the archive keeps what the glob chose.
+///
+/// # Errors
+///
+/// `project.invalid` for a dataset or a members table written inline, as [`with_exclusions`].
+pub(crate) fn with_members_copied(
+    text: &str,
+    name: &str,
+    from: &str,
+    archive: &str,
+) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let members = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| inline(&format!("datasets.{name}")))?
+        .get_mut("members")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| inline(&format!("datasets.{name}.members")))?;
+    let source = members
+        .get(from)
+        .and_then(Item::as_table)
+        .ok_or_else(|| inline(&format!("datasets.{name}.members.\"{from}\"")))?;
+    let mut table = Table::new();
+    table.set_dotted(members.is_dotted());
+    for key in MEMBER_KEYS {
+        if let Some(value) = source.get(key).and_then(Item::as_value) {
+            let mut value = value.clone();
+            value.decor_mut().clear();
+            table.insert(key, Item::Value(value));
+        }
+    }
+    members.insert(archive, Item::Table(table));
     Ok(document.to_string())
 }
 

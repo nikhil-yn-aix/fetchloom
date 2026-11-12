@@ -214,6 +214,77 @@ fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
     Ok(())
 }
 
+/// a file of an archive a glob key's table covers is left out in a table of the archive's own,
+/// copied from the glob's, since an archive's own table wins over a glob: the archive keeps what
+/// the glob chose, and the pattern never reaches the other archives the glob covers.
+#[test]
+fn drop_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = globbed(&sandbox)?;
+    let preview = sandbox.run(&["--json", "drop", "-n", "data/set/train/images/x.png"])?;
+    ok(&preview)?;
+    assert_eq!(
+        json(&preview)?["result"]["copied"],
+        json!([{"dataset": "set", "archive": "train.zip", "from": "*.zip"}])
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        GLOBBED
+    );
+    let output = sandbox.run(&["drop", "data/set/train/images/x.png"])?;
+    ok(&output)?;
+    assert!(
+        text(&output.stderr)?.contains(
+            "  hint: train.zip now has its own members table, copied from members.\"*.zip\", so later changes to that table do not reach it\n"
+        ),
+        "{}",
+        text(&output.stderr)?
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        format!(
+            "{GLOBBED}\n[datasets.set.members.\"train.zip\"]\nselect = [\"images/*\"]\nexclude = [\"images/x.png\"]\n"
+        )
+    );
+    assert!(!folder.join("train/images/x.png").exists());
+    assert!(
+        !folder.join("train/labels.csv").exists(),
+        "the select stays"
+    );
+    assert_eq!(fs::read(folder.join("test/images/x.png"))?, b"test");
+    let synced = sandbox.run(&["--json", "sync", "--locked"])?;
+    ok(&synced)?;
+    let placement = &json(&synced)?["result"]["placement"];
+    assert_eq!(
+        (&placement["placed"], &placement["removed"]),
+        (&json!(0), &json!(0))
+    );
+    Ok(())
+}
+
+/// leaving out every file of an archive leaves out the archive, and a glob key's table goes once
+/// it matches no archive left, as an archive's own table goes with it.
+#[test]
+fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = globbed(&sandbox)?;
+    let manifest = sandbox.work().join("data.toml");
+    ok(&sandbox.run(&["drop", "data/set/test"])?)?;
+    assert_eq!(
+        fs::read_to_string(&manifest)?,
+        "[datasets.set]\nref = \"local\"\nexclude = [\"test.zip\"]\n\n[datasets.set.members.\"*.zip\"]\nselect = [\"images/*\"]\n",
+        "train.zip still takes the table"
+    );
+    ok(&sandbox.run(&["drop", "data/set/train"])?)?;
+    assert_eq!(
+        fs::read_to_string(&manifest)?,
+        "[datasets.set]\nref = \"local\"\nexclude = [\n  \"test.zip\",\n  \"train.zip\",\n]\n"
+    );
+    assert!(!folder.join("train").exists());
+    ok(&sandbox.run(&["sync", "--locked"])?)?;
+    Ok(())
+}
+
 /// a file the source lists leaves data.lock too, rewritten as relocking would pin it, so a
 /// locked sync takes it. an import could not be listed again, so a stale pin would fail here.
 #[test]

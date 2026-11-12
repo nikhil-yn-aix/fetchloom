@@ -282,7 +282,7 @@ fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Er
         .filter(|file| file.unpacks_to.is_some())
         .map(|file| file.path.as_str())
         .collect();
-    let Some((archive, filter)) = source.members.unmatched(&archives) else {
+    let Some((archive, filter)) = source.members.unmatched(&archives).next() else {
         return Ok(());
     };
     let error = Error::new(

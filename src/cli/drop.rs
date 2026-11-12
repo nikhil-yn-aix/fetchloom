@@ -30,6 +30,8 @@ pub(super) struct Report {
     project: PathBuf,
     /// each file left out, by its path in the project.
     dropped: Vec<Left>,
+    /// each members table drop wrote for an archive a glob key's table covered, as a copy of it.
+    copied: Vec<Copied>,
     lock_changed: bool,
     placement: Option<Placement>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -47,6 +49,16 @@ struct Left {
     dataset: String,
     archive: Option<String>,
     pattern: String,
+}
+
+/// a members table drop wrote for `archive` of `dataset` as a copy of the one under the glob key
+/// `from`, which covered it: a table under the archive's own path wins over a glob, so the
+/// archive keeps what the glob chose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct Copied {
+    dataset: String,
+    archive: String,
+    from: String,
 }
 
 /// the planned files one path names: the file at it, or every file under a folder.
@@ -71,6 +83,9 @@ struct Edit<'a> {
     leaving: BTreeSet<&'a str>,
     /// patterns for the members table of each archive, by its path in data.lock.
     members: BTreeMap<&'a str, BTreeSet<String>>,
+    /// the glob key whose table each archive in `members` without a table of its own starts
+    /// from.
+    copied: BTreeMap<&'a str, String>,
     /// the files left out, as `--json` lists them.
     left: Vec<Left>,
 }
@@ -149,6 +164,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     let lock_changed = edits.values().any(|edit| !edit.leaving.is_empty());
     let mut dropped: Vec<Left> = edits.values().flat_map(|edit| edit.left.clone()).collect();
     dropped.sort_by(|a, b| a.path.cmp(&b.path));
+    let copied = copies(&edits);
     let scope = Scope::Only(edits.keys().map(|name| (*name).to_owned()).collect());
     pace.look()?;
     let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
@@ -166,6 +182,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     let report = |placement, changes| Report {
         project: project.root.clone(),
         dropped: dropped.clone(),
+        copied: copied.clone(),
         lock_changed,
         placement: Some(placement),
         dry_run,
@@ -176,7 +193,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         pace.look()?;
         context.stop.finish();
         drop(progress);
-        tell(&context.output, &edits, "Would exclude");
+        tell(&context.output, &edits, true);
         place::tell_preview(&context.output, &new_manifest, &scope, &preview);
         dry_run_done(&context.output, None);
         return Ok(report(preview.placement, Some(preview.changes)));
@@ -191,7 +208,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         &updated,
         lock_changed.then_some(&new_lock),
     )?;
-    tell(&context.output, &edits, "Excluded");
+    tell(&context.output, &edits, false);
     let placement = placing.remove_only(&context.output).map_err(|error| {
         let written = if lock_changed {
             "data.toml and data.lock were"
@@ -202,6 +219,20 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     })?;
     tell_next(context, &project, &new_manifest, &edits, lock_changed);
     Ok(report(placement, None))
+}
+
+/// the members tables `edits` copy from a glob key's, as `--json` lists them.
+fn copies(edits: &BTreeMap<&str, Edit>) -> Vec<Copied> {
+    edits
+        .iter()
+        .flat_map(|(dataset, edit)| {
+            edit.copied.iter().map(|(archive, from)| Copied {
+                dataset: (*dataset).to_owned(),
+                archive: (*archive).to_owned(),
+                from: from.clone(),
+            })
+        })
+        .collect()
 }
 
 /// a stop asked while drop plans, which writes nothing, so the stop says that nothing changed.
@@ -767,6 +798,21 @@ fn edits<'a>(
     for (dataset, edit) in &mut edits {
         let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
         whole_archives(locked, edit, &archives);
+        // a pattern added to the glob's table would reach every archive it covers
+        let Some(source) = manifest
+            .datasets
+            .get(*dataset)
+            .and_then(|entry| entry.source())
+        else {
+            continue;
+        };
+        for archive in edit.members.keys() {
+            if let Some((key, _)) = source.members.of(dataset, archive)?
+                && key != *archive
+            {
+                edit.copied.insert(archive, key.to_owned());
+            }
+        }
     }
     Ok(edits)
 }
@@ -1045,17 +1091,29 @@ fn written(
     for (dataset, edit) in edits {
         pace.look()?;
         for (archive, patterns) in &edit.members {
+            if let Some(from) = edit.copied.get(archive) {
+                updated = manifest::with_members_copied(&updated, dataset, from, archive)?;
+            }
             let patterns: Vec<String> = patterns.iter().cloned().collect();
             updated = manifest::with_exclusions(&updated, dataset, Some(archive), &patterns)?;
         }
-        let tables = manifest
+        // a table that matches no archive left would be refused, as a whole archive's own is
+        if let Some(source) = manifest
             .datasets
             .get(*dataset)
             .and_then(|entry| entry.source())
-            .map(|source| &source.members);
-        for archive in &edit.leaving {
-            if tables.is_some_and(|tables| tables.contains_key(archive)) {
-                updated = manifest::without_members(&updated, dataset, archive)?;
+            && let Some(locked) = lock.get(dataset)
+            && !edit.leaving.is_empty()
+        {
+            let kept: Vec<&str> = locked
+                .files
+                .iter()
+                .filter(|file| file.unpacks_to.is_some())
+                .map(|file| file.path.as_str())
+                .filter(|path| !edit.leaving.contains(path))
+                .collect();
+            for (key, _) in source.members.unmatched(&kept) {
+                updated = manifest::without_members(&updated, dataset, key)?;
             }
         }
         if !edit.exclude.is_empty() {
@@ -1090,7 +1148,8 @@ fn written(
 }
 
 /// a line for each dataset and archive drop leaves files out of, with `-v` naming each file.
-fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, verb: &str) {
+fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, dry_run: bool) {
+    let verb = if dry_run { "Would exclude" } else { "Excluded" };
     for (dataset, edit) in edits {
         let mut groups: BTreeMap<Option<&str>, Vec<&Left>> = BTreeMap::new();
         for left in &edit.left {
@@ -1114,6 +1173,13 @@ fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, verb: &str
             );
             for left in left {
                 output.detail(&left.path);
+            }
+            if let Some(from) = archive.and_then(|archive| edit.copied.get(archive)) {
+                output.hint(&if dry_run {
+                    format!("{of} would have its own members table, copied from members.\"{from}\", so later changes to that table would not reach it")
+                } else {
+                    format!("{of} now has its own members table, copied from members.\"{from}\", so later changes to that table do not reach it")
+                });
             }
         }
     }

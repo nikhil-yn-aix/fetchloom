@@ -24,9 +24,10 @@ fetchloom drop [options] <path>...
 1. find the files data.lock places at each path, from what this machine recorded about each archive.
 2. write a pattern for each file into `data.toml`, escaped so it matches that file alone:
    - a file inside an archive gets its path inside the archive, in the archive's [members table](../reference/data-toml.md#files-inside-archives). in a dataset that is one archive, that path starts with the folder all its files share, which placing leaves out.
+   - an archive that a table under a [glob key](../reference/data-toml.md#one-table-for-many-shards) covers, with no table of its own, gets one, copied from the glob's `select` and `exclude` before the new pattern goes in. a table of its own wins over the glob, so without the copy the archive would get back what the glob left out, and a pattern added to the glob's table would also leave out files of the same name in every other archive it matches.
    - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too. the pin is rewritten as relocking the same listing would pin it, so `sync --locked` takes it and nothing is resolved again.
    - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
-   - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes.
+   - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
 3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning. a dataset with `place = false` has none to delete.
 
 stderr when the curator drops a broken image from a dataset that is one zip, `pets.zip`:
@@ -47,6 +48,24 @@ exclude = ["pets-v1/images/dog_010_corrupt.png"]
 ```
 
 a file of `train.zip` stays left out of `train.zip` alone: in a dataset where `test.zip` holds a file at the same path, that one stays.
+
+with ten-sample shards whose files have the same names in each, and `select = ["*.wav", "*.txt"]` under `[datasets.shards.members."shard-*.tar"]`, `fetchloom drop data/shards/shard-000001/00000005.wav` says on stderr:
+
+```text
+   Excluded 1 file of shard-000001.tar in data.toml
+  hint: shard-000001.tar now has its own members table, copied from members."shard-*.tar", so later changes to that table do not reach it
+    Removed 1 file no dataset needs
+```
+
+and adds to `data.toml`:
+
+```toml
+[datasets.shards.members."shard-000001.tar"]
+select = ["*.wav", "*.txt"]
+exclude = ["00000005.wav"]
+```
+
+the `00000005.wav` of `shard-000000.tar` and `shard-000002.tar` stays, and so does the choice of the other shards. edit both tables to change what every shard keeps.
 
 commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them at a terminal. when a [recipe](../recipes.md) is made from the dataset, directly or through another recipe, that line names its build first, as [raw data only recipes read](#raw-data-only-recipes-read) shows. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees what no project keeps.
 
@@ -123,7 +142,7 @@ once drop starts writing `data.toml`, ctrl-c no longer stops it: it writes `data
 
 ## JSON
 
-`--json` returns `result.project`; `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, by path, with `archive` null for a file the source lists; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
+`--json` returns `result.project`; `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, by path, with `archive` null for a file the source lists; `result.copied`, one `{dataset, archive, from}` for each archive given its own members table as a copy of the glob key `from`'s, often empty; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
 
 ## exit codes
 
