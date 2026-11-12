@@ -1844,6 +1844,12 @@ async fn sync_add(
 ) -> Result<Outcome<Placement>, Error> {
     let (names, given) = datasets;
     let project = work.project;
+    // relocking, readying the placement and writing data.lock grow with the files the add pins,
+    // which a first add of many files otherwise sits through untold. downloads tell their own
+    // lines, so the line starts once every byte is in, but for an import, whose bytes are in the
+    // cache already
+    let imported = !given.is_empty() && given.iter().all(|given| matches!(given, Given::Locked(_)));
+    let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
     let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
@@ -1858,6 +1864,9 @@ async fn sync_add(
     // never pins what no sync can place
     let plan = plan::from_cache_adding(manifest, &lock, &work.cache, names)?;
     let placing = work.prepare(manifest, &lock, plan, false, survey).await?;
+    if pinning.is_none() {
+        pinning = pinning_line(work, names);
+    }
     // every byte is in the cache now, and a stop asked meanwhile ends the add before anything in
     // the project changed
     work.context.stop.check()?;
@@ -1907,6 +1916,8 @@ async fn sync_add(
             }
             None => None,
         };
+        // placing tells its own line
+        drop(pinning);
         let lock_text = written.as_deref().or(adding.lock_text.as_deref());
         let synced = lock_text.map(|text| Synced {
             manifest: digest::sha256(manifest_text.as_bytes()),
@@ -1945,6 +1956,16 @@ async fn sync_add(
             None => error,
         }),
     }
+}
+
+/// a line, once the work lasts, that the add pins the datasets `names`, or none for none.
+fn pinning_line(work: &Loop<'_>, names: &[String]) -> Option<crate::output::Lasting> {
+    let what = match names {
+        [] => return None,
+        [name] => name.clone(),
+        many => units::count(many.len() as u64, "dataset", "datasets"),
+    };
+    Some(work.context.output.lasting("Pinning", what))
 }
 
 /// the error of an add that found data.toml or data.lock, as `changed` names them, changed once
@@ -2898,5 +2919,103 @@ mod tests {
             "{error:?}"
         );
         assert!(!root.join("data").join("b").exists());
+    }
+
+    /// a terminal that keeps the text bars draw on it, and says when it changes.
+    #[derive(Clone, Debug, Default)]
+    struct Screen(Arc<(std::sync::Mutex<String>, std::sync::Condvar)>);
+
+    impl Screen {
+        fn draw(&self, text: &str) {
+            let (shown, changed) = &*self.0;
+            shown.lock().unwrap().push_str(text);
+            changed.notify_all();
+        }
+
+        /// whether `text` shows, waiting for it a while.
+        fn shows(&self, text: &str) -> bool {
+            let (shown, changed) = &*self.0;
+            let shown = changed
+                .wait_timeout_while(
+                    shown.lock().unwrap(),
+                    std::time::Duration::from_secs(10),
+                    |shown| !shown.contains(text),
+                )
+                .unwrap()
+                .0;
+            shown.contains(text)
+        }
+    }
+
+    impl indicatif::TermLike for Screen {
+        fn width(&self) -> u16 {
+            80
+        }
+        fn move_cursor_up(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_down(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_right(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_left(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn write_line(&self, line: &str) -> std::io::Result<()> {
+            self.draw(line);
+            Ok(())
+        }
+        fn write_str(&self, text: &str) -> std::io::Result<()> {
+            self.draw(text);
+            Ok(())
+        }
+        fn clear_line(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn flush(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    thread_local! {
+        /// the terminal an add a test runs draws on.
+        static SCREEN: std::cell::RefCell<Option<Screen>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// relocking, planning and writing data.lock grow with the files an add pins, which a first
+    /// add of many files sat through untold after `Imported`, so a terminal shows what the add
+    /// pins meanwhile.
+    #[test]
+    fn an_add_tells_what_it_pins_before_it_places() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut adding, cache, updated, listing) = adding_b(dir.path());
+        let screen = Screen::default();
+        SCREEN.set(Some(screen.clone()));
+        let mut context = Context::new(Output::on_screen(screen.clone()));
+        context.offline = crate::net::Offline::Flag;
+        let manifest = Manifest::parse(&updated).unwrap();
+        let old = adding.old.take();
+        let work =
+            Loop::new(&context, &adding.project, Arc::new(context.net()), cache).telling("b");
+        // the add goes on once the line shows, as one of many files would still be pinning
+        EDIT_AT.set(Some(("saved", |_| {
+            let screen = SCREEN.with_borrow(Clone::clone).unwrap();
+            screen.shows("Pinning b");
+        })));
+        let names = ["b".to_owned()];
+        block_on(sync_add(
+            &work,
+            &adding,
+            &manifest,
+            Some(&updated),
+            old,
+            (&names, vec![Given::Listing("b".to_owned(), listing)]),
+            &[],
+        ))
+        .unwrap();
+        EDIT_AT.set(None);
+        assert!(screen.shows("Pinning b"));
     }
 }

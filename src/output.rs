@@ -298,6 +298,25 @@ impl Output {
             .clone()
     }
 
+    /// for tests elsewhere: an output whose bars draw on `screen`, as a terminal's would, and
+    /// which tells lasting work at once.
+    #[cfg(test)]
+    pub(crate) fn on_screen(screen: impl indicatif::TermLike + 'static) -> Output {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut output = Output::new(style, Level::Normal, false, false);
+        output.bars = Some(MultiProgress::with_draw_target(
+            ProgressDrawTarget::term_like(Box::new(screen)),
+        ));
+        output.untold = Duration::ZERO;
+        output
+    }
+
     /// the warnings told so far, as `--json` lists them.
     #[cfg(test)]
     pub(crate) fn warned(&self) -> Vec<String> {
