@@ -345,6 +345,8 @@ impl Reader<'_> {
         }
         let origin = if RECIPE_KEYS.iter().any(|key| table.contains_key(key)) {
             Origin::Derived(self.recipe(table, name)?)
+        } else if !table.contains_key("ref") && table.iter().all(|(key, _)| key == "members") {
+            return Err(self.left_members(datasets, table, name, item.span().or(key_span)));
         } else {
             Origin::Source(self.source(table, name, item.span().or(key_span))?)
         };
@@ -357,6 +359,55 @@ impl Reader<'_> {
                 .transpose()?,
             place: self.boolean(table.get("place"), "place", true)?,
             lines,
+        })
+    }
+
+    /// the refusal of `table`, the dataset `name` in `datasets` with members tables alone, as
+    /// when only the dataset's own table was renamed. the new name is told only when a single
+    /// other dataset's ref ends in the file of an archive the tables name.
+    fn left_members(
+        &self,
+        datasets: &dyn TableLike,
+        table: &dyn TableLike,
+        name: &str,
+        span: Option<Range<usize>>,
+    ) -> Error {
+        let archives: Vec<&str> = table
+            .get("members")
+            .and_then(Item::as_table_like)
+            .map(|members| members.iter().map(|(archive, _)| archive).collect())
+            .unwrap_or_default();
+        let example = archives.first().copied().unwrap_or("<archive>");
+        let links_to = |reference: &str| {
+            let bare = reference.split(['?', '#']).next().unwrap_or(reference);
+            let file = bare.rsplit('/').next().unwrap_or(bare);
+            archives
+                .iter()
+                .any(|archive| archive.rsplit('/').next() == Some(file))
+        };
+        let renamed: Vec<&str> = datasets
+            .iter()
+            .filter(|(other, item)| {
+                *other != name
+                    && item
+                        .as_table_like()
+                        .and_then(|entry| entry.get("ref"))
+                        .and_then(Item::as_str)
+                        .is_some_and(links_to)
+            })
+            .map(|(other, _)| other)
+            .collect();
+        let error = self.error(
+            span,
+            format!("datasets.{name} in data.toml has members tables but no ref"),
+        );
+        error.help(match renamed.as_slice() {
+            [new] => format!(
+                "if {name} is now {new}, rename its members tables too, as [datasets.{new}.members.\"{example}\"]"
+            ),
+            _ => format!(
+                "if {name} was renamed, rename its members tables with it, as [datasets.<new name>.members.\"{example}\"], or remove them"
+            ),
         })
     }
 
@@ -2796,6 +2847,35 @@ mod tests {
                     .as_str()
                 )
             );
+        }
+    }
+
+    /// a members table left behind when its dataset's table was renamed is told as a rename to
+    /// finish, naming the new table only when data.toml shows which one it is.
+    #[test]
+    fn members_left_by_a_rename_say_to_rename_them_too() {
+        let members = "\n[datasets.glob.members.\"glob-000000.tar\"]\nexclude = ['a1.wav']\n";
+        for (sounds, help) in [
+            (
+                "ref = 'https://example.org/v/glob-000000.tar?download=1'",
+                "if glob is now sounds, rename its members tables too, as [datasets.sounds.members.\"glob-000000.tar\"]",
+            ),
+            (
+                "ref = 'zenodo:1'",
+                "if glob was renamed, rename its members tables with it, as [datasets.<new name>.members.\"glob-000000.tar\"], or remove them",
+            ),
+        ] {
+            let error = fails(&format!("[datasets.sounds]\n{sounds}\n{members}"));
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                "datasets.glob in data.toml has members tables but no ref"
+            );
+            assert_eq!(
+                error.details,
+                ["data.toml:4   [datasets.glob.members.\"glob-000000.tar\"]"]
+            );
+            assert_eq!(error.help.as_deref(), Some(help));
         }
     }
 

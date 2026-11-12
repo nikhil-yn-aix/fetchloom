@@ -1,6 +1,7 @@
-//! a project's inputs, against servers on this machine: the dataset names data.toml and
-//! data.lock may give, and `cache gc --inputs`, which frees the cache's copy of raw data that
-//! only builds read where a folder mirror holds a copy that hashes to its name in the same run.
+//! a project's inputs, against servers on this machine: the dataset names and members tables
+//! data.toml and data.lock may give, the names of the files inside datasets, and
+//! `cache gc --inputs`, which frees the cache's copy of raw data that only builds read where a
+//! folder mirror holds a copy that hashes to its name in the same run.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -305,7 +306,6 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
 }
 
 /// a zip of `members`, each a path and its bytes.
-#[cfg(unix)]
 fn zipped(members: &[(&str, &[u8])]) -> Result<Vec<u8>> {
     let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (path, bytes) in members {
@@ -348,5 +348,54 @@ fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Resul
     for placed in ["odd/what?.csv", "odd/con.txt", "pack/star*.csv"] {
         assert!(work.join("data").join(placed).is_file(), "{placed}");
     }
+    Ok(())
+}
+
+/// a members table left under a dataset's old name when only its own table was renamed is told
+/// as a rename to finish, not as a dataset without a ref, and once it is renamed too the pin
+/// stays without a request.
+#[test]
+fn members_left_under_an_old_name_ask_to_finish_the_rename() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zipped(&[("a1.wav", b"1"), ("a2.wav", b"2")])?;
+    let server = Server::start("/glob-000000.zip", vec![file(&zip, "\"g\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "glob"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let members = "[datasets.glob.members.\"glob-000000.zip\"]\nexclude = [\"a1.wav\"]\n";
+    let table = |name: &str| format!("[datasets.{name}]\nref = \"{}\"\n\n", server.url);
+    fs::write(&manifest, format!("{}{members}", table("glob")))?;
+    let filtered = sandbox.run(&["sync"])?;
+    assert_eq!(
+        filtered.status.code(),
+        Some(0),
+        "{}",
+        text(&filtered.stderr)?
+    );
+    let requests = server.requests().len();
+    fs::write(&manifest, format!("{}{members}", table("sounds")))?;
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert_eq!(status.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.starts_with("error: datasets.glob in data.toml has members tables but no ref\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: if glob is now sounds, rename its members tables too, as [datasets.sounds.members.\"glob-000000.zip\"]"),
+        "{stderr}"
+    );
+    let renamed = members.replace("glob.members", "sounds.members");
+    fs::write(&manifest, format!("{}{renamed}", table("sounds")))?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Renamed glob to sounds in data.lock · its pin stays"),
+        "{stderr}"
+    );
+    assert_eq!(server.requests().len(), requests);
+    assert!(!sandbox.work().join("data/sounds/a1.wav").exists());
     Ok(())
 }
