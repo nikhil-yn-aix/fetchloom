@@ -228,6 +228,36 @@ the change keeps a 1 s bound and flushes a waiting group as a full one is flushe
 
 the two requests are the listing and the new shard. the stand-in that answers 304 sent no bytes for the five old shards before the change either, but took a request for each.
 
+## commands that name a dataset, 2026-11-12
+
+`path <name>` cost what the whole project costs. in a settled project of three imported datasets of 3, 1,000 and 10,000 files, `path` of the 3-file one took 47 ms on the glibc build, and a trace put 6.7 ms in reading data.lock, 7.5 ms in planning, 12.2 ms in reading the state and 14.9 ms in listing the data folder, each for every dataset. beside one dataset of 100,000 files, whose list data.lock keeps in data.lock.d, it took 0.47 s. the changes below make `path` and a settled `sync <name>` read only the pins of the named datasets, of what their recipes read and, for `path`, of datasets whose folders meet theirs, which a clash with their files could involve; only the state's records inside their folders; and only a listing of those folders. `list <name>` and `export <name>` read only the named pins.
+
+both projects were git repositories on ext4 over nvme, settled before the runs. each change ran behind a switch in one release build, each arm adding one change to those before it, every arm once a round in a seeded shuffled order, 12 to 30 measured rounds a case; then the release builds of b3b182a and of the changes. a ratio is the median of new over old with its 95% paired bootstrap interval from `bench/ab.py`. a change stayed if an interval where it aimed ended below 0.97 and no case's interval for time or peak memory started above 1.02; batches that ran under a burst of other load ran again. the static musl build comes first, glibc after the semicolon.
+
+| change | against the arm before it | outcome |
+|---|---|---|
+| list only the named dataset's folder, and what stands on the way down to it | `path` of 3 files among 11,000 0.654 [0.649, 0.664]; 0.672 [0.668, 0.684]. beside 100,000 files 0.648; 0.636 | kept |
+| read from the state only the records inside that folder, passing over the others unbuilt | 0.629 [0.624, 0.636]; 0.740 [0.730, 0.749]. beside 100,000 files 0.570; 0.696, peak memory 0.811; 0.799 | kept |
+| read only the pins path needs, and no other list in data.lock.d | 0.647 [0.644, 0.659]; 0.629 [0.622, 0.634]. beside 100,000 files 0.197; 0.240, peak memory 0.417; 0.435 | kept |
+| pass over the lines of the other pins' files in data.lock unread | 0.626 [0.619, 0.637]; 0.713 [0.689, 0.722], peak memory 0.666; 1.000. flat where data.lock lists no other files itself | kept |
+| answer a settled `sync <name>` from the named datasets alone | `sync` of 3 files among 11,000 0.567 [0.563, 0.572]; 0.595 [0.587, 0.602]. beside 100,000 files 0.370; 0.351 | kept |
+| read the number of processors once a run, not the cgroup's cpu limit for each batch of work | 0.997 [0.985, 1.005]; 1.002 [0.988, 1.017], and no other case moved by 3%: a reading is some 30 system calls | dropped: no case moved past the 3% bar |
+
+all of them, b3b182a against the changes, median times:
+
+| case | musl | glibc |
+|---|---|---|
+| `path` of 3 files among 11,000 | 45.7 to 7.8 ms, 0.168 [0.166, 0.174], peak memory 0.382 | 48.8 to 11.3 ms, 0.231 [0.228, 0.236], peak memory 0.808 |
+| `path` of 3 files beside 100,000 | 415 to 29 ms, 0.071 [0.070, 0.071], peak memory 0.305 | 479 to 50 ms, 0.107 [0.105, 0.109], peak memory 0.349 |
+| `sync` of 3 files among 11,000 | 43.1 to 9.5 ms, 0.221 [0.215, 0.224], peak memory 0.392 | 45.8 to 12.9 ms, 0.283 [0.277, 0.287], peak memory 0.866 |
+| `sync` of 3 files beside 100,000 | 392 to 30 ms, 0.077 [0.074, 0.078], peak memory 0.394 | 423 to 52 ms, 0.124 [0.118, 0.127], peak memory 0.415 |
+| `list` and `export` of 3 files beside 100,000 | 125 to 3.5 ms and 62 to 3.4 ms | 162 to 3.7 ms and 77 to 3.8 ms |
+| `path` and `sync` of the 10,000 files among 11,000 | 0.917 [0.900, 0.921] and 0.924 [0.915, 0.942] | 0.926 [0.909, 0.939] and 0.932 [0.918, 0.942] |
+| `path` of the 100,000 files | 0.972 [0.959, 0.989] | 0.973 [0.952, 1.028] |
+| `sync` and `status` of all, in either project, and `--version` | 0.967 to 0.999 | 0.990 to 1.004 |
+
+no peak memory interval started above 1.001. beside 100,000 files, `path` of 3 still reads all of the state's 24 MB of json to pass over its records: 25 ms on musl and 45 ms on glibc, nearly all of what is left. going further needs a state that keeps each dataset's records apart.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
