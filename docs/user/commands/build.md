@@ -1,6 +1,6 @@
 # build
 
-`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` says what the build would do with each step, shows the command of each that would run, and runs nothing. `fetchloom help recipes` shows how to write a recipe, and `build --help` points at it.
+`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one, and `--dry-run` shows the commands first. `fetchloom help recipes` shows how to write a recipe.
 
 ```sh
 fetchloom build --dry-run
@@ -37,15 +37,15 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 1. find the project and take its lock, which the build holds until it ends.
 2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet. with `--locked`, a fetched dataset whose entry changed, a recipe never built or changed since it was built, or a pin building would change, as one of a recipe `data.toml` no longer has, stops the build with `lock.outdated`, exit 1, before anything is fetched or run.
-3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them, besides results never built before, which the line names, and, where the disk does not clone files, the copies of what the largest step reads. when that and the `build_floor` [setting](settings.md) are more than the disk has free, it asks first; `--yes` answers yes, and with no one to ask the build stops with `unconfirmed`, exit 1, before anything runs. when the disk has less free than `build_floor` already, no answer helps, since the floor would stop the first step at once: the build stops with `local.io`, exit 50, before anything runs, `--yes` or not, as [the step](#the-step) shows.
+3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them, and, where the disk does not clone files, the copies of what the largest step reads. a result never built before is named instead, since its size is unknown. when that and the `build_floor` [setting](settings.md) are more than the disk has free, the build asks first; with no one to ask, it stops with `unconfirmed`, exit 1, unless `--yes` is given. when the disk has less free than `build_floor` already, the build stops with `local.io`, exit 50, `--yes` or not, as [the step](#the-step) shows.
 4. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
    - `Fetched` when `data.lock` pins what building it now would make and the data folder or a [mirror](../mirrors.md) holds the files the cache lacks, which it copies into the cache;
    - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
-   - otherwise put in the cache the files of the datasets it reads, from the data folder, a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache and data folder lack it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`. when fetching them fails, as offline, the error names each file of theirs in the data folder that is linked to a cache copy someone changed, which is why its pinned bytes had to be fetched again, as a [sync](sync.md#local-changes) does.
+   - otherwise put in the cache the files of the datasets it reads, from the data folder, a mirror or their source, then run its step, as [the step](#the-step) describes, and take in what it wrote. an [imported](add.md#files-on-this-machine) dataset has no source, so where the cache and the data folder lack it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`.
 5. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
-6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would. a file you edited stays, and when it is an edit of an earlier result than the one now pinned, as `copy = true` on the recipe allows, the warning says so and names `fetchloom sync --force` with that recipe alone, as [recipes](../recipes.md) shows.
-7. warn of each file of a recipe's `code` that git does not have, as `fetchloom status` does: a file never added, such as a new file in a code folder, or one `.gitignore` leaves out. a commit would leave it out, and a clone without it cannot build the recipe from the same code. a build that ran no step warns too, so a change to code that made the same files is not missed.
+6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would. a file you edited stays, and the warning names `fetchloom sync --force` with that recipe alone.
+7. warn of each file of a recipe's `code` that git does not have, as `fetchloom status` does: a file never added, or one `.gitignore` leaves out, which a clone would lack. a build that ran no step warns too.
 
 this output is from a project where `clean` is made from `iris` with `python3 clean.py`:
 
@@ -65,7 +65,7 @@ the dim line under `Running` is the step's own output. a build of what `data.loc
          Ok every recipe is built as data.lock pins it
 ```
 
-on a machine whose cache lacks the result `data.lock` pins, as in a fresh clone with no mirror holding it, the build runs the step again. a copy of the project that brought its data folder along takes the result from there instead, as [moving a project](cache.md#moving-a-project-to-another-machine) describes. when the step makes the same files, `data.lock` stays as it is and the last line says so, here after the cache lost clean's result:
+where neither the cache, the data folder nor a mirror holds the result `data.lock` pins, as in a fresh clone, the build runs the step again; a copy of the project that brought its data folder along takes the result from there, as [moving a project](cache.md#moving-a-project-to-another-machine) describes. when the step makes the same files, `data.lock` stays as it is, here after the cache lost clean's result:
 
 ```text
       Needs up to 100 B on the disk holding the cache, which has 331.1 GiB free
@@ -88,12 +88,12 @@ warning: git does not have step.py, code of made
 
 ## the step
 
-a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. the program is found as your shell finds it: in the folders of `PATH`, in order, and a name with a folder in it, such as `tools/prep`, from the project folder. on windows each folder is tried with the extensions of `PATHEXT` that windows can start, `.com`, `.exe`, `.bat` and `.cmd`, so `uv`, `python` and a `.cmd` shim such as `npm` all start; [windows](../windows.md#recipe-steps) has the details. fetchloom makes a folder for the step in the cache, which `<build>` stands for in the output:
+a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. the program is found as your shell finds it: in the folders of `PATH`, or for a name with a folder in it, such as `tools/prep`, from the project folder. on windows, `.com`, `.exe`, `.bat` and `.cmd` programs all start, as [windows](../windows.md#recipe-steps) explains. fetchloom makes a folder for the step in the cache, which `<build>` stands for in the output:
 
-- `<build>/in/<name>` holds a copy of each dataset it reads, made from the files `data.lock` pins in the cache, never from the data folder, where you may have changed a file. a file the cache took from the data folder came in only once its bytes there hashed to their pin. the copies are reflinks where the disk clones files and plain copies elsewhere, never hardlinks, and read-only, so a step that writes one anyway changes only its own copy.
+- `<build>/in/<name>` holds a copy of each dataset it reads, made from the files `data.lock` pins in the cache, never from the data folder, where you may have changed a file. the copies are reflinks where the disk clones files and plain copies elsewhere, never hardlinks, and read-only, so a step that writes one anyway changes only its own copy.
 - `<build>/out` is empty, and what the step writes there becomes the dataset.
 
-a program that is not there stops the build with `build.failed`, exit 60, and the error says where it looked. a name with a folder in it is missing from a clone until the project's environment is set up there, as `.venv/bin/python` is before the virtual environment is made, so the help asks for that rather than a full path in `run`, which would work on one machine only and change the recipe's key for everyone (stderr):
+a program that is not there stops the build with `build.failed`, exit 60, and the error says where it looked. a name with a folder in it, as `.venv/bin/python`, is missing from a clone until the project's environment is set up there, so the help asks for that rather than a full path in `run`, which would work on one machine only and change the recipe's key for everyone (stderr):
 
 ```text
     Running made · .venv/bin/python step.py <build>/in/raw <build>/out
@@ -101,11 +101,11 @@ error: made cannot start: the project folder has no .venv/bin/python
   help: a program named with a folder in it runs from the project folder, not from PATH: set up the project's environment so that .venv/bin/python is there, then run `fetchloom build` again
 ```
 
-a bare name, such as `python3.99`, is looked for on `PATH`, and the help says to install it or add its folder to `PATH`. a full path this machine lacks gets the help to install it there or to name a program `PATH` or the project folder holds.
+for a bare name, such as `python3.99`, the help says to install it or add its folder to `PATH`.
 
 the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. the step and everything it starts run in a group of their own, a process group on linux and macos and a job object on windows: when the step ends, anything it started and left running is ended too, and ctrl-c ends the whole group. on windows the group also ends when fetchloom does, even when task manager or a cancelled CI job ends it outright. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does and ends the step's group at once, with `Stopping (a second SIGTERM quits at once)` in the job's log; a second one quits as a second ctrl-c does, with one `Quit at once` line.
 
-while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. a disk with less free than the floor before any step runs would stop the first one at once, so the build stops there instead, `--yes` or not, and nothing runs. this output is from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes made` on a disk with 321 GiB free; the line under the error, left out here, says where the cache is:
+while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. a disk with less free than the floor before any step runs stops the build there, `--yes` or not. this output is from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes made` on a disk with 321 GiB free; the line under the error, left out here, says where the cache is:
 
 ```text
       Needs up to 122 B on the disk holding the cache, which has 321.1 GiB free
@@ -126,7 +126,7 @@ once the step exits with 0, fetchloom takes in what it wrote into `<build>/out`,
 - more files than the `most_files` [setting](settings.md) allows;
 - a file that changed while fetchloom read it, as when something the step started still writes.
 
-a step that changed a file of its own `code` while it ran fails too, since its result would answer code that is no longer there. fetchloom hashes each file, then moves it into the cache when it has no other name and is yours, and copies it otherwise and on windows, so a file the step linked from elsewhere, such as one of your own, stays as it was.
+a step that changed a file of its own `code` while it ran fails too, since its result would answer code that is no longer there. fetchloom moves each file into the cache, or copies it when it has another name, so a file the step linked from elsewhere, such as one of your own, stays as it was.
 
 ## what a failure leaves
 
@@ -150,11 +150,9 @@ error: clean failed: python3 exited with code 1 after 32 ms
   help: the whole output is in .fetchloom/builds/clean.log, and data.lock and data/clean are as they were
 ```
 
-the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
+the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, says `Waiting for another fetchloom building clean` and reuses what that build made.
 
-a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from the data folder or a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files fails, as [a rebuild that differs](#a-rebuild-that-differs) describes.
-
-code a recipe names that the project lacks, as in a clone of a commit that left it out, stops the build with `project.invalid`, exit 50, before its step runs. the help asks for the code first, since taking it out of `code` would change the recipe, and its key, for everyone. the end of the output (stderr):
+code a recipe names that the project lacks, as in a clone of a commit that left it out, stops the build with `project.invalid`, exit 50, before its step runs. the help asks for the code back, since taking it out of `code` would change the recipe's key for everyone (stderr):
 
 ```text
 error: clean cannot be built: its code clean.py is not in the project
@@ -163,7 +161,7 @@ error: clean cannot be built: its code clean.py is not in the project
 
 ## check
 
-`fetchloom build --check` asks whether each step still makes what `data.lock` pins. it runs every step the named recipes need, each from the inputs `data.lock` pins, a recipe it reads as its pinned result rather than as its own check made it, so each step is checked on its own. it compares what each makes with the files `data.lock` and `data.lock.d` list, so it needs no pinned result on the machine, and reports every step, not only the first that differs. this output is from a project with `clean`, which keeps rows of a table, and `emb`, whose step writes random bytes:
+`fetchloom build --check` asks whether each step still makes what `data.lock` pins. it runs every step the named recipes need, each from the inputs `data.lock` pins, so a step reads the pinned result of a recipe before it, not what the check made of it. it compares what each makes with the files `data.lock` lists, so it needs no pinned result on the machine, and reports every step, not only the first that differs. this output is from a project with `clean`, which keeps rows of a table, and `emb`, whose step writes random bytes:
 
 ```text
       Needs up to 135 B on the disk holding the cache, which has 320.4 GiB free
@@ -178,9 +176,9 @@ error: emb differs from data.lock: 0 of 1 files match
   help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```
 
-a check changes neither `data.lock` nor the data folder. when every step matches, it ends with `Ok every step made the files data.lock pins`, exit 0. the files of a step that matches enter the cache as its pinned result, so a check on a fresh clone leaves the results there for `sync` to place. one that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check, as it stops a build. a step that reads a recipe whose check made other files, and whose pinned result neither the cache, the data folder nor a mirror holds, cannot be checked: it is `Skipped`, and the error says so.
+a check changes neither `data.lock` nor the data folder. when every step matches, it ends with `Ok every step made the files data.lock pins`, exit 0, and the results are in the cache for `sync` to place, even on a fresh clone. a step that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check. a step that reads a recipe whose check made other files, and whose pinned result is not on this machine or a mirror, is `Skipped`, and the error says so.
 
-a check compares with `data.lock` as it is, so it runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks: a fetched dataset whose entry changed, or a recipe never built or changed since it was built, is `lock.outdated`, exit 1:
+a check runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks, as when a fetched dataset's entry changed or a recipe changed since it was built: that is `lock.outdated`, exit 1:
 
 ```text
 error: data.lock is out of date: clean changed since it was built
@@ -192,7 +190,7 @@ error: data.lock is out of date: clean changed since it was built
 
 ## prepare
 
-`fetchloom build --prepare` fetches what a build of the named recipes needs and runs nothing, so a build on a machine without the network, such as a cluster's compute node, finds it all in the cache. for each step the build would run, it puts in the cache the files of the datasets the step reads, taking them from the data folder or asking a [mirror](../mirrors.md) before their source as a build does, and the pinned result of each recipe the step reads. a step `data.lock` pins as building it now would make needs only its own result: it is `Up to date` when the cache holds it, and `Fetched` when the data folder or a mirror gave the files the cache lacked. a build places its datasets once its steps are done, so `--prepare` also fetches what placing them needs, such as a dataset read only by steps that will not run. with `--check`, every step counts as one that runs and nothing is placed. a fetched dataset whose entry changed in `data.toml` is pinned anew and written to `data.lock`, as `fetchloom lock` would, so the later build needs no network for it either; with `--locked`, it is `lock.outdated` instead. this output is from a project whose `clean` reads `iris`, with a cache that did not hold it yet:
+`fetchloom build --prepare` fetches what a build of the named recipes needs and runs nothing, so a build on a machine without the network, such as a cluster's compute node, finds it all in the cache. it fetches what each step that would run reads, from the data folder, a [mirror](../mirrors.md) or the source, and what placing the results needs. a step `data.lock` pins as building it now would make needs only its own result: `Up to date` when the cache holds it, and `Fetched` when the data folder or a mirror gave it. with `--check`, every step counts as one that runs, and nothing is placed. a fetched dataset whose entry changed in `data.toml` is pinned anew and written to `data.lock`, as `fetchloom lock` would, unless `--locked` makes that `lock.outdated`. this output is from a project whose `clean` reads `iris`, with a cache that did not hold it yet:
 
 ```text
  Downloaded 1 file · 72 B in 28 ms
@@ -233,9 +231,9 @@ error: emb differs from data.lock: 0 of 1 files match
   help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```
 
-the help does not guess why the files differ. the time or an unseeded random number can change what a step writes, and so can another version of a program or library it uses, as on a machine whose environment was set up apart from the lock files `code` names. look at the versions and the files before you choose: `--accept` pins these files for everyone who takes the commit.
+look at the program versions and the files before you choose: `--accept` pins these files for everyone who takes the commit.
 
-the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses: only you choose them over the pinned files. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the file `data.lock` pins, placed in the data folder; `status --json` gives the cache file of both. this run had the cache in its usual place on linux:
+the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the pinned file in the data folder; `status --json` gives the cache file of both. this run had the cache in its usual place on linux:
 
 ```text
 $ fetchloom status -v
@@ -255,11 +253,11 @@ a cache file is read-only and others may share it, so copy one before you change
          Ok pinned emb's kept rebuild in data.lock
 ```
 
-without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, as after accepting it once; when the recipe or `data.lock` changed since it was kept, so it no longer answers them, as after a checkout of another commit, which `fetchloom status` says of it; or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild, and so does a sync or `fetchloom remove` once `data.toml` no longer has the recipe, as they drop its pin; `cache gc` then frees its files. `--accept` cannot be combined with `--dry-run` or `--locked`.
+without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, when the recipe or `data.lock` changed since the rebuild was kept, as after a checkout of another commit, or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild, and so does dropping the recipe from `data.toml`; `cache gc` then frees its files. `--accept` cannot be combined with `--dry-run` or `--locked`.
 
 ## dry run
 
-a dry run says what a build would do with each step, deciding each as the build does against the cache, the data folder and the mirrors, and shows the command of each step that would or may run, so you can read it before it runs as you. steps come in the order a build runs them: each after the datasets it is made from, ties by name. a dry run reads `data.toml`, `data.lock`, each recipe's code, the cache, the data folder and each folder [mirror](../mirrors.md), and changes nothing: no file is written, no step runs and nothing is downloaded. it asks no web mirror. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
+a dry run says what a build would do with each step, in the order a build runs them, and shows the command of each step that would or may run, so you can read it before it runs as you. it reads `data.toml`, `data.lock`, each recipe's code, the cache, the data folder and each folder [mirror](../mirrors.md), and changes nothing: no file is written, no step runs, nothing is downloaded and no web mirror is asked. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
 
 ```text
       Would run clean · not built yet
@@ -272,13 +270,13 @@ a dry run says what a build would do with each step, deciding each as the build 
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
-the second line of a step is its command, the program and its arguments with each folder in place. no shell reads it, so a word with spaces stays one argument; the dry run quotes such a word. the third line names the datasets and code the step reads, the variables `env` sets for it, and the folder its result goes in.
+the second line of a step is its command, with each folder in place and a word with spaces quoted. the third line names the datasets and code the step reads, the variables `env` sets for it, and the folder its result goes in.
 
-each step has one of five actions, each the word for what the build after it reports in its JSON:
+each step has one of five actions:
 
 | action | when | the build then |
 |---|---|---|
-| `Would run` | its step runs: data.lock pins no result for what building it now would make and no earlier build left one, since something it is made from moved: a dataset it reads, its `run`, a file of its `code` or its `env`; or the result data.lock pins is neither in the cache nor on a mirror, as in a fresh clone. the line says what | `ran` |
+| `Would run` | its step runs: something it is made from changed, a dataset it reads, its `run`, a file of its `code` or its `env`, and no earlier build left that result; or the result data.lock pins is neither in the cache nor on a mirror, as in a fresh clone. the line says which | `ran` |
 | `Would fetch` | data.lock pins its result as building it now would make, and the data folder or a folder mirror holds the files the cache lacks, which the build copies in. the line says where from | `fetched` |
 | `Would reuse` | an earlier build of the same key, here or in another project that shares the cache, left a result the cache holds whole | `reused` |
 | `May run` | what the build does with it waits on what the build learns first: the result of a step before it that runs, a dataset whose entry in `data.toml` changed, which the build pins again first, or whether a web mirror holds its pinned result. the line says what | any of the others |
