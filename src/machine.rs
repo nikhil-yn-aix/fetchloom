@@ -33,6 +33,17 @@ pub(crate) struct Machine {
 impl Machine {
     /// reads this machine, raising the process's open-file limit on the way.
     pub(crate) fn read() -> Machine {
+        // a container of a chosen size, for CLI tests; release builds never read it
+        #[cfg(debug_assertions)]
+        let memory = std::env::var("FETCHLOOM_TEST_ROOM")
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .map(|bytes| Room {
+                bytes,
+                in_cgroup: true,
+            })
+            .or_else(memory);
+        #[cfg(not(debug_assertions))]
         let memory = memory();
         Machine {
             processors: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
@@ -40,6 +51,14 @@ impl Machine {
             memory_in_cgroup: memory.is_some_and(|room| room.in_cgroup),
             open_files: raise_open_files(),
         }
+    }
+}
+
+impl Machine {
+    /// the memory a container's limit leaves a run, none when no container's limit is what
+    /// holds it.
+    pub(crate) fn container_room(&self) -> Option<u64> {
+        self.memory.filter(|_| self.memory_in_cgroup)
     }
 }
 

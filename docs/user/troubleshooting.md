@@ -166,6 +166,17 @@ if `remove` changed `data.toml` and `data.lock` but could not delete files, fix 
 
 a command that was killed can leave a record that it holds the project. delete only the exact path a waiting command names, and only once the process it names has ended; [owner record](reference/project-folder.md#owner-record) explains the rules.
 
+### a project too big for its container
+
+in a container with a memory limit, fetchloom compares what reading a project's files takes, about 650 bytes a file data.lock pins, with what the limit leaves, and stops before reading them when that is too little, with `local.io`, exit 50. in a container limited to 64 MiB, the status of a project of 100,000 files says:
+
+```text
+error: reading this project's 100,000 files takes about 70.0 MiB of memory, more than the 60.6 MiB this container leaves fetchloom
+  help: raise the container's memory limit by 9.3 MiB or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files
+```
+
+`fetchloom path <name>` and a sync of named datasets already in place read only those datasets' pins and records, so they still answer there. memory a system has available outside a container is not checked: past it the system pages memory out rather than ending the run.
+
 ### the system cannot start another worker
 
 before it starts, fetchloom checks that the system lets it start a thread, and stops with `local.io`, exit 50, when it does not. lower `FETCHLOOM_THREADS`, or raise the process's or container's thread limit, then retry. this is a resource limit, not a damaged cache.

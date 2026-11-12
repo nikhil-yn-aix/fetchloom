@@ -14,6 +14,7 @@ mod model_tests;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::Error as _;
@@ -32,6 +33,51 @@ pub(crate) const FILE: &str = "data.lock";
 /// the one format of data.lock. a dataset of more files than it lists in itself keeps them in
 /// [`lists::FOLDER`], in the same format.
 const VERSION: u32 = 1;
+/// the least memory reading a project takes for each file data.lock pins: a status or settled
+/// sync of 100,000 files peaked at 76.7 MiB on glibc and 92.5 MiB on musl, of 1,000,001 at 690
+/// and 668.
+const PER_FILE: u64 = 650;
+/// what a run holds before it reads a project, which the musl build's allocator starts larger.
+const BASE: u64 = if cfg!(target_env = "musl") {
+    20 << 20
+} else {
+    8 << 20
+};
+
+/// the memory a container's limit leaves this run, past which the kernel ends it with no word.
+/// what a system without such a limit has available is no such wall: it can page out instead.
+static ROOM: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// sets the memory a container's limit leaves this run, none without one, for every later read
+/// of a lock.
+pub(crate) fn set_room(room: Option<u64>) {
+    ROOM.store(room.unwrap_or(u64::MAX), Ordering::Relaxed);
+}
+
+/// refuses to read the files `parsed` pins when that takes more memory than `room` leaves, so a
+/// run too big for its container says so instead of being ended partway. their lists are not
+/// read yet.
+fn fits(parsed: &[Parsed], room: u64) -> Result<(), Error> {
+    let files: u64 = parsed.iter().map(Parsed::files).sum();
+    let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
+    if need <= room {
+        return Ok(());
+    }
+    Err(Error::new(
+        Kind::LocalIo,
+        format!(
+            "reading this project's {} takes about {} of memory, more than the {} this container leaves fetchloom",
+            crate::units::count(files, "file", "files"),
+            crate::units::size(need),
+            crate::units::size(room)
+        ),
+    )
+    .help(format!(
+        "raise the container's memory limit by {} or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files",
+        crate::units::size(need - room)
+    )))
+}
+
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
 /// file first and fails the same way.
 pub(crate) const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
@@ -116,6 +162,14 @@ enum Parsed {
 }
 
 impl Parsed {
+    /// the files it pins, in data.lock or in its list.
+    fn files(&self) -> u64 {
+        match self {
+            Parsed::Source(locked, None) => locked.files.len() as u64,
+            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.count,
+        }
+    }
+
     fn name(&self) -> &str {
         match self {
             Parsed::Source(locked, _) => &locked.name,
@@ -631,6 +685,7 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
 /// the lock `parsed` gives, with each list it keeps below `root` read and checked. every reader's
 /// datasets pass through here, so the links they give are checked here once.
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
+    fits(&parsed, ROOM.load(Ordering::Relaxed))?;
     let mut lock = Lock::default();
     for entry in parsed {
         match entry {
@@ -1457,6 +1512,36 @@ mod tests {
 
     /// a dataset of more files than data.lock lists in itself keeps them in parts beside it, in
     /// the same format 1 as every other lock.
+    /// a lock whose files would take more memory than a container leaves is refused before its
+    /// lists are read, counting a dataset's files in data.lock or in its list; a read of some
+    /// datasets counts only theirs.
+    #[test]
+    fn a_lock_too_big_for_its_room_is_refused_before_its_lists() {
+        let text = sample_sorted()
+            .render_with(1)
+            .replace("file_count = 2\n", "file_count = 100000\n");
+        let parsed = parse(&text).unwrap();
+        // iris's 100,000 in its list, which is not on disk, and zeta's one file inline
+        let need = BASE + 100_001 * PER_FILE;
+        assert!(fits(&parsed, need).is_ok());
+        let error = fits(&parsed, need - 1).unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(
+            error
+                .message
+                .starts_with("reading this project's 100,001 files takes about "),
+            "{}",
+            error.message
+        );
+        let zeta = parse_only(&text, &|name| name == "zeta").unwrap();
+        let zeta: Vec<Parsed> = zeta
+            .into_iter()
+            .filter(|entry| entry.name() == "zeta")
+            .collect();
+        assert!(fits(&zeta, BASE + PER_FILE).is_ok());
+        assert!(fits(&zeta, BASE + PER_FILE - 1).is_err());
+    }
+
     #[test]
     fn a_version_1_lock_reads_a_big_dataset_from_its_parts() {
         let root = tempfile::tempdir().unwrap();

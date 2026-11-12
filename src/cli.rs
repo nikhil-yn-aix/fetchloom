@@ -657,6 +657,7 @@ pub(crate) fn run() -> ExitCode {
             crate::cache::set_hash_batches(settings.hash_batches());
             crate::cache::set_hash_workers(context.threads.limit(settings.hash_workers()));
             crate::source::set_most_files(settings.most_files.value);
+            crate::project::lock::set_room(settings.machine.container_room());
             crate::archive::set_limits(settings.archive_limits());
             context.settings = settings;
         }

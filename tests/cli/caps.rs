@@ -181,6 +181,47 @@ fn a_verbose_run_says_what_it_spends_and_why() -> Result {
     Ok(())
 }
 
+/// a project whose files need more memory than a container's limit leaves fetchloom is refused,
+/// `local.io` with exit 50, before its files are read, rather than ended by the kernel partway
+/// with no word; with room, the same command reads it.
+#[test]
+fn a_project_too_big_for_its_container_is_refused_before_it_is_read() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("parts")?;
+    for name in ["a.csv", "b.csv", "c.csv"] {
+        std::fs::write(folder.join(name), name)?;
+    }
+    let added = sandbox.run(&["add", "../parts"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let small = sandbox
+        .command(&["--json", "status"])
+        .env("FETCHLOOM_TEST_ROOM", (1_u64 << 20).to_string())
+        .output()?;
+    let document = json(&small)?;
+    assert_eq!(small.status.code(), Some(50), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "local.io", "{document}");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(message.contains("3 files"), "{message}");
+    assert!(
+        message.contains("1.0 MiB this container leaves"),
+        "{message}"
+    );
+    assert!(
+        error["help"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("memory limit"),
+        "{document}"
+    );
+    let roomy = sandbox
+        .command(&["--json", "status"])
+        .env("FETCHLOOM_TEST_ROOM", (1_u64 << 30).to_string())
+        .output()?;
+    assert_eq!(roomy.status.code(), Some(0), "{}", text(&roomy.stdout)?);
+    Ok(())
+}
+
 /// `--no-config`, or `FETCHLOOM_NO_CONFIG`, runs a command on the defaults past a settings file
 /// that would stop it, and `settings` says the file was bypassed. without it the file still
 /// stops the run, and data.toml is read either way.
