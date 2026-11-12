@@ -42,6 +42,6 @@ cargo bolero test --toolchain nightly-2026-11-03 --target x86_64-unknown-linux-g
 
 when a crash appears, preserve the input, minimize it, and add a deterministic regression test that fails before fixing the parser. run that test and the parser's module after the fix, then repeat the fuzz target. keep only inputs needed to explain and reproduce the behavior.
 
-[weekly deep checks](ci.md#scheduled-deep-checks) run all eight targets, including the joined-input property whose name lacks `fuzz_`. each gets five minutes, one worker, a 10-second input timeout and a 64 KiB input cap. logs and crashes survive a failure for fourteen days; a timeout fails. the scheduled corpus starts fresh, without a growing cache. the ordinary short properties remain part of every native CI run.
+[weekly deep checks](ci.md#scheduled-deep-checks) run all eight targets, including the joined-input property whose name lacks `fuzz_`, one after another from one build. each gets five minutes, one worker, a 10-second input timeout and a 64 KiB input cap. logs and crashes survive a failure for fourteen days; a timeout fails. the scheduled corpus starts fresh, without a growing cache. the ordinary short properties remain part of every native CI run.
 
 related: [building and testing](building-and-testing.md), [sources](../architecture/sources.md), [archives](../architecture/archives.md), [project](../architecture/project.md).

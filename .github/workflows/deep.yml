@@ -77,31 +77,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # cargo-bolero builds every test target and picks the property only when it runs it, so one
+  # build serves all eight, fuzzed one after another
   fuzz:
     if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'fuzz'
-    name: fuzz ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: member-names
-            test: archive::names::tests::fuzz_member_names
-          - name: joined-input
-            test: archive::input::tests::joined_parts_read_and_seek_as_the_whole
-          - name: seven-zip
-            test: archive::sevenz::tests::fuzz_seven_zip
-          - name: lock-reader
-            test: project::lock::canonical::tests::fuzz_lock_reader
-          - name: manifest
-            test: project::manifest::tests::fuzz_manifest
-          - name: drive-pages
-            test: source::drive::folder::tests::fuzz_drive_pages
-          - name: response-headers
-            test: net::headers::tests::fuzz_response_headers
-          - name: object-listings
-            test: source::bucket::xml::tests::fuzz_object_listings
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,26 +93,46 @@ jobs:
           tool: cargo-bolero@0.13.5
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: fuzz-${{ matrix.name }}-nightly-2026-11-03
+          shared-key: fuzz-nightly-2026-11-03
           workspaces: . -> target/fuzz-build
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +nightly-2026-11-03 fetch --locked
-      - name: five minutes of libFuzzer
+      - name: five minutes of libFuzzer for each target
         env:
           CARGO_NET_OFFLINE: 'true'
-          FUZZ_TARGET: ${{ matrix.test }}
+          TARGETS: >-
+            member-names=archive::names::tests::fuzz_member_names
+            joined-input=archive::input::tests::joined_parts_read_and_seek_as_the_whole
+            seven-zip=archive::sevenz::tests::fuzz_seven_zip
+            lock-reader=project::lock::canonical::tests::fuzz_lock_reader
+            manifest=project::manifest::tests::fuzz_manifest
+            drive-pages=source::drive::folder::tests::fuzz_drive_pages
+            response-headers=net::headers::tests::fuzz_response_headers
+            object-listings=source::bucket::xml::tests::fuzz_object_listings
         shell: bash
         run: |
-          mkdir -p target/fuzz-corpus target/fuzz-results/crashes
-          timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-03 \
-            --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
-            --corpus-dir target/fuzz-corpus --crashes-dir target/fuzz-results/crashes \
-            "$FUZZ_TARGET" 2>&1 | tee target/fuzz-results/run.log
+          failed=""
+          for entry in $TARGETS; do
+            name=${entry%%=*}
+            results="target/fuzz-results/$name"
+            mkdir -p "target/fuzz-corpus/$name" "$results/crashes"
+            echo "::group::$name"
+            # the first target's limit also covers the shared build
+            timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-03 \
+              --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
+              --corpus-dir "target/fuzz-corpus/$name" --crashes-dir "$results/crashes" \
+              "${entry#*=}" 2>&1 | tee "$results/run.log" || failed="$failed $name"
+            echo "::endgroup::"
+          done
           git diff --exit-code -- Cargo.lock
+          if [ -n "$failed" ]; then
+            echo "::error::fuzzing failed or timed out for:$failed"
+            exit 1
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: fuzz-${{ matrix.name }}-${{ github.run_attempt }}
+          name: fuzz-${{ github.run_attempt }}
           path: target/fuzz-results/
           if-no-files-found: warn
           retention-days: 14
