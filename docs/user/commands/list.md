@@ -25,9 +25,11 @@ a dataset without a lock entry says it is not locked yet. a [recipe](../recipes.
 with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its title, how many files and bytes it holds, and its license and DOI when the lock has them:
 
 ```text
-  iris · 2 files · 4.5 KiB · license cc0-1.0
-Iris.csv   4.4 KiB
-iris.data     15 B
+  iris · 4 files · 18.1 KiB · license cc0-1.0
+.gitattributes    1.5 KiB
+Iris.csv          5.0 KiB
+README.md         1.6 KiB
+database.sqlite  10.0 KiB
 ```
 
 a dataset without a lock entry prints no files and says to run `fetchloom sync`.

@@ -12,7 +12,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`export`](export.md) | write the SHA-256 of placed files, or the links of downloaded ones | check files with `sha256sum`, or download them with another tool |
 | [`push`](push.md) | copy the pinned files from the cache into a folder mirror | share a project's data through a lab disk or a usb drive |
 | [`search`](search.md) | find datasets on public catalogs | choose a reference from plain words |
-| [`status`](status.md) | list missing, edited and extra files | check local inputs without downloads |
+| [`status`](status.md) | list missing, edited and extra files; `--check` fails while the data is not ready | check local inputs without downloads |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
 | [`remove`](remove.md) | remove an entry and unchanged managed files | stop using a dataset |
 | [`drop`](drop.md) | leave files out of their dataset for good, as patterns in data.toml, and delete them from data/ | take bad samples, or a part you do not use, out of a dataset |
@@ -74,6 +74,8 @@ a command, option, dataset name, path in a dataset or help topic that fetchloom 
 ## output
 
 stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
+
+at a terminal, a line on stderr wider than the terminal wraps between words, never inside backticks or quotes. help there puts an example's comment below it when both do not fit, and continues a command too long for a line after `\`, or a backtick on windows, so it still runs when pasted. a pipe, a file or a coding agent gets each line whole.
 
 a ready `path` has no closing summary. a successful `lock --check` ends with `Ok data.lock matches data.toml`. quiet mode keeps stdout answers, warnings and errors. JSON mode returns one document and never prompts; `--progress` keeps plain progress lines on stderr beside it, and explicit debug logging can still write stderr.
 

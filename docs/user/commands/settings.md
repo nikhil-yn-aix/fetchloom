@@ -20,13 +20,13 @@ there are no command-specific options. [global options](README.md#global-options
 stdout holds one line per setting: its name, its value, where the value came from and the variable that changes it, which is always `FETCHLOOM_` and the name in capitals. a value longer than 24 characters, such as a deep cache folder, puts the rest of its row on a line of its own, and a terminal too narrow for every column leaves out the variable. from a real run:
 
 ```text
-resources        default                  default        FETCHLOOM_RESOURCES
-cache            /scratch/lab/fetchloom-cache
-                                          settings file  FETCHLOOM_CACHE
-jobs             32                       settings file  FETCHLOOM_JOBS
-host_jobs        8                        environment    FETCHLOOM_HOST_JOBS
-retries          4                        default        FETCHLOOM_RETRIES
-memory           4.0 GiB                  this machine   FETCHLOOM_MEMORY
+resources         default                  default        FETCHLOOM_RESOURCES
+cache             /scratch/lab/fetchloom-cache
+                                           settings file  FETCHLOOM_CACHE
+jobs              32                       settings file  FETCHLOOM_JOBS
+host_jobs         8                        environment    FETCHLOOM_HOST_JOBS
+retries           4                        default        FETCHLOOM_RETRIES
+memory            4.0 GiB                  this machine   FETCHLOOM_MEMORY
 ```
 
 | origin | where the value came from |
