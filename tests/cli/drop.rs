@@ -574,3 +574,108 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     assert_eq!(routes.requests().len(), asked);
     Ok(())
 }
+
+/// a command running in the background, with its pid for signals and its stderr read line by
+/// line as it comes.
+#[cfg(unix)]
+struct Signalled {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+#[cfg(unix)]
+impl Signalled {
+    fn start(mut command: std::process::Command) -> Result<Signalled> {
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let stderr = child.stderr.take().ok_or("no stderr")?;
+        let (sender, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(stderr)) {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Signalled { child, lines })
+    }
+
+    /// sends SIGINT, as ctrl-c at a terminal does, and returns once the command says it heard it.
+    fn interrupt(&self) -> Result {
+        let sent = std::process::Command::new("kill")
+            .args(["-INT", &self.child.id().to_string()])
+            .status()?;
+        if !sent.success() {
+            return Err("kill -INT failed".into());
+        }
+        let line = self
+            .lines
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|error| format!("no line after the ctrl-c: {error}"))?;
+        assert_eq!(line, "   Stopping (press ctrl-c again to quit at once)");
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(Option<i32>, String)> {
+        let status = self.child.wait()?;
+        let rest: Vec<String> = self.lines.iter().collect();
+        Ok((status.code(), rest.join("\n")))
+    }
+}
+
+/// a ctrl-c while drop plans its patterns ends it there, before it writes or claims anything.
+/// data.lock is a fifo the test fills only once the drop heard the ctrl-c, so the stop always
+/// comes after the drop began and before it plans.
+#[cfg(unix)]
+#[test]
+fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
+    use std::os::unix::fs::FileTypeExt as _;
+    let sandbox = Sandbox::new()?;
+    let folder = tree(&sandbox)?;
+    let work = sandbox.work();
+    let files = |folder: &std::path::Path| -> Result<Vec<(PathBuf, Vec<u8>)>> {
+        let mut found = Vec::new();
+        for name in ["keep.txt", "sub/s1.txt", "sub/s2.txt", "sub/s3.txt"] {
+            found.push((folder.join(name), fs::read(folder.join(name))?));
+        }
+        Ok(found)
+    };
+    let placed = files(&folder)?;
+    let manifest = fs::read(work.join("data.toml"))?;
+    let lock_path = work.join("data.lock");
+    let lock = fs::read(&lock_path)?;
+    fs::remove_file(&lock_path)?;
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&lock_path)
+            .status()?
+            .success()
+    );
+    let running = Signalled::start(sandbox.command(&["drop", "data/tree/sub"]))?;
+    // opening the fifo waits for the drop to open it, long after it listens for ctrl-c
+    let (opened, open) = std::sync::mpsc::channel();
+    let fifo = lock_path.clone();
+    std::thread::spawn(move || {
+        let _ = opened.send(fs::OpenOptions::new().write(true).open(fifo));
+    });
+    let mut writer = open.recv_timeout(std::time::Duration::from_secs(30))??;
+    running.interrupt()?;
+    writer.write_all(&lock)?;
+    drop(writer);
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    assert_eq!(stderr, "    Stopped at your request, so nothing changed");
+    assert!(fs::symlink_metadata(&lock_path)?.file_type().is_fifo());
+    assert_eq!(fs::read(work.join("data.toml"))?, manifest);
+    assert_eq!(files(&folder)?, placed);
+    fs::remove_file(&lock_path)?;
+    fs::write(&lock_path, &lock)?;
+    ok(&sandbox.run(&["drop", "data/tree/sub"])?)?;
+    assert!(!folder.join("sub/s1.txt").exists());
+    assert_eq!(fs::read(folder.join("keep.txt"))?, b"keep\n");
+    Ok(())
+}

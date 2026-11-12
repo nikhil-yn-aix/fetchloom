@@ -74,16 +74,33 @@ struct Edit<'a> {
     left: Vec<Left>,
 }
 
-/// how much work planning did: a step for each planned file it took and each listed path it
-/// compared with a pattern.
-#[derive(Default)]
-struct Pace {
+/// how much work planning did, a step for each planned file it took and each listed path it
+/// compared with a pattern, and where it looks for a stop: every [`CHUNK`] steps, and between
+/// its parts.
+struct Pace<'p> {
     steps: usize,
+    poll: &'p dyn Fn() -> Result<(), Error>,
 }
 
-impl Pace {
-    fn step(&mut self) {
+/// the steps planning takes between two looks for a stop, a few milliseconds of work.
+const CHUNK: usize = 4096;
+
+impl<'p> Pace<'p> {
+    fn new(poll: &'p dyn Fn() -> Result<(), Error>) -> Pace<'p> {
+        Pace { steps: 0, poll }
+    }
+
+    fn step(&mut self) -> Result<(), Error> {
         self.steps += 1;
+        if self.steps.is_multiple_of(CHUNK) {
+            (self.poll)()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn look(&self) -> Result<(), Error> {
+        (self.poll)()
     }
 }
 
@@ -109,18 +126,30 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         .iter()
         .map(|path| in_data_folder(&project.root, &here, &manifest.data_dir, path))
         .collect::<Result<Vec<_>, _>>()?;
+    // planning writes nothing, so a stop it finds leaves everything as it was
+    let poll = || {
+        context.stop.check().map_err(|mut error| {
+            error.message = format!("{}, so nothing changed", error.message);
+            error
+        })
+    };
+    let mut pace = Pace::new(&poll);
+    let progress = context.output.wait("Planning", planning(&paths));
+    pace.look()?;
     // a dataset with `place = false` is planned where its files would land, so they drop too
     let planned = plan::inputs(&manifest, &lock, &cache)?;
-    let asked = asked(&manifest, &lock, &cache, &planned, &paths)?;
-    let edits = edits(&manifest, &lock, &cache, &asked, &mut Pace::default())?;
-    refuse_what_breaks(&manifest, &lock, &planned, &cache, &edits)?;
-    let (updated, new_lock) = written(&text, &manifest, &lock, &edits)?;
+    let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace)?;
+    let edits = edits(&manifest, &lock, &cache, &asked, &mut pace)?;
+    refuse_what_breaks(&manifest, &lock, &planned, &cache, &edits, &pace)?;
+    let (updated, new_lock) = written(&text, &manifest, &lock, &edits, &pace)?;
     let new_manifest = Manifest::parse(&updated)?;
     let lock_changed = edits.values().any(|edit| !edit.leaving.is_empty());
     let mut dropped: Vec<Left> = edits.values().flat_map(|edit| edit.left.clone()).collect();
     dropped.sort_by(|a, b| a.path.cmp(&b.path));
     let scope = Scope::Only(edits.keys().map(|name| (*name).to_owned()).collect());
+    pace.look()?;
     let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    pace.look()?;
     let placing = place::Placing::new(
         &project,
         &new_manifest,
@@ -130,8 +159,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         &scope,
         survey,
     )?;
-    let verb = if dry_run { "Would exclude" } else { "Excluded" };
-    tell(&context.output, &edits, verb);
+    pace.look()?;
     let report = |placement, changes| Report {
         project: project.root.clone(),
         dropped: dropped.clone(),
@@ -142,20 +170,25 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     };
     if dry_run {
         let preview = placing.preview_removal();
+        pace.look()?;
+        context.stop.finish();
+        drop(progress);
+        tell(&context.output, &edits, "Would exclude");
         place::tell_preview(&context.output, &new_manifest, &scope, &preview);
         dry_run_done(&context.output, None);
         return Ok(report(preview.placement, Some(preview.changes)));
     }
-    // a stop asked while the data folder was read leaves the project as it was; once the files
-    // change, the drop runs to its end
-    context.stop.check()?;
+    // the last look for a stop: once the files change, the drop runs to its end
+    pace.look()?;
     context.stop.finish();
+    drop(progress);
     project.write(manifest::FILE, updated.as_bytes())?;
     if lock_changed {
         context.wrote_lists(&project.root, project.write_lists(&new_lock)?);
         project.write(lock::FILE, new_lock.render().as_bytes())?;
         project.sweep_lists(&new_lock);
     }
+    tell(&context.output, &edits, "Excluded");
     let placement = placing.remove_only(&context.output).map_err(|error| {
         let written = if lock_changed {
             "data.toml and data.lock were"
@@ -173,6 +206,17 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         "commit {changed}; other clones drop them at their next `fetchloom sync`"
     ));
     Ok(report(placement, None))
+}
+
+/// what the line that shows planning at work names: the path asked for, or how many.
+fn planning(paths: &[String]) -> String {
+    match paths {
+        [one] => format!("the drop of {one}"),
+        many => format!(
+            "the drop of {}",
+            units::count(many.len() as u64, "path", "paths")
+        ),
+    }
 }
 
 /// `arg`, a path relative to `here` that may name a file already deleted, as a path in the
@@ -230,6 +274,7 @@ fn asked<'p, 'a>(
     cache: &Cache,
     planned: &'p Plan<'a>,
     paths: &[String],
+    pace: &Pace,
 ) -> Result<Vec<Asked<'p, 'a>>, Error> {
     let mut sorted: Vec<(String, &'p Target<'a>)> = planned
         .targets
@@ -239,6 +284,7 @@ fn asked<'p, 'a>(
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let mut asked = Vec::with_capacity(paths.len());
     for path in paths {
+        pace.look()?;
         let found = named(&sorted, path);
         if found.targets.is_empty() {
             return Err(unplanned(manifest, lock, cache, planned, path));
@@ -420,7 +466,7 @@ fn edits<'a>(
             .iter()
             .filter_map(|target| Some((*target, target.file()?)))
         {
-            pace.step();
+            pace.step()?;
             if !seen.insert(target.path.as_str()) {
                 continue;
             }
@@ -444,7 +490,7 @@ fn edits<'a>(
                 .map(|(target, file)| (target.path.as_str(), file.path.as_str()))
                 .collect();
             let all = locked.files.iter().map(|file| file.path.as_str());
-            let patterns = written_for(request, &chosen, all, pace);
+            let patterns = written_for(request, &chosen, all, pace)?;
             record(edit, dataset, None, &chosen, &patterns);
             edit.leaving
                 .extend(targets.iter().map(|(_, file)| file.path.as_str()));
@@ -466,7 +512,7 @@ fn edits<'a>(
                 })
                 .collect();
             let kept = inside.values().map(String::as_str);
-            let patterns = written_for(request, &chosen, kept, pace);
+            let patterns = written_for(request, &chosen, kept, pace)?;
             record(edit, dataset, Some(origin), &chosen, &patterns);
             edit.members
                 .entry(origin)
@@ -530,7 +576,7 @@ fn written_for<'c>(
     chosen: &[(&'c str, &'c str)],
     all: impl Iterator<Item = &'c str>,
     pace: &mut Pace,
-) -> Vec<(Vec<&'c str>, String)> {
+) -> Result<Vec<(Vec<&'c str>, String)>, Error> {
     if request.folder
         && let Some(prefix) = shared_prefix(&request.path, chosen)
     {
@@ -539,21 +585,24 @@ fn written_for<'c>(
         if let Ok(glob) = Glob::new(&pattern) {
             let mut matched: HashSet<&str> = HashSet::new();
             for path in all {
-                pace.step();
+                pace.step()?;
                 // every path the pattern matches starts with its folder, so the rest skip the match
                 if path.starts_with(prefix.as_str()) && glob.matches(path) {
                     matched.insert(path);
                 }
             }
             if matched == wanted {
-                return vec![(chosen.iter().map(|(placed, _)| *placed).collect(), pattern)];
+                return Ok(vec![(
+                    chosen.iter().map(|(placed, _)| *placed).collect(),
+                    pattern,
+                )]);
             }
         }
     }
-    chosen
+    Ok(chosen
         .iter()
         .map(|(placed, origin)| (vec![*placed], glob::escape(origin)))
-        .collect()
+        .collect())
 }
 
 /// the folder in the origin's own paths that `folder`, in the project, stands for: what is left
@@ -665,8 +714,10 @@ fn refuse_what_breaks(
     planned: &Plan,
     cache: &Cache,
     edits: &BTreeMap<&str, Edit>,
+    pace: &Pace,
 ) -> Result<(), Error> {
     for (dataset, edit) in edits {
+        pace.look()?;
         let kept = planned
             .targets
             .iter()
@@ -741,9 +792,11 @@ fn written(
     manifest: &Manifest,
     lock: &Lock,
     edits: &BTreeMap<&str, Edit>,
+    pace: &Pace,
 ) -> Result<(String, Lock), Error> {
     let mut updated = text.to_owned();
     for (dataset, edit) in edits {
+        pace.look()?;
         for (archive, patterns) in &edit.members {
             let patterns: Vec<String> = patterns.iter().cloned().collect();
             updated = manifest::with_exclusions(&updated, dataset, Some(archive), &patterns)?;
@@ -869,8 +922,9 @@ mod tests {
         let (manifest, lock, _folder, cache) = tiny(10, 100);
         let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
         let paths = ["data/tiny/d003".to_owned(), "data/tiny/d007".to_owned()];
-        let asked = asked(&manifest, &lock, &cache, &planned, &paths).unwrap();
-        let mut pace = Pace::default();
+        let go_on = || Ok(());
+        let mut pace = Pace::new(&go_on);
+        let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace).unwrap();
         let edits = edits(&manifest, &lock, &cache, &asked, &mut pace).unwrap();
         assert_eq!(
             edits["tiny"].exclude,
@@ -878,6 +932,33 @@ mod tests {
         );
         assert_eq!(edits["tiny"].left.len(), 200);
         assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
+    }
+
+    /// planning looks for a stop every chunk of its work, and a stop it finds there ends it at
+    /// once, however much is left: the look that finds it is the last.
+    #[test]
+    fn planning_ends_at_the_first_look_after_a_stop() {
+        let (manifest, lock, _folder, cache) = tiny(4, 1_000);
+        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let paths = ["data/tiny/d001", "data/tiny/d002", "data/tiny/d003"].map(str::to_owned);
+        let stop = crate::stop::Stop::default();
+        let looks = std::cell::Cell::new(0);
+        let poll = || {
+            looks.set(looks.get() + 1);
+            // a look for each path, then the first inside the work on the first folder
+            if looks.get() == 4 {
+                stop.ask();
+            }
+            stop.check()
+        };
+        let mut pace = Pace::new(&poll);
+        let asked = asked(&manifest, &lock, &cache, &planned, &paths, &pace).unwrap();
+        assert_eq!(looks.get(), 3);
+        let Err(stopped) = edits(&manifest, &lock, &cache, &asked, &mut pace) else {
+            panic!("planning went on after the stop");
+        };
+        assert_eq!(stopped.kind, Kind::Interrupted);
+        assert_eq!((looks.get(), pace.steps), (4, CHUNK));
     }
 
     #[test]

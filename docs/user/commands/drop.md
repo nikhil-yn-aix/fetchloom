@@ -95,6 +95,19 @@ Would remove 1 file no dataset needs
          Ok dry run, nothing was changed
 ```
 
+## stopping
+
+drop plans everything before it writes: which files each path names and the pattern for each. in a dataset of many files that takes a while, so a line says it is at work, `Planning the drop of data/tiny/d050`, or `of 50 paths` for several. a terminal shows it at once and adds the time it has taken; a log or a pipe gets it after 2 seconds and again every 10 seconds.
+
+ctrl-c while it plans, in a dry run too, stops it before it writes anything, exit 130. stderr:
+
+```text
+   Stopping (press ctrl-c again to quit at once)
+    Stopped at your request, so nothing changed
+```
+
+once drop starts writing `data.toml`, ctrl-c no longer stops it: it writes `data.lock`, deletes the files and says what it did, as without the ctrl-c.
+
 ## JSON
 
 `--json` returns `result.project`; `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, by path, with `archive` null for a file the source lists; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
