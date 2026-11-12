@@ -31,6 +31,8 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | xfs staging through `O_TMPFILE` | xfs s4 0.955 [0.914, 1.026] | dropped, no win | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | a new object published on btrfs by one rename | 0.970 | dropped, no win | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | archives | short memory moves in the musl bzip2 decoder | 64 MiB 2.843 s musl, 2.211 s glibc; 31.47% of musl user samples in `memmove` | upstream note, no change | [bzip2](#musl-bzip2-short-memory-moves-2026-11-12) |
+| archives | stream every member above 1 MiB to an existing writer | large gzip 0.717 glibc, 0.774 musl; 1.0625 MiB-member control 1.021 [1.005, 1.044] on glibc | dropped | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
+| archives | stream declared large members with spare writer budget | large gzip 0.754 glibc, 0.759 musl; 4.0625 MiB-member control 0.856 and 0.885; highest musl RSS 88.6 MiB | kept | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -555,6 +557,49 @@ the CPU sweep found a libc-specific bzip2 gap, not a measured fix. on a8f9dad7, 
 the static musl user profile put 31.47% of samples in `memmove`, 51.61% in `libbz2_rs_sys::decompress::decompress`, and 14.28% in the wrapper's decompressor. fetchloom uses bzip2 0.6.1 and libbz2-rs-sys 0.2.5. the short move-to-front rotations are an upstream investigation lead; they do not prove which replacement would help. the native command also omits fetchloom's SHA-256, staged publication and archive guards, so its time is not a promised decoder speedup.
 
 no dependency, decoder or allocator is changed, and no upstream issue was submitted. the raw `archive-large-tar.bz2-{glibc,musl}` rounds and `profile-musl-large-bzip` samples remain with the CPU sweep's records. a future fix needs an independent before/after comparison on both libc builds, not the native gap as its acceptance result.
+
+## overlapping archive decoding and storage, 2026-11-12
+
+the original archive reader decoded, wrote and hashed a large member before sending it to a writer for sealing. the first prototype sent the 1 MiB prefix and then reused three 256 KiB buffers while an existing writer wrote and hashed them. it made a real `get` of a 64 MiB gzip member 0.717 [0.695, 0.741] of the glibc time and 0.774 [0.762, 0.785] on musl, twelve clean pairs each. ZIP was 0.816 [0.779, 0.833] and 0.806 [0.782, 0.815]. these are command timings, not the earlier CPU-only ceiling.
+
+that version was dropped. a boundary control with 32 different 1.0625 MiB members took 0.1614 → 0.1647 s on glibc, ratio 1.021 [1.005, 1.044], over 22 clean pairs including a bounded confirmation. its median child RSS was 17.1 → 17.9 MiB. extra memory was not the failure: the handoff's cost was not repaid for short members. the boundary regression remains in the records rather than being hidden by the large-file win.
+
+these runs used separate switched release binaries for glibc and static musl, fat LTO, one codegen unit, abort, frame pointers and line tables, on the same EPYC 7V13 as the checksum measurements. a local HTTP server supplied ZIP, plain tar, tar.gz, tar.zst, tar.xz, tar.bz2 and 7z fixtures with one 64 MiB member, plus a ZIP of 4,000 × 4 KiB files and the boundary control. `get` used a fresh cache/output on ext4 NVMe, warm source files, ordinary defaults and a thread-cap-one control. hashlib checked every output's size and SHA-256 outside the clock. the first setup batch's checker expected a `data/` directory which `get` correctly stripped; those failed-check rows are retained separately and are not measurements accepted here.
+
+`abh.py` randomized the two arms within each round, four pairs per lock acquisition on cores 12–23 at nice 0. builds used cores 0–11, nice 10 and three jobs. a burst on either arm excluded the whole pair. GNU time measured child peak RSS without the Python parent's inherited floor; paired median ratios have 95% bootstrap intervals. all commands, source patches, binary hashes and round records remain with the CPU sweep's archive handoff evidence.
+
+the kept version admits streaming only for a member declared above 4 MiB. shorter members take the original path. the declared size is only a scheduling hint: no buffer is sized from it, and every actual byte still passes the existing guard. the size admission removed the earlier boundary regression; a separate 32-member fixture just beyond the new boundary, at 4.0625 MiB per file, also gained. after resource levels landed, a zero- or one-writer budget was kept inline as well, so single-core and lean runs allocate no new handoff buffers. this fallback is checked directly with paused writers, not claimed as a timed speedup.
+
+| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB before → after |
+|---|---|---:|---:|---:|---|---|
+| 64 MiB ZIP | glibc | 13 | 0.2991 | 0.2448 | 0.816 [0.780, 0.830] | 19.7 → 19.5 |
+| 64 MiB ZIP | musl | 12 | 0.2923 | 0.2400 | 0.817 [0.778, 0.840] | 64.3 → 61.3 |
+| 64 MiB gzip | glibc | 8 | 0.2853 | 0.2174 | 0.754 [0.751, 0.778] | 19.9 → 19.2 |
+| 64 MiB gzip | musl | 8 | 0.2734 | 0.2078 | 0.759 [0.726, 0.774] | 58.3 → 60.3 |
+| 64 MiB zstd | glibc | 14 | 0.2328 | 0.2243 | 0.962 [0.952, 0.978] | 19.7 → 19.3 |
+| 64 MiB zstd | musl | 12 | 0.2363 | 0.2242 | 0.949 [0.928, 0.970] | 63.5 → 62.5 |
+| 64 MiB xz | glibc | 14 | 0.7797 | 0.7178 | 0.926 [0.917, 0.929] | 24.4 → 25.0 |
+| 64 MiB xz | musl | 12 | 0.7817 | 0.7149 | 0.909 [0.897, 0.923] | 72.1 → 72.3 |
+| 64 MiB bzip2 | glibc | 16 | 2.2748 | 2.2154 | 0.972 [0.966, 0.975] | 21.7 → 21.2 |
+| 64 MiB bzip2 | musl | 12 | 3.0295 | 2.9879 | 0.982 [0.978, 0.992] | 62.8 → 68.8 |
+| 64 MiB plain tar | glibc | 13 | 0.2998 | 0.3074 | 0.977 [0.957, 1.015] | 37.2 → 32.8 |
+| 64 MiB plain tar | musl | 12 | 0.3140 | 0.3120 | 0.971 [0.955, 0.999] | 59.0 → 58.4 |
+| 64 MiB 7z | glibc | 10 | 0.8800 | 0.8184 | 0.930 [0.922, 0.940] | 23.3 → 23.6 |
+| 64 MiB 7z | musl | 11 | 0.9403 | 0.8725 | 0.936 [0.929, 0.945] | 70.4 → 72.0 |
+| 32 × 1.0625 MiB ZIP | glibc | 8 | 0.1492 | 0.1509 | 0.993 [0.961, 1.037] | 17.2 → 17.2 |
+| 32 × 1.0625 MiB ZIP | musl | 12 | 0.1610 | 0.1641 | 1.006 [0.976, 1.031] | 57.5 → 56.4 |
+| 32 × 4.0625 MiB ZIP | glibc | 15 | 0.5935 | 0.4979 | 0.856 [0.835, 0.869] | 24.9 → 24.2 |
+| 32 × 4.0625 MiB ZIP | musl | 8 | 0.5872 | 0.5119 | 0.885 [0.856, 0.905] | 72.5 → 71.5 |
+| 4,000 × 4 KiB ZIP | glibc | 12 | 0.2286 | 0.2247 | 0.982 [0.957, 0.999] | 23.7 → 23.7 |
+| 4,000 × 4 KiB ZIP | musl | 12 | 0.2302 | 0.2322 | 1.007 [0.964, 1.052] | 80.8 → 78.7 |
+| 64 MiB ZIP, thread cap 1 | glibc | 12 | 0.2925 | 0.2938 | 0.995 [0.964, 1.012] | 19.8 → 19.6 |
+| 64 MiB ZIP, thread cap 1 | musl | 10 | 0.2388 | 0.2416 | 1.011 [0.977, 1.026] | 50.3 → 49.2 |
+
+large gzip is 24–25% faster and ZIP about 18% faster end to end on both libc builds. no control establishes a time regression; the wider small-file, old-boundary and single-thread intervals do not establish equivalence either. GNU's largest clean child RSS across the fixtures was 38.2 MiB after the change, musl's 88.6 MiB. small median increases in some cases remain well inside the default budget and are shown in the table. the pipeline keeps at most the initial 1 MiB prefix and three 256 KiB reusable buffers for its handoff, not a whole large member.
+
+the second build kept both arms in the same binary again. busy GNU rounds were retained and replaced by bounded quiet batches, with any wait for lower load outside the measure lock. the table pools clean whole pairs only. the default writer budget and thread-cap-one paths used in these A/Bs are unchanged by the subsequently rebased reader-budget and resource-level changes.
+
+the old reader failed the paused-writer offload test. the first prototype failed the boundary-admission test. independent 8 MiB SHA-256 vectors check successful storage and refused-thread fallback; bounded-buffer reuse, interruption and all archive guard tests pass. deliberately replacing interrupted-channel handling with a writer error changed `Interrupted` to `LocalIo` and failed its assertion. deliberately enabling the handoff for a one-writer budget failed the inline-storage assertion; both were restored. the experiment switch is absent from the kept code.
 
 ## evidence limits
 

@@ -309,8 +309,8 @@ pub(crate) struct Skipped {
     pub(crate) first: Option<String>,
 }
 
-/// stores one file the guard let through, reading it from the archive.
-type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), Error> + 'k;
+/// stores a guarded member, using its declared size only as a storage-scheduling hint.
+type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, u64, &mut dyn Read) -> Result<(), Error> + 'k;
 
 /// unpacks every file in `input` into the cache. an archive refused part way leaves no object
 /// behind. `writers` caps its writer threads; zero keeps storage on the reading thread.
@@ -334,8 +334,8 @@ pub(crate) fn unpack(
     let mut guard = Guard::new(limits, watch, &meter).writing_to(cache.root(), filesystem);
     let (mut members, added) = store::store_all(cache, writers, |writers| {
         let mut buffer = vec![0; BUFFER];
-        let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {
-            writers.keep(guard, path, from, &mut buffer)
+        let mut keep = |guard: &mut Guard<'_>, path: String, size: u64, from: &mut dyn Read| {
+            writers.keep(guard, path, size, from, &mut buffer)
         };
         match format {
             Format::Zip => zip::unpack(input, &mut guard, &mut keep)?,

@@ -675,7 +675,7 @@ fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
         let mut guard =
             Guard::new(&limits, &|_| false, &meter).holding_at_most(scratch.cache.root(), 3);
         let mut kept = Vec::new();
-        let mut keep = |_: &mut Guard<'_>, path: String, from: &mut dyn std::io::Read| {
+        let mut keep = |_: &mut Guard<'_>, path: String, _: u64, from: &mut dyn std::io::Read| {
             std::io::copy(from, &mut std::io::sink()).unwrap();
             kept.push(path);
             Ok(())

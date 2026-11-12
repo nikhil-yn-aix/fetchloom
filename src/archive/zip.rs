@@ -41,7 +41,7 @@ pub(super) fn unpack(
             .by_index(index)
             .map_err(|err| damaged(Some(&path), &err))?;
         guard.fits(&path, file.size())?;
-        keep(guard, path, &mut file)?;
+        keep(guard, path, file.size(), &mut file)?;
     }
     Ok(())
 }

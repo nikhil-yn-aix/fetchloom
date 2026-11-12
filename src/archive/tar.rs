@@ -148,7 +148,7 @@ pub(super) fn unpack(
             Named::File(path) => {
                 guard.fits(&path, entry.size())?;
                 headers.in_member.set(true);
-                let kept = keep(guard, path, &mut entry);
+                let kept = keep(guard, path, entry.size(), &mut entry);
                 headers.in_member.set(false);
                 kept?;
             }

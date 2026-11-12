@@ -78,7 +78,7 @@ fn take(
     match guard.name(&raw, entry.is_directory)? {
         Named::File(path) => {
             guard.fits(&path, entry.size)?;
-            keep(guard, path, read)
+            keep(guard, path, entry.size, read)
         }
         Named::System(path) => {
             guard.pass(&raw, read)?;

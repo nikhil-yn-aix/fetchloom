@@ -4,6 +4,8 @@
 //! object is put in place until the whole archive passed every check, so a refused archive leaves
 //! nothing in the cache, and an object another process already uses is never taken back.
 
+mod stream;
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
@@ -20,16 +22,25 @@ use crate::cache::{Cache, MOST_FLUSHED_ALONE, Member, NewObject, Sealed, Staging
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
-/// members up to this size reach a writer as bytes in memory. a larger one is written by the
-/// reading thread as it is read, and only flushed and closed by a writer.
+/// members up to this size reach a writer as bytes in memory. larger ones stream to a writer
+/// or stay on the reader when the handoff would not pay for itself.
 const SMALL: usize = 1 << 20;
+
+/// leaves room to repay the handoff above the in-memory spill threshold.
+const LARGE: u64 = 4 << 20;
 
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
 const MOST_WRITERS: usize = 8;
 
 enum Job {
+    #[cfg(test)]
+    Pause {
+        ready: SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    },
     Bytes(String, Vec<u8>),
     Written(String, Box<NewObject>),
+    Stream(String, Box<stream::Receiving>),
 }
 
 /// where the reading thread hands each member.
@@ -40,14 +51,16 @@ pub(super) struct Writers<'s> {
     flush_each: bool,
     few: Option<&'s Few>,
     failed: &'s AtomicBool,
+    streaming: bool,
 }
 
 impl Writers<'_> {
-    /// reads one member through the guard and queues it for a writer.
+    /// reads a member through the guard; its declared size chooses only the storage handoff.
     pub(super) fn keep(
         &self,
         guard: &mut Guard<'_>,
         path: String,
+        size: u64,
         from: &mut dyn Read,
         buffer: &mut [u8],
     ) -> Result<(), Error> {
@@ -56,18 +69,34 @@ impl Writers<'_> {
         }
         let mut spill = Spill {
             staging: self.staging,
+            jobs: (self.streaming && size > LARGE)
+                .then_some(self.jobs.as_ref())
+                .flatten(),
+            path: &path,
             bytes: Vec::new(),
             object: None,
+            stream: None,
         };
         guard.copy(&path, from, &mut spill, buffer)?;
-        let job = match spill.object {
+        let Spill {
+            bytes,
+            object,
+            stream,
+            ..
+        } = spill;
+        if let Some(stream) = stream {
+            return stream.finish().map_err(|error| not_written(&path, &error));
+        }
+        let job = match object {
             Some(object) => Job::Written(path, Box::new(object)),
-            None => Job::Bytes(path, spill.bytes),
+            None => Job::Bytes(path, bytes),
         };
         if let Some(jobs) = &self.jobs {
             jobs.send(job).map_err(|_| stopped())
         } else {
-            locked(self.sealed).push(seal(self.staging, job, self.flush_each, self.few)?);
+            if let Some(sealed) = seal(self.staging, job, self.flush_each, self.few)? {
+                locked(self.sealed).push(sealed);
+            }
             Ok(())
         }
     }
@@ -81,6 +110,18 @@ pub(super) fn store_all(
     cap: Option<usize>,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
+    let threads = thread::available_parallelism()
+        .map_or(1, NonZeroUsize::get)
+        .min(MOST_WRITERS);
+    let threads = cap.map_or(threads, |cap| threads.min(cap));
+    store_with(cache, threads, read)
+}
+
+fn store_with(
+    cache: &Cache,
+    threads: usize,
+    read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
+) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let staging = cache.staging().map_err(|err| {
         Error::io(
             format_args!(
@@ -90,10 +131,6 @@ pub(super) fn store_all(
             &err,
         )
     })?;
-    let threads = thread::available_parallelism()
-        .map_or(1, NonZeroUsize::get)
-        .min(MOST_WRITERS);
-    let threads = cap.map_or(threads, |cap| threads.min(cap));
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let batch = cache
         .batch()
@@ -113,11 +150,21 @@ pub(super) fn store_all(
         loop {
             let next = locked(&queue).recv();
             let Ok(job) = next else { return };
+            #[cfg(test)]
+            let job = match job {
+                Job::Pause { ready, release } => {
+                    ready.send(()).unwrap();
+                    release.recv().unwrap();
+                    continue;
+                }
+                job => job,
+            };
             if failed.load(Ordering::Relaxed) {
                 continue;
             }
             match seal(&staging, job, flush_each, keeps) {
-                Ok(done) => locked(&sealed).push(done),
+                Ok(Some(done)) => locked(&sealed).push(done),
+                Ok(None) => {}
                 Err(err) => {
                     failed.store(true, Ordering::Relaxed);
                     locked(&trouble).get_or_insert(err);
@@ -137,6 +184,7 @@ pub(super) fn store_all(
             flush_each,
             few: keeps,
             failed: &failed,
+            streaming: threads > 1,
         };
         // with no live consumer the reader stores inline; joining before closing would hang.
         let result = read(&writers);
@@ -226,26 +274,32 @@ fn seal(
     job: Job,
     flush: bool,
     few: Option<&Few>,
-) -> Result<(String, Sealed), Error> {
+) -> Result<Option<(String, Sealed)>, Error> {
     let (path, object) = match job {
+        #[cfg(test)]
+        Job::Pause { .. } => return Err(stopped()),
         Job::Bytes(path, bytes) => {
             let object = staging.new_object().and_then(|mut object| {
                 object.write_all(&bytes)?;
-                Ok(object)
+                Ok(Some(object))
             });
             (path, object)
         }
-        Job::Written(path, object) => (path, Ok(*object)),
+        Job::Written(path, object) => (path, Ok(Some(*object))),
+        Job::Stream(path, stream) => (path, stream.store(staging)),
+    };
+    let Some(object) = object.map_err(|error| not_written(&path, &error))? else {
+        return Ok(None);
     };
     // in a batch the members are flushed together before any is published
-    let sealed = object.and_then(|object| {
+    let sealed = (|| {
         if let Some(few) = few {
             few.keep(&object)?;
         }
         object.seal(flush)
-    });
+    })();
     match sealed {
-        Ok(sealed) => Ok((path, sealed)),
+        Ok(sealed) => Ok(Some((path, sealed))),
         Err(err) => Err(not_written(&path, &err)),
     }
 }
@@ -322,21 +376,35 @@ fn stopped() -> Error {
     Error::new(Kind::LocalIo, "storing the archive's files stopped")
 }
 
-/// a member's bytes: in memory while small, in a new object once they outgrow that.
+/// a member's bytes: buffered while small, then streamed to a writer or stored inline.
 struct Spill<'c> {
     staging: &'c Arc<Staging>,
+    jobs: Option<&'c SyncSender<Job>>,
+    path: &'c str,
     bytes: Vec<u8>,
     object: Option<NewObject>,
+    stream: Option<stream::Sending>,
 }
 
 impl Write for Spill<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if let Some(stream) = &mut self.stream {
+            return stream.write(buffer);
+        }
         if let Some(object) = &mut self.object {
             return object.write(buffer);
         }
         if self.bytes.len() + buffer.len() <= SMALL {
             self.bytes.extend_from_slice(buffer);
             return Ok(buffer.len());
+        }
+        if let Some(jobs) = self.jobs {
+            let (mut stream, receiving) = stream::channel(std::mem::take(&mut self.bytes));
+            jobs.send(Job::Stream(self.path.to_owned(), Box::new(receiving)))
+                .map_err(|_| io::Error::other("the archive member's writer stopped"))?;
+            let written = stream.write(buffer)?;
+            self.stream = Some(stream);
+            return Ok(written);
         }
         let mut object = self.staging.new_object()?;
         object.write_all(&std::mem::take(&mut self.bytes))?;
@@ -368,7 +436,13 @@ mod tests {
         store_all(&scratch.cache, None, |writers| {
             let mut buffer = vec![0; 64 << 10];
             for (path, bytes) in members {
-                writers.keep(&mut guard, (*path).to_owned(), &mut &bytes[..], &mut buffer)?;
+                writers.keep(
+                    &mut guard,
+                    (*path).to_owned(),
+                    bytes.len() as u64,
+                    &mut &bytes[..],
+                    &mut buffer,
+                )?;
             }
             Ok(())
         })
@@ -418,7 +492,13 @@ mod tests {
         let (mut members, added) = store_all(&scratch.cache, Some(0), |writers| {
             assert!(writers.jobs.is_none());
             for (name, mut bytes) in [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())] {
-                writers.keep(&mut guard, name.to_owned(), &mut bytes, &mut [0; 1024])?;
+                writers.keep(
+                    &mut guard,
+                    name.to_owned(),
+                    bytes.len() as u64,
+                    &mut bytes,
+                    &mut [0; 1024],
+                )?;
             }
             Ok(())
         })
@@ -440,6 +520,7 @@ mod tests {
             writers.keep(
                 &mut guard,
                 "small".to_owned(),
+                4,
                 &mut &b"1,2\n"[..],
                 &mut [0; 1024],
             )?;
@@ -504,6 +585,7 @@ mod tests {
             writers.keep(
                 &mut guard,
                 "large.bin".to_owned(),
+                bytes.len() as u64,
                 &mut &bytes[..],
                 &mut [0; 1024],
             )?;
@@ -580,6 +662,7 @@ mod tests {
                 writers.keep(
                     &mut guard,
                     format!("{index}.csv"),
+                    3,
                     &mut format!("{index}\n").as_bytes(),
                     &mut buffer,
                 )?;
@@ -623,6 +706,7 @@ mod tests {
             writers.keep(
                 &mut guard,
                 "discard".to_owned(),
+                8,
                 &mut &b"not kept"[..],
                 &mut [0; 32],
             )?;
@@ -637,5 +721,209 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    fn pending_files(scratch: &Scratch) -> usize {
+        let mut folders = vec![scratch.cache.root().join("tmp")];
+        let mut count = 0;
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(folder).unwrap().flatten() {
+                if entry.file_type().unwrap().is_dir() {
+                    folders.push(entry.path());
+                } else if entry.path().extension().is_some_and(|ext| ext == "new") {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn paused_writers(writers: &Writers<'_>, count: usize) -> Vec<SyncSender<()>> {
+        let (ready, paused) = sync_channel(count);
+        let mut releases = Vec::new();
+        for _ in 0..count {
+            let (release, waiting) = sync_channel(1);
+            writers
+                .jobs
+                .as_ref()
+                .unwrap()
+                .send(Job::Pause {
+                    ready: ready.clone(),
+                    release: waiting,
+                })
+                .unwrap();
+            releases.push(release);
+        }
+        for _ in 0..count {
+            paused.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        releases
+    }
+
+    #[test]
+    fn large_members_leave_writes_and_hashing_on_the_writer() {
+        struct Ahead {
+            read: usize,
+            notified: bool,
+            ready: SyncSender<()>,
+        }
+        impl Read for Ahead {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.notified && self.read >= SMALL + 2 * (64 << 10) {
+                    self.notified = true;
+                    self.ready.send(()).unwrap();
+                }
+                let size = buffer.len().min(8 * SMALL - self.read);
+                buffer[..size].fill(b'a');
+                self.read += size;
+                Ok(size)
+            }
+        }
+        let scratch = Scratch::new();
+        let (members, _) = store_with(&scratch.cache, 2, |writers| {
+            let releases = paused_writers(writers, 2);
+            let (ahead, reached) = sync_channel(1);
+            let files = thread::scope(|scope| {
+                let reading = scope.spawn(|| {
+                    let limits = Limits::default();
+                    let meter = Meter::default();
+                    meter.count(8 * SMALL);
+                    let mut guard = Guard::new(&limits, &|_| false, &meter);
+                    let mut input = Ahead {
+                        read: 0,
+                        notified: false,
+                        ready: ahead,
+                    };
+                    writers.keep(
+                        &mut guard,
+                        "large.bin".to_owned(),
+                        (8 * SMALL) as u64,
+                        &mut input,
+                        &mut vec![0; 64 << 10],
+                    )
+                });
+                let reached = reached.recv_timeout(Duration::from_secs(5));
+                let files = pending_files(&scratch);
+                for release in releases {
+                    release.send(()).unwrap();
+                }
+                reading.join().unwrap().unwrap();
+                reached.unwrap();
+                files
+            });
+            assert_eq!(
+                files, 0,
+                "a paused writer has not stored the reader's large member"
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].size, (8 * SMALL) as u64);
+        assert_eq!(
+            members[0].sha256.hex(),
+            "ad97f87076920684e2ca66fc44e5d322797dc9d64706b174e51b5d0828937043"
+        );
+    }
+
+    #[test]
+    fn stopping_after_a_large_member_started_preserves_interruption() {
+        use std::cell::Cell;
+        struct Counted<'a> {
+            read: &'a Cell<usize>,
+        }
+        impl Read for Counted<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let size = buffer.len().min(8 * SMALL - self.read.get());
+                buffer[..size].fill(b'a');
+                self.read.set(self.read.get() + size);
+                Ok(size)
+            }
+        }
+        let scratch = Scratch::new();
+        let limits = Limits::default();
+        let meter = Meter::default();
+        meter.count(8 * SMALL);
+        let read = Cell::new(0);
+        let stopped = |_| read.get() > SMALL + (64 << 10);
+        let mut guard = Guard::new(&limits, &stopped, &meter);
+        let error = store_with(&scratch.cache, 2, |writers| {
+            writers.keep(
+                &mut guard,
+                "large.bin".to_owned(),
+                (8 * SMALL) as u64,
+                &mut Counted { read: &read },
+                &mut vec![0; 64 << 10],
+            )
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::Interrupted);
+        scratch.assert_empty();
+        assert_eq!(pending_files(&scratch), 0);
+    }
+
+    #[test]
+    fn short_members_or_one_writer_keep_storage_inline() {
+        let scratch = Scratch::new();
+        let bytes = vec![b'a'; SMALL + (64 << 10)];
+        for (size, threads) in [(bytes.len() as u64, 2), (8 << 20, 1)] {
+            let (members, _) = store_with(&scratch.cache, threads, |writers| {
+                let releases = paused_writers(writers, threads);
+                let limits = Limits::default();
+                let meter = Meter::default();
+                let mut guard = Guard::new(&limits, &|_| false, &meter);
+                let written = writers.keep(
+                    &mut guard,
+                    "medium.bin".to_owned(),
+                    size,
+                    &mut &bytes[..],
+                    &mut vec![0; 64 << 10],
+                );
+                let files = pending_files(&scratch);
+                for release in releases {
+                    release.send(()).unwrap();
+                }
+                written?;
+                assert_eq!(
+                    files, 1,
+                    "short members and one writer avoid the streaming handoff"
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(members[0].size, bytes.len() as u64);
+            assert_eq!(
+                members[0].sha256.hex(),
+                "cd2d309f2ece5dc637ce39628379d5412e600e04628e753e8a9287a554716349"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_archive_writer_keeps_large_members_inline() {
+        let scratch = Scratch::new();
+        let refused = crate::threads::refuse_after(0);
+        let limits = Limits::default();
+        let meter = Meter::default();
+        meter.count(8 * SMALL);
+        let mut guard = Guard::new(&limits, &|_| false, &meter);
+        let bytes = vec![b'a'; 8 * SMALL];
+        let (members, _) = store_all(&scratch.cache, Some(2), |writers| {
+            assert!(writers.jobs.is_none());
+            writers.keep(
+                &mut guard,
+                "large.bin".to_owned(),
+                bytes.len() as u64,
+                &mut &bytes[..],
+                &mut vec![0; 64 << 10],
+            )
+        })
+        .unwrap();
+        drop(refused);
+        assert_eq!(
+            members[0].sha256.hex(),
+            "ad97f87076920684e2ca66fc44e5d322797dc9d64706b174e51b5d0828937043"
+        );
+        assert_eq!(members[0].size, (8 * SMALL) as u64);
     }
 }
