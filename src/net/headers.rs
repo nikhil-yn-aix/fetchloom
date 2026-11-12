@@ -81,6 +81,12 @@ pub(super) fn changed(recorded: &Validators, stated: &Validators) -> bool {
         )
 }
 
+/// whether a response names the version `recorded` names: it states a validator, and none that
+/// differs.
+pub(super) fn same_version(recorded: &Validators, stated: &Validators) -> bool {
+    (stated.etag.is_some() || stated.last_modified.is_some()) && !changed(recorded, stated)
+}
+
 pub(super) fn validators(headers: &HeaderMap) -> Validators {
     let text = |name| {
         headers

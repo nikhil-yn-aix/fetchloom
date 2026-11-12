@@ -189,14 +189,24 @@ pub(crate) enum Resumable {
 }
 
 impl Resumable {
-    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file.
-    fn answered(status: StatusCode, head: &header::HeaderMap, proven: bool) -> Resumable {
+    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file. `asked`
+    /// holds the validators of kept bytes whose rest the request asked for: a whole answer naming
+    /// that same version ignored the request, as a server that sends no parts does, while one
+    /// naming another version is a restart that says nothing about parts.
+    fn answered(
+        status: StatusCode,
+        head: &header::HeaderMap,
+        proven: bool,
+        asked: Option<&Validators>,
+    ) -> Resumable {
         if !proven {
             return Resumable::No;
         }
+        let ignored = status == StatusCode::OK
+            && asked.is_some_and(|kept| headers::same_version(kept, &headers::validators(head)));
         if status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(head) {
             Resumable::Yes
-        } else if head.contains_key(header::ACCEPT_RANGES) {
+        } else if ignored || head.contains_key(header::ACCEPT_RANGES) {
             Resumable::No
         } else {
             Resumable::Maybe
@@ -748,7 +758,12 @@ impl Net {
             return Ok(Answer::StartOver);
         };
         let kept = writer.kept();
-        let resumable = Resumable::answered(status, &head, proven);
+        let resumable = Resumable::answered(
+            status,
+            &head,
+            proven,
+            earlier.as_ref().map(|(_, kept)| kept),
+        );
         self.started(on, total, offset + kept, resumable)?;
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;

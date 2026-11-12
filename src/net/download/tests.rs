@@ -684,7 +684,10 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
 
 /// a later run goes on from kept bytes only when the server sends parts of a file and a pinned
 /// hash or a validator proves those parts belong to the bytes kept. a server that never said
-/// whether it sends parts may; one that says it sends none, or bytes nothing proves, start over.
+/// whether it sends parts may; one that says it sends none, or bytes nothing proves, start over,
+/// and so does one that answered a request for the rest of the same version with all of it, as
+/// python's http.server does. a whole answer naming another version restarts on a new file, which
+/// says nothing about parts.
 #[test]
 fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
     let head = |pairs: &[(&'static str, &'static str)]| {
@@ -695,23 +698,81 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
         head
     };
     let ranges = [("accept-ranges", "bytes")];
-    for (status, pairs, proven, resumable) in [
-        (StatusCode::OK, &ranges[..], true, Resumable::Yes),
-        (StatusCode::PARTIAL_CONTENT, &[][..], true, Resumable::Yes),
-        (StatusCode::OK, &[][..], true, Resumable::Maybe),
+    let modified = "Mon, 02 Nov 2026 10:00:00 GMT";
+    let kept = Validators {
+        etag: None,
+        last_modified: Some(modified.to_owned()),
+        date: Some("Wed, 11 Nov 2026 19:00:00 GMT".to_owned()),
+        version: None,
+    };
+    let same = [("last-modified", modified)];
+    let tagged = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        ..kept.clone()
+    };
+    for (status, pairs, proven, asked, resumable) in [
+        (StatusCode::OK, &ranges[..], true, None, Resumable::Yes),
+        (
+            StatusCode::PARTIAL_CONTENT,
+            &[][..],
+            true,
+            None,
+            Resumable::Yes,
+        ),
+        (StatusCode::OK, &[][..], true, None, Resumable::Maybe),
         (
             StatusCode::OK,
             &[("accept-ranges", "none")][..],
             true,
+            None,
             Resumable::No,
         ),
-        (StatusCode::OK, &ranges[..], false, Resumable::No),
-        (StatusCode::PARTIAL_CONTENT, &[][..], false, Resumable::No),
+        (StatusCode::OK, &ranges[..], false, None, Resumable::No),
+        (
+            StatusCode::PARTIAL_CONTENT,
+            &[][..],
+            false,
+            None,
+            Resumable::No,
+        ),
+        // the rest of the same version was asked for, and all of it came
+        (StatusCode::OK, &same[..], true, Some(&kept), Resumable::No),
+        (
+            StatusCode::OK,
+            &[("etag", "\"v1\"")][..],
+            true,
+            Some(&tagged),
+            Resumable::No,
+        ),
+        // another version came whole, as If-Range asks of a server that sends parts
+        (
+            StatusCode::OK,
+            &[("last-modified", "Tue, 10 Nov 2026 10:00:00 GMT")][..],
+            true,
+            Some(&kept),
+            Resumable::Maybe,
+        ),
+        // an answer naming no version says nothing either way
+        (StatusCode::OK, &[][..], true, Some(&kept), Resumable::Maybe),
+        (
+            StatusCode::OK,
+            &[("etag", "\"v1\""), ("accept-ranges", "bytes")][..],
+            true,
+            Some(&tagged),
+            Resumable::Yes,
+        ),
+        (
+            StatusCode::PARTIAL_CONTENT,
+            &same[..],
+            true,
+            Some(&kept),
+            Resumable::Yes,
+        ),
     ] {
         assert_eq!(
-            Resumable::answered(status, &head(pairs), proven),
+            Resumable::answered(status, &head(pairs), proven, asked),
             resumable,
-            "{status} {pairs:?} proven: {proven}"
+            "{status} {pairs:?} proven: {proven}, asked for the rest of {asked:?}"
         );
     }
     assert_eq!(Resumable::kept(true), Resumable::Maybe);
