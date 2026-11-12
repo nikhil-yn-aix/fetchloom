@@ -213,10 +213,10 @@ impl Output {
         }
     }
 
-    /// a difference found, in the same rhythm as steps but in the warning color.
+    /// a difference found, in the same rhythm as steps but in the color of its kind.
     pub(crate) fn mark(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
-            self.line(&verb_line(verb, text, Tone::Warn, self.style.color));
+            self.line(&verb_line(verb, text, difference(verb), self.style.color));
         }
     }
 
@@ -1021,7 +1021,7 @@ impl Output {
     fn report_text(&self, verb: &str, text: &str) -> Option<String> {
         self.tells(Level::Normal).then(|| {
             shown(
-                &verb_line(verb, text, Tone::Warn, self.report_color),
+                &verb_line(verb, text, difference(verb), self.report_color),
                 self.style.unicode,
             )
             .into_owned()
@@ -1285,12 +1285,21 @@ fn verb_color(verb: &str) -> Tone {
         "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Untracked" | "Outdated" => {
             Tone::Warn
         }
-        "Failed" => Tone::Fail,
+        "Failed" | "Damaged" | "Blocked" => Tone::Fail,
         // a dry run's plan is work not yet done
         verb if verb.starts_with("Would ") => Tone::Work,
         // the numbers of a list to choose from
         verb if verb.bytes().all(|byte| byte.is_ascii_digit()) => Tone::Accent,
         _ => Tone::Done,
+    }
+}
+
+/// the color a difference shows in, the same wherever a command reports it: red where the bytes
+/// in place are wrong or an entry stands in a file's way, yellow for every other difference.
+fn difference(verb: &str) -> Tone {
+    match verb {
+        "Damaged" | "Blocked" => Tone::Fail,
+        _ => Tone::Warn,
     }
 }
 
@@ -2001,11 +2010,27 @@ mod tests {
             console::strip_ansi_codes(&row),
             "    Missing data/iris/iris.csv"
         );
-        // a row is a difference whatever its verb, as a mark is, never a finished step
-        let damaged = plain_story
-            .report_text("Damaged", "data/iris/iris.csv")
-            .unwrap_or_default();
-        assert_eq!(damaged.replace("Damaged", "Missing"), row);
+        // a row is a difference whatever its verb, as a mark is, never a finished step, and
+        // wrong bytes or an entry in the way are failures
+        for (verb, tone) in [
+            ("Removed", super::Tone::Warn),
+            ("Unbuilt", super::Tone::Warn),
+            ("Damaged", super::Tone::Fail),
+            ("Blocked", super::Tone::Fail),
+        ] {
+            let shown = plain_story
+                .report_text(verb, "data/iris/iris.csv")
+                .unwrap_or_default();
+            assert_eq!(
+                shown,
+                super::verb_line(verb, "data/iris/iris.csv", tone, true),
+                "{verb}"
+            );
+            assert_eq!(
+                super::verb_color(verb) == super::Tone::Fail,
+                tone == super::Tone::Fail
+            );
+        }
         for (level, json) in [(Level::Quiet, false), (Level::Normal, true)] {
             let silent = Output::new(style(false), level, json, false);
             assert_eq!(silent.report_text("Missing", "data/iris/iris.csv"), None);
