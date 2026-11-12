@@ -142,7 +142,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-11-arm, macos-15]
+        # what each runner has, so a test that lacks one fails rather than skips
+        include:
+          - os: ubuntu-24.04
+            require: script,git,hardlinks,raw-names,distinct-names,unprivileged,pwsh,fish
+          - os: ubuntu-24.04-arm
+            require: script,git,hardlinks,raw-names,distinct-names,unprivileged
+          - os: windows-11-arm
+            require: git,hardlinks
+          - os: macos-15
+            require: script,git,hardlinks,unprivileged,pwsh,zsh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -163,10 +172,12 @@ jobs:
       - run: cargo build --locked --example recipe_step
       - name: record cargo test selections
         run: python3 python/ci_tests.py record
+      - name: install fish for the quoting test
+        if: matrix.os == 'ubuntu-24.04'
+        run: .github/scripts/apt-install.sh fish
       - name: nextest
         env:
-          # what each runner has, so a test that lacks one fails rather than skips
-          FETCHLOOM_TEST_REQUIRE: ${{ startsWith(matrix.os, 'windows') && 'git,hardlinks' || startsWith(matrix.os, 'macos') && 'script,git,hardlinks' || 'script,git,hardlinks,raw-names' }}
+          FETCHLOOM_TEST_REQUIRE: ${{ matrix.require }}
         run: python3 python/ci_tests.py run native
       - name: doctests
         run: cargo test --locked --doc
@@ -265,7 +276,7 @@ jobs:
         run: python python/ci_tests.py record
       - name: nextest
         env:
-          FETCHLOOM_TEST_REQUIRE: git,hardlinks
+          FETCHLOOM_TEST_REQUIRE: git,hardlinks,pwsh
         run: python python/ci_tests.py run native
       - name: doctests
         run: cargo test --locked --doc
