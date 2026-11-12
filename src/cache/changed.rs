@@ -8,12 +8,13 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use super::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
 use crate::place::{FolderUse, found_folder, real_folder};
+use crate::project::state::nanos;
 use crate::volume::is_plain;
 
 /// an object in doubt that could not be hashed, sealed or marked for repair.
@@ -447,13 +448,6 @@ pub(crate) fn may_follow(marked: u64, known: u64) -> bool {
 /// the step of the coarsest clock a cache may sit on: FAT and exFAT round a file's time up to
 /// two seconds, so an object edited just before its mark can look newer than the mark.
 const COARSE: u64 = 2_000_000_000;
-
-/// `time` in nanoseconds since 1970, as projects record the times of their files.
-fn nanos(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
-        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-    })
-}
 
 #[cfg(test)]
 mod tests {
