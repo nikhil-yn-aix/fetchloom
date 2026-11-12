@@ -1,5 +1,6 @@
 //! what fetchloom prints. stdout carries the answer and nothing else, stderr carries the story.
 
+mod fit;
 mod picker;
 mod progress;
 mod style;
@@ -86,6 +87,8 @@ pub(crate) struct Output {
     /// every line told, in the order it went out, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
+    /// the width of the terminal stderr goes to, which a line wraps at between words, or none.
+    columns: Option<usize>,
 }
 
 /// the output while a first ctrl-c is decided and told, from [`Output::alone`]: every other line
@@ -290,6 +293,7 @@ impl Output {
             closing: Mutex::new((None, false)),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
+            columns: None,
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -446,6 +450,13 @@ impl Output {
         if let (Some(line), true) = closing {
             self.line(&line);
         }
+    }
+
+    /// wraps each line told on stderr between words at `columns`, the width of the terminal it
+    /// goes to, so the terminal never wraps one inside a word.
+    pub(crate) fn fitted(mut self, columns: Option<usize>) -> Self {
+        self.columns = columns;
+        self
     }
 
     pub(crate) fn without_hints(mut self, off: bool) -> Self {
@@ -725,11 +736,14 @@ impl Output {
             });
         let color = self.style.color;
         let unicode = self.style.unicode;
+        let columns = self.columns;
         Ticker::start(verb, what, known, moment, move |verb, text| {
-            write_line(
-                color,
-                &shown(&verb_line(verb, text, Tone::Work, color), unicode),
-            );
+            let line = verb_line(verb, text, Tone::Work, color);
+            let line = shown(&line, unicode);
+            match columns {
+                Some(columns) => write_line(color, &fit::fit(&line, columns)),
+                None => write_line(color, &line),
+            }
         })
     }
 
@@ -1081,10 +1095,14 @@ impl Output {
         self.write_lines(&[text]);
     }
 
-    /// `text` as a line goes out: its symbols as the terminal shows them, from the start of the
-    /// line.
+    /// `text` as a line goes out: its symbols as the terminal shows them, wrapped to its width,
+    /// from the start of the line.
     fn prepared(&self, text: &str) -> String {
-        self.at_start(&shown(text, self.style.unicode))
+        let text = shown(text, self.style.unicode);
+        match self.columns {
+            Some(columns) => self.at_start(&fit::fit(&text, columns)),
+            None => self.at_start(&text),
+        }
     }
 
     /// writes `lines` on stderr below the bars. callers hold `held`, so no other line comes
@@ -1201,19 +1219,31 @@ pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
     )
 }
 
+/// the width of the terminal stderr goes to, which a line told there wraps at between words, or
+/// none for a pipe, a file or a coding agent, which reads each line whole.
+pub(crate) fn story_columns() -> Option<usize> {
+    let terminal =
+        std::io::stderr().is_terminal() && !style::by_agent(&|name| std::env::var_os(name));
+    terminal
+        .then(|| console::Term::stderr().size_checked())
+        .flatten()
+        .map(|(_, columns)| usize::from(columns))
+}
+
 /// prints help with the chosen palette and terminal width.
 ///
 /// # Errors
 /// returns stdout failures other than a reader closing its pipe.
 pub(crate) fn help(text: &str, choice: ColorChoice) -> Result<(), Error> {
-    let width = if std::io::stdout().is_terminal() {
+    let terminal = std::io::stdout().is_terminal();
+    let width = if terminal {
         console::Term::stdout()
             .size_checked()
             .map_or(80, |(_, columns)| usize::from(columns))
     } else {
         80
     };
-    let wrapped = wrap_help(text.trim_end_matches('\n'), width.clamp(40, 100));
+    let wrapped = wrap_help(text.trim_end_matches('\n'), width.clamp(40, 100), terminal);
     let shown = help_text(&wrapped, Style::stdout_color(choice));
     stdout(|out| writeln!(out, "{shown}"))
 }
@@ -1234,18 +1264,34 @@ fn write_answer(
     }
 }
 
-/// help as wide as `width`: a row of a table wraps under its own description column, prose
-/// wraps flush, and the command lines under `examples:` never wrap, so each can be copied whole.
-pub(crate) fn wrap_help(text: &str, width: usize) -> String {
+/// help as wide as `width`: a row of a table wraps under its own description column and prose
+/// wraps flush. a command line under `examples:`, or on a line of its own, stays whole, so it can
+/// be copied, but at a `terminal`, which would wrap it inside a word, it goes on after the mark a
+/// shell continues it at, with its comment below it.
+pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
     let mut examples = false;
-    for line in text.split('\n') {
+    let mut below = false;
+    for (at, line) in lines.iter().copied().enumerate() {
         if !line.starts_with(' ') {
             examples = line == "examples:";
+            let block = lines[at + 1..]
+                .iter()
+                .copied()
+                .take_while(|line| line.starts_with("  "));
+            below = examples && fit::comments_below(block, width);
         }
-        // a command on a line of its own stays whole too, so it can be copied
         let command = line.starts_with("  fetchloom ") && !line.trim_start().contains("  ");
-        if line.chars().count() <= width || (examples && line.starts_with("  ")) || command {
+        if (examples && line.starts_with("  ")) || command {
+            if terminal {
+                out.extend(fit::example(line, width, below));
+            } else {
+                out.push(line.to_owned());
+            }
+            continue;
+        }
+        if line.chars().count() <= width {
             out.push(line.to_owned());
             continue;
         }
@@ -1313,10 +1359,16 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
     let bold = Paint::new().bold();
     let accent = accent();
     let mut commands = false;
+    // whether the line before ended in the mark a shell continues a command at
+    let mut continued = false;
     text.split('\n')
         .map(|line| {
             if !line.starts_with(' ') {
                 commands = line == "commands:";
+            }
+            if std::mem::replace(&mut continued, line.ends_with(fit::MARK)) {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                return format!("{indent}{accent}{}{accent:#}", line.trim_start());
             }
             for heading in [
                 "usage:",
@@ -1837,16 +1889,19 @@ mod tests {
     }
 
     #[test]
-    fn help_wraps_rows_under_their_column_and_keeps_examples_whole() {
+    fn help_wraps_rows_under_their_column_and_continues_long_examples() {
         let text = "options:\n  -o, --output <dir>  put the download in <dir> instead of a new folder named after it\n\nexamples:\n  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom";
-        let wrapped = super::wrap_help(text, 60);
+        let wrapped = super::wrap_help(text, 60, true);
         assert_eq!(
             wrapped,
-            "options:\n  -o, --output <dir>  put the download in <dir> instead of a\n                      new folder named after it\n\nexamples:\n  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom"
+            format!(
+                "options:\n  -o, --output <dir>  put the download in <dir> instead of a\n                      new folder named after it\n\nexamples:\n  fetchloom completions bash{}\n    > ~/.local/share/bash-completion/completions/fetchloom",
+                super::fit::MARK
+            )
         );
         // prose wraps flush, one-letter words keep their spaces, and nothing is lost
         let prose = "a b c d e f g h i j k l m n o p q r s t u v w x y z a b c d e f g h";
-        let wrapped = super::wrap_help(prose, 20);
+        let wrapped = super::wrap_help(prose, 20, true);
         assert!(
             wrapped.lines().all(|line| line.chars().count() <= 20),
             "{wrapped}"
@@ -1857,7 +1912,7 @@ mod tests {
         );
         // a name that is not ascii still lines its description up by characters
         let row = "  --données  une description assez longue pour passer à la ligne suivante";
-        let wrapped = super::wrap_help(row, 40);
+        let wrapped = super::wrap_help(row, 40, true);
         let column = wrapped.lines().next().unwrap().find("une").unwrap();
         let first = &wrapped.lines().next().unwrap()[..column];
         assert!(
@@ -1868,12 +1923,29 @@ mod tests {
         );
     }
 
+    /// at 60 columns an example's comment goes below its command, every one in the block once one
+    /// does not fit beside its command, and a command too long for a line goes on after the mark
+    /// a shell continues it at, an option with its value. at 80 columns they all fit as written.
+    #[test]
+    fn help_examples_wrap_as_a_shell_reads_them() {
+        let examples = "examples:\n  fetchloom add iris    # at a terminal, pick one from a list\n  fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run\n  fetchloom add ./flowers    # files on this machine, copied into the cache\n  fetchloom add -i links.txt    # a dataset for each link in a list";
+        let mark = if cfg!(windows) { '`' } else { '\\' };
+        assert_eq!(
+            super::wrap_help(examples, 60, true),
+            format!(
+                "examples:\n  fetchloom add iris\n    # at a terminal, pick one from a list\n  fetchloom add hf:datasets/scikit-learn/iris {mark}\n    --select \"*.csv\" --dry-run\n  fetchloom add ./flowers\n    # files on this machine, copied into the cache\n  fetchloom add -i links.txt\n    # a dataset for each link in a list"
+            )
+        );
+        assert_eq!(super::wrap_help(examples, 80, true), examples);
+        assert_eq!(super::wrap_help(examples, 60, false), examples);
+    }
+
     /// a word wider than the help's width, such as a link, goes on a line of its own, whole.
     #[test]
     fn help_keeps_a_word_wider_than_the_terminal_whole() {
         let link = "https://huggingface.co/datasets/ILSVRC/imagenet-1k/resolve/main/train.tar";
         let text = format!("request access and accept the terms at {link} while signed in");
-        let wrapped = super::wrap_help(&text, 40);
+        let wrapped = super::wrap_help(&text, 40, true);
         assert!(wrapped.lines().any(|line| line == link), "{wrapped}");
         assert_eq!(
             wrapped.split_whitespace().collect::<Vec<_>>(),

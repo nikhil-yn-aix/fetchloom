@@ -1254,7 +1254,9 @@ mod tests {
     }
 
     /// help wraps at the terminal's width between words: no width from 40 to 100 columns, the
-    /// range help uses, splits a word or loses one.
+    /// range help uses, splits a word or loses one. an example goes on after the mark a shell
+    /// continues a command at, its comment on lines that each start with `#`, and those marks
+    /// are all wrapping adds.
     #[test]
     fn help_wraps_between_words_and_never_inside_one() {
         let mut screens = every_help();
@@ -1263,14 +1265,19 @@ mod tests {
             Err(err) => err.render().to_string(),
         };
         screens.push(("fetchloom".to_owned(), top));
+        let words = |text: &str| -> Vec<String> {
+            text.split_whitespace()
+                .filter(|word| !matches!(*word, "\\" | "`" | "#"))
+                .map(str::to_owned)
+                .collect()
+        };
         for (name, help) in screens {
-            let words: Vec<&str> = help.split_whitespace().collect();
-            assert!(words.len() > 20, "{name}\n{help}");
+            assert!(words(&help).len() > 20, "{name}\n{help}");
             for width in 40..=100 {
-                let wrapped = crate::output::wrap_help(&help, width);
+                let wrapped = crate::output::wrap_help(&help, width, true);
                 assert_eq!(
-                    wrapped.split_whitespace().collect::<Vec<_>>(),
-                    words,
+                    words(&wrapped),
+                    words(&help),
                     "{name} at {width} columns\n{wrapped}"
                 );
             }

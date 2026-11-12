@@ -546,7 +546,8 @@ pub(crate) fn run() -> ExitCode {
     let logs = logs::start(level, style.color, &var);
     let output = Output::new(style, level, global.json, logs.on_stderr())
         .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"))
-        .with_progress(global.progress);
+        .with_progress(global.progress)
+        .fitted(crate::output::story_columns());
     let mut context = Context::new(output);
     if let Some(refused) = &logs.refused {
         context.output.warn(refused);
@@ -916,7 +917,7 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     let Some(width) = context.output.answer_width() else {
         return about(context, "", &welcome, started);
     };
-    let welcome = crate::output::wrap_help(&welcome, width);
+    let welcome = crate::output::wrap_help(&welcome, width, true);
     let rows = usize::from(console::Term::stdout().size().0);
     let banner = crate::output::wordmark(width, Style::stdout_color(args::color()));
     // the wordmark leads only where the whole welcome still fits below it

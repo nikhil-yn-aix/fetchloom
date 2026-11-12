@@ -804,12 +804,57 @@ fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Res
     Ok(())
 }
 
-/// a terminal narrower than a line wraps it at its last column, even inside a word: a
-/// 120-column terminal showed "authenticat" and "ed" on two lines of a long error. fetchloom
-/// itself wraps only help, and only between words, and writes each line of an error whole.
+/// at a terminal 60 columns wide an error wraps between words, going on under its own text past
+/// `error:`, at a dumb terminal too, so no word is cut in two where the terminal would wrap it.
 #[cfg(target_os = "linux")]
 #[test]
-fn at_a_narrow_terminal_help_wraps_between_words_and_errors_stay_whole() -> Result {
+fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.iris]\nref = \"zenodo:1\"\nselectt = \"*.csv\"\n",
+    )?;
+    let status = sandbox.command(&["status"]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &status, "rows 30 cols 60", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(50), "{screen}");
+    assert!(
+        screen.replace('\r', "").contains(
+            "error: data.toml has a key fetchloom does not know:\n       \"selectt\" in datasets.iris\n  data.toml:3   selectt = \"*.csv\"\n  help: did you mean `select`?\n"
+        ),
+        "{screen}"
+    );
+    let server = crate::support::Server::start(
+        "/files/dumb-prompt.bin",
+        vec![crate::support::file(&[0; 1024], "\"v1\"")],
+    )?;
+    let mut get = sandbox.command(&["get", &server.url, "-o", "dumb-prompt.bin"]);
+    get.env("TERM", "dumb").env("FETCHLOOM_ASK_ABOVE", "100");
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &get, "rows 30 cols 60", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(
+        screen.contains(
+            "error: downloading dumb-prompt.bin needs 1.0 KiB, and\n       fetchloom cannot ask you here\n  help: add --yes to download it without being asked\n"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}
+
+/// a terminal narrower than a line wraps it at its last column, even inside a word: a
+/// 120-column terminal showed "authenticat" and "ed" on two lines of a long error. fetchloom
+/// wraps help and errors between words itself, an example after the mark a shell continues it
+/// at, and a word wider than the terminal goes whole onto a line of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn at_a_narrow_terminal_help_and_errors_wrap_between_words() -> Result {
     let sandbox = Sandbox::new()?;
     let wide = text(&sandbox.run(&["get", "--help"])?.stdout)?;
     let help = sandbox.command(&["get", "--help"]);
@@ -823,9 +868,15 @@ fn at_a_narrow_terminal_help_wraps_between_words_and_errors_stay_whole() -> Resu
         narrow.lines().count() > wide.lines().count(),
         "help wraps to the terminal\n{narrow}"
     );
+    let words = |text: &str| -> Vec<String> {
+        text.split_whitespace()
+            .filter(|word| !matches!(*word, "\\" | "#"))
+            .map(str::to_owned)
+            .collect()
+    };
     assert_eq!(
-        narrow.split_whitespace().collect::<Vec<_>>(),
-        wide.split_whitespace().collect::<Vec<_>>(),
+        words(&narrow),
+        words(&wide),
         "no word is split or lost\n{narrow}"
     );
     let long = format!("/records/{}/iris.csv", "a".repeat(60));
@@ -845,10 +896,11 @@ fn at_a_narrow_terminal_help_wraps_between_words_and_errors_stay_whole() -> Resu
     };
     assert_eq!(code, Some(10), "{screen}");
     // the terminal may clear a progress line first, so the error need not start its line
+    assert!(screen.contains("error: "), "{screen}");
     assert!(
         screen
             .lines()
-            .any(|line| line.contains("error: ") && line.contains(&server.url)),
+            .any(|line| line.trim_start() == server.url.as_str()),
         "{screen}"
     );
     Ok(())

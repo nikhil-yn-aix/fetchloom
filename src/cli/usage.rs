@@ -37,7 +37,8 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
             let color = read.get_one("color").copied().unwrap_or_default();
             (level(quiet, read.get_count("verbose")), color)
         });
-    let output = Output::new(Style::detect(color), level, asks_for_json(), false);
+    let output = Output::new(Style::detect(color), level, asks_for_json(), false)
+        .fitted(crate::output::story_columns());
     // help prints text, never a document, so a mistake after it names no command
     let command = read
         .as_ref()
