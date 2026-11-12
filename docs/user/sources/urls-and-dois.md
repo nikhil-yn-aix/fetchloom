@@ -20,9 +20,9 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 
 `github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
 
-for direct downloads, a safe `Content-Disposition` filename, including one received after redirects, can replace the name guessed from the URL. selection patterns match the source path before that replacement. recognized archive names [unpack by default](../concepts.md#archives).
+a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../concepts.md#archives) as from any source.
 
-a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with an HTML page and the server names no file and no pinned hash proves the bytes: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead. to share a folder of files as one dataset, publish it packed, as `tar czf many.tar.gz many`, and add the archive's link: fetchloom unpacks it into the dataset's folder. a response with HTML content type warns when its filename looks like data rather than HTML. check the saved file and use a download or raw link if the server returned a page.
+a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with a web page and nothing says the bytes are a file: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead, or publish the folder packed, as `tar czf many.tar.gz many`, and add the archive's link, which unpacks into the dataset's folder. a web page served under a name that looks like data gets a warning; check the file and use a download or raw link.
 
 ## names
 
@@ -35,7 +35,7 @@ a link's file is named after the last part of its path, decoded. a character win
 | `back%5Cslash.txt` | `slash` | `data/slash/slash.txt` |
 | `Data%20Set.CSV` | `data-set` | `data/data-set/Data Set.CSV` |
 
-`--as` names the dataset. `add -i` cannot, so rename a table in data.toml afterwards: the next sync moves its pin to the new name. a link to a folder answers with a web page, which is refused as [above](#accepted-references); its archive is one dataset. stderr from real runs against a server on this machine that `allowed_origins` names:
+`--as` names the dataset; with `add -i`, rename the table in data.toml afterwards, and the next sync moves its pin to the new name. a link to a folder is refused as [above](#accepted-references), while its archive makes one dataset. stderr from real runs against a server on this machine that `allowed_origins` names:
 
 ```sh
 $ fetchloom add http://127.0.0.1:19353/many/
@@ -50,14 +50,14 @@ $ fetchloom add http://127.0.0.1:19353/many.tar.gz
 
 ## dry runs
 
-`add --dry-run` with a link asks its server nothing: it checks the link's spelling and what data.toml would hold, and says `size unknown`. what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses. from real runs against a server on this machine, where `--json` counted 0 requests for the dry run:
+`add --dry-run` with a link asks its server nothing, so it says `size unknown`, and what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses. from real runs against a server on this machine, where `--json` counted 0 requests for the dry run:
 
 ```sh
 $ fetchloom add --dry-run http://127.0.0.1:19354/many/
-  Would pin many, new in data.lock: http://127.0.0.1:19354/many/ · 1 file · size unknown
-Would fetch many/many · size unknown
-Would place data/many · 1 file
-  Would add many to data.toml, its files in data/many
+      Would pin many, new in data.lock: http://127.0.0.1:19354/many/ · 1 file · size unknown
+      Would fetch many/many · size unknown
+      Would place data/many · 1 file
+      Would add many to data.toml, its files in data/many
          Ok dry run, nothing was changed
 $ fetchloom add http://127.0.0.1:19354/many/
 error: http://127.0.0.1:19354/many/ answered with a web page, such as a folder listing, not a file
@@ -66,17 +66,11 @@ error: http://127.0.0.1:19354/many/ answered with a web page, such as a folder l
 
 ## pins
 
-a plain URL records the parsed URL as both `resolved` and the file's download URL. SHA-256 and size pin its bytes, even though the URL can later change. DOI pins follow the source to which the handle routes.
-
-`get` can reuse a URL record with `ETag` or `Last-Modified`. a 304 response avoids a file-body download; without validators, bytes may download again. `lock --upgrade` revalidates unchecksummed URLs. a normal locked sync requires the original bytes.
+a plain link is recorded as both `resolved` and the file's download link, and its SHA-256 and size pin its bytes, even though what the link serves can change. a DOI pins what the source it routes to records. `lock --upgrade` checks the link again, while a sync needs the pinned bytes.
 
 ## credentials
 
-project commands reject login details in plain URLs and recognized secret query keys. keep credentials out of `data.toml` and `data.lock`.
-
-`get` accepts secret query values for one-off downloads. its JSON file URLs and errors mask logins and recognized keys, including malformed-link errors. recognized names include `token`, `signature` and `sig`; arbitrary secrets cannot be identified reliably.
-
-[local URL and partial records](../reference/cache-folder.md#url-and-partial-records) store a fingerprint of the URL, not its raw text. cache payloads and other metadata can still contain private data. there is no general browser login or access-approval workflow.
+project commands refuse a link holding a login or a known secret, such as `token=`, since data.toml and data.lock are shared. `get` takes such a link for a one-off download, and masks the login and known secrets in what it prints; a secret under a name fetchloom does not know cannot be told apart. the cache's [records of links](../reference/cache-folder.md#url-and-partial-records) keep a fingerprint of each link, not its text. a server's own login goes in `.netrc`, which `fetchloom auth login <host>` writes.
 
 ## limits
 
