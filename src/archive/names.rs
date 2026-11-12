@@ -110,7 +110,8 @@ impl Names {
         }
         if let Some(reason) = name::unstorable(&nfc) {
             return Err(refused(format!(
-                "the archive holds \"{raw}\", which this machine cannot store: {reason}"
+                "the archive holds \"{}\", which this machine cannot store: {reason}",
+                name::abridged(raw)
             )));
         }
         self.kept = self.kept.saturating_add(nfc.len() as u64);

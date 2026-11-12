@@ -702,3 +702,70 @@ fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
         assert_eq!(kept, ["small.csv"], "{format:?}");
     }
 }
+
+/// bytes no compressor shrinks, so cutting a compressed tar in half cuts it inside a member.
+fn noise(length: usize) -> Vec<u8> {
+    let mut state: u32 = 0x9e37_79b9;
+    (0..length)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()[0]
+        })
+        .collect()
+}
+
+/// a tar that ends too soon, as an upload stopped part way leaves one, is told in plain words
+/// rather than in its decoder's, whatever compresses it. a failure of the disk itself stays one,
+/// since no fixed copy of the archive helps.
+#[test]
+fn a_tar_cut_short_is_told_in_plain_words() {
+    let bytes = noise(64 << 10);
+    let files: &[(&str, &[u8])] = &[("a.wav", &bytes), ("b.wav", &bytes)];
+    for format in [
+        Format::Tar,
+        Format::TarGz,
+        Format::TarXz,
+        Format::TarZst,
+        Format::TarBz2,
+    ] {
+        let packed = archive(format, files);
+        let err = Scratch::new().refuse(format, &packed[..packed.len() / 2]);
+        assert_eq!(err.kind, Kind::SourceInvalid, "{format:?}");
+        assert!(
+            err.message
+                .starts_with("the archive is damaged: it ends in the middle of "),
+            "{format:?}: {}",
+            err.message
+        );
+        assert!(err.help.unwrap().contains("fixed copy"), "{format:?}");
+    }
+    let disk = std::io::Error::from_raw_os_error(5);
+    assert_eq!(super::damaged(None, &disk).kind, Kind::LocalIo);
+}
+
+/// a name too long for a disk is shown once and cut to fit a screen, and so is any long name an
+/// archive is refused for.
+#[test]
+fn a_huge_member_name_is_shown_once_and_short() {
+    let long = format!("{}.wav", "x".repeat(300));
+    let err = Scratch::new().refuse(Format::Tar, &tar_of(&[(&long, b"too long a name")]));
+    assert_eq!(
+        err.message,
+        format!(
+            "the archive holds \"{}…{}.wav\", which this machine cannot store: its name is longer than disks allow",
+            "x".repeat(60),
+            "x".repeat(26)
+        )
+    );
+    let refused = super::refused_member(&format!("data/{}", "y".repeat(3000)), "it is a symlink");
+    assert_eq!(
+        refused.message,
+        format!(
+            "the archive holds \"data/{}…{}\", which fetchloom refuses because it is a symlink",
+            "y".repeat(55),
+            "y".repeat(30)
+        )
+    );
+}

@@ -1,5 +1,6 @@
 //! file and folder names that windows and linux can both store.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use icu_normalizer::properties::CanonicalCombiningClassMapBorrowed;
@@ -414,7 +415,7 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
             part.len()
         };
         if length > 255 {
-            return Some(format!("\"{}…\" is longer than disks allow", shorten(part)));
+            return Some(too_long(path, part));
         }
         if cfg!(windows) {
             if let Some(c) = part
@@ -438,6 +439,32 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
     None
 }
 
+/// why `path` cannot be stored when its name `part` is longer than disks allow. messages show
+/// the path beside this reason, so the path's own name is not shown again, and a folder's is
+/// shown short.
+fn too_long(path: &str, part: &str) -> String {
+    if path.rsplit('/').next() == Some(part) {
+        "its name is longer than disks allow".to_owned()
+    } else {
+        format!(
+            "its folder \"{}\" has a name longer than disks allow",
+            abridged(part)
+        )
+    }
+}
+
+/// `text` as a message shows a name or a path: whole up to 100 characters, else its first 60
+/// and its last 30 around `…`, so a name near the most a disk allows does not fill the screen.
+pub(crate) fn abridged(text: &str) -> Cow<'_, str> {
+    let count = text.chars().count();
+    if count <= 100 {
+        return Cow::Borrowed(text);
+    }
+    let head: String = text.chars().take(60).collect();
+    let tail: String = text.chars().skip(count - 30).collect();
+    Cow::Owned(format!("{head}…{tail}"))
+}
+
 /// why some disk fetchloom supports cannot store `path`, whatever this machine is: a name longer
 /// than 255 bytes, which ext4 refuses, or one windows refuses, with a character it does not
 /// allow, a dot or a space at its end, or a name it keeps for devices. a recipe's result is
@@ -445,7 +472,7 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
 pub(crate) fn unportable(path: &str) -> Option<String> {
     for part in path.split('/') {
         if part.len() > 255 {
-            return Some(format!("\"{}…\" is longer than disks allow", shorten(part)));
+            return Some(too_long(path, part));
         }
         if let Some(c) = part
             .chars()

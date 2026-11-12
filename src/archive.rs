@@ -472,7 +472,8 @@ fn past(message: impl Into<String>, variable: &str, key: &str) -> Error {
 /// an archive holding a member that fetchloom refuses for its name or its kind.
 fn refused_member(path: &str, reason: &str) -> Error {
     refused(format!(
-        "the archive holds \"{path}\", which fetchloom refuses because {reason}"
+        "the archive holds \"{}\", which fetchloom refuses because {reason}",
+        crate::name::abridged(path)
     ))
 }
 
@@ -496,11 +497,40 @@ fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
             "memory",
         );
     }
-    let message = match at {
-        Some(path) => format!("the archive is damaged at \"{path}\": {err}"),
-        None => format!("the archive is damaged: {err}"),
+    let at = at.map(crate::name::abridged);
+    let message = match (at, ends_early(err)) {
+        (Some(path), true) => {
+            format!("the archive is damaged: it ends in the middle of \"{path}\"")
+        }
+        (None, true) => "the archive is damaged: it ends in the middle of a file".to_owned(),
+        (Some(path), false) => format!("the archive is damaged at \"{path}\": {err}"),
+        (None, false) => format!("the archive is damaged: {err}"),
     };
     Error::new(Kind::SourceInvalid, message).help(DAMAGED_HELP)
+}
+
+/// whether `err` says the archive's bytes ran out before what they hold did: a decoder's
+/// end-of-file error, or the tar crate's own words for one.
+fn ends_early(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(err);
+    while let Some(error) = cause {
+        let Some(io) = error.downcast_ref::<io::Error>() else {
+            cause = error.source();
+            continue;
+        };
+        if io.kind() == io::ErrorKind::UnexpectedEof
+            || matches!(
+                io.to_string().as_str(),
+                "unexpected EOF during skip" | "failed to read entire block"
+            )
+        {
+            return true;
+        }
+        cause = io
+            .get_ref()
+            .map(|inner| inner as &(dyn std::error::Error + 'static));
+    }
+    false
 }
 
 const DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract";
