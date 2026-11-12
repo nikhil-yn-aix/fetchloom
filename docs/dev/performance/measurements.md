@@ -50,6 +50,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | waiting `path` calls finish once the project is ready | 32 waiters 3.24 to 0.25 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | lock and names | a merge's data.toml edits made on one reading of each side | merge of 2,000 datasets 18.0 to 0.33 s, of 1,000 4.0 to 0.10 s; 1 and 10 flat | kept | [merge](#a-merge-of-many-datasets-2026-11-12) |
 | lock and names | a drop across datasets written in one edit, its planned files counted once | drop of a file from each of 2,000 datasets 8.8 to 0.07 s; 1 and 10 flat | kept | [drop](#a-drop-across-many-datasets-2026-11-12) |
+| lock and names | `list` builds only the view it shows | `--json list <name>` of 100,000 files 0.815, peak memory 0.746; `list` of them 0.899; 1 and 10 flat | kept | [list](#listing-only-what-is-shown-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -473,6 +474,25 @@ the fixtures are the scale map's: n datasets of two files each, `keep.bin` and `
 | 2,000 | 8.83 to 0.070 s | 0.0080 [0.0077, 0.0083] | 8.31 to 0.056 s | 0.0067 [0.0067, 0.0068] |
 
 peak memory stayed the same at 1 and 10 datasets and within 1% at 1,000 and 2,000, the most 1.008 on musl at 2,000, 0.4 MiB, for the changes held until data.toml is written. what `--json` printed matched byte for byte at every size. kept.
+
+## listing only what is shown, 2026-11-12
+
+`list` built every view of every dataset whatever it showed: each file's path in its folder, sorted, and a list of sizes only summed, for a table that needs only counts; each pinned file with its link, which only `--json` prints; and every dataset's row for `list <name>`, which then kept one, still formatting its files under `--json`, which prints none of them. it now builds the view asked for: counts for the table and `--json`, paths for `list <name>` at a terminal, pinned files for `--json`, and the named dataset alone. a test holds what each of the four views shows for six kinds of dataset, among them an archive this machine recorded with a members table and one it never unpacked.
+
+the fixtures are the scale map's datasets-n, n datasets of one file, and files-n, one dataset of n files in data.lock.d, with their caches, run as `list` and `list <name>`, with and without `--json`. one release build of 7dc24bb chose the old or new way by `FETCHLOOM_EXP_LIST_VIEW`, measured as in [a merge of many datasets](#a-merge-of-many-datasets-2026-11-12): 30 rounds at 1 and 10, 15 at 40,000 datasets and 100,000 files.
+
+| case | glibc, old to new | new/old, peak memory | musl, old to new | new/old, peak memory |
+|---|---|---|---|---|
+| `--json list`, 40,000 datasets | 501 to 486 ms | 0.976 [0.964, 0.990], 0.952 | 322 to 313 ms | 0.982 [0.933, 0.988], 0.975 |
+| `--json list <name>`, 40,000 datasets | 320 to 301 ms | 0.939 [0.923, 0.961], 1.001 | 183 to 168 ms | 0.901 [0.889, 0.926], 1.000 |
+| `list`, 40,000 datasets | 482 to 457 ms | 0.950 [0.932, 0.962], 0.913 | 285 to 276 ms | 0.971 [0.960, 0.989], 0.963 |
+| `list <name>`, 40,000 datasets | 317 to 296 ms | 0.935 [0.920, 0.939], 1.001 | 182 to 168 ms | 0.924 [0.912, 0.931], 1.000 |
+| `--json list`, 100,000 files | 196 to 189 ms | 0.953 [0.948, 0.962], 0.915 | 161 to 154 ms | 0.948 [0.933, 0.975], 0.931 |
+| `--json list <name>`, 100,000 files | 238 to 192 ms | 0.815 [0.808, 0.824], 0.746 | 182 to 150 ms | 0.823 [0.819, 0.841], 0.931 |
+| `list`, 100,000 files | 169 to 151 ms | 0.899 [0.884, 0.906], 0.923 | 126 to 115 ms | 0.917 [0.909, 0.921], 0.899 |
+| `list <name>`, 100,000 files | 203 to 188 ms | 0.930 [0.907, 0.946], 0.851 | 153 to 149 ms | 0.973 [0.966, 0.989], 0.997 |
+
+at 1 and 10, the 32 cases on both builds came out between 0.99 and 1.05 at the median of 30 rounds. three intervals started above 1: `list <name>` of one dataset on glibc, `--json list` of 10 datasets and `list <name>` of 10 files on musl. 100 more rounds of each gave 1.003 [0.997, 1.012], 1.006 [0.996, 1.014] and 1.017 [0.998, 1.035]. peak memory at 1 and 10 stayed the same, or fell to 0.984 for the table on musl. every view printed the same bytes as before at every size. kept: what is left of a list's time is mostly reading data.toml and data.lock.
 
 ## evidence limits
 

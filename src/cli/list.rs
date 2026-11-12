@@ -11,7 +11,7 @@ use crate::digest::Sha256;
 use crate::error::Error;
 use crate::plan;
 use crate::project::lock::archives::{self, Archive, Pinned};
-use crate::project::lock::{Lock, Locked, LockedFile};
+use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::Access;
 use crate::units;
@@ -75,11 +75,14 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
         None => project.lock()?,
     }
     .unwrap_or_default();
-    let mut report = listed(&manifest, &lock, super::peek_cache().ok().as_ref());
     let output = &context.output;
-    if let Some(name) = name {
-        report.datasets.retain(|dataset| dataset.name == name);
-        if let Some(dataset) = report.datasets.first() {
+    let cache = super::peek_cache().ok();
+    let report = report(&manifest, &lock, cache.as_ref(), name, output.json());
+    if name.is_some() {
+        // `--json` prints the report alone, so the lines for a person are not built
+        if let Some(dataset) = report.datasets.first()
+            && !output.json()
+        {
             one(output, dataset);
         }
     } else if report.datasets.is_empty() {
@@ -166,14 +169,50 @@ fn held(
     locked: &Locked,
     cache: Option<&Cache>,
 ) -> Vec<(String, u64)> {
-    let as_pinned = |files: &[&LockedFile]| -> Vec<(String, u64)> {
-        files
-            .iter()
-            .map(|file| (file.path.clone(), file.size))
-            .collect()
+    let mut held = Vec::new();
+    each_held(manifest, name, locked, cache, &mut |path, size| {
+        held.push((path.to_owned(), size));
+    });
+    held.sort();
+    held
+}
+
+/// how many files [`held`] lists, and their bytes, without their paths.
+fn held_total(
+    manifest: &Manifest,
+    name: &str,
+    locked: &Locked,
+    cache: Option<&Cache>,
+) -> (u64, u64) {
+    let mut totals = (0, 0);
+    each_held(manifest, name, locked, cache, &mut |_, size| {
+        totals = counted(totals, size);
+    });
+    totals
+}
+
+/// `totals`, files and bytes, with one more file of `size` bytes.
+fn counted((files, bytes): (u64, u64), size: u64) -> (u64, u64) {
+    (files + 1, bytes.saturating_add(size))
+}
+
+/// calls `each` with the path in its folder and the size of each file [`held`] lists, in no
+/// order.
+fn each_held(
+    manifest: &Manifest,
+    name: &str,
+    locked: &Locked,
+    cache: Option<&Cache>,
+    each: &mut dyn FnMut(&str, u64),
+) {
+    let as_pinned = |each: &mut dyn FnMut(&str, u64)| {
+        for file in &locked.files {
+            each(&file.path, file.size);
+        }
     };
     let Some(source) = manifest.datasets.get(name).and_then(Entry::source) else {
-        return as_pinned(&locked.files.iter().collect::<Vec<_>>());
+        as_pinned(each);
+        return;
     };
     let folder = plan::folder(manifest, name);
     let members = |archive: &Archive<'_>| cache.and_then(|cache| archive.recorded(cache));
@@ -188,19 +227,17 @@ fn held(
         &members,
     );
     if expanded.is_err() {
-        return as_pinned(&locked.files.iter().collect::<Vec<_>>());
+        as_pinned(each);
+        return;
     }
-    let inside = |path: &str| {
-        path.strip_prefix(folder.as_str())
+    for target in &planned.targets {
+        let path = target.path.as_str();
+        let inside = path
+            .strip_prefix(folder.as_str())
             .and_then(|path| path.strip_prefix('/'))
-            .unwrap_or(path)
-            .to_owned()
-    };
-    let mut held: Vec<(String, u64)> = planned
-        .targets
-        .iter()
-        .map(|target| (inside(&target.path), target.size))
-        .collect();
+            .unwrap_or(path);
+        each(inside, target.size);
+    }
     for pinned in archives::pinned(&locked.files) {
         if let Pinned::Archive(archive) = pinned
             && planned
@@ -208,34 +245,75 @@ fn held(
                 .iter()
                 .any(|(_, file)| file.path == archive.file.path)
         {
-            held.extend(as_pinned(&archive.files()));
+            for file in archive.files() {
+                each(&file.path, file.size);
+            }
         }
     }
-    held.sort();
-    held
 }
 
-fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>) -> Report {
-    let datasets = manifest
-        .datasets
-        .iter()
+/// what a list shows, so that it builds only that.
+#[derive(Clone, Copy)]
+struct View<'n> {
+    /// the one dataset `list <name>` shows, or none for every dataset.
+    name: Option<&'n str>,
+    /// whether each dataset's files go in by path, as `list <name>` shows them to a person.
+    paths: bool,
+    /// whether each dataset's pinned files go in, as `--json` gives them.
+    pinned: bool,
+}
+
+/// the list `list` shows: every dataset, or the one `name`, with what a person or `--json` reads.
+fn report(
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: Option<&Cache>,
+    name: Option<&str>,
+    json: bool,
+) -> Report {
+    let view = View {
+        name,
+        paths: name.is_some() && !json,
+        pinned: json,
+    };
+    listed(manifest, lock, cache, view)
+}
+
+fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_>) -> Report {
+    let chosen: Vec<(&String, &Entry)> = match view.name {
+        Some(name) => manifest.datasets.get_key_value(name).into_iter().collect(),
+        None => manifest.datasets.iter().collect(),
+    };
+    let datasets = chosen
+        .into_iter()
         .map(|(name, entry)| {
             let locked = lock.get(name).filter(|_| entry.source().is_some());
             let result = lock.result(name).filter(|_| entry.recipe().is_some());
-            let held: Option<Vec<(String, u64)>> = match (locked, result) {
-                (Some(locked), _) => Some(held(manifest, name, locked, cache)),
-                (None, Some(result)) => Some(
-                    result
-                        .files
-                        .iter()
-                        .map(|file| (file.path.clone(), file.size))
-                        .collect(),
+            let (held, totals) = match (locked, result) {
+                (Some(locked), _) if view.paths => {
+                    let held = held(manifest, name, locked, cache);
+                    let totals = held.iter().map(|(_, size)| *size).fold((0, 0), counted);
+                    (Some(held), Some(totals))
+                }
+                (Some(locked), _) => (None, Some(held_total(manifest, name, locked, cache))),
+                (None, Some(result)) => (
+                    view.paths.then(|| {
+                        result
+                            .files
+                            .iter()
+                            .map(|file| (file.path.clone(), file.size))
+                            .collect()
+                    }),
+                    Some(
+                        result
+                            .files
+                            .iter()
+                            .map(|file| file.size)
+                            .fold((0, 0), counted),
+                    ),
                 ),
-                (None, None) => None,
+                (None, None) => (None, None),
             };
-            let sizes: Option<Vec<u64>> = held
-                .as_ref()
-                .map(|held| held.iter().map(|(_, size)| *size).collect());
             Listed {
                 name: name.clone(),
                 reference: entry
@@ -243,12 +321,8 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>) -> Report {
                     .map(|source| crate::net::mask_query(&source.reference).into_owned()),
                 from: entry.recipe().map(|recipe| recipe.from.clone()),
                 resolved: locked.map(|locked| locked.resolved.clone()),
-                files: sizes.as_ref().map(|sizes| sizes.len() as u64),
-                bytes: sizes.map(|sizes| {
-                    sizes
-                        .into_iter()
-                        .fold(0, |total: u64, size| total.saturating_add(size))
-                }),
+                files: totals.map(|(files, _)| files),
+                bytes: totals.map(|(_, bytes)| bytes),
                 folder: plan::folder(manifest, name),
                 placed: entry.place,
                 title: locked.and_then(|locked| locked.title.clone()),
@@ -256,6 +330,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>) -> Report {
                 doi: locked.and_then(|locked| locked.doi.clone()),
                 access: locked.map(|locked| locked.access),
                 locked_files: match (locked, result) {
+                    _ if !view.pinned => None,
                     (Some(locked), _) => Some(
                         locked
                             .files
@@ -428,7 +503,7 @@ mod tests {
             "[datasets.iris]\nref = \"zenodo:3608990\"\n\n[datasets.mnist-digits]\nref = \"hf:datasets/ylecun/mnist\"\n",
         )
         .unwrap();
-        let report = listed(&manifest, &Lock::default(), None);
+        let report = report(&manifest, &Lock::default(), None, None, true);
         assert_eq!(
             table(&report.datasets, None),
             "iris          zenodo:3608990            not locked yet  data/iris\n\
@@ -450,7 +525,7 @@ mod tests {
             "[datasets.iris]\nref = \"zenodo:3608990\"\nplace = false\n\n[datasets.wine]\nref = \"zenodo:1\"\n",
         )
         .unwrap();
-        let report = listed(&manifest, &Lock::default(), None);
+        let report = report(&manifest, &Lock::default(), None, None, true);
         assert_eq!(
             table(&report.datasets, None),
             "iris  zenodo:3608990  not locked yet  not placed\n\
@@ -572,13 +647,14 @@ mod tests {
             "[datasets.images]\nref = \"https://example.org/images.zip\"\n\n[datasets.images.members.\"shapes.zip\"]\nexclude = [\"shapes/b.png\"]\n\n[datasets.other]\nref = \"https://example.org/other.zip\"\n",
         )
         .unwrap();
-        let report = listed(&manifest, &lock, Some(&cache));
+        let report = report(&manifest, &lock, Some(&cache), None, true);
         assert_eq!(
             table(&report.datasets, None),
             "images  https://example.org/images.zip  2 files · 1.0 KiB  data/images\n\
              other   https://example.org/other.zip   1 file · 512 B     data/other"
         );
-        let images = report.datasets[0].held.as_deref().unwrap_or_default();
+        let one = super::report(&manifest, &lock, Some(&cache), Some("images"), false);
+        let images = one.datasets[0].held.as_deref().unwrap_or_default();
         assert_eq!(file_lines(images), "a.png       1000 B\nlabels.csv    24 B");
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(
@@ -592,5 +668,177 @@ mod tests {
             value["datasets"][0]["locked_files"][0]["path"],
             "shapes.zip"
         );
+    }
+
+    /// a project with one dataset of each kind a list shows: a recipe's result, one not placed,
+    /// one whose link holds a secret, one not locked, an archive this machine recorded with a
+    /// members table, and one it never unpacked; with the cache that recorded it.
+    fn every_kind() -> (Manifest, Lock, tempfile::TempDir, Cache) {
+        use crate::project::lock::LockedFile;
+        let manifest = Manifest::parse(concat!(
+            "[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\n\n",
+            "[datasets.hidden]\nref = \"zenodo:4\"\nplace = false\n\n",
+            "[datasets.iris]\nref = \"https://example.org/iris.csv?token=abc\"\n\n",
+            "[datasets.later]\nref = \"zenodo:3\"\n\n",
+            "[datasets.pets]\nref = \"zenodo:2\"\n\n",
+            "[datasets.pets.members.\"pets.zip\"]\nexclude = [\"notes.txt\"]\n\n",
+            "[datasets.scans]\nref = \"zenodo:5\"\n",
+        ))
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let member = |path: &str, size: u64| crate::cache::Member {
+            path: path.to_owned(),
+            size,
+            sha256: crate::digest::sha256(path.as_bytes()),
+        };
+        let pets_zip = crate::digest::sha256(b"pets.zip");
+        let tree = cache
+            .record_unpacked(
+                &pets_zip,
+                &[
+                    member("images/cat.jpg", 3_000),
+                    member("images/dog.jpg", 5_000),
+                    member("notes.txt", 20),
+                ],
+            )
+            .unwrap();
+        let file = |path: &str, size: u64, query: &str| LockedFile {
+            path: path.to_owned(),
+            size,
+            sha256: crate::digest::sha256(path.as_bytes()),
+            md5: None,
+            url: format!("https://example.org/{path}{query}"),
+            unpacks_to: None,
+        };
+        let pinned = |name: &str, files: Vec<LockedFile>| {
+            let source = manifest.datasets[name].source().unwrap();
+            Locked {
+                name: name.to_owned(),
+                reference: source.reference.clone(),
+                spec: crate::project::lock::spec(source),
+                extract: source.extract,
+                resolved: format!("{name}-v1"),
+                title: Some(format!("the {name} set")),
+                license: Some("cc-by-4.0".to_owned()),
+                doi: None,
+                access: Access::Unknown,
+                timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                files,
+            }
+        };
+        let recorded = LockedFile {
+            sha256: pets_zip,
+            unpacks_to: Some(tree),
+            ..file("pets.zip", 4_000, "")
+        };
+        let never = LockedFile {
+            unpacks_to: Some(crate::digest::sha256(b"never unpacked")),
+            ..file("scans.zip", 60_000, "")
+        };
+        let result_files = vec![crate::cache::Member {
+            sha256: crate::digest::sha256(b"clean"),
+            ..member("iris-clean.csv", 700)
+        }];
+        let lock = Lock {
+            datasets: vec![
+                pinned("hidden", vec![file("h.bin", 9, "")]),
+                pinned(
+                    "iris",
+                    vec![
+                        file("iris.csv", 4_551, "?token=abc"),
+                        file("readme.txt", 12, ""),
+                    ],
+                ),
+                pinned("pets", vec![recorded, file("labels.csv", 30, "")]),
+                pinned("scans", vec![never]),
+            ],
+            derived: vec![crate::project::lock::derived::Derived {
+                name: "clean".to_owned(),
+                from: Vec::new(),
+                run: vec!["python3".to_owned()],
+                code: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                key: crate::digest::sha256(b"key"),
+                timestamp: "2026-01-02T00:00:00Z".to_owned(),
+                tree: crate::cache::tree_hash(&result_files),
+                files: result_files,
+            }],
+        };
+        (manifest, lock, folder, cache)
+    }
+
+    /// each view a list shows, every dataset or one, for a person or as `--json`, lists what it
+    /// did when every view was built whole: files a recorded archive's members table keeps, an
+    /// archive this machine never unpacked as itself, a recipe's result, a link that holds a
+    /// secret left out, and datasets not locked or not placed.
+    #[test]
+    fn each_view_lists_what_the_whole_list_has() {
+        let (manifest, lock, _folder, cache) = every_kind();
+        let shown =
+            |name: Option<&str>, json: bool| report(&manifest, &lock, Some(&cache), name, json);
+        let each = |report: &Report| -> Vec<String> {
+            let value = serde_json::to_value(report).unwrap();
+            value["datasets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect()
+        };
+        let expected = [
+            r#"{"access":null,"bytes":700,"doi":null,"files":1,"folder":"data/clean","from":["iris"],"license":null,"locked_files":[{"path":"iris-clean.csv","sha256":"3b066804f6d1d077173cfe4d06002e6a61e6f21c2b2e648417962115f1afcd8e","size":700,"url":null}],"name":"clean","placed":true,"ref":null,"resolved":null,"title":null}"#,
+            r#"{"access":"unknown","bytes":9,"doi":null,"files":1,"folder":"data/hidden","from":null,"license":"cc-by-4.0","locked_files":[{"path":"h.bin","sha256":"0925728359a07a9b354226d3f74b9438c96b02f383533dae71cf688daf5ace47","size":9,"url":"https://example.org/h.bin"}],"name":"hidden","placed":false,"ref":"zenodo:4","resolved":"hidden-v1","title":"the hidden set"}"#,
+            r#"{"access":"unknown","bytes":4563,"doi":null,"files":2,"folder":"data/iris","from":null,"license":"cc-by-4.0","locked_files":[{"path":"iris.csv","sha256":"ab7cabb5c193f27616d6c479b5880441ab13117bebe91fdddc797bdfe88d3e08","size":4551,"url":null},{"path":"readme.txt","sha256":"9e6e4772050998a5c0dc3c61acf3dab0a7e594566171fa5746d6b62f9598efb6","size":12,"url":"https://example.org/readme.txt"}],"name":"iris","placed":true,"ref":"https://example.org/iris.csv?token=***","resolved":"iris-v1","title":"the iris set"}"#,
+            r#"{"access":null,"bytes":null,"doi":null,"files":null,"folder":"data/later","from":null,"license":null,"locked_files":null,"name":"later","placed":true,"ref":"zenodo:3","resolved":null,"title":null}"#,
+            r#"{"access":"unknown","bytes":8030,"doi":null,"files":3,"folder":"data/pets","from":null,"license":"cc-by-4.0","locked_files":[{"path":"pets.zip","sha256":"fa70fd5c3721e72a45715d3e82a49fcd15c1ed46aa714627a6fc0582b95c50c5","size":4000,"url":"https://example.org/pets.zip"},{"path":"labels.csv","sha256":"6bf6d3cb41de5ffae32a537c49ee7c4d8667314c5245cfdcd37399e1046d530e","size":30,"url":"https://example.org/labels.csv"}],"name":"pets","placed":true,"ref":"zenodo:2","resolved":"pets-v1","title":"the pets set"}"#,
+            r#"{"access":"unknown","bytes":60000,"doi":null,"files":1,"folder":"data/scans","from":null,"license":"cc-by-4.0","locked_files":[{"path":"scans.zip","sha256":"662d753124e3d540e95f3e4c988a0beb71357f542a7fa8358107c3cdb54e2d04","size":60000,"url":"https://example.org/scans.zip"}],"name":"scans","placed":true,"ref":"zenodo:5","resolved":"scans-v1","title":"the scans set"}"#,
+        ];
+        let table_text = "clean   made from iris                          1 file · 700 B     data/clean\nhidden  zenodo:4                                1 file · 9 B       not placed  cc-by-4.0\niris    https://example.org/iris.csv?token=***  2 files · 4.5 KiB  data/iris   cc-by-4.0\nlater   zenodo:3                                not locked yet     data/later\npets    zenodo:2                                3 files · 7.8 KiB  data/pets   cc-by-4.0\nscans   zenodo:5                                1 file · 58.6 KiB  data/scans  cc-by-4.0";
+        let views: [(&str, &str, Option<&str>); 6] = [
+            (
+                "clean",
+                "clean · 1 file · 700 B",
+                Some("iris-clean.csv  700 B"),
+            ),
+            (
+                "hidden",
+                "hidden · the hidden set · 1 file · 9 B · license cc-by-4.0",
+                Some("h.bin  9 B"),
+            ),
+            (
+                "iris",
+                "iris · the iris set · 2 files · 4.5 KiB · license cc-by-4.0",
+                Some("iris.csv    4.4 KiB\nreadme.txt     12 B"),
+            ),
+            ("later", "later", None),
+            (
+                "pets",
+                "pets · the pets set · 3 files · 7.8 KiB · license cc-by-4.0",
+                Some(
+                    "labels.csv              30 B\npets/images/cat.jpg  2.9 KiB\npets/images/dog.jpg  4.9 KiB",
+                ),
+            ),
+            (
+                "scans",
+                "scans · the scans set · 1 file · 58.6 KiB · license cc-by-4.0",
+                Some("scans.zip  58.6 KiB"),
+            ),
+        ];
+        assert_eq!(each(&shown(None, true)), expected);
+        assert_eq!(table(&shown(None, false).datasets, None), table_text);
+        for ((name, heading_text, lines), expected) in views.into_iter().zip(expected) {
+            assert_eq!(each(&shown(Some(name), true)), [expected], "{name}");
+            let one = shown(Some(name), false);
+            let [dataset] = one.datasets.as_slice() else {
+                panic!("{name}");
+            };
+            let listed = dataset.held.as_deref().map(file_lines);
+            assert_eq!(
+                (heading(dataset).as_str(), listed.as_deref()),
+                (heading_text, lines),
+                "{name}"
+            );
+        }
     }
 }
