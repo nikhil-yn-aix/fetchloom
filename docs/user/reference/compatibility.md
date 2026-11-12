@@ -101,6 +101,7 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | mendeley data | the public API under `/public-api` that its site uses: a version, its folders and their files | data.mendeley.com |
 | ENA | portal API: `filereportcount` and `filereport` for read runs | www.ebi.ac.uk, its files on ftp.sra.ebi.ac.uk over https |
 | GEO | the folder indexes of NCBI's file server under `/geo` | ftp.ncbi.nlm.nih.gov over https |
+| DANDI | API: a dandiset, a version's `info/` and its `assets/` with `metadata=true`, in pages | api.dandiarchive.org, its blobs on dandiarchive.s3.amazonaws.com over https |
 | osf | API v2 and its file storage links | api.osf.io |
 | hugging face | hub API under `/api` and `resolve` links | huggingface.co |
 | kaggle | public API v1 | api.kaggle.com |

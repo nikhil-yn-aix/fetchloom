@@ -997,3 +997,178 @@ fn bytes_geo_remade_under_the_same_name_are_refused_by_the_lock() -> Result {
     );
     Ok(())
 }
+
+const DANDI_API: &str = "/api.dandiarchive.org/api/dandisets/000027";
+const DANDI_VERSION: &str = "0.210831.2033";
+
+/// dandi's answers for dandiset 000027, `embargo` as its status, whose newest published version
+/// holds `(path, bytes, stated SHA-256)` assets, and the bytes behind each one's blob on S3.
+fn dandi(embargo: &str, assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
+    let version = format!("{DANDI_API}/versions/{DANDI_VERSION}");
+    let mut routes = vec![
+        (
+            format!("{DANDI_API}/"),
+            answer(&serde_json::json!({
+                "identifier": "000027",
+                "embargo_status": embargo,
+                "most_recent_published_version": {"version": DANDI_VERSION, "name": "a test dandiset"},
+                "draft_version": {"version": "draft", "name": "a test dandiset"},
+            }))?,
+        ),
+        (
+            format!("{version}/info/"),
+            answer(&serde_json::json!({
+                "version": DANDI_VERSION,
+                "name": "a test dandiset",
+                "dandiset": {"identifier": "000027", "embargo_status": embargo},
+                "metadata": {"license": ["spdx:CC-BY-4.0"], "doi": "10.48324/dandi.000027/0.210831.2033"},
+            }))?,
+        ),
+    ];
+    let mut results = Vec::new();
+    for (at, (path, body, sha256)) in assets.iter().enumerate() {
+        let blob = format!("blobs/2db/af0/2dbaf0fd-5003-4a0a-b4c0-bc8cdbdb382{at}");
+        results.push(serde_json::json!({
+            "asset_id": format!("1c095f5f-d1e2-45db-b807-fdcfea08c6d{at}"),
+            "blob": format!("2dbaf0fd-5003-4a0a-b4c0-bc8cdbdb382{at}"),
+            "zarr": null,
+            "path": path,
+            "size": body.len(),
+            "metadata": {
+                "digest": {"dandi:dandi-etag": "6ec084ca9d3be17ec194a8f700d65344-1", "dandi:sha2-256": sha256},
+                "contentUrl": [
+                    format!("https://api.dandiarchive.org/api/assets/1c095f5f-d1e2-45db-b807-fdcfea08c6d{at}/download/"),
+                    format!("https://dandiarchive.s3.amazonaws.com/{blob}"),
+                ],
+            },
+        }));
+        routes.push((
+            format!("/dandiarchive.s3.amazonaws.com/{blob}"),
+            file(body, &format!("\"{}\"", md5(body))),
+        ));
+    }
+    routes.push((
+        format!("{version}/assets/?metadata=true&order=path&page_size=1000"),
+        answer(&serde_json::json!({"count": assets.len(), "next": null, "previous": null, "results": results}))?,
+    ));
+    Routes::start(routes)
+}
+
+/// a command whose requests to dandi's API and its S3 bucket go to `routes`.
+fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+    let mut command = command(sandbox, routes, args);
+    command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command
+}
+
+/// a dandiset is pinned at its newest published version with the SHA-256 dandi states for each
+/// asset, and a teammate's sync reads only the blobs data.lock names.
+#[test]
+fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let stated = sha256_hex(ROWS);
+    let routes = dandi("OPEN", &[("sub-RAT123/sub-RAT123.nwb", ROWS, &stated)])?;
+    let output =
+        dandi_command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("resolved = \"dandi:000027@0.210831.2033\"")
+            && lock.contains(&format!("sha256 = \"{stated}\""))
+            && lock.contains("url = \"https://dandiarchive.s3.amazonaws.com/blobs/2db/af0/2dbaf0fd-5003-4a0a-b4c0-bc8cdbdb3820\""),
+        "{lock}"
+    );
+    assert_eq!(
+        fs::read(work.join("data/rat/sub-RAT123/sub-RAT123.nwb"))?,
+        ROWS
+    );
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(
+        routes.targets()[listed..],
+        ["/dandiarchive.s3.amazonaws.com/blobs/2db/af0/2dbaf0fd-5003-4a0a-b4c0-bc8cdbdb3820"],
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// bytes whose SHA-256 is not the one dandi states for the asset are refused, and nothing is
+/// placed.
+#[test]
+fn bytes_that_differ_from_dandis_sha256_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dandi(
+        "OPEN",
+        &[("sub-RAT123/sub-RAT123.nwb", ROWS, &sha256_hex(NOTES))],
+    )?;
+    let output =
+        dandi_command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!("expected {}", sha256_hex(NOTES))),
+        "{stderr}"
+    );
+    assert!(
+        !sandbox
+            .work()
+            .join("data/rat/sub-RAT123/sub-RAT123.nwb")
+            .exists()
+    );
+    Ok(())
+}
+
+/// an embargoed dandiset, which dandi shows to no one without an account, is refused with what
+/// that means, and no data.toml is written.
+#[test]
+fn an_embargoed_dandiset_is_refused_and_says_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        format!("{DANDI_API}/"),
+        reply(
+            "401 Unauthorized",
+            &[("Content-Type", "application/json")],
+            br#"{"detail":"Authentication credentials were not provided."}"#,
+        ),
+    )])?;
+    let output = dandi_command(&sandbox, &routes, &["--json", "add", "dandi:000027"]).output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let said = json(&output)?;
+    assert_eq!(said["errors"][0]["kind"], "auth.required");
+    let message = said["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("embargo"), "{message}");
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
+/// a pasted page of a folder in a dandiset fetches that folder's assets alone.
+#[test]
+fn get_takes_the_folder_a_pasted_dandi_page_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dandi(
+        "OPEN",
+        &[
+            ("sub-RAT123/sub-RAT123.nwb", ROWS, &sha256_hex(ROWS)),
+            ("sub-RAT124/sub-RAT124.nwb", NOTES, &sha256_hex(NOTES)),
+        ],
+    )?;
+    let page =
+        "https://dandiarchive.org/dandiset/000027/0.210831.2033/files?location=sub-RAT124%2F";
+    let output = dandi_command(&sandbox, &routes, &["get", page, "--dir", "rats"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let rats = sandbox.work().join("rats");
+    assert_eq!(fs::read(rats.join("sub-RAT124/sub-RAT124.nwb"))?, NOTES);
+    assert!(!rats.join("sub-RAT123").exists());
+    Ok(())
+}

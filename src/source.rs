@@ -4,6 +4,7 @@
 //! were accepted.
 
 mod bucket;
+mod dandi;
 mod dataverse;
 mod doi;
 pub(crate) mod drive;
@@ -111,6 +112,7 @@ pub(crate) enum Reference {
     GitLab(gitlab::Release),
     Ena(ena::Accession),
     Geo(geo::Accession),
+    Dandi(dandi::Dandiset),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -314,6 +316,7 @@ impl Reference {
             "gitlab" => whole(Reference::GitLab(gitlab::Release::parse(rest)?)),
             "ena" => whole(Reference::Ena(ena::Accession::parse(rest)?)),
             "geo" => whole(Reference::Geo(geo::Accession::parse(rest)?)),
+            "dandi" => whole(Reference::Dandi(dandi::Dandiset::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -423,6 +426,7 @@ impl Reference {
             Reference::GitLab(release) => release.resolve(api).await,
             Reference::Ena(accession) => accession.resolve(api).await,
             Reference::Geo(accession) => accession.resolve(api).await,
+            Reference::Dandi(dandiset) => dandiset.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -449,6 +453,7 @@ impl fmt::Display for Reference {
             Reference::GitLab(release) => write!(f, "{release}"),
             Reference::Ena(accession) => write!(f, "{accession}"),
             Reference::Geo(accession) => write!(f, "{accession}"),
+            Reference::Dandi(dandiset) => write!(f, "{dandiset}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -659,6 +664,10 @@ fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
             geo::Accession::from_link(url)
                 .map(|(accession, folder)| (Reference::Geo(accession), folder))
         })
+        .or_else(|| {
+            dandi::Dandiset::from_link(url)
+                .map(|(dandiset, folder)| (Reference::Dandi(dandiset), folder))
+        })
 }
 
 /// repository file pages have a stable raw endpoint, unlike their HTML view.
@@ -701,6 +710,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "datadryad.org" | "www.datadryad.org" => "dryad",
         "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
         "www.ncbi.nlm.nih.gov" | "ncbi.nlm.nih.gov" if url.path().starts_with("/geo/") => "geo",
+        "dandiarchive.org" | "www.dandiarchive.org" => "dandi",
         "www.ebi.ac.uk" | "ebi.ac.uk"
             if ["/ena/browser/view/", "/ena/data/view/"]
                 .iter()
@@ -1075,6 +1085,50 @@ mod tests {
             "azure:open_data/mnist/",
             "azure:azureopendatastorage/MNIST/",
             "azure:azureopendatastorage/mn--ist/",
+        ] {
+            let error = Reference::parse(bad).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");
+        }
+    }
+
+    /// a dandiset is its number, at a version or the newest, and a pasted page of one, or of a
+    /// folder in one, is read as that, the folder as what to select.
+    #[test]
+    fn dandisets_and_their_pages_find_their_source() {
+        for (text, canonical, select) in [
+            ("dandi:000027", "dandi:000027", &[][..]),
+            ("DANDI:000027", "dandi:000027", &[]),
+            (
+                "dandi:000027@0.210831.2033",
+                "dandi:000027@0.210831.2033",
+                &[],
+            ),
+            ("dandi:000027@draft", "dandi:000027@draft", &[]),
+            (
+                "https://dandiarchive.org/dandiset/000027",
+                "dandi:000027",
+                &[],
+            ),
+            (
+                "https://dandiarchive.org/dandiset/000027/0.210831.2033",
+                "dandi:000027@0.210831.2033",
+                &[],
+            ),
+            (
+                "https://dandiarchive.org/dandiset/000027/draft/files?location=sub-RAT123%2F",
+                "dandi:000027@draft",
+                &["sub-RAT123/**"],
+            ),
+        ] {
+            let parsed = parse(text);
+            assert_eq!(parsed.reference.to_string(), canonical, "{text}");
+            assert_eq!(parsed.select(), select, "{text}");
+        }
+        for bad in [
+            "dandi:27",
+            "dandi:0000271",
+            "dandi:000027@",
+            "dandi:000027@1.0",
         ] {
             let error = Reference::parse(bad).unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");

@@ -308,6 +308,7 @@ fn test_source(url: &Url) -> Option<Url> {
             | "www.ebi.ac.uk"
             | "ftp.sra.ebi.ac.uk"
             | "ftp.ncbi.nlm.nih.gov"
+            | "api.dandiarchive.org"
     ) {
         return None;
     }
