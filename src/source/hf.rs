@@ -100,6 +100,11 @@ impl Repo {
         })
     }
 
+    /// whether the repository is at a commit, which no push changes, rather than a branch or tag.
+    pub(super) fn is_at_commit(&self) -> bool {
+        self.revision.as_deref().is_some_and(revision::is_commit)
+    }
+
     /// the owner and the name of a dataset repository, such as `scikit-learn` and `iris`. none for
     /// a model, a space or an id of one part.
     pub(crate) fn dataset_parts(&self) -> Option<(&str, &str)> {

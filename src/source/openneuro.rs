@@ -37,6 +37,11 @@ pub(crate) struct Dataset {
 }
 
 impl Dataset {
+    /// whether this names a snapshot, whose files openneuro never changes.
+    pub(super) fn is_snapshot(&self) -> bool {
+        self.tag.is_some()
+    }
+
     /// reads the part after `openneuro:`: an accession, with `@` and a snapshot's tag to pin one.
     pub(super) fn parse(text: &str) -> Result<Dataset, Error> {
         let invalid = || malformed(&format!("openneuro:{text}"), "openneuro:ds000001@1.0.0");

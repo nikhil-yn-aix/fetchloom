@@ -380,6 +380,18 @@ impl Reference {
         matches!(self, Reference::Bucket(prefix) if prefix.keeps_versions())
     }
 
+    /// whether this reference, as a listing resolved it, names bytes nobody can change: a hugging
+    /// face commit, a version of a kaggle dataset or an openneuro snapshot. resolved to it again,
+    /// a dataset lists the same bytes, even of files no checksum pins.
+    pub(crate) fn fixes_bytes(&self) -> bool {
+        match self {
+            Reference::HuggingFace(repo) => repo.is_at_commit(),
+            Reference::Kaggle(dataset) => dataset.is_versioned(),
+            Reference::OpenNeuro(dataset) => dataset.is_snapshot(),
+            _ => false,
+        }
+    }
+
     /// the reference as messages and logs show it, a secret in a link masked.
     pub(crate) fn shown(&self) -> String {
         match self {
@@ -992,6 +1004,28 @@ mod tests {
                 "leave key out of the link: sign in once with `fetchloom auth login dataverse --host demo.dataverse.org`, and fetchloom sends your key to demo.dataverse.org itself"
             )
         );
+    }
+
+    /// a commit, a dataset's version and a snapshot fix their bytes. a branch, a dataset without
+    /// its version and a link do not.
+    #[test]
+    fn only_a_revision_nobody_can_change_fixes_its_bytes() {
+        for (text, fixed) in [
+            (
+                "hf:datasets/scikit-learn/iris@0123456789abcdef0123456789abcdef01234567",
+                true,
+            ),
+            ("hf:datasets/scikit-learn/iris@main", false),
+            ("hf:datasets/scikit-learn/iris", false),
+            ("kaggle:uciml/iris@2", true),
+            ("kaggle:uciml/iris", false),
+            ("openneuro:ds000001@1.0.0", true),
+            ("openneuro:ds000001", false),
+            ("https://example.org/data.csv", false),
+            ("geo:GSE1000", false),
+        ] {
+            assert_eq!(parse(text).reference.fixes_bytes(), fixed, "{text}");
+        }
     }
 
     #[test]

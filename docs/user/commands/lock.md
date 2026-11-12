@@ -50,7 +50,7 @@ warning: mc changed since it was built: c.py changed
 
 ## upgrading
 
-`--upgrade` asks each source again for the latest version of its reference, and checks again each file no checksum pins, such as a plain link's, and each file whose source now states an MD5 that data.lock lacks. a bucket object whose listing gives the ETag and size this machine recorded is not downloaded again, as [buckets](../sources/buckets.md#pins) explains. a reference that names a version stays on it; edit `ref` to choose another.
+`--upgrade` asks each source again for the latest version of its reference, and checks again each file no checksum pins, such as a plain link's, and each file whose source now states an MD5 that data.lock lacks. a bucket object whose listing gives the ETag and size this machine recorded is not downloaded again, as [buckets](../sources/buckets.md#pins) explains. a dataset that resolves again to the revision data.lock pins, where nobody can change that revision's bytes, keeps its pins without asking about any file: a hugging face commit, a version of a kaggle dataset or an openneuro snapshot. a reference that names a version stays on it; edit `ref` to choose another.
 
 an [import](add.md#files-on-this-machine) has no source with a newer version: `--upgrade <name>` naming one exits 10 with `reference.unresolved`, and `--upgrade` alone keeps it as data.lock pins it and says so with a `Skipped` line.
 
@@ -124,7 +124,7 @@ with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`,
 
 ## dry run
 
-`lock --dry-run`, or `-n`, lists what `lock` would change without writing `data.lock` or the cache and without downloading files; with `--upgrade`, it shows which datasets have newer versions. it still resolves entries, so a source may be asked what a link holds. its lines are those of a real lock, with `Would pin`, `Would lock`, `Would remove` and `Would upgrade`. `Would fetch` names each file a real lock would download to learn its hash, including, under `--upgrade`, a file no checksum pins, which the dry run counts as unchanged. `Would open` names each archive it would unpack. `--check --dry-run` is a check. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+`lock --dry-run`, or `-n`, lists what `lock` would change without writing `data.lock` or the cache and without downloading files; with `--upgrade`, it shows which datasets have newer versions. it still resolves entries, so a source may be asked what a link holds. its lines are those of a real lock, with `Would pin`, `Would lock`, `Would remove` and `Would upgrade`. `Would fetch` names each file a real lock would download to learn its hash. under `--upgrade` that includes a file no checksum pins, which the dry run counts as unchanged, but not one whose dataset resolves again to a revision whose bytes cannot change, which the real lock does not ask about either. `Would open` names each archive it would unpack. `--check --dry-run` is a check. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 

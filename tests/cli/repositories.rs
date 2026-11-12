@@ -1314,6 +1314,33 @@ fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() 
     Ok(())
 }
 
+/// a snapshot nobody can change lists the same bytes when an upgrade asks again, so neither the
+/// dry run nor the upgrade fetches the README, which no checksum pins.
+#[test]
+fn an_upgrade_to_the_snapshot_data_lock_pins_fetches_no_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
+    let routes = openneuro(&key, ROWS)?;
+    let add = &["add", "openneuro:ds000001@1.0.0", "--as", "bart"];
+    ok(&openneuro_command(&sandbox, &routes, add).output()?)?;
+    let listed = routes.targets().len();
+    let dry = &["--json", "lock", "--upgrade", "--dry-run"];
+    let planned = openneuro_command(&sandbox, &routes, dry).output()?;
+    ok(&planned)?;
+    assert_eq!(
+        json(&planned)?["result"]["changes"]["download"],
+        serde_json::json!([])
+    );
+    ok(&openneuro_command(&sandbox, &routes, &["lock", "--upgrade"]).output()?)?;
+    let fetched: Vec<String> = routes.targets()[listed..]
+        .iter()
+        .filter(|target| !target.starts_with(OPENNEURO))
+        .cloned()
+        .collect();
+    assert_eq!(fetched, Vec::<String>::new());
+    Ok(())
+}
+
 /// bytes whose MD5 is not the one an old dataset's git-annex key states are refused, and
 /// nothing is placed.
 #[test]

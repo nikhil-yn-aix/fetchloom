@@ -60,7 +60,8 @@ impl Draft {
     /// a dataset's files with every hash known without a download: stated by the source, carried
     /// over from data.lock, or remembered from an earlier download whose MD5 the source stated.
     /// an upgrade carries nothing over for a file no checksum pins, since only asking the server
-    /// tells whether its bytes changed.
+    /// tells whether its bytes changed, unless the dataset resolved again to the revision
+    /// data.lock pins and that revision's bytes cannot change.
     pub(super) fn new(
         name: &str,
         entry: &Entry,
@@ -83,12 +84,17 @@ impl Draft {
                 .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
             by_url.entry(link).or_default().push(file);
         }
+        // listed again at the revision data.lock pins, a revision nobody can change holds the
+        // same bytes, so an upgrade has nothing to ask of its files
+        let asks = upgrading
+            && !(listing.resolved.fixes_bytes()
+                && previous.is_some_and(|locked| locked.resolved == listing.resolved.to_string()));
         let files = filter(name, entry, source, &listing)?
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
                 let found = carried(&by_url, &remote);
-                let earlier = found.filter(|_| pinned || !upgrading);
+                let earlier = found.filter(|_| pinned || !asks);
                 let was = found.filter(|_| earlier.is_none()).cloned();
                 let stated = match (remote.sha256, remote.size) {
                     (Some(_), Some(_)) => None,

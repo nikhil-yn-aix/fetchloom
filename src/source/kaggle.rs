@@ -69,6 +69,11 @@ pub(crate) struct Dataset {
 }
 
 impl Dataset {
+    /// whether this names one version of the dataset, whose files kaggle never changes.
+    pub(super) fn is_versioned(&self) -> bool {
+        self.version.is_some()
+    }
+
     /// reads a dataset after `kaggle:`, such as `uciml/iris` or `uciml/iris@2`.
     fn parse(text: &str) -> Result<Dataset, Error> {
         let bad = || {
