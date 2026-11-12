@@ -710,6 +710,27 @@ fn output_names_a_link_to_nothing_in_its_way() -> Result {
     Ok(())
 }
 
+/// a file at the `-o` path that only the download can tell apart is compared once the download
+/// is in, which the person is told before it starts rather than after a long wait.
+#[test]
+fn output_says_it_downloads_to_compare_a_file_in_its_way() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    fs::write(sandbox.work().join("data.csv"), "mine")?;
+    let refused = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(50), "{stderr}");
+    let told = stderr
+        .find("   Checking data.csv · already there, so the link downloads first to compare\n");
+    let refusal = stderr.find("error: data.csv already exists and holds other bytes");
+    assert!(
+        told.zip(refusal)
+            .is_some_and(|(told, refusal)| told < refusal),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     let sandbox = Sandbox::new()?;

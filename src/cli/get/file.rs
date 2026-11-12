@@ -377,6 +377,7 @@ fn decided_early(
         (None, None, Some(stated)) => (stated, Wanted::Stated),
         (None, None, None) => {
             let Some(record) = recorded(cache, remote) else {
+                unhashed(context, remote, args.force, destination)?;
                 return Ok(Early::Download(Known::default()));
             };
             if !context.offline.enabled() {
@@ -402,6 +403,42 @@ fn decided_early(
             held: None,
         })),
     }
+}
+
+/// looks, before downloading a link whose bytes no hash names, at a file already at the path: one
+/// of another size than the source states holds other bytes, so it is refused at once, and of any
+/// other only the download tells, so the person is told that it comes first. `--force` replaces
+/// it either way.
+fn unhashed(
+    context: &Context,
+    remote: &Remote,
+    force: bool,
+    destination: &Destination,
+) -> Result<(), Error> {
+    let size = match fs::metadata(&destination.path) {
+        Ok(metadata) if metadata.is_file() && !force => metadata.len(),
+        _ => return Ok(()),
+    };
+    if let Some(stated) = remote.size.filter(|stated| *stated != size) {
+        return Err(
+            other_bytes(&destination.shown, Wanted::Served).detail(format!(
+                "{} is {}, and the link's file {}",
+                destination.shown,
+                crate::units::size(size),
+                crate::units::size(stated)
+            )),
+        );
+    }
+    if !context.offline.enabled() {
+        context.output.step(
+            "Checking",
+            &format!(
+                "{} · already there, so the link downloads first to compare",
+                destination.shown
+            ),
+        );
+    }
+    Ok(())
 }
 
 /// what the link served the last time it was downloaded here, for a link whose source states
@@ -776,9 +813,7 @@ fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) ->
             "the link",
         ),
         Existing::Other => ("is a special file, such as a pipe".to_owned(), "it"),
-        Existing::Missing | Existing::Holds(_) => {
-            (format!("holds other bytes than {}", wanted.said()), "it")
-        }
+        Existing::Missing | Existing::Holds(_) => return other_bytes(shown, wanted),
     };
     Error::new(
         Kind::LocalNotEmpty,
@@ -787,6 +822,18 @@ fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) ->
     .help(format!(
         "add --force to replace {it}, or choose another name with -o"
     ))
+}
+
+/// refuses the file at the path, which holds other bytes than `wanted` says.
+fn other_bytes(shown: &str, wanted: Wanted) -> Error {
+    Error::new(
+        Kind::LocalNotEmpty,
+        format!(
+            "{shown} already exists and holds other bytes than {}",
+            wanted.said()
+        ),
+    )
+    .help("add --force to replace it, or choose another name with -o")
 }
 
 fn unwritten(shown: &str, err: &io::Error) -> Error {
@@ -1025,6 +1072,45 @@ mod tests {
         );
         for path in ["a.csv", "new/a.csv", ".hidden"] {
             usage(Path::new(path), &one, false).unwrap();
+        }
+    }
+
+    /// a file at the path whose size is not the one the source states holds other bytes, so it
+    /// is refused before any download. one of the same or an unknown size waits for the download,
+    /// and `--force` replaces whatever is there.
+    #[test]
+    fn a_file_of_another_size_than_stated_is_refused_before_downloading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.csv");
+        fs::write(&path, b"mine").unwrap();
+        let destination = Destination {
+            shown: "data.csv".to_owned(),
+            path,
+        };
+        let context = crate::cli::project::tests::offline_context();
+        let mut remote = crate::cli::project::tests::stated(
+            "iris.csv",
+            "https://example.org/iris.csv",
+            b"0123456789",
+        );
+        remote.sha256 = None;
+        let Err(error) = unhashed(&context, &remote, false, &destination) else {
+            panic!("a file of another size went to the download");
+        };
+        assert_eq!(
+            (error.kind, error.message.as_str(), error.details.as_slice()),
+            (
+                Kind::LocalNotEmpty,
+                "data.csv already exists and holds other bytes than the link serves now",
+                &["data.csv is 4 B, and the link's file 10 B".to_owned()][..]
+            )
+        );
+        for (size, force) in [(Some(10), true), (Some(4), false), (None, false)] {
+            remote.size = size;
+            assert!(
+                unhashed(&context, &remote, force, &destination).is_ok(),
+                "{size:?} {force}"
+            );
         }
     }
 

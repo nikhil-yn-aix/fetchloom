@@ -112,15 +112,16 @@ a file already at the path stays as it is unless `--force` asks to replace it:
 
 a file that still holds what the link served last time, while the link serves other bytes now, is refused the same way, and the error says its source changed it since. a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
 
-with `--sha256`, or a hash the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. a stated MD5 counts once this machine has downloaded bytes that match it. without such a hash, the bytes the link served the last time this machine fetched it stand in. offline they decide, so a run without a network keeps a file that still holds them. that holds for a link only its site can list, such as a hugging face link, too: once a run fetched its one file, an offline run takes that file in place of the listing, and with `--sha256` an offline run needs no earlier one. online, a file that still holds them makes the run ask the server whether they changed, even after they left the cache for the file: an unchanged answer leaves the file as it is, and a large file asks about its size only when new bytes come. otherwise the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
+with `--sha256`, or a hash the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. a stated MD5 counts once this machine has downloaded bytes that match it. without such a hash, the bytes the link served the last time this machine fetched it stand in. offline they decide, so a run without a network keeps a file that still holds them. that holds for a link only its site can list, such as a hugging face link, too: once a run fetched its one file, an offline run takes that file in place of the listing, and with `--sha256` an offline run needs no earlier one. online, a file that still holds them makes the run ask the server whether they changed, even after they left the cache for the file: an unchanged answer leaves the file as it is, and a large file asks about its size only when new bytes come. otherwise the run downloads the file to compare it, and says so before it starts, so a large download never ends in a refusal you did not see coming; a file of another size than the source states is refused before any download. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
 
 ```text
-$ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv
- Downloaded iris.csv · 81 B in 20 ms
+$ fetchloom get http://127.0.0.1:19450/files/iris81.csv -o other.csv
+   Checking other.csv · already there, so the link downloads first to compare
+ Downloaded iris81.csv · 81 B in 7 ms
 error: other.csv already exists and holds other bytes than the link serves now
   help: add --force to replace it, or choose another name with -o
-$ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv --force
-    Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
+$ fetchloom get http://127.0.0.1:19450/files/iris81.csv -o other.csv --force
+    Checked iris81.csv · 127.0.0.1 still serves the bytes downloaded last time
    Replaced other.csv
 /home/me/work/other.csv
 ```
