@@ -15,11 +15,17 @@ fn version() -> Result {
     Ok(())
 }
 
+/// `--help` lists every command and the options every command takes. the introduction above
+/// them is the welcome's, which `welcome` holds and `help_opens_like_the_first_run` finds here.
 #[test]
-fn help_is_lowercase() -> Result {
+fn help_lists_every_command() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
     assert!(output.status.success());
-    insta::assert_snapshot!(text(&output.stdout)?);
+    let help = text(&output.stdout)?;
+    let (_, listed) = help
+        .split_once("\n\nusage: ")
+        .ok_or("help has no usage line")?;
+    insta::assert_snapshot!(format!("usage: {listed}"));
     Ok(())
 }
 

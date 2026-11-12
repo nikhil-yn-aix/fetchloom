@@ -1166,6 +1166,33 @@ mod tests {
         words
     }
 
+    /// `fetchloom --help`.
+    fn top_help() -> String {
+        match Args::command().try_get_matches_from(["fetchloom", "--help"]) {
+            Ok(_) => String::new(),
+            Err(err) => err.render().to_string(),
+        }
+    }
+
+    /// help is lowercase, as all of fetchloom's prose is: capitals belong only to acronyms such
+    /// as JSON and SHA-256, setting names such as `FETCHLOOM_CACHE` and option letters such as
+    /// `-C`. an example keeps what it runs as it is spelled, as `iris/Iris.csv` or `Out-String`.
+    #[test]
+    fn help_screens_are_lowercase_but_for_acronyms_and_option_letters() {
+        let mut screens = every_help();
+        screens.push(("fetchloom".to_owned(), top_help()));
+        for (name, help) in &screens {
+            let prose = help.lines().filter(|line| {
+                !(line.starts_with(' ') && line.trim_start().starts_with("fetchloom "))
+            });
+            for word in prose.flat_map(str::split_whitespace) {
+                let mixed =
+                    word.chars().any(char::is_uppercase) && word.chars().any(char::is_lowercase);
+                assert!(!mixed, "{name} says {word}\n{help}");
+            }
+        }
+    }
+
     /// the help of every command and subcommand, as `fetchloom <command> --help` prints it.
     fn every_help() -> Vec<(String, String)> {
         let root = Args::command();
@@ -1230,11 +1257,7 @@ mod tests {
     #[test]
     fn help_screens_name_things_plainly() {
         let mut screens = every_help();
-        let top = match Args::command().try_get_matches_from(["fetchloom", "--help"]) {
-            Ok(_) => String::new(),
-            Err(err) => err.render().to_string(),
-        };
-        screens.push(("fetchloom".to_owned(), top));
+        screens.push(("fetchloom".to_owned(), top_help()));
         for (name, help) in &screens {
             let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
             if flat.contains(" pin") {

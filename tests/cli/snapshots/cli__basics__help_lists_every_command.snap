@@ -1,24 +1,7 @@
 ---
 source: tests/cli/basics.rs
-expression: text(&output.stdout)?
+expression: "format!(\"usage: {listed}\")"
 ---
-fetchloom puts the exact research data a project needs into its data/ folder.
-
-  data.toml  the datasets you want
-  pinning    recording a dataset's exact files and their SHA-256 in data.lock
-  data.lock  the list of pinned files, so every machine gets the same bytes
-  the cache  one folder that keeps each file once, for all your projects
-
-  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
-  fetchloom get iris    download it once, without a project
-  fetchloom sync        fill data/ in a project you cloned
-
-a name is looked up on hugging face, kaggle and zenodo. a link works too:
-  fetchloom add https://zenodo.org/records/3608990
-
-learn more: `fetchloom --help` lists the commands;
-`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
-
 usage: fetchloom [options] <command>
 
 commands:
