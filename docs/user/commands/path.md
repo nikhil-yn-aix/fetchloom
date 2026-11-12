@@ -19,7 +19,7 @@ fetchloom path [options] <name>[/file]
 |---|---|
 | `--locked` | fail instead of updating data.lock when the dataset's entry is out of date with data.toml, for CI |
 
-[global options](README.md#global-options) also apply. use `/` between the dataset name and file path on both platforms.
+[global options](README.md#global-options) also apply. use `/` between the dataset name and file path on both platforms. the target starts with a dataset's name: an empty one, or a path on this machine such as `/etc/passwd`, is refused with `usage`, exit 2, quoting it as typed.
 
 ## what happens
 

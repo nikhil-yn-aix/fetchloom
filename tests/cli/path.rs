@@ -217,3 +217,31 @@ fn verbose_path_says_where_the_bytes_are() -> Result {
     }
     Ok(())
 }
+
+/// an empty target and a path on this machine are refused as typed, with how a target names a
+/// dataset and a file or folder in it, while a file in a dataset still answers.
+#[test]
+fn a_target_that_names_no_dataset_is_refused_as_typed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    for (target, message) in [
+        ("", "error: \"\" names no dataset\n"),
+        (
+            "/etc/passwd",
+            "error: \"/etc/passwd\" is a path on this machine, not a dataset\n",
+        ),
+    ] {
+        let output = sandbox.run(&["path", "--", target])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(stderr.starts_with(message), "{stderr}");
+        assert!(
+            stderr.contains("help: name a dataset, with a file or folder in it after a / if you like, as in `fetchloom path iris` or `fetchloom path iris/<file>`"),
+            "{stderr}"
+        );
+    }
+    let member = sandbox.run(&["path", "iris/iris.csv"])?;
+    assert_eq!(member.status.code(), Some(0), "{}", text(&member.stderr)?);
+    Ok(())
+}

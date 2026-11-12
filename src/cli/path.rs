@@ -37,6 +37,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let project = find(&context.output)?;
     let before = state_stamp(&project);
     let (_, manifest) = project.manifest()?;
+    named(&manifest, &args.target)?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
@@ -131,6 +132,26 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
     );
     Ok(Report { path })
+}
+
+/// refuses a target that names no dataset before it is split into a name and a path in it: an
+/// empty one, and a path on this machine, which its first `/` would leave with no name at all.
+fn named(manifest: &Manifest, target: &str) -> Result<(), Error> {
+    let message = if target.is_empty() {
+        "\"\" names no dataset".to_owned()
+    } else if target.starts_with(['/', '\\']) || std::path::Path::new(target).is_absolute() {
+        format!("\"{target}\" is a path on this machine, not a dataset")
+    } else {
+        return Ok(());
+    };
+    let example = manifest
+        .datasets
+        .keys()
+        .next()
+        .map_or("iris", String::as_str);
+    Err(Error::new(Kind::Usage, message).help(format!(
+        "name a dataset, with a file or folder in it after a / if you like, as in `fetchloom path {example}` or `fetchloom path {example}/<file>`"
+    )))
 }
 
 /// refuses a dataset data.toml does not have, as [`known_with_rest`] does, and one it keeps out
