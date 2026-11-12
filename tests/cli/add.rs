@@ -3,14 +3,14 @@
 
 use std::fs;
 
-use crate::project::{Background, IRIS, PATH, added};
+use crate::project::{IRIS, PATH, added};
 #[cfg(unix)]
 use crate::project::{partial_bytes, told_a_stop};
 #[cfg(unix)]
 use crate::support::wait_until;
 use crate::support::{
-    Part, Result, Routes, Sandbox, Server, delete_folder, file, json, reply, sha256_hex, text,
-    without_copy_warning,
+    Part, Result, Routes, Running, Sandbox, Server, delete_folder, file, json, reply, sha256_hex,
+    text, without_copy_warning,
 };
 
 #[test]
@@ -504,10 +504,10 @@ fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
     );
     let body = vec![b'x'; 1 << 20];
     let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
-    let mut running = Background::start(sandbox.command(&["add", &cows.url, "--as", "cows"]))?;
+    let mut running = Running::start(&mut sandbox.command(&["add", &cows.url, "--as", "cows"]))?;
     cows.wait_for_requests(1)?;
-    running.child.kill()?;
-    let (_, stderr) = running.finish()?;
+    running.kill()?;
+    let stderr = text(&running.finish()?.stderr)?;
     drop(release);
     assert_eq!(
         (
@@ -531,7 +531,7 @@ fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
     let lock = fs::read(work.join("data.lock"))?;
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
-    let running = Background::start(sandbox.command(&["-v", "add", &cows.url, "--as", "cows"]))?;
+    let running = Running::start(&mut sandbox.command(&["-v", "add", &cows.url, "--as", "cows"]))?;
     cows.wait_for_requests(1)?;
     let edited = format!(
         "{}# a note made meanwhile\n",
@@ -539,8 +539,9 @@ fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
     );
     fs::write(work.join("data.toml"), &edited)?;
     drop(release);
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(50), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains("data.toml changed while the add was downloading")
             && stderr.contains("kind: project.changed"),
@@ -573,7 +574,7 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     let work = sandbox.work();
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let slow = Server::held_file("/files/cows.csv", body)?;
-    let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
+    let running = Running::start(&mut sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",
         || Ok(partial_bytes(&sandbox.cache()) > 0),
@@ -584,8 +585,9 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     );
     fs::write(work.join("data.toml"), &edited)?;
     running.interrupt()?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     told_a_stop(&stderr, "    Stopped, and nothing was added")?;
     assert!(!stderr.contains("could not be put back"), "{stderr}");
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
@@ -607,14 +609,15 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
     );
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let slow = Server::held_file("/files/cows.csv", body.clone())?;
-    let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
+    let running = Running::start(&mut sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",
         || Ok(partial_bytes(&sandbox.cache()) > 0),
     )?;
     running.interrupt()?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     let kept = told_a_stop(&stderr, "    Stopped, and nothing was added")?;
     assert!(kept.starts_with("            the "), "{stderr}");
     assert_eq!(stderr.matches("nothing was added").count(), 1, "{stderr}");
@@ -704,12 +707,13 @@ fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
         for (variable, _) in SEARCHED {
             command.env(variable, &stalled.url);
         }
-        let running = Background::start(command)?;
+        let running = Running::start(&mut command)?;
         stalled.wait_for_requests(1)?;
         running.interrupt()?;
-        let (code, stderr) = running.finish()?;
+        let output = running.finish()?;
+        let stderr = text(&output.stderr)?;
         drop(release);
-        assert_eq!(code, Some(130), "{stderr}");
+        assert_eq!(output.status.code(), Some(130), "{stderr}");
         assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{stderr}");
     }
     Ok(())

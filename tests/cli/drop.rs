@@ -730,64 +730,13 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// a command running in the background, with its pid for signals and its stderr read line by
-/// line as it comes.
-#[cfg(unix)]
-struct Signalled {
-    child: std::process::Child,
-    lines: std::sync::mpsc::Receiver<String>,
-}
-
-#[cfg(unix)]
-impl Signalled {
-    fn start(mut command: std::process::Command) -> Result<Signalled> {
-        let mut child = command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        let stderr = child.stderr.take().ok_or("no stderr")?;
-        let (sender, lines) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            for line in std::io::BufRead::lines(std::io::BufReader::new(stderr)) {
-                let Ok(line) = line else { break };
-                if sender.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Signalled { child, lines })
-    }
-
-    /// sends SIGINT, as ctrl-c at a terminal does, and returns once the command says it heard it.
-    fn interrupt(&self) -> Result {
-        let sent = std::process::Command::new("kill")
-            .args(["-INT", &self.child.id().to_string()])
-            .status()?;
-        if !sent.success() {
-            return Err("kill -INT failed".into());
-        }
-        let line = self
-            .lines
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .map_err(|error| format!("no line after the ctrl-c: {error}"))?;
-        assert_eq!(line, "   Stopping (press ctrl-c again to quit at once)");
-        Ok(())
-    }
-
-    fn finish(mut self) -> Result<(Option<i32>, String)> {
-        let status = self.child.wait()?;
-        let rest: Vec<String> = self.lines.iter().collect();
-        Ok((status.code(), rest.join("\n")))
-    }
-}
-
 /// a ctrl-c while drop plans its patterns ends it there, before it writes or claims anything.
 /// data.lock is a fifo the test fills only once the drop heard the ctrl-c, so the stop always
 /// comes after the drop began and before it plans.
 #[cfg(unix)]
 #[test]
 fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
+    use crate::support::Running;
     use std::os::unix::fs::FileTypeExt as _;
     let sandbox = Sandbox::new()?;
     let folder = tree(&sandbox)?;
@@ -810,7 +759,8 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
             .status()?
             .success()
     );
-    let running = Signalled::start(sandbox.command(&["drop", "data/tree/sub"]))?;
+    let mut command = sandbox.command(&["drop", "data/tree/sub"]);
+    let running = Running::start(command.stdin(std::process::Stdio::null()))?;
     // opening the fifo waits for the drop to open it, long after it listens for ctrl-c
     let (opened, open) = std::sync::mpsc::channel();
     let fifo = lock_path.clone();
@@ -819,11 +769,16 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
     });
     let mut writer = open.recv_timeout(std::time::Duration::from_secs(30))??;
     running.interrupt()?;
+    running.wait_for("Stopping")?;
     writer.write_all(&lock)?;
     drop(writer);
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
-    assert_eq!(stderr, "    Stopped at your request, so nothing changed");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert_eq!(
+        stderr,
+        "   Stopping (press ctrl-c again to quit at once)\n    Stopped at your request, so nothing changed\n"
+    );
     assert!(fs::symlink_metadata(&lock_path)?.file_type().is_fifo());
     assert_eq!(fs::read(work.join("data.toml"))?, manifest);
     assert_eq!(files(&folder)?, placed);

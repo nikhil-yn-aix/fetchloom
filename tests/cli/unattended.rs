@@ -1,50 +1,8 @@
 //! fetchloom as a script or an agent runs it: no terminal anywhere.
 
-use std::process::{Output, Stdio};
-use std::time::{Duration, Instant};
-
-use crate::support::{Result, Sandbox, Server, file, reply, text};
+use crate::support::{Result, Running, Sandbox, Server, file, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
-
-/// runs a command whose stdin is a pipe that stays open and never sends a byte, as many tool
-/// runners leave it. a command that read stdin or waited for an answer would never finish.
-fn finishes(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
-    let mut child = sandbox
-        .command(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let open = child.stdin.take();
-    // read as the command writes, so a long help or story never fills a pipe and stalls it
-    let drain = |stream: Option<Box<dyn std::io::Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut stream) = stream {
-                let _ = stream.read_to_end(&mut bytes);
-            }
-            bytes
-        })
-    };
-    let stdout = drain(child.stdout.take().map(|s| Box::new(s) as _));
-    let stderr = drain(child.stderr.take().map(|s| Box::new(s) as _));
-    let started = Instant::now();
-    while child.try_wait()?.is_none() {
-        if started.elapsed() > Duration::from_secs(60) {
-            child.kill()?;
-            child.wait()?;
-            return Err(format!("{args:?} is still waiting after a minute").into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    drop(open);
-    Ok(Output {
-        status: child.wait()?,
-        stdout: stdout.join().map_err(|_| "reading stdout failed")?,
-        stderr: stderr.join().map_err(|_| "reading stderr failed")?,
-    })
-}
 
 #[test]
 fn no_command_waits_for_input_when_stdin_is_not_a_terminal() -> Result {
@@ -71,7 +29,9 @@ fn no_command_waits_for_input_when_stdin_is_not_a_terminal() -> Result {
         (&["cache", "verify"], 0),
         (&["--help"], 0),
     ] {
-        let output = finishes(&sandbox, args)?;
+        let output = Running::start_with_open_stdin(&mut sandbox.command(args))?
+            .finish()
+            .map_err(|error| format!("{args:?}: {error}"))?;
         assert_eq!(
             output.status.code(),
             Some(code),
@@ -87,6 +47,7 @@ fn no_command_waits_for_input_when_stdin_is_not_a_terminal() -> Result {
 fn cli_output_ctrl_c_cancels_an_open_link_list() -> Result {
     use rustix::process::{Pid, Signal, kill_process};
     use std::io::Write as _;
+    use std::process::Stdio;
 
     let sandbox = Sandbox::new()?;
     let mut child = sandbox

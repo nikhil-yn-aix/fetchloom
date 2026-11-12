@@ -1611,19 +1611,20 @@ fn a_stopped_step_leaves_no_process_behind() -> Result {
         let (sandbox, _server, lock, marker) = leaving_a_child("leave-child")?;
         let pinned = pins(&sandbox.work())?;
         let data = files(&sandbox.work().join("data"))?;
-        let command = building_in(&sandbox, &sandbox.work(), &["build"])?;
+        let mut command = building_in(&sandbox, &sandbox.work(), &["build"])?;
         #[cfg(windows)]
-        let command = own_console(command);
-        let mut running = crate::project::Background::start(command)?;
+        own_console(&mut command);
+        let mut running = Running::start(&mut command)?;
         wait_until("the step's child to take its lock", || Ok(marker.exists()))?;
         #[cfg(unix)]
-        signal(running.child.id(), stop)?;
+        signal(running.id()?, stop)?;
         #[cfg(windows)]
-        ctrl_c(&sandbox, running.child.id())?;
-        running.child.wait()?;
+        ctrl_c(&sandbox, running.id()?)?;
+        running.wait()?;
         lock_freed(&lock)?;
-        let (code, stderr) = running.finish()?;
-        assert_eq!(code, Some(130), "{stop}: {stderr}");
+        let output = running.finish()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(130), "{stop}: {stderr}");
         let by = if stop == "-TERM" {
             "by a SIGTERM"
         } else {
@@ -1818,12 +1819,11 @@ fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
 #[test]
 fn a_finished_step_leaves_no_process_behind() -> Result {
     let (sandbox, _server, lock, _) = leaving_a_child("start-child")?;
-    let mut running =
-        crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
-    running.child.wait()?;
+    let mut running = Running::start(&mut building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    running.wait()?;
     lock_freed(&lock)?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(0), "{stderr}");
+    let output = running.finish()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     Ok(())
 }
 
@@ -1833,11 +1833,10 @@ fn a_finished_step_leaves_no_process_behind() -> Result {
 #[test]
 fn a_killed_build_leaves_no_process_behind() -> Result {
     let (sandbox, _server, lock, marker) = leaving_a_child("leave-child")?;
-    let mut running =
-        crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    let mut running = Running::start(&mut building_in(&sandbox, &sandbox.work(), &["build"])?)?;
     wait_until("the step's child to take its lock", || Ok(marker.exists()))?;
-    running.child.kill()?;
-    running.child.wait()?;
+    running.kill()?;
+    running.wait()?;
     lock_freed(&lock)?;
     running.finish()?;
     Ok(())
@@ -1866,12 +1865,11 @@ fn word(path: &Path) -> String {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// `command` with a console of its own, so the ctrl-c [`ctrl_c`] presses there reaches no other
+/// gives `command` a console of its own, so the ctrl-c [`ctrl_c`] presses there reaches no other
 /// process.
 #[cfg(windows)]
-fn own_console(mut command: Command) -> Command {
-    std::os::windows::process::CommandExt::creation_flags(&mut command, CREATE_NO_WINDOW);
-    command
+fn own_console(command: &mut Command) {
+    std::os::windows::process::CommandExt::creation_flags(command, CREATE_NO_WINDOW);
 }
 
 /// presses ctrl-c in the console of the process `pid`, which needs a console of its own, as

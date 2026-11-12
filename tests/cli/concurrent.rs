@@ -2,9 +2,9 @@
 
 use std::fs;
 
-use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, sha256_hex, text};
 #[cfg(unix)]
-use crate::{project::Background, support::wait_until};
+use crate::support::wait_until;
+use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, sha256_hex, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -60,101 +60,6 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
         "only the wait is told: {story}"
     );
     Ok(())
-}
-
-struct Syncing {
-    child: Option<std::process::Child>,
-    readers: Vec<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
-    closed: std::sync::mpsc::Receiver<()>,
-}
-
-impl Syncing {
-    fn start(command: &mut std::process::Command) -> Result<Self> {
-        use std::io::Read as _;
-        use std::process::Stdio;
-
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let pipes: [Box<dyn std::io::Read + Send>; 2] = [
-            Box::new(child.stdout.take().ok_or("missing child stdout")?),
-            Box::new(child.stderr.take().ok_or("missing child stderr")?),
-        ];
-        let (done, closed) = std::sync::mpsc::channel();
-        let readers = pipes
-            .into_iter()
-            .map(|mut pipe| {
-                let done = done.clone();
-                std::thread::spawn(move || {
-                    let mut bytes = Vec::new();
-                    let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
-                    let _ = done.send(());
-                    result
-                })
-            })
-            .collect();
-        Ok(Self {
-            child: Some(child),
-            readers,
-            closed,
-        })
-    }
-
-    fn finish(mut self) -> Result<std::process::Output> {
-        for _ in 0..2 {
-            if let Err(error) = self.closed.recv_timeout(std::time::Duration::from_secs(30)) {
-                // what the stuck run logged is the only clue on a runner nobody can reach
-                if let Some(child) = &mut self.child {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                let logged: Vec<String> = self
-                    .readers
-                    .drain(..)
-                    .map(|reader| match reader.join() {
-                        Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
-                        _ => String::new(),
-                    })
-                    .collect();
-                return Err(format!(
-                    "shared-cache sync did not finish: {error}\n{}",
-                    logged.join("\n")
-                )
-                .into());
-            }
-        }
-        let status = self.child.as_mut().ok_or("missing sync child")?.wait()?;
-        self.child = None;
-        let mut output = self
-            .readers
-            .drain(..)
-            .map(|reader| {
-                reader
-                    .join()
-                    .map_err(|_| std::io::Error::other("output reader panicked"))?
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
-        let stderr = output.pop().ok_or("missing stderr")?;
-        let stdout = output.pop().ok_or("missing stdout")?;
-        Ok(std::process::Output {
-            status,
-            stdout,
-            stderr,
-        })
-    }
-}
-
-impl Drop for Syncing {
-    fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        for reader in self.readers.drain(..) {
-            let _ = reader.join();
-        }
-    }
 }
 
 /// eight syncs of different projects run at once against one cache, as cluster jobs do. each
@@ -258,7 +163,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
             .env("FETCHLOOM_JOBS", "1")
             .env("FETCHLOOM_THREADS", "1")
             .env("FETCHLOOM_CACHE", &cache);
-        syncing.push(Syncing::start(&mut command)?);
+        syncing.push(Running::start(&mut command)?);
         projects.push((project, order));
     }
     if !warm {
@@ -272,7 +177,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
     drop(releases);
     let mut children = Vec::new();
     for run in syncing {
-        let pid = run.child.as_ref().ok_or("missing sync child")?.id();
+        let pid = run.id()?;
         children.push((pid, run.finish()?));
     }
     let requests: Vec<_> = servers
@@ -364,16 +269,17 @@ fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     let mut command = sandbox.command(&["push", "--to", &mirror.display().to_string(), "--yes"]);
     // a file that never appears, so only the stop lets the copies go on
     command.env("FETCHLOOM_TEST_HOLD_PUSH", sandbox.work().join("never"));
-    let mut pushing = Background::start(command)?;
+    let mut pushing = Running::start(&mut command)?;
     let mut ended = false;
     wait_until("a copy held in the mirror's tmp/", || {
-        ended = pushing.child.try_wait()?.is_some();
+        ended = pushing.has_ended()?;
         Ok(ended || unfinished()? > 0)
     })?;
     assert!(!ended, "the push ended before it was stopped");
     pushing.interrupt()?;
-    let (code, stderr) = pushing.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = pushing.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     assert_eq!(unfinished()?, 0, "{stderr}");
     assert!(other.exists(), "another push's file stays");
     Ok(())

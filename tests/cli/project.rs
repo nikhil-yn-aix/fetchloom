@@ -3,11 +3,11 @@
 
 use std::fs;
 
-#[cfg(unix)]
-use crate::support::wait_until;
 use crate::support::{
     Result, Sandbox, Server, delete, edit, file, json, reply, sha256_hex, text, zip_of,
 };
+#[cfg(unix)]
+use crate::support::{Running, wait_until};
 
 pub(crate) const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 pub(crate) const PATH: &str = "/files/iris.csv";
@@ -2309,48 +2309,6 @@ fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
     Ok(())
 }
 
-/// a command running in the background, with its stderr read as it comes.
-pub(crate) struct Background {
-    pub(crate) child: std::process::Child,
-    stderr: std::thread::JoinHandle<String>,
-}
-
-impl Background {
-    pub(crate) fn start(mut command: std::process::Command) -> Result<Background> {
-        let mut child = command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        let mut stream = child.stderr.take().ok_or("no stderr")?;
-        let stderr = std::thread::spawn(move || {
-            let mut told = String::new();
-            let _ = std::io::Read::read_to_string(&mut stream, &mut told);
-            told
-        });
-        Ok(Background { child, stderr })
-    }
-
-    /// sends SIGINT, as ctrl-c at a terminal does.
-    #[cfg(unix)]
-    pub(crate) fn interrupt(&self) -> Result {
-        let sent = std::process::Command::new("kill")
-            .args(["-INT", &self.child.id().to_string()])
-            .status()?;
-        if sent.success() {
-            Ok(())
-        } else {
-            Err("kill -INT failed".into())
-        }
-    }
-
-    pub(crate) fn finish(mut self) -> Result<(Option<i32>, String)> {
-        let status = self.child.wait()?;
-        let stderr = self.stderr.join().map_err(|_| "reading stderr failed")?;
-        Ok((status.code(), stderr))
-    }
-}
-
 /// the sizes of the partial downloads in `cache`.
 #[cfg(unix)]
 pub(crate) fn partial_bytes(cache: &std::path::Path) -> u64 {
@@ -2402,14 +2360,15 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
         sandbox.work().join("data.toml"),
         format!("[datasets.cows]\nref = \"{}\"\n", slow.url),
     )?;
-    let running = Background::start(sandbox.command(&["sync"]))?;
+    let running = Running::start(&mut sandbox.command(&["sync"]))?;
     wait_until(
         "bytes to arrive",
         || Ok(partial_bytes(&sandbox.cache()) > 0),
     )?;
     running.interrupt()?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     let kept = told_a_stop(
         &stderr,
         "    Stopped while talking to 127.0.0.1, so nothing changed",
@@ -2437,7 +2396,7 @@ fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
             cows.url, pigs.url
         ),
     )?;
-    let running = Background::start(sandbox.command(&["sync"]))?;
+    let running = Running::start(&mut sandbox.command(&["sync"]))?;
     wait_until("bytes of both files to arrive", || {
         let started = crate::support::partial_files(&sandbox.cache())
             .iter()
@@ -2450,8 +2409,9 @@ fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
         Ok(started == 2)
     })?;
     running.interrupt()?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     let kept = told_a_stop(
         &stderr,
         "    Stopped while talking to 127.0.0.1, so nothing changed",
@@ -2544,11 +2504,12 @@ fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Resu
     let cache = sandbox.folder("another cache")?;
     let mut sync = sandbox.command(&["sync"]);
     sync.env("FETCHLOOM_CACHE", &cache);
-    let running = Background::start(sync)?;
+    let running = Running::start(&mut sync)?;
     wait_until("bytes to arrive", || Ok(partial_bytes(&cache) > 0))?;
     running.interrupt()?;
-    let (code, stderr) = running.finish()?;
-    assert_eq!(code, Some(130), "{stderr}");
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
     told_a_stop(
         &stderr,
         "    Stopped while talking to 127.0.0.1, so nothing changed",
