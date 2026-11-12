@@ -16,41 +16,41 @@ fetchloom sync
 
 ## manifest and lock
 
-`data.toml` describes intent. each dataset has a reference and can select files, exclude paths, keep archives packed, request writable copies, choose a destination or stay out of the data folder. see the [manifest reference](reference/data-toml.md).
+`data.toml` says what you want. each dataset has a reference and can select files, exclude paths, keep archives packed, ask for writable copies, choose a folder or stay out of the data folder. see the [manifest reference](reference/data-toml.md).
 
-`data.lock` records selected source files by SHA-256 and size, plus stated MD5 when available. source metadata and resolved versions make the origin inspectable. archive extraction adds a hash of the unpacked file tree.
+`data.lock` records what you got: each selected file's SHA-256 and size, plus the MD5 a source states, the version the reference resolved to, and for an archive, a hash of its unpacked file tree. see the [lock reference](reference/data-lock.md).
 
-files on your own machine can be pinned too: `fetchloom add ./flowers` copies them into the cache and pins them by their bytes, with `ref = "local"` and no path or link, and leaves the folder as it was. a teammate gets the same files from a copy, or by running the same `add` with `--as` where the files are; no source can download them again. see [files on this machine](commands/add.md#files-on-this-machine).
+files on your own machine can be pinned too: `fetchloom add ./flowers` copies them into the cache and pins them by their bytes, and leaves the folder as it was. see [files on this machine](commands/add.md#files-on-this-machine).
 
-downloads must match their locked size and hashes. cached objects are not rehashed on every use: sealing dates each object by its birth, and one whose time has moved since, as an edit through a placed hardlink moves it, is hashed before it is used. file metadata and saved state avoid unnecessary reads; [cache verify](commands/cache.md#verify) checks cached bytes explicitly.
+every download must match its locked size and hashes. a source that states a SHA-256 and size lets a file be locked without downloading it. what a reference points at can change, as a plain link's file can, but the lock pins bytes: a source that serves other bytes fails the check. see [the spec hash](reference/data-lock.md#the-spec-hash).
 
-source checksum support covers MD5 and SHA-256. a known SHA-256 and size can allow a file to be locked without downloading it. hashes pin bytes after resolution; a source reference is not always immutable. see [lock rules](reference/data-lock.md#the-spec-hash).
+cached files are not hashed again on every use. a cached file written after it entered the cache, as an edit through a placed hardlink writes it, is hashed before it is used, and [cache verify](commands/cache.md#verify) hashes everything when you want to be sure.
 
-`sync` updates missing or stale locks first unless `--locked` requires an up-to-date lock. unchanged entries retain their pins. `lock --check` checks manifest membership and specs without changing files, while `lock --upgrade` deliberately asks sources again.
+`sync` first updates a missing or stale lock, unless `--locked` asks for an up-to-date one. unchanged entries keep their pins. `lock --check` checks the lock against data.toml without changing files, and `lock --upgrade` asks the sources for newer versions.
 
 ## recipes
 
-a dataset can also be made from other datasets by a command of yours. a [recipe](recipes.md) in `data.toml` names the datasets it reads with `from`, the command with `run`, the files it depends on with `code` and its variables with `env`. fetchloom keys the result by the content of all of these, so `status`, `lock --check` and `sync --locked` say when data.lock's pin of it no longer matches. no command but `fetchloom build` runs a recipe: it runs the command on private copies of what it reads, pins what it wrote in `data.lock` and places it like any dataset. `fetchloom build --dry-run` shows the commands first.
+a dataset can also be made from other datasets by a command of yours. a [recipe](recipes.md) in `data.toml` names the datasets it reads with `from`, the command with `run`, the files it depends on with `code` and its variables with `env`. fetchloom keys the result by the content of all of these, so `status`, `lock --check` and `sync --locked` say when the pinned result no longer matches. only `fetchloom build` runs a recipe: it runs the command on private copies of what it reads, pins what it wrote in `data.lock` and places it like any dataset. `fetchloom build --dry-run` shows the commands first.
 
-a dataset only recipes read can stay out of the data folder with `place = false`. it stays pinned in `data.lock`, and its files stay in the cache for the builds that read them, but no command places it, and the next sync removes what it placed of it before. once a folder mirror holds them, `fetchloom cache gc --inputs` frees the cache's copy too. [keep only the result](recipes.md#keep-only-the-result) shows it end to end.
+a dataset only recipes read can stay out of the data folder with `place = false`: it stays pinned and cached for the builds that read it, and the next sync removes what it placed of it before. once a folder mirror holds its files, `fetchloom cache gc --inputs` frees the cache's copy too. [keep only the result](recipes.md#keep-only-the-result) shows it end to end.
 
 ## cache
 
-the cache is local and content-addressed: objects are named by SHA-256. projects reuse the same bytes rather than downloading a separate copy for each project.
+the cache is one folder on this machine that names each file by its SHA-256, so projects share the same bytes instead of downloading a copy each. [cache folder](reference/cache-folder.md) says where it is and what it holds.
 
-one user's processes can share it. on shared machines, give each user their own cache. a cache folder fetchloom creates itself on linux and macos is readable by you only. a group-writable cache is suitable only among trusted users: create its folder first with the group permissions you want, or set them with ACLs, and fetchloom keeps them; [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) gives the commands, on a cluster or a shared desktop alike. fetchloom has no cross-user administration or group-permission layer. use `copy = true` for students or jobs that edit inputs.
+one user's processes can share a cache. on a shared machine, give each user their own: a cache folder fetchloom creates on linux and macos is readable by you only. a cache shared by a group suits only trusted users; create its folder first with the group permissions you want and fetchloom keeps them, as [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows. use `copy = true` for students or jobs that edit inputs.
 
-successful project sync registers its root for garbage collection. `get` and standalone `lock` do not. [cache commands](commands/cache.md) covers retention, verification and cleanup; [cache folder](reference/cache-folder.md) covers locations and records.
+a sync registers its project with the cache, so `cache gc` keeps what the project needs. `get` and `lock` register nothing. [cache commands](commands/cache.md) cover retention, verification and cleanup.
 
 ## placement
 
-| method | how files land | writable input? |
+| method | how files land | writable? |
 |---|---|---|
-| reflink | clone file data using filesystem copy-on-write support | yes when `copy = true` |
-| hardlink | share the cache object's file | no |
-| copy | write independent bytes | yes when `copy = true` |
+| reflink | a clone that shares the cache file's blocks until either is written | yes, with `copy = true` |
+| hardlink | another name for the cache file itself | no |
+| copy | independent bytes | yes, with `copy = true` |
 
-placement tries reflink, hardlink, then copy where supported. read-only placement on windows tries hardlinks before reflinks to reuse an already scanned file. it does not create symlinks. recognized synced folders skip hardlinks but may use reflinks.
+sync tries a reflink, then a hardlink, then a copy, as the disk allows. it never makes symlinks. a folder synced by onedrive, dropbox, icloud or google drive gets no hardlinks, but may get reflinks.
 
 files are read-only by default. for an analysis that writes into its inputs:
 
@@ -60,21 +60,23 @@ ref = "zenodo:3608990"
 copy = true
 ```
 
-then run `fetchloom sync`. it replaces unchanged read-only files with writable reflinks or copies, never hardlinks. edited files stay. turning `copy` off leaves existing writable files as they are.
+then run `fetchloom sync`. it replaces unchanged read-only files with writable reflinks or copies, never hardlinks, and keeps files you edited. turning `copy` off leaves writable files as they are.
 
-keep results of your own outside the data folder, or declare the step that makes them as a [recipe](recipes.md). a file you delete from the data folder comes back at the next sync, since data.lock still pins it. to leave a bad sample out for good, run [`fetchloom drop <path>`](commands/drop.md): it writes a pattern into data.toml that leaves the file out, so every clone leaves it out too. do not make a shared hardlink writable to edit it: every project using that link shares the change. sync treats such an edit as damage to the cache's copy: it downloads the file again and puts the pinned file back in each project still linked to the changed copy, keeping the changed copy beside it as `<path>.changed`. set `copy = true` on a dataset whose files you edit. [shared edits](commands/sync.md#local-changes) explains detection and repair, including how windows, whose folder listings can hide such a change, is checked. [working with raw data](raw-data.md) shows each of these cases from a real run.
+keep results of your own outside the data folder, or make them with a [recipe](recipes.md). a file you delete from the data folder comes back at the next sync, since data.lock still pins it; to leave a bad sample out for good, [`fetchloom drop <path>`](commands/drop.md) writes a pattern into data.toml that every clone follows. do not make a hardlinked file writable to edit it: the edit changes the cache's copy, which every project linked to it shares. sync treats that as damage, as [local changes](commands/sync.md#local-changes) explains. [working with raw data](raw-data.md) shows each of these cases from a real run.
 
-sync preserves local conflicts unless forced. status differences and kept conflicts still exit 0. [scripting](scripting.md) shows how to inspect them.
+sync keeps local edits unless forced, and status differences and kept conflicts still exit 0. [scripting](scripting.md) shows how to check for them.
 
 ## archives
 
-extraction is enabled for `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`, `.tgz`, `.txz`, `.tzst`, `.tbz` and `.tbz2`, ignoring case. the bytes choose the decoder.
+fetchloom unpacks `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`, `.tgz`, `.txz`, `.tzst`, `.tbz` and `.tbz2`, ignoring case; the bytes choose the decoder. other files stay as they are, including `.fastq.gz`, `.xlsx`, `.npz` and `.pt`.
 
-other names stay intact, including `.fastq.gz`, `.xlsx`, `.npz`, `.pt` and extensionless downloads. `.rar` and recognized names containing unsupported bytes stay packed with a warning; a `.zip` whose bytes are a rar gets the rar's warning and next step. the add that pins a `.rar` warns, and so does each sync that puts it in a data folder, as a teammate's first sync of a clone does, once a run. a `.rar`'s warning names a command for your system that unpacks it into `<name>-unpacked` beside it, inside the data folder that git ignores, where sync keeps its files and `status` lists them as extra: unrar on linux, unar on macos, 7-Zip on windows. [compatibility](reference/compatibility.md#archives) shows each one. unsafe, damaged or encrypted supported archives fail extraction, as does a 7z compressed with a method fetchloom does not read, such as ppmd. a member that is a symlink, a device or a fifo makes an archive unsafe, as does a tar hardlink to anything but a file before it in the archive; a hardlink to such a file, as tar writes a file's second name, lands as another file with the same bytes, a link or a copy as the dataset places its other files. an archive inside another is not unpacked: it lands as a file, and the run that places it says so once, as in `warning: nested/inner.zip stays packed: it came inside nested.zip, and fetchloom unpacks no archive inside another`, with a command that unpacks it beside itself, inside the data folder. zip directories are checked before their entries are collected: at most 1,000,000 entries, 4,096-byte paths and 256 MiB of directory metadata work. a refused archive can still be kept packed.
+a `.rar` stays packed with a warning, from the add that pins it and once a run from each sync that places it, as a teammate's first sync does. the warning names a command for your system that unpacks it beside itself in the data folder, where sync keeps the files and `status` lists them as extra; [compatibility](reference/compatibility.md#archives) shows each. an archive inside another also stays packed, and the run that places it says so once, with a command that unpacks it.
 
-use `--no-extract` with `add` or `get`, or `extract = false` in an existing manifest entry, to keep packed bytes. select and exclude patterns match the listed archive, not the files inside it; a [members table](reference/data-toml.md#files-inside-archives) keeps or leaves out those, matching each by its path inside the archive.
+an unsafe, damaged or encrypted archive fails to unpack, as does a 7z compressed with a method fetchloom does not read, such as ppmd. unsafe means a member that would land outside its folder, a symlink, a device or a fifo, or a tar hardlink to anything but a file before it. an archive past the [limits](limits.md) on files, size or compression ratio is refused too. a refused archive can still be kept packed.
 
-paths below are relative to the dataset or `get` folder:
+use `--no-extract` with `add` or `get`, or `extract = false` in data.toml, to keep archives packed. select and exclude patterns match the files a source lists, so an archive, not the files inside it; a [members table](reference/data-toml.md#files-inside-archives) chooses those by their paths inside the archive.
+
+where the files land, relative to the dataset or `get` folder:
 
 | selected files | members in `train.zip` | placed paths |
 |---|---|---|
@@ -84,17 +86,15 @@ paths below are relative to the dataset or `get` folder:
 | `train.zip` and another file | only `a.csv` | `a.csv` |
 | `train.zip` and another file | `a.csv`, `b.csv` | `train/a.csv`, `train/b.csv` |
 
-a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file keeps its name; otherwise members go under the archive's stem. what a system writes by itself is no data, so an archive leaves it out as a [folder import](commands/add.md#files-on-this-machine) does: finder's `.DS_Store` and the `._` twins it puts under `__MACOSX`, the `._` files a mac's own `tar` adds, and windows' `Thumbs.db` and `desktop.ini`, among others. one `Skipped` line under `Unpacked` names the first and counts the rest, as in `Skipped recordings/.DS_Store and 2 more the system makes in finder/finder.zip`. with `__MACOSX` gone, a zip finder made has one top folder, so it lands as the same zip made elsewhere does. the archive's parent path is retained. colliding destinations fail, a member landing on another dataset's file too; sync finds that once the archive is unpacked, before it places anything.
+a sole archive loses one top folder its members share. beside other selected files, a shared top folder or a lone top-level file keeps its name; otherwise members go under the archive's name without its extension. an archive in a folder unpacks into that folder. files a system writes by itself, such as finder's `.DS_Store` and `__MACOSX` or windows' `Thumbs.db`, are left out, as a folder import leaves them out, and one `Skipped` line counts them, as in `Skipped recordings/.DS_Store and 2 more the system makes in finder/finder.zip`. two members, or a member and another dataset's file, that land on one path fail before anything is placed. empty folders are not placed, and an archive with no files makes no dataset folder.
 
-an archive with no regular files creates no dataset folder in a project. `get` still creates an empty output folder. members enter the cache before placement. packed bytes can then be removed unless a registered project needs them packed.
-
-[tree hashes](reference/data-lock.md#the-tree-hash) records archive member paths before placement strips a folder. empty directories are not placed.
+members enter the cache before they are placed, and the archive's own bytes then leave it, unless a project needs them packed. [the tree hash](reference/data-lock.md#the-tree-hash) records member paths before placement drops a top folder.
 
 ### split archives
 
-a big dataset may come as one archive cut into parts, such as `scans.zip.001` to `scans.zip.003` on zenodo, or `train.tar.gz.aa` and `.ab` in a hugging face repository. `split` and 7-Zip cut an archive's bytes, so its parts read one after another are the archive. when a dataset lists every part, fetchloom unpacks them as that one archive, reading part after part where the cache keeps them, and places the files as it would place the whole archive's; the parts themselves are not placed. a dataset that is one split archive gets the files straight in its folder, and one beside other files puts them under the name before the counter, `scans/` for `scans.zip.001`. data.lock pins each part as a file and gives the first part `unpacks_to`, as [split archives in data.lock](reference/data-lock.md#split-archives) describes, and the cache drops the parts once the files are in. a [members table](reference/data-toml.md#files-inside-archives) and `fetchloom drop` name the archive by its first part, as in `[datasets.scans.members."scans.zip.001"]`.
+a big dataset may come as one archive cut into parts, such as `scans.zip.001` to `scans.zip.003` on zenodo, or `train.tar.gz.aa` and `.ab` in a hugging face repository. `split` and 7-Zip cut an archive's bytes, so the parts read one after another are the archive. when a dataset lists every part, fetchloom unpacks them as that one archive and places its files; the parts themselves are not placed. a dataset that is one split archive gets the files straight in its folder, and one beside other files puts them under the name before the counter, `scans/` for `scans.zip.001`. data.lock pins each part as a file, as [split archives in data.lock](reference/data-lock.md#split-archives) describes, and a [members table](reference/data-toml.md#files-inside-archives) or `fetchloom drop` names the archive by its first part, as in `[datasets.scans.members."scans.zip.001"]`.
 
-parts belong together only inside one dataset and one folder, after the name of an archive fetchloom unpacks, so `weights.bin.001` stays a file. their counters run as `split` and 7-Zip write them, letters from `aa` or numbers from `00`, `000` or `001`, and `.part`, `.part-` or `.part_` may come before a counter. a counter after a bare `.` has at least two characters, so a copy named `data.tar.gz.1` stays a file. stderr from `fetchloom add ../zipped`, a folder holding `headers.zip.00` to `.02` that `split -b 256K -d` made of a zip of 300 files:
+parts belong together only inside one dataset and one folder, after the name of an archive fetchloom unpacks, so `weights.bin.001` stays a file. their counters run as `split` and 7-Zip write them: letters from `aa`, or numbers from `00`, `000` or `001`, with `.part`, `.part-` or `.part_` allowed before the counter. a counter after a bare `.` has at least two characters, so a copy named `data.tar.gz.1` stays a file. stderr from `fetchloom add ../zipped`, a folder holding `headers.zip.00` to `.02` that `split -b 256K -d` made of a zip of 300 files:
 
 ```text
    Imported zipped · 3 files · 748.6 KiB, copied into the cache; ../zipped is unchanged
@@ -114,11 +114,11 @@ warning: headers-zip/headers.zip.00 stays packed, since it does not unpack on it
   help: it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part
 ```
 
-the parts of an archive missing one are placed as plain files. rar volumes and spanned zips are no cut of the bytes, so only their own tools join them: a rar's help is the one for a single rar, given its first volume, from which unrar and 7-Zip read the others, and a spanned zip's joins its parts with zip and unpacks them with unzip, or on windows runs 7-Zip, which reads them itself. a first part alone, as `add -i` makes each link a dataset of its own, is unpacked when its bytes are a whole archive, and otherwise stays packed with the last warning above. `extract = false` and `--no-extract` keep the parts packed, and switching `extract` back on unpacks them from the cache with no request.
+the parts of an archive missing one are placed as plain files. rar volumes and spanned zips are not cuts of the bytes, so only their own tools join them. a first part alone, as `add -i` makes each link a dataset of its own, is unpacked when its bytes are a whole archive, and otherwise stays packed with the last warning above. `extract = false` and `--no-extract` keep the parts packed, and turning `extract` back on unpacks them from the cache with no request.
 
 ### webdataset shards
 
-webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. an `add` of a folder on this machine hints the same way before it copies anything into the cache, naming the folder as typed, as in `hint: ./shards holds 8 numbered .tar shards`. in a project, the hint ends with the one [members table](reference/data-toml.md#one-table-for-many-shards) that keeps only some files of every shard, its key made from the shards' own names. a dataset whose shards a members table covers already gets no hint, since keeping them packed would refuse that table. an excerpt of stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket, on a debug build:
+webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files, and each file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset print a hint when the files to unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. in a project, the hint names the one [members table](reference/data-toml.md#one-table-for-many-shards) that keeps only some files of every shard. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket, on a debug build:
 
 ```text
    Resolved s3://wds/shards/ · 1,024 files · 10.0 MiB
@@ -126,9 +126,7 @@ webdataset splits a large dataset into numbered tar files, shards such as `train
  Downloaded 1,024 files · 10.0 MiB in 15.5 s · 659.5 KiB/s
 ```
 
-`sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows when the dataset is new or a change to its entry lists the source again; a later sync, an upgrade and a switch of `extract` show none, and neither do `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
-
-the members table the hint names chooses the same files in every shard, and in shards that arrive later, as `select = ["*.wav", "*.txt"]` under `[datasets.shards.members."train-*.tar"]`; `get` keeps no project, so its hint names none. a `select` written on the dataset itself for those files matches none the bucket lists, and its error moves the pattern to that table.
+`sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, which keeps no project and so names no members table. the hint shows when a dataset is new, or a change to its entry lists the source again, and not for a dataset a members table already covers, nor with `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards download again, since sync drops an archive's own bytes once its files are in.
 
 ## offline
 
@@ -137,19 +135,19 @@ fetchloom sync --offline
 fetchloom --offline path iris
 ```
 
-offline mode prevents fetchloom from making HTTP or DNS requests. a locked project can use unchanged placed files, cached objects and unpack records.
+offline, fetchloom makes no HTTP or DNS requests. a locked project whose files are cached or already placed works as usual.
 
-search and entries needing resolution fail offline, even when you already know a source id or plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes, or with `-o`, a file at the path that still holds what the link served last time. a link only its site can list works the same once a `get` on this machine kept one file from it: the cache remembers that file in place of the listing. an unpinned new link reports "offline, and a new link must be downloaded once to learn its SHA-256". the help names the flag or environment setting to change, followed in a project by "to pin it. `fetchloom get <link> --offline` reuses a file fetched before", and in `get`, which pins nothing, by "to download it once. after that, `fetchloom get <link> --offline` reuses it".
+whatever needs a source fails offline: search, and an entry the lock does not pin yet, even when you know its id or link, since listings are not cached. a link not pinned yet fails with `offline, and a new link must be downloaded once to learn its SHA-256`. `get` of a link works offline once a `get` on this machine kept its file, and with `-o`, once the file at that path still holds what the link served.
 
-prepare the project online before disconnecting and keep its manifest and lock unchanged. `FETCHLOOM_OFFLINE=1` or `true` also enables offline mode, and a value fetchloom cannot read, such as `yes`, stops a command before any request. to reconnect, remove `--offline` and unset that variable. offline, a folder [mirror](mirrors.md), such as a usb drive, still gives the pinned files the cache lacks, and so does the data folder, where it holds them at the paths data.lock places them at.
+prepare the project online and keep `data.toml` and `data.lock` unchanged before you disconnect. `FETCHLOOM_OFFLINE=1` or `true` turns offline mode on too, and a value fetchloom cannot read, such as `yes`, stops a command before any request. offline, a folder [mirror](mirrors.md), such as a usb drive, still gives the pinned files the cache lacks, and so do the files already at their places in the data folder.
 
 ## recovery
 
-a [mirror](mirrors.md) you name is asked for a pinned file before its source, so a file whose source is gone can still come from a lab's copy. if a locked download returns 404 or 410, fetchloom asks its recorded source for a new URL and checks the new download against the original size and hashes. it does not rewrite the lock. an unchanged URL or another kind of failure cannot recover this way.
+a [mirror](mirrors.md) you name is asked for a pinned file before its source, so a file whose source is gone can still come from a lab's copy. if a locked download returns 404 or 410, fetchloom asks the recorded source for a new link and checks the new download against the pinned size and hashes, without rewriting the lock.
 
-successful downloads stay cached when another file fails. retries can reuse saved partial bytes when hashes or server validators allow it. unsupported ranges, changed validators or damaged saved bytes can require a restart.
+when one file fails, the files that downloaded stay cached. a retry continues from the bytes it kept when hashes or server validators show they belong to the same file; otherwise it starts the file over.
 
-transfers retry transient failures, 4 more times by default or as `FETCHLOOM_RETRIES` sets, and respect announced rate limits within bounded waits. while a download waits to try again, its bar says which try comes next and when, as in `try 3 of 5 · next in 2 s`, or `waiting for 127.0.0.1's rate limit · try 6 of 15 · next in 3 s` when the server limits requests. several files download at once. eligible files of at least 64 MiB can split into parallel range requests after one stream stays below 1 MB/s over 2 seconds, with at least 16 MiB left. a configured rate cap turns off that adaptive split; `FETCHLOOM_SPLIT=1` and a resumed download whose later ranges are kept still split. [environment settings](reference/environment.md) controls network work and rate limits.
+a failed transfer is tried 4 more times, or as many as `FETCHLOOM_RETRIES` sets, and a server's announced rate limit is respected within bounded waits. while a download waits, its bar says which try comes next and when, as in `try 3 of 5 · next in 2 s`. several files download at once, and a file of at least 64 MiB whose one stream stays below 1 MB/s for 2 seconds, with at least 16 MiB left, splits into parallel range requests. [environment](reference/environment.md) lists the settings for network work and rate limits.
 
 ## approval
 
@@ -157,24 +155,30 @@ transfers retry transient failures, 4 more times by default or as `FETCHLOOM_RET
 fetchloom sync --yes
 ```
 
-approval is required above 1 GiB, not at exactly 1 GiB. `FETCHLOOM_ASK_ABOVE`, or `ask_above` in the [settings file](reference/environment.md#settings-file), moves that line, as `FETCHLOOM_ASK_ABOVE=50G` on a machine meant for big data.
+a download of more than 1 GiB asks first. `FETCHLOOM_ASK_ABOVE`, or `ask_above` in the [settings file](reference/environment.md#settings-file), moves that line, as `FETCHLOOM_ASK_ABOVE=50G` on a machine meant for big data.
 
-| download | bytes checked |
+| download | bytes counted |
 |---|---|
-| `get` | known bytes still needing download; cached checksummed files and unpacked archives do not count |
+| `get` | known bytes still to download; cached files with checksums and unpacked archives do not count |
 | project commands | known bytes still missing from the cache |
-| unknown source size | the server's length against the remaining download, or received bytes after a file passes that size |
-| known source size | counted up front, as in the rows above; an answer stating another length is refused before download, and a body without a stated length stops once it passes the known size, so a larger download never slips past the approval |
+| a file of unknown size | the length its server states, or the bytes received once they pass the line |
+| a file of known size | counted up front; a server stating another length is refused before the download, and a body without a stated length stops once it passes the known size |
 
-unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
+a batch asks at most one question about files of unknown size. offline runs never ask.
 
-the disk holding the cache is checked too. when what a run is about to download needs more than that disk has free, counting each archive whose files are not known yet once more for unpacking, a lower bound since an archive may unpack to more than its own size, fetchloom asks before anything starts, naming the cache's folder and both numbers, or stops with `unconfirmed` and the same facts when no one can answer. a sync asks once for all its downloads, so parts that fit alone but not together are caught. `--yes` goes on anyway, as a disk that compresses what it stores can hold more than it tells. a file of unknown size is checked once its server states the length, an archive it unpacks with room for the archive once more, the least its files can take. one whose server never states it is checked as its bytes arrive: once more has arrived than the disk had free when it started, it stops before it writes those bytes, with the same question, or `unconfirmed` naming the bytes so far, so the disk is left near full rather than full.
+fetchloom also checks the free space on the cache's disk. when a run needs more than is free, counting each archive whose files are not known yet once more for unpacking, it asks before anything starts, naming the cache folder and both numbers. a sync asks once for all its downloads. `--yes` goes on anyway, since a disk that compresses what it stores can hold more than it says. a file whose server never states its length is checked as it arrives, and stops before it fills the disk.
 
-`--yes` or `-y` answers yes to every question a person could be asked, never a [dataset search choice](commands/search.md#choosing-a-dataset). a question shows its default in capitals, as `[y/N]`: downloads, a project in your home folder and the offer to sign in after a refusal default to no, saving a key you typed to yes. questions require interactive stdin and stderr. answer with y or yes, or n or no, then enter; enter alone takes the default, and any other answer, such as q, asks the question again. pipes, CI, [coding agents](ai-agents.md) and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`. a run asks before it places any file, so a no at the question says that nothing changed. the exception is a `sync` that has already written `data.lock`, which it does before it downloads what placing needs: that change stays, and the `Cancelled` line does not say nothing changed.
+`--yes` or `-y` answers yes to every question, but never picks a dataset from a [search](commands/search.md#choosing-a-dataset). a question shows its default in capitals, as `[y/N]`: downloads, a project in your home folder and the offer to sign in after a refusal default to no, and saving a key you typed defaults to yes. answer y, yes, n or no and press enter; enter alone takes the default, and any other answer asks again. questions need a terminal on stdin and stderr, so pipes, CI, [coding agents](ai-agents.md) and `--json` cannot answer them: an unapproved download fails with exit 1 and `unconfirmed`. a run asks before it places any file, so a no changes nothing, except in a `sync` that had already written `data.lock`, which stays.
 
 ## interruptions
 
-at a download question, a sign-in prompt or the dataset picker, ctrl-c cancels the question and stops with exit 130, and the terminal shows what you type again. a cancel you choose is not an error: fetchloom prints one `Cancelled` line saying what was cancelled, such as `Cancelled the download of huge.bin (2.0 GiB), so nothing changed`, instead of `error:`. during other work, the first ctrl-c requests a stop, prints `Stopping (press ctrl-c again to quit at once)`, shows `stopping` on each progress bar, and preserves resumable bytes before exiting 130. a stop you ask for is not an error either: the run ends with one `Stopped` line saying where it stopped, such as `Stopped while talking to 127.0.0.1`, and a dim line under it says how much the unfinished downloads keep, together, and whether the next run goes on from there. it promises that only where the server sends parts of a file and a pinned hash or a server validator proves the parts belong together: a server that never said whether it sends parts gets `if the server allows it`, as python's `http.server` does at a first stop. one that said it sends none, or that answered a request for the rest of the same file with all of it, as `http.server` does in the next run, gets `the server cannot continue from the 2.0 MiB downloaded so far, so the next run starts over`. a later run that cannot go on from what an earlier run kept says so once, as `Restarting big.bin · the 2.0 MiB an earlier run kept cannot be continued`, and downloads the file from its first byte. cache scans check between entries, and verification checks between hash reads. a ctrl-c once every byte of the run's downloads is in, while the disk keeps them and nothing else is left to download, lets the run finish, since stopping would mean downloading them again: it prints `Finishing (the download is complete; ctrl-c again to quit at once)` and goes on to its usual last lines. once a command's changes are under way, as when `add`, `sync`, `lock`, `remove`, `drop`, `push`, `build`, `get`, `export -o`, `cache gc`, `cache verify` or `auth` writes or prints its last lines, a ctrl-c no longer stops it: it prints `Finishing what it started (ctrl-c again to quit at once)`, ends with its closing line, such as `Added iris`, told again when it came before the ctrl-c, and exits 0. a second ctrl-c clears the progress bars, prints `Quit at once` and exits with code 130 without waiting for the work to wind down. a first `add` quit this way before it wrote anything leaves its folder as it was. a thread inside the operating system's flush of a file cannot be ended, so on a slow disk the process itself can take until that flush returns to end, after the `Quit` line.
+at a question, a sign-in prompt or the dataset picker, ctrl-c cancels and exits 130. a cancel you chose is not an error, so one `Cancelled` line says what was cancelled, such as `Cancelled the download of huge.bin (2.0 GiB), so nothing changed`.
+
+during other work, the first ctrl-c asks for a stop. fetchloom prints `Stopping (press ctrl-c again to quit at once)`, keeps what it downloaded, and ends with one `Stopped` line, such as `Stopped while talking to 127.0.0.1`, and exit 130. a dim line under it says how much the unfinished downloads keep and whether the next run continues from there, which needs a server that sends parts of a file. a later run that cannot continue says so once, as `Restarting big.bin · the 2.0 MiB an earlier run kept cannot be continued`, and starts that file over.
+
+two moments finish instead, since stopping there would throw work away. once every byte is downloaded and only the disk is still writing, a ctrl-c prints `Finishing (the download is complete; ctrl-c again to quit at once)`. once a command is writing its changes or its last lines, a ctrl-c prints `Finishing what it started (ctrl-c again to quit at once)`, and the command ends with its usual closing line, such as `Added iris`, and exit 0.
+
+a second ctrl-c prints `Quit at once` and exits 130 without waiting for the work to wind down. a first `add` quit this way before it wrote anything leaves its folder as it was. on a slow disk, the process can outlast the `Quit` line until the operating system finishes flushing a file.
 
 ## deleting a dataset from a machine
 
