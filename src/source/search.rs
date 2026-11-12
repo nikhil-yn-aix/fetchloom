@@ -296,6 +296,90 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
         .collect()
 }
 
+/// a public dataset one typo from a dataset its source would not show, as the source lists the
+/// datasets of the same owner.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Near {
+    /// the id that was given, such as `scikit-learn/irsi`.
+    pub(crate) given: String,
+    /// the id one typo from it, such as `scikit-learn/iris`.
+    pub(crate) id: String,
+    /// the reference that names the dataset, such as `hf:datasets/scikit-learn/iris`.
+    pub(crate) reference: Reference,
+}
+
+/// a dataset an owner publishes, as hugging face lists one.
+#[derive(Deserialize)]
+struct Owned {
+    id: String,
+    #[serde(default)]
+    private: bool,
+}
+
+/// a dataset an owner publishes, as kaggle lists one.
+#[derive(Deserialize)]
+struct Published {
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
+/// the public dataset one typo from `reference`, a hugging face or kaggle dataset its source would
+/// not show, among those its owner publishes there, the most downloaded first on hugging face.
+/// one request, and none for any other reference; one that fails finds none.
+pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> {
+    let (owner, name, prefix, url) = match reference {
+        Reference::HuggingFace(repo) => {
+            let (owner, name) = repo.dataset_parts()?;
+            let url = query(
+                "https://huggingface.co/api/datasets",
+                &[
+                    ("author", owner),
+                    ("sort", "downloads"),
+                    ("direction", "-1"),
+                    ("limit", "100"),
+                    ("expand[]", "private"),
+                ],
+            );
+            (owner, name, "hf:datasets/", url)
+        }
+        Reference::Kaggle(dataset) => {
+            let (owner, name) = dataset.parts();
+            let url = query(
+                "https://api.kaggle.com/v1/datasets/list",
+                &[("user", owner), ("page", "1")],
+            );
+            (owner, name, "kaggle:", url)
+        }
+        _ => return None,
+    };
+    let url = url.ok()?;
+    let response = api.get(&url).await.ok()?;
+    let ids: Vec<String> = match reference {
+        Reference::HuggingFace(_) => super::json::<Vec<Owned>>(&url, &response)
+            .ok()?
+            .into_iter()
+            .filter(|owned| !owned.private)
+            .map(|owned| owned.id)
+            .collect(),
+        _ => super::json::<Vec<Published>>(&url, &response)
+            .ok()?
+            .into_iter()
+            .map(|published| published.reference)
+            .collect(),
+    };
+    let id = ids.into_iter().find(|id| {
+        id.split_once('/').is_some_and(|(by, other)| {
+            by.eq_ignore_ascii_case(owner) && crate::name::one_typo(name, other)
+        })
+    })?;
+    let reference = Reference::parse(&format!("{prefix}{id}")).ok()?.reference;
+    Some(Near {
+        given: format!("{owner}/{name}"),
+        id,
+        reference,
+    })
+}
+
 #[derive(Deserialize)]
 struct ZenodoMatches {
     hits: Hits,

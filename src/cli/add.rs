@@ -468,6 +468,68 @@ fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     stop
 }
 
+/// resolves `link`, typed for a new dataset, with the help its failure needs: one with nothing at
+/// it is fixed on the command line, and one a source may not show may be a typo. a link
+/// `manifest` has already is fixed there, so its help stays.
+async fn resolve_typed(
+    context: &Context,
+    net: &Net,
+    args: &Add,
+    (link, parsed): (&str, &Parsed),
+    manifest: &Manifest,
+) -> Result<Addition, Error> {
+    let reference = stored_reference(link, parsed);
+    let known = manifest
+        .datasets
+        .values()
+        .filter_map(manifest::Entry::source)
+        .any(|source| source.reference == reference);
+    match resolve_add(context, net, args, link, parsed).await {
+        Ok(addition) => Ok(addition),
+        Err(error) if known => Err(error),
+        Err(error) => Err(near_miss(context, net, link, parsed, typed(error, false)).await),
+    }
+}
+
+/// `error`, from a source that answers alike for a dataset it does not have and a private one, as
+/// hugging face and kaggle do, with the help of a typo: the command the person meant, when the
+/// source lists a public dataset of the same owner one typo from the link. a sign-in could not
+/// help then, so none is offered. it asks once, and never for `--json` or offline.
+async fn near_miss(
+    context: &Context,
+    net: &Net,
+    link: &str,
+    parsed: &Parsed,
+    mut error: Error,
+) -> Error {
+    let maybe_missing = error.need.as_ref().is_some_and(|need| need.maybe_missing);
+    if !maybe_missing || context.output.json() || context.offline.enabled() {
+        return error;
+    }
+    let near = {
+        let _searching = context.output.wait(
+            "Searching",
+            format!(
+                "for a public dataset named like {}",
+                parsed.reference.shown()
+            ),
+        );
+        crate::source::search::near(net, &parsed.reference).await
+    };
+    let Some(near) = near else {
+        return error;
+    };
+    // the link as typed, with the name fixed, keeps a link's file or folder
+    let fixed = if link.contains(&near.given) {
+        link.replacen(&near.given, &near.id, 1)
+    } else {
+        near.reference.to_string()
+    };
+    let meant = super::meant(&[link], &[&fixed], format!("fetchloom add {fixed}"));
+    error.need = None;
+    error.help(format!("did you mean `{meant}`?"))
+}
+
 /// the add once the project is held: everything but the steps before holding it.
 async fn add_held(
     context: &Context,
@@ -492,16 +554,7 @@ async fn add_held(
     } else {
         open_cache()?
     };
-    // a link data.toml has already is fixed there, should it have moved
-    let reference = stored_reference(link, &parsed);
-    let known = manifest
-        .datasets
-        .values()
-        .filter_map(manifest::Entry::source)
-        .any(|source| source.reference == reference);
-    let mut addition = resolve_add(context, &net, &args, link, &parsed)
-        .await
-        .map_err(|error| if known { error } else { typed(error, false) })?;
+    let mut addition = resolve_typed(context, &net, &args, (link, &parsed), manifest).await?;
     if args.name.is_none()
         && let Some(name) =
             Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing)

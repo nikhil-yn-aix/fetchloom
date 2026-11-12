@@ -293,6 +293,11 @@ pub(crate) fn nearest<'a>(
         .collect()
 }
 
+/// whether one typo turns `a` into `b`, as [`distance`] counts typos.
+pub(crate) fn one_typo(a: &str, b: &str) -> bool {
+    distance(a, b) == 1
+}
+
 /// the number of edits that turn `a` into `b`: adding, dropping or changing a character, or
 /// swapping two neighbours, the most common typo of all.
 fn distance(a: &str, b: &str) -> usize {

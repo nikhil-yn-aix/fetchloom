@@ -92,6 +92,11 @@ impl Dataset {
         })
     }
 
+    /// the dataset's owner and name, such as `uciml` and `iris`.
+    pub(crate) fn parts(&self) -> (&str, &str) {
+        (&self.owner, &self.slug)
+    }
+
     /// a pasted kaggle.com dataset link, and the file in it when the link selects one.
     fn from_link(url: &Url) -> Option<(Dataset, Option<String>)> {
         let parts = parts(url)?;

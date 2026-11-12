@@ -66,10 +66,17 @@ echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --wi
 at a terminal, a command refused for want of an account offers to sign in, then runs once more. the question defaults to no, so enter alone starts no sign-in. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those refusals the offer first says to check the name:
 
 ```text
-error: huggingface.co has no dataset scikit-learn/irs, or it is private
-  help: check the name at https://huggingface.co/datasets/scikit-learn/irs. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
+error: huggingface.co has no dataset acme-lab/field-notes, or it is private
+  help: check the name at https://huggingface.co/datasets/acme-lab/field-notes. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
       Check the name first: hugging face answers alike for a name that does not exist and for a private one
 sign in to hugging face now? [y/N]
+```
+
+`add` first asks the source, once, for the public datasets of the same owner. when one is a typo away, signing in could not help, so no sign-in is offered and the help gives your command with the name fixed. `--json` and offline runs ask nothing more:
+
+```text
+error: huggingface.co has no dataset scikit-learn/irsi, or it is private
+  help: did you mean `fetchloom add hf:datasets/scikit-learn/iris`?
 ```
 
 a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page. without a key on this machine, the offer says that first, as `First accept the terms at https://huggingface.co/datasets/bigcode/the-stack while signed in there`, then asks whether to sign in; with a key, it shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.

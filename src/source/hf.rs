@@ -100,6 +100,14 @@ impl Repo {
         })
     }
 
+    /// the owner and the name of a dataset repository, such as `scikit-learn` and `iris`. none for
+    /// a model, a space or an id of one part.
+    pub(crate) fn dataset_parts(&self) -> Option<(&str, &str)> {
+        (self.kind == RepoKind::Dataset)
+            .then(|| self.id.split_once('/'))
+            .flatten()
+    }
+
     /// a pasted huggingface.co link, and the file or folder in it when the link names one.
     pub(super) fn from_link(url: &Url) -> Option<(Repo, Option<String>, Option<String>)> {
         if !matches!(

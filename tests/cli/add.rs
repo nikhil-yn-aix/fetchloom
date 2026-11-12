@@ -1337,6 +1337,130 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     Ok(())
 }
 
+/// a hugging face and a kaggle on this machine that answer for a dataset nobody may see, as
+/// both answer for a typo, and list the public datasets of its owner, `scikit-learn` and `uciml`.
+#[cfg(debug_assertions)]
+fn typo_sources() -> Result<(Routes, Routes)> {
+    let json = |status: &str, body: &str| {
+        let length = body.len().to_string();
+        reply(
+            status,
+            &[
+                ("Content-Type", "application/json"),
+                ("Content-Length", length.as_str()),
+            ],
+            body.as_bytes(),
+        )
+    };
+    let revision = |name: &str| {
+        format!(
+            "/api/datasets/scikit-learn/{name}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
+        )
+    };
+    let hidden = r#"{"error":"Invalid username or password."}"#;
+    let hub = Routes::start(vec![
+        (revision("irsi"), json("401 Unauthorized", hidden)),
+        (revision("zzzz"), json("401 Unauthorized", hidden)),
+        (
+            "/api/datasets?author=scikit-learn&sort=downloads&direction=-1&limit=100&expand%5B%5D=private"
+                .to_owned(),
+            json(
+                "200 OK",
+                r#"[{"id":"scikit-learn/wine","private":false},{"id":"scikit-learn/iris","private":false},{"id":"scikit-learn/irsx","private":true}]"#,
+            ),
+        ),
+    ])?;
+    let kaggle = Routes::start(vec![
+        (
+            "/v1/datasets/view/uciml/irsi".to_owned(),
+            json("403 Forbidden", "{}"),
+        ),
+        (
+            "/v1/datasets/list?user=uciml&page=1".to_owned(),
+            json(
+                "200 OK",
+                r#"[{"ref":"uciml/mushroom-classification","title":"Mushrooms"},{"ref":"uciml/iris","title":"Iris Species"}]"#,
+            ),
+        ),
+    ])?;
+    Ok((hub, kaggle))
+}
+
+/// a hugging face or kaggle id one typo from a public dataset of the same owner, which its source
+/// answers as it answers a private one, gets the command meant rather than a sign-in, from one
+/// request to the source's own list of the owner's datasets. `--json` asks nothing more.
+#[cfg(debug_assertions)]
+#[test]
+fn a_typo_in_an_id_gets_the_command_meant() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, kaggle) = typo_sources()?;
+    let add = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
+            .output()
+    };
+    // the command line comes back as typed, with only the name fixed
+    for (link, meant) in [
+        (
+            "hf:datasets/scikit-learn/irsi",
+            "fetchloom add hf:datasets/scikit-learn/iris --dry-run",
+        ),
+        (
+            "https://www.kaggle.com/datasets/uciml/irsi",
+            "fetchloom add https://www.kaggle.com/datasets/uciml/iris --dry-run",
+        ),
+    ] {
+        let output = add(&["add", link, "--dry-run"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert!(
+            stderr.contains(&format!("help: did you mean `{meant}`?\n")),
+            "{stderr}"
+        );
+    }
+    assert_eq!(hub.requests().len(), 2);
+    assert_eq!(kaggle.requests().len(), 2);
+    let output = add(&["--json", "add", "hf:datasets/scikit-learn/irsi"])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stdout)?);
+    let help = json(&output)?["errors"][0]["help"].clone();
+    assert!(
+        help.as_str()
+            .is_some_and(|help| help.contains("sign in with `fetchloom auth login hf`")),
+        "{help}"
+    );
+    assert_eq!(hub.requests().len(), 3, "--json asks nothing more");
+    Ok(())
+}
+
+/// at a terminal, an id one typo from a public dataset ends with the command meant and asks
+/// nothing, while one with no public dataset close still offers to sign in.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+#[test]
+fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, _kaggle) = typo_sources()?;
+    for (name, after, keys, asked) in [
+        ("irsi", "did you mean", "", false),
+        ("zzzz", "sign in to hugging face now?", "\r", true),
+    ] {
+        let mut add = sandbox.command(&["add", &format!("hf:datasets/scikit-learn/{name}")]);
+        add.env("FETCHLOOM_TEST_HF_API", &hub.url);
+        let Some((code, screen)) = crate::support::typed(&sandbox.work(), &add, "", after, keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(40), "{screen}");
+        assert_eq!(
+            screen.contains("sign in to hugging face now?"),
+            asked,
+            "{screen}"
+        );
+    }
+    Ok(())
+}
+
 /// a link on line 3 of a list that has nothing at it fails the add naming that line, in text and
 /// in json, and the help says to fix the line, since data.toml has no entry for it yet.
 #[test]
