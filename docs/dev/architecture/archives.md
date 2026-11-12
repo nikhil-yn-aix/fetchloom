@@ -101,6 +101,8 @@ data.lock gives `unpacks_to` to a set's first part alone, and the cache records 
 
 a dataset's `members` tables in data.toml choose which members a project places, naming a split archive by its first part. unpacking never sees them: an archive is always unpacked whole, every member is stored and recorded, and the tree data.lock pins covers them all, so a filter changes no pin and a project that keeps a member another one leaves out finds it cached. [planning](placing.md#expand-destinations-first) applies the filters to the targets once `unpacked_paths` placed every member.
 
+`select` chooses among the files a source lists, so a pattern meant for members matches nothing, and `draft::inside` says where such a pattern belongs. one in data.toml moves to the dataset's members table. one given to `--select` may be `get`'s, which keeps no project, so its help says to leave `--select` out and keep what is needed from the folder the archive unpacks to, and offers the members table and `drop` for a project.
+
 ## invariants and traps
 
 - no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.

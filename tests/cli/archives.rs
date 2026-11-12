@@ -169,20 +169,31 @@ fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
 }
 
 /// select chooses among the files a link lists, so a pattern meant for the files inside a zip
-/// matches nothing; the help points at the members table and drop, which reach inside.
+/// matches nothing. the help works for get as for add, which both take --select: leave it out and
+/// keep what is needed from the folder the zip unpacks to, or, in a project, use the members table
+/// or drop, which reach inside. it named the project's remedies alone, which a get cannot use.
 #[test]
 fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
-    let refused = sandbox.run(&["add", &server.url, "--select", "**/*.csv"])?;
-    let stderr = text(&refused.stderr)?;
-    assert_eq!(refused.status.code(), Some(2), "{stderr}");
-    assert!(
-        stderr.contains(
-            "  help: --select chooses among the files the link lists, and dataset.zip is one of them, unpacked whole. to keep only some files inside it, add the link without --select, then name them in a members table, as select = [\"**/*.csv\"] under [datasets.<name>.members.\"dataset.zip\"] in data.toml, or leave files out with `fetchloom drop <path>`\n"
-        ),
-        "{stderr}"
-    );
+    let help = "  help: --select chooses among the files the link lists, and dataset.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"**/*.csv\"] under [datasets.<name>.members.\"dataset.zip\"] in data.toml, or `fetchloom drop <path>` leaves files out\n";
+    for args in [
+        &["add", &server.url, "--select", "**/*.csv"][..],
+        &[
+            "get",
+            &server.url,
+            "--dir",
+            "python",
+            "--select",
+            "**/*.csv",
+        ],
+    ] {
+        let refused = sandbox.run(args)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(stderr.contains(help), "{args:?}: {stderr}");
+    }
+    assert!(!sandbox.work().join("python").exists());
     Ok(())
 }
 

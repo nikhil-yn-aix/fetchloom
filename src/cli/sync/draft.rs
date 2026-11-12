@@ -942,11 +942,13 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
 
 /// how to keep only the files inside `archive` that `glob`, a select pattern of dataset `name`
 /// that matched no file the source lists, was most likely meant for: a members table, or drop.
+/// a pattern on the command line may be get's, which keeps no project, so its advice works for
+/// get too and offers a project's tools only for a project.
 fn inside(name: &str, glob: &Glob, archive: &str, patterns: Patterns) -> String {
     let select = toml_edit::Value::from(glob.as_str());
     match patterns {
         Patterns::OnCommandLine => format!(
-            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, add the link without --select, then name them in a members table, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or leave files out with `fetchloom drop <path>`"
+            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `fetchloom drop <path>` leaves files out"
         ),
         Patterns::InDataToml => format!(
             "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `fetchloom drop <path>`"
@@ -958,6 +960,22 @@ fn inside(name: &str, glob: &Glob, archive: &str, patterns: Patterns) -> String 
 mod tests {
     use super::*;
     use crate::cache::Member;
+
+    /// a pattern given on the command line for the files inside an archive gets advice both
+    /// commands that take --select can follow, add and get, with the project's own tools offered
+    /// for a project, while one in data.toml is moved to the dataset's members table.
+    #[test]
+    fn a_pattern_meant_for_inside_an_archive_gets_advice_its_command_can_follow() {
+        let glob = Glob::new("*.data").unwrap();
+        assert_eq!(
+            inside("new", &glob, "iris.zip", Patterns::OnCommandLine),
+            "--select chooses among the files the link lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"*.data\"] under [datasets.<name>.members.\"iris.zip\"] in data.toml, or `fetchloom drop <path>` leaves files out"
+        );
+        assert_eq!(
+            inside("uci", &glob, "iris.zip", Patterns::InDataToml),
+            "select chooses among the files the source lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [\"*.data\"] under [datasets.uci.members.\"iris.zip\"], or leave files out with `fetchloom drop <path>`"
+        );
+    }
     use crate::cache::tests::store;
     use crate::digest::{self, Md5};
     use crate::project::manifest::Manifest;
