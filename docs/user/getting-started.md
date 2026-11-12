@@ -12,11 +12,11 @@ a terminal is a window where you type a command and press enter to run it.
 
 type each command below on its own line and press enter after it.
 
-with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines: no colors, no redrawn progress bars, and ` - ` in place of symbols such as `·`. it also asks no questions, so a download over 1 GiB needs `--yes`, and plain words such as `iris` list the matching datasets, in rows that fit the terminal, to add by their id, instead of opening a list to move through; the run then ends with an error saying it did not guess one, exit 10. `-q` keeps only answers, warnings and errors, `NO_COLOR=1` turns off colors alone, and `--json` gives one document for a script.
+with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines, with no colors, redrawn progress bars or symbols such as `·`, and asks no questions: a download over 1 GiB needs `--yes`, and plain words such as `iris` print the matching datasets for you to add by their id, instead of opening a list to move through.
 
 ## install
 
-no release has been published yet, so the one-line installers and `pip install fetchloom` do not work. until the first release, build fetchloom from its source code. you do this once and it takes a few minutes.
+no release has been published yet, so the one-line installers and `pip install fetchloom` do not work. until then, build fetchloom from its source code. you do this once and it takes a few minutes.
 
 ### 1. install rust
 
@@ -51,7 +51,7 @@ fetchloom --version
 
 the second line prints `fetchloom` and its version. if `cargo install` says your rust is too old, run `rustup update` and try again.
 
-cargo installs `fetchloom` alone, while the installers also make `fl`, a short name for it. on linux and macos, this line makes the same link in cargo's folder; skip it when `command -v fl` prints another program:
+cargo installs `fetchloom` alone, while the installers also make `fl`, a short name for it. on linux and macos, this line makes that link in cargo's folder; skip it when `command -v fl` prints another program:
 
 ```sh
 ln -s fetchloom ~/.cargo/bin/fl
@@ -59,9 +59,7 @@ ln -s fetchloom ~/.cargo/bin/fl
 
 in powershell, `fl` means `Format-List`; [windows](windows.md#short-name) shows how to get the short name there.
 
-fetchloom runs on windows 10 or later, macos 11 or later and linux, on x86_64 and arm64 machines. for the [python helper](scripting.md#python-helper) as well, install the python package instead. to finish the setup, see [shell completions](commands/completions.md).
-
-after the first release, the [README](https://github.com/nikhil-yn-aix/fetchloom#install) lists one-line installers that need no rust.
+fetchloom runs on windows 10 or later, macos 11 or later and linux, on x86_64 and arm64; [compatibility](reference/compatibility.md) has the details. the [python helper](scripting.md#python-helper) says how to build the python package, which adds a python api to the same program. [shell completions](commands/completions.md) finish the setup.
 
 ## first project
 
@@ -125,9 +123,9 @@ copy `data.toml` and `data.lock` to another machine, or commit them to git. leav
 fetchloom sync
 ```
 
-`sync` downloads what is missing and checks every download against `data.lock`, so you get the same bytes. files it already verified are reused without hashing them again; `fetchloom cache verify` rehashes the cache when you want to be sure.
+`sync` downloads what is missing and checks every download against `data.lock`, so you get the same bytes. files it already checked are not hashed again; `fetchloom cache verify` rehashes the cache when you want to be sure.
 
-with git, `add` already put `data/` in `.gitignore` when the folder was a git repository, and its `next:` line then says `commit data.toml, data.lock and .gitignore`. if you start git later, run `git init` and then `fetchloom sync`, which writes `.gitignore`. then:
+in a git repository, `add` already put `data/` in `.gitignore`, and its `next:` line said `commit data.toml, data.lock and .gitignore`. if you start git later, run `git init` and then `fetchloom sync`, which writes `.gitignore`. then:
 
 ```sh
 git add data.toml data.lock .gitignore
