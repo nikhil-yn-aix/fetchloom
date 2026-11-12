@@ -34,6 +34,14 @@ impl Meter {
         self.compressed
             .set(total.min(self.ceiling.get().unwrap_or(u64::MAX)));
     }
+
+    /// counts the archive as read to its end once its readers took every file from it, though
+    /// bytes after the last file, such as a tar's closing blocks, stay unread.
+    pub(super) fn read_to_end(&self) {
+        if let Some(ceiling) = self.ceiling.get() {
+            self.compressed.set(ceiling);
+        }
+    }
 }
 
 pub(super) struct Guard<'a> {

@@ -769,3 +769,28 @@ fn a_huge_member_name_is_shown_once_and_short() {
         )
     );
 }
+
+/// once its readers took every file from an archive, the caller hears the whole archive as read,
+/// though bytes after its last file stay unread, as in a tar `tar -b 2048` pads to 1 MiB: what
+/// is left is writing and publishing the files, which a bar then tells apart from reading.
+#[test]
+fn the_end_of_reading_is_heard_as_the_whole_archive() {
+    let mut padded = tar_of(FILES);
+    padded.resize(1 << 20, 0);
+    let mut cases: Vec<(Format, Vec<u8>)> = FAMILIES
+        .iter()
+        .map(|&format| (format, archive(format, FILES)))
+        .collect();
+    cases.push((Format::Tar, padded));
+    for (format, bytes) in cases {
+        let heard = Cell::new(0);
+        let watch = |now: u64| {
+            heard.set(heard.get().max(now));
+            false
+        };
+        Scratch::new()
+            .unpack_with(format, &bytes, &Limits::default(), &watch)
+            .unwrap();
+        assert_eq!(heard.get(), bytes.len() as u64, "{format:?}");
+    }
+}

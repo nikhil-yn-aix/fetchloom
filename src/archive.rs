@@ -319,7 +319,8 @@ type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), E
 ///
 /// `source.invalid` for an unsafe or damaged archive, `local.io` when the cached archive cannot
 /// be read or the cache cannot take its files, and `interrupted` once `watch` returns true. `watch` hears how many bytes of the
-/// archive were read so far.
+/// archive were read so far, and the whole archive once its readers are done, while its files
+/// may still be written and published.
 pub(crate) fn unpack(
     input: &Input,
     format: Format,
@@ -343,6 +344,7 @@ pub(crate) fn unpack(
                 tar::unpack(input, format, &mut guard, &mut keep)?;
             }
         }
+        meter.read_to_end();
         guard.check_stopped()
     })?;
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));

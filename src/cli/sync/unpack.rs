@@ -19,7 +19,7 @@ use crate::archive::{self, System, Unpacked, parts};
 use crate::cache::{Cache, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::output::Output;
+use crate::output::{Bar, Output, Ticker};
 use crate::plan;
 use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::{Lock, Locked, LockedFile};
@@ -141,16 +141,11 @@ pub(in crate::cli) async fn unpack_all(
             let cache = cache.clone();
             let stop = context.stop.clone();
             let failed = failed.clone();
-            let ticker = ticker.clone();
-            let bar = context.output.bar("Unpacking", unpack.label.clone());
-            bar.start(Some(unpack.size), 0);
+            let told = Told::new(&context.output, &unpack, ticker.clone());
             tasks.spawn_blocking(move || {
                 let started = Instant::now();
-                let read = Cell::new(0);
                 let watch = |now: u64| {
-                    let bytes = now.saturating_sub(read.replace(now));
-                    bar.advance(bytes);
-                    ticker.advance(bytes);
+                    told.heard(now);
                     stop.is_asked() || failed.load(Ordering::Relaxed)
                 };
                 let tree = unpack.tree.as_ref();
@@ -160,7 +155,7 @@ pub(in crate::cli) async fn unpack_all(
                 } else {
                     archive::unpack_cached_parts(&cache, &unpack.parts, tree, &watch, writers)
                 };
-                drop(bar);
+                drop(told);
                 (index, unpack, started.elapsed(), unpacked)
             });
         }
@@ -199,6 +194,48 @@ pub(in crate::cli) async fn unpack_all(
         }
     }
     Ok(results)
+}
+
+/// what an archive shows while it unpacks: its bar and the batch's plain lines count the bytes
+/// read, then, once the readers are done while the files are still written and put in the
+/// cache, the bar says it is finishing, with no total to fill, so it never stands full with no
+/// time left.
+struct Told {
+    bar: Bar,
+    ticker: Arc<Ticker>,
+    label: String,
+    size: u64,
+    read: Cell<u64>,
+}
+
+impl Told {
+    fn new(output: &Output, unpack: &Unpack, ticker: Arc<Ticker>) -> Told {
+        let bar = output.bar("Unpacking", unpack.label.clone());
+        bar.start(Some(unpack.size), 0);
+        Told {
+            bar,
+            ticker,
+            label: unpack.label.clone(),
+            size: unpack.size,
+            read: Cell::new(0),
+        }
+    }
+
+    /// hears that `now` bytes of the archive were read, `size` once the readers are done.
+    fn heard(&self, now: u64) {
+        let before = self.read.replace(now);
+        let bytes = now.saturating_sub(before);
+        self.ticker.advance(bytes);
+        if now < self.size {
+            self.bar.advance(bytes);
+        } else if before < self.size {
+            // each call redraws: the verb goes first and the count before the total, so no frame
+            // shows a full bar or a count against a total of nothing
+            self.bar.message("Finishing", self.label.clone());
+            self.bar.start(None, 0);
+            self.bar.length(0);
+        }
+    }
 }
 
 /// what `unpack` unpacked to when another run recorded it while this one waited, with every file
@@ -778,6 +815,60 @@ mod tests {
             }],
             ..Lock::default()
         }
+    }
+
+    /// an archive's bar counts the bytes read. once the readers are done, while its files are
+    /// still to be written and put in the cache, it fills toward nothing, so it never stands full
+    /// with no time left, and it stays so until the unpack returns with the files in the cache.
+    #[test]
+    fn a_bar_read_to_its_end_is_finishing_until_the_files_are_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        // larger than one read, so the bar hears the archive part way first
+        let member = b"0123456789abcdef".repeat(40_000);
+        let stored = store(&cache, &tar(&member));
+        let unpack = Unpack::whole(stored.digest, stored.size, "set/set.tar".to_owned(), None);
+        let ticker = Arc::new(output.ticker("Unpacking", unpack.label.clone(), [None]));
+        let told = Told::new(&output, &unpack, ticker);
+        let in_cache = || {
+            cache
+                .find(&digest::sha256(&member), Some(member.len() as u64))
+                .is_some()
+        };
+        let heard = std::cell::RefCell::new(Vec::new());
+        let watch = |now: u64| {
+            told.heard(now);
+            heard.borrow_mut().push((now, told.bar.total(), in_cache()));
+            false
+        };
+        let unpacked =
+            archive::unpack_cached(&cache, &stored.digest, stored.size, None, &watch, Some(2))
+                .unwrap()
+                .unwrap();
+        let heard = heard.into_inner();
+        assert!(
+            heard
+                .iter()
+                .any(|&(now, total, _)| now < stored.size && total == Some(stored.size)),
+            "{heard:?}"
+        );
+        assert_eq!(heard.last(), Some(&(stored.size, Some(0), false)));
+        assert!(in_cache());
+        assert_eq!(unpacked.members.len(), 1);
+        assert_eq!(told.bar.total(), Some(0));
+        assert_eq!(told.bar.told().as_deref(), Some("set/set.tar"));
     }
 
     #[test]

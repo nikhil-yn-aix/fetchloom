@@ -499,6 +499,11 @@ pub(super) fn into_cache(
     let flush_each = true;
     let Sealing { sealed, cloned } = sealed(context, cache, walked, flush_each)?;
     context.stop.check()?;
+    // every file is copied, and the disk still has to keep them before they are in the cache
+    let finishing = context.output.wait(
+        "Finishing",
+        units::count(found.len() as u64, "file", "files"),
+    );
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(batch) = batch {
         batch
@@ -509,6 +514,7 @@ pub(super) fn into_cache(
         let sealed: Option<Sealed> = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
         sealed.map(|sealed| sealed.publish(cache))
     });
+    drop(finishing);
     let mut files = Vec::with_capacity(found.len());
     for (file, stored) in found.iter().zip(published) {
         let stored = stored
