@@ -129,7 +129,7 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
     let mut files = Vec::new();
     let mut folders = vec![(out.to_path_buf(), String::new())];
     while let Some((folder, inside)) = folders.pop() {
-        stopped(stop)?;
+        stop.check_io()?;
         crate::cache::enterable(&folder, &fs::symlink_metadata(&folder)?)?;
         for entry in fs::read_dir(&folder)? {
             let entry = entry?;
@@ -154,17 +154,6 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
         }
     }
     Ok(files)
-}
-
-/// `Interrupted` once `stop` asks.
-fn stopped(stop: &Stop) -> io::Result<()> {
-    if stop.is_asked() {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "stopped at your request",
-        ));
-    }
-    Ok(())
 }
 
 fn joined(inside: &str, name: &str) -> String {
@@ -228,7 +217,7 @@ fn take(
     let block = block.get();
     let mut size = 0;
     loop {
-        stopped(stop)?;
+        stop.check_io()?;
         let read = match file.read(block) {
             Ok(0) => break,
             Ok(read) => read,
@@ -302,7 +291,7 @@ pub(crate) fn publish(
         }
     }
     for copy in copies {
-        stopped(stop)?;
+        stop.check_io()?;
         let stored = copy.publish(cache)?;
         if stored.new {
             work.wrote(&stored.digest);
@@ -319,7 +308,7 @@ fn seal(
     flush: bool,
     stop: &Stop,
 ) -> Result<Option<crate::cache::Sealed>, Fault> {
-    stopped(stop)?;
+    stop.check_io()?;
     #[cfg(unix)]
     if file.seen.movable {
         match crate::cache::seal_captured(&file.disk, &file.seen, flush) {

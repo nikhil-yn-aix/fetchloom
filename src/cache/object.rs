@@ -460,12 +460,7 @@ fn each_block(
     let block = block.get();
     let mut left = most;
     while left > 0 {
-        if stop.is_asked() {
-            return Err(Fault::Cache(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "stopped at your request",
-            )));
-        }
+        stop.check_io().map_err(Fault::Cache)?;
         let want = usize::try_from(left).map_or(block.len(), |left| left.min(block.len()));
         let read = match input.read(&mut block[..want]) {
             Ok(0) => return Ok(()),

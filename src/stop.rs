@@ -1,5 +1,6 @@
 //! stopping a run cleanly. the first ctrl-c asks every task to wind down and keep what it has.
 
+use std::io;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
@@ -66,6 +67,19 @@ impl Stop {
     pub(crate) fn check(&self) -> Result<(), Error> {
         if self.is_asked() {
             Err(Stop::stopped())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// [`Stop::check`] for work on files, whose errors are `io::Error`: `Interrupted` once a
+    /// stop is asked.
+    pub(crate) fn check_io(&self) -> io::Result<()> {
+        if self.is_asked() {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "stopped at your request",
+            ))
         } else {
             Ok(())
         }
@@ -250,6 +264,18 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    /// file work sees a stop as the `Interrupted` io error its callers turn back into a stop, and
+    /// sees nothing until one is asked.
+    #[test]
+    fn file_work_sees_a_stop_as_interrupted() {
+        let stop = Stop::default();
+        assert!(stop.check_io().is_ok());
+        stop.ask();
+        let err = stop.check_io().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(err.to_string(), "stopped at your request");
+    }
 
     /// a first ctrl-c stops work that has not marked itself as finishing, asking the stop before
     /// the caller tells the person, and lets work that has run to its end, without asking a stop

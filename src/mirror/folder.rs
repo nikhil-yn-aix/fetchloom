@@ -155,12 +155,7 @@ pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<T
     let mut bytes = Vec::new();
     let mut block = vec![0; 1 << 20];
     loop {
-        if stop.is_asked() {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "stopped at your request",
-            ));
-        }
+        stop.check_io()?;
         let read = match file.read(&mut block) {
             Ok(0) => return Ok(Tree::Bytes(bytes)),
             Ok(read) => read,
@@ -235,12 +230,7 @@ pub(crate) fn check_all(
         read(want.size.saturating_sub(settled));
         held
     });
-    if stop.is_asked() {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "stopped at your request",
-        ));
-    }
+    stop.check_io()?;
     Ok(held)
 }
 
@@ -1094,12 +1084,7 @@ fn hashed(
     let mut hasher = Hasher::default();
     let mut read = 0_u64;
     while read < most {
-        if stop.is_asked() {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "stopped at your request",
-            ));
-        }
+        stop.check_io()?;
         let want = usize::try_from(most - read).map_or(block.len(), |left| left.min(block.len()));
         let got = match source.read(&mut block[..want]) {
             Ok(0) => break,

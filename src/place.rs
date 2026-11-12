@@ -309,7 +309,7 @@ impl Placer {
         // whether each folder passed its check, so the check runs once per folder, not per file
         let mut checked = Vec::new();
         let ready = spread((0..count).filter_map(|index| {
-            if let Err(err) = check_stop(&self.stop) {
+            if let Err(err) = self.stop.check_io() {
                 results.push((index, Err(err)));
                 return None;
             }
@@ -402,7 +402,7 @@ impl Placer {
         writable: bool,
         batch: bool,
     ) -> io::Result<Put<Metadata>> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         let location = Arc::new(self.location(destination, false)?);
         let early_hardlink = cfg!(windows)
             && !writable
@@ -544,7 +544,7 @@ impl Placer {
     /// inside the data folder can never send a file elsewhere. with `make`, missing folders are
     /// made one at a time. each folder is checked once.
     pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         let (_, parent) = self.within(path)?;
         if !self.folders.contains(&parent) {
             if let Err(error) = self.location(path, make) {
@@ -569,7 +569,7 @@ impl Placer {
         prune: bool,
         placed: Option<Method>,
     ) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         let (path, parent) = self.within(path)?;
         let location = self.location(&path, false)?;
         #[cfg(unix)]
@@ -591,7 +591,7 @@ impl Placer {
             if current == self.root {
                 break;
             }
-            check_stop(&self.stop)?;
+            self.stop.check_io()?;
             let removed = self
                 .location(current, false)
                 .and_then(|location| location.remove_dir());
@@ -611,14 +611,14 @@ impl Placer {
 
     /// creates one new folder below the pinned root; existing names are refused.
     pub(crate) fn create_folder(&self, path: &Path) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.location(path, false)?.create_folder()
     }
 
     /// creates a new file through its parent, with a handle that writes it even when its mode is
     /// read-only, and reads it, so what was written can be read back through the same file.
     pub(crate) fn create_file(&self, path: &Path, readonly: bool) -> io::Result<File> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.location(path, false)?.create_file(readonly)
     }
 
@@ -626,7 +626,7 @@ impl Placer {
     /// replaces a file already at `to`, so it suits only a folder no one else writes, such as a
     /// staging folder this run made; [`Placer::move_aside`] never replaces.
     pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.location(from, false)?
             .rename_to(&self.location(to, false)?)
     }
@@ -635,7 +635,7 @@ impl Placer {
     /// anything, so its bytes stay while a replacement takes its name, and returns that name. a
     /// sync leaves such a file alone, so one a run cut off midway kept is there to find.
     pub(crate) fn move_aside(&self, path: &Path) -> io::Result<PathBuf> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         let (path, parent) = self.within(path)?;
         let from = self.location(&path, false)?;
         loop {
@@ -658,7 +658,7 @@ impl Placer {
     /// gives the file at `from` a second name, `to`, between two checked parents below the pinned
     /// root. a name already taken is refused with `AlreadyExists`, so nothing is replaced.
     pub(crate) fn link_file(&self, from: &Path, to: &Path) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.location(from, false)?
             .link_to(&self.location(to, false)?)
     }
@@ -668,7 +668,7 @@ impl Placer {
     /// hardlink, so a later write to either leaves the other as it is. a name already taken is
     /// refused with `AlreadyExists`, so nothing is replaced.
     pub(crate) fn copy_file(&self, from: &Path, to: &Path, writable: bool) -> io::Result<Method> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.check_parent(from)?;
         let location = Arc::new(self.location(to, false)?);
         if self.can_reflink.load(Ordering::Relaxed) {
@@ -692,7 +692,7 @@ impl Placer {
         destination: &Path,
         unchanged: impl FnOnce(&Metadata) -> bool,
     ) -> io::Result<Option<Metadata>> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         if self.synced.is_some() || !self.can_hardlink.load(Ordering::Relaxed) {
             return Ok(None);
         }
@@ -710,7 +710,7 @@ impl Placer {
 
     /// deletes a temporary file through its parent; it is not a recorded placement.
     pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         let location = self.location(path, false)?;
         #[cfg(unix)]
         {
@@ -724,7 +724,7 @@ impl Placer {
 
     /// removes an empty folder without following a replacement link.
     pub(crate) fn delete_folder(&self, path: &Path) -> io::Result<()> {
-        check_stop(&self.stop)?;
+        self.stop.check_io()?;
         self.location(path, false)?.remove_dir()
     }
 
@@ -1080,7 +1080,7 @@ fn copy_at(
     if flush {
         file.sync_all()?;
     }
-    check_stop(stop)?;
+    stop.check_io()?;
     staged.publish()?;
     #[cfg(windows)]
     {
@@ -1119,7 +1119,7 @@ fn stage_copy_at(
     threads: Threads,
     stop: &Stop,
 ) -> io::Result<(Staged, File)> {
-    check_stop(stop)?;
+    stop.check_io()?;
     let (staged, file) = location.create(0o666, false)?;
     // publishing clears windows attributes, so seal through the claimed handle afterward.
     fill(object, &file, cfg!(windows) || writable, threads, stop)?;
@@ -1182,7 +1182,7 @@ fn publish_flushed<T: Send>(
     if waiting.is_empty() {
         return Vec::new();
     }
-    if let Err(err) = check_stop(stop).and_then(|()| flush()) {
+    if let Err(err) = stop.check_io().and_then(|()| flush()) {
         return waiting
             .into_iter()
             .map(|(index, _)| {
@@ -1193,7 +1193,8 @@ fn publish_flushed<T: Send>(
     }
     let publish = &|(index, staged): (usize, Staged)| {
         let _permit = grouped.enter(index);
-        let named = check_stop(stop)
+        let named = stop
+            .check_io()
             .and_then(|()| staged.publish())
             .map(|metadata| (Method::Copy, seen(&metadata)));
         (index, named)
@@ -1270,7 +1271,7 @@ fn fill(
     } else {
         transfer(input, output, stop)?;
     }
-    check_stop(stop)?;
+    stop.check_io()?;
     set_file_writable(output, writable)
 }
 
@@ -1292,7 +1293,7 @@ fn transfer(input: File, output: &File, stop: &Stop) -> io::Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 fn transfer(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
-    check_stop(stop)?;
+    stop.check_io()?;
     match usize::try_from(input.metadata()?.len()) {
         Ok(size) if size <= BLOCK => {
             let mut bytes = Vec::with_capacity(size);
@@ -1313,19 +1314,9 @@ fn transfer(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
 /// bounds each `io::copy` operation so a stop is checked between blocks.
 const BLOCK: usize = 1 << 20;
 
-fn check_stop(stop: &Stop) -> io::Result<()> {
-    if stop.is_asked() {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "stopped at your request",
-        ));
-    }
-    Ok(())
-}
-
 fn copy_stoppable(mut input: impl Read, mut output: impl Write, stop: &Stop) -> io::Result<()> {
     loop {
-        check_stop(stop)?;
+        stop.check_io()?;
         if io::copy(&mut input.by_ref().take(BLOCK as u64), &mut output)? == 0 {
             return Ok(());
         }
@@ -1352,7 +1343,7 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
             }
             while let Ok(mut block) = spare.recv() {
                 block.resize(BLOCK, 0);
-                let read = check_stop(stop).and_then(|()| input.read(&mut block));
+                let read = stop.check_io().and_then(|()| input.read(&mut block));
                 let sent = match read {
                     Ok(0) => return Ok(()),
                     Ok(read) => {
@@ -1375,7 +1366,7 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
         let mut written = Ok(());
         while let Ok(block) = filled.recv() {
             written = block.and_then(|block| {
-                check_stop(stop)?;
+                stop.check_io()?;
                 output.write_all(&block)?;
                 let _ = empty.send(block);
                 Ok(())
