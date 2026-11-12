@@ -61,6 +61,8 @@ pub(crate) struct Output {
     report_color: bool,
     /// every bar made, so a first ctrl-c redraws each at once to say it is stopping.
     drawn: Mutex<Vec<indicatif::WeakProgressBar>>,
+    /// how long work that is usually quick goes untold at a terminal.
+    untold: Duration,
     /// the last closing line told, such as `Added iris`, and whether a ctrl-c that let the run
     /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
     /// a ctrl-c comes, so that line is told once more at the end.
@@ -68,6 +70,12 @@ pub(crate) struct Output {
     /// every line told, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
+}
+
+/// work told once it lasts, as [`Output::lasting`] makes it, until dropped.
+pub(crate) struct Lasting {
+    _setup: Setup,
+    _ticker: Ticker,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -181,6 +189,7 @@ impl Output {
             stopping: Arc::default(),
             report_color: Style::stdout_colored(),
             drawn: Mutex::new(Vec::new()),
+            untold: progress::UNTOLD,
             closing: Mutex::new((None, false)),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
@@ -534,15 +543,30 @@ impl Output {
     /// for a slow disk or a network filesystem that makes such a step take seconds.
     pub(crate) fn setup(&self, verb: &'static str, what: &'static str) -> Setup {
         tracing::debug!(step = %format!("{verb} {what}").to_lowercase(), "setting up");
+        self.untold(verb, what.to_owned())
+    }
+
+    /// a live line for `verb` and `what` once they last [`Output::untold`], at a terminal.
+    fn untold(&self, verb: &'static str, what: String) -> Setup {
         match &self.bars {
-            Some(bars) => Setup::start(
+            Some(bars) => Setup::after(
+                self.untold,
                 bars,
-                verb,
-                what,
+                (verb, what),
                 (self.style.color, self.style.unicode),
                 self.stopping.clone(),
             ),
             None => Setup::quiet(),
+        }
+    }
+
+    /// work that is usually quick but grows with its size, such as placing many files: at a
+    /// terminal a live line once it lasts a second, and where no bar shows, the plain lines a
+    /// long batch tells, which `--progress` keeps beside `--json`.
+    pub(crate) fn lasting(&self, verb: &'static str, what: String) -> Lasting {
+        Lasting {
+            _setup: self.untold(verb, what.clone()),
+            _ticker: self.ticker(verb, what, [None]),
         }
     }
 
@@ -2440,6 +2464,31 @@ mod tests {
         let none = piped.waiting("Waiting", text);
         assert_eq!(none.told(), None);
         assert_eq!(piped.said(), [format!("    Waiting {text}")]);
+    }
+
+    /// work that grows with its size, such as placing many files, gets a live line at a
+    /// terminal once it lasts, where it once went untold for seconds after `Imported`.
+    #[test]
+    fn lasting_work_is_told_once_it_lasts() {
+        let mut terminal = telling(false);
+        let screen = Screen::default();
+        terminal.bars = Some(indicatif::MultiProgress::with_draw_target(
+            indicatif::ProgressDrawTarget::term_like(Box::new(screen.clone())),
+        ));
+        terminal.untold = Duration::ZERO;
+        let placing = terminal.lasting("Placing", "20,000 files".to_owned());
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !screen
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|drawn| drawn.contains("Placing 20,000 files"))
+        {
+            assert!(std::time::Instant::now() < deadline, "no line");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(placing);
     }
 
     #[test]

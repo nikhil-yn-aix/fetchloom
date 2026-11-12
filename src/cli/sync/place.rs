@@ -30,6 +30,7 @@ use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, State, Synced};
 use crate::stop::Stop;
+use crate::units;
 use crate::work::Work;
 
 #[derive(Debug, Default, Serialize)]
@@ -814,6 +815,10 @@ impl<'a> Placing<'a> {
     /// the dataset an add adds: its line stays out of what this tells, since the add tells it
     /// last, and when placing fails or stops, what this placed for it goes again, since the add
     /// is then rolled back.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one placement's steps share its state, and a line says while it places"
+    )]
     pub(crate) fn apply(
         self,
         output: &Output,
@@ -886,7 +891,9 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let threads = survey.threads;
         let state = &mut survey.state;
+        let placing = output.lasting("Placing", units::count(todo.len() as u64, "file", "files"));
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
+        drop(placing);
         // one look at the stop decides flushing, taking back an add's files and the result, so
         // a stop asked between them cannot leave an add's files placed and the add rolled back
         let stopped = stop.is_asked();

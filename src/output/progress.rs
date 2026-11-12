@@ -619,7 +619,7 @@ pub(crate) struct Setup {
 }
 
 /// how long a step before a command's own work goes untold at a terminal.
-const UNTOLD: Duration = Duration::from_secs(1);
+pub(super) const UNTOLD: Duration = Duration::from_secs(1);
 
 impl Setup {
     pub(super) fn quiet() -> Setup {
@@ -629,23 +629,12 @@ impl Setup {
         }
     }
 
-    /// shows `verb` and `what` on `bars` once the step has lasted [`UNTOLD`], in the bar's
-    /// `look`, until the step ends.
-    pub(super) fn start(
-        bars: &MultiProgress,
-        verb: &'static str,
-        what: &'static str,
-        look: (bool, bool),
-        stopping: Arc<AtomicBool>,
-    ) -> Setup {
-        Setup::after(UNTOLD, bars, (verb, what), look, stopping)
-    }
-
-    /// [`Setup::start`] with the line shown once the step has lasted `untold`.
-    fn after(
+    /// shows `verb` and `what` on `bars` once the step has lasted `untold`, usually [`UNTOLD`],
+    /// in the bar's `look`, until the step ends.
+    pub(super) fn after(
         untold: Duration,
         bars: &MultiProgress,
-        (verb, what): (&'static str, &'static str),
+        (verb, what): (&'static str, String),
         look: (bool, bool),
         stopping: Arc<AtomicBool>,
     ) -> Setup {
@@ -665,7 +654,7 @@ impl Setup {
                 if *ended {
                     return;
                 }
-                let bar = Bar::add(&bars, verb, what.to_owned(), look, stopping);
+                let bar = Bar::add(&bars, verb, what, look, stopping);
                 if let Some(drawn) = &bar.drawn {
                     drawn.set_elapsed(began.elapsed());
                 }
@@ -985,7 +974,7 @@ mod tests {
         drop(Setup::after(
             hour,
             &bars,
-            ("Locking", "the project"),
+            ("Locking", "the project".to_owned()),
             look,
             Arc::default(),
         ));
@@ -993,7 +982,7 @@ mod tests {
         let setup = Setup::after(
             Duration::ZERO,
             &bars,
-            ("Opening", "the cache"),
+            ("Opening", "the cache".to_owned()),
             look,
             Arc::default(),
         );
