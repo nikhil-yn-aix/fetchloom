@@ -964,6 +964,8 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
         .filter(|(_, put)| **put != Put::Present)
         .map(|((needed, _), _)| needed.item)
         .collect();
+    // every file has its name, so a stop during the flush lets the push finish it
+    context.stop.finish();
     if started || !written.is_empty() {
         target.flush(&written).map_err(|err| {
             Error::io(
@@ -975,7 +977,6 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
             )
         })?;
     }
-    context.stop.finish();
     Ok((started, puts))
 }
 

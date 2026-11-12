@@ -167,6 +167,31 @@ fn a_push_writes_each_file_once_and_skips_it_next_time() -> Result {
     Ok(())
 }
 
+/// a push marks its work as finishing once every file has its name, before the flush that keeps
+/// them after a power cut, so a ctrl-c while a slow disk flushes lets it finish rather than say
+/// first that it stops. held at that mark, the push has its flush still to do, which a mirror
+/// moved away by then fails.
+#[cfg(unix)]
+#[test]
+fn a_push_marks_its_work_as_finishing_before_its_flush() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let mut push = sandbox.command(&["--yes", "push", "--to"]);
+    push.arg(&root);
+    let (running, release) = crate::support::held_at_its_mark(&sandbox, &mut push)?;
+    fs::rename(&root, root.with_file_name("moved"))?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("but could not make sure the files stay after a power cut"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a member a members table leaves out is not pushed: no clone places it, and gc may already
 /// have freed its bytes, which would make the push refuse for want of them.
 #[test]
