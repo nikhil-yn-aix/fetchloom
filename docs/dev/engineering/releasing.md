@@ -74,6 +74,8 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
 
+a pre-release such as 0.1.0-rc.1 keeps that spelling in the archive and debian package file names. its wheels carry pep 440's spelling, 0.1.0rc1, as maturin writes it, with alpha and beta shortened to a and b. its debian packages record 0.1.0~rc.1 as their version, which dpkg sorts before 0.1.0, so the release replaces the pre-release on upgrade.
+
 every wheel the release builds also has `fl`, a console script. maturin refuses console scripts in a wheel that carries an executable, so the build job adds it after `maturin build` with `python/wheel_scripts.py`: an `entry_points.txt` naming the launcher, which pip and uv turn into a command, `fl.exe` on windows, and its line in RECORD, with every other file left as maturin wrote it. the launcher, `python/fetchloom/__main__.py`, finds the executable the wheel installed beside it, as the helper does, and hands it the command line. on unix it replaces itself with the executable through `os.execv`; windows has no exec, so there it runs the executable, leaves ctrl-c to it and exits with its code. `python -m fetchloom` runs the same launcher. wheels have no links, and a second copy of the executable would double the wheel, so `fl` costs a python start instead. a wheel maturin builds from source, as `pip install` from git does, has no `fl`; `python -m fetchloom` works there too.
 
 ## publish a version

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 
-from ci_journey import digest, require
+from ci_journey import digest, require, wheel_version
 
 TARGETS = {
     "x86_64-unknown-linux-musl": {"wheel": {"manylinux2014_x86_64", "manylinux_2_17_x86_64", "musllinux_1_2_x86_64"}, "deb": "amd64"},
@@ -65,7 +65,7 @@ def inventory(folder, proofs, version, commit):
         archive = archive_name(target, version)
         wheels = [name for name in files if name.endswith(".whl")]
         require(len(wheels) == 1, f"{target}: expected exactly one wheel")
-        match = re.fullmatch(rf"fetchloom-{re.escape(version)}-py3-none-(.+)\.whl", wheels[0])
+        match = re.fullmatch(rf"fetchloom-{re.escape(wheel_version(version))}-py3-none-(.+)\.whl", wheels[0])
         require(match is not None and set(match[1].split(".")) == TARGETS[target]["wheel"], f"wrong wheel target: {wheels[0]}")
         wanted = {archive, wheels[0]}
         if "deb" in TARGETS[target]:

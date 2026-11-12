@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socketserver
 import stat
@@ -33,6 +34,17 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
+
+def wheel_version(version):
+    """the version a wheel records for Cargo's `version`: maturin writes pep 440's spelling, so
+    0.1.0-rc.1 becomes 0.1.0rc1, -alpha.N becomes aN and -beta.N becomes bN."""
+    match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)(?:-(alpha|beta|rc)\.([0-9]+))?", version)
+    require(match is not None, f"{version} is not a release or an alpha, beta or rc pre-release, such as 0.1.0-rc.1")
+    release, kind, number = match.groups()
+    if kind is None:
+        return release
+    return release + {"alpha": "a", "beta": "b", "rc": "rc"}[kind] + str(int(number))
 
 
 def environment(home, cache=None, origin=None):

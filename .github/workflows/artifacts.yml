@@ -260,9 +260,12 @@ jobs:
           install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
           install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
           mkdir -p "$root/DEBIAN"
+          # dpkg sorts 0.1.0~rc.1 before 0.1.0 and 0.1.0-rc.1 after it. the file keeps Cargo's
+          # spelling, since a release upload renames a ~ in a file name to a dot
+          debian=$(printf '%s' "$VERSION" | sed 's/-/~/')
           cat > "$root/DEBIAN/control" <<EOF
           Package: fetchloom
-          Version: $VERSION
+          Version: $debian
           Architecture: $arch
           Maintainer: Nikhil Y N <nikhil-yn-aix@users.noreply.github.com>
           Installed-Size: $(du -sk "$root/usr" | cut -f1)
@@ -283,6 +286,7 @@ jobs:
           esac
           sudo dpkg -i "$deb"
           trap 'sudo dpkg -r fetchloom' EXIT
+          test "$(dpkg-query --show --showformat='${Version}' fetchloom)" = "$debian"
           python python/ci_journey.py --binary /usr/bin/fetchloom --version "$VERSION" \
             --commit "$FETCHLOOM_COMMIT" --report "$PROOFS/deb.json"
           short=$(/usr/bin/fl --version)

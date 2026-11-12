@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 from email.parser import Parser
 
-from ci_journey import ROOT, check_version, digest, environment, require
+from ci_journey import ROOT, check_version, digest, environment, require, wheel_version
 
 
 def inspect_wheel(wheel, version, binary):
@@ -20,7 +20,7 @@ def inspect_wheel(wheel, version, binary):
         metadata = [name for name in packed.namelist() if name.endswith('.dist-info/METADATA')]
         require(len(metadata) == 1, "wheel has no unique metadata")
         fields = Parser().parsestr(packed.read(metadata[0]).decode())
-        require(fields['Name'] == 'fetchloom' and fields['Version'] == version, "wrong wheel identity")
+        require(fields['Name'] == 'fetchloom' and fields['Version'] == wheel_version(version), "wrong wheel identity")
         require(fields['Requires-Python'] == '>=3.10', "wheel changed the Python floor")
         require('fetchloom/py.typed' in packed.namelist() and 'fetchloom/__init__.py' in packed.namelist(), "wheel omitted its helper")
         programs = [name for name in packed.namelist() if name.endswith('/scripts/' + binary.name)]

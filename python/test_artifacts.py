@@ -17,43 +17,48 @@ from check_archive import check_machine, unpack
 from check_artifacts import TARGETS, archive_name, inventory, stages
 import check_wheel
 from check_wheel import inspect_wheel
-from ci_journey import Server, check_version
+from ci_journey import Server, check_version, wheel_version
 
 VERSION = '0.1.0'
 COMMIT = 'a' * 40
 
 
 class InventoryTests(unittest.TestCase):
-    def make(self, root):
+    def make(self, root, version=VERSION, wheel_version=VERSION):
         packages, proofs = root / 'dist', root / 'proofs'
         packages.mkdir()
         proofs.mkdir()
         for target, metadata in TARGETS.items():
-            wheel = f'fetchloom-{VERSION}-py3-none-' + '.'.join(sorted(metadata['wheel'])) + '.whl'
-            names = [archive_name(target, VERSION), wheel]
+            wheel = f'fetchloom-{wheel_version}-py3-none-' + '.'.join(sorted(metadata['wheel'])) + '.whl'
+            names = [archive_name(target, version), wheel]
             if 'deb' in metadata:
-                names.append(f"fetchloom_{VERSION}_{metadata['deb']}.deb")
+                names.append(f"fetchloom_{version}_{metadata['deb']}.deb")
             files = {}
             for name in names:
                 data = name.encode()
                 (packages / name).write_bytes(data)
                 files[name] = hashlib.sha256(data).hexdigest()
             current = '3.14.7' if target == 'x86_64-apple-darwin' else '3.15.2'
-            checks = {name: {'ok': True, 'version': VERSION, 'commit': COMMIT,
+            checks = {name: {'ok': True, 'version': version, 'commit': COMMIT,
                              'binary_sha256': 'b' * 64, 'helper': name.startswith('wheel-'),
                              'python': '3.10.11' if name == 'wheel-minimum' else current}
                       for name in stages(target)}
             folder = proofs / target
             folder.mkdir()
-            (folder / 'verified.json').write_text(json.dumps({'target': target, 'version': VERSION,
+            (folder / 'verified.json').write_text(json.dumps({'target': target, 'version': version,
                  'commit': COMMIT, 'checks': checks, 'files': files}), encoding='utf-8')
-        (proofs / 'source-package.json').write_text(json.dumps({'ok': True, 'version': VERSION, 'commit': COMMIT}), encoding='utf-8')
+        (proofs / 'source-package.json').write_text(json.dumps({'ok': True, 'version': version, 'commit': COMMIT}), encoding='utf-8')
         return packages, proofs
 
     def test_exact_six_target_set_is_accepted(self):
         with tempfile.TemporaryDirectory() as directory:
             packages, proofs = self.make(Path(directory))
             self.assertEqual(len(inventory(packages, proofs, VERSION, COMMIT)), 14)
+
+    def test_a_pre_release_wheel_is_named_as_python_spells_its_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packages, proofs = self.make(Path(directory), '0.1.0-rc.1', '0.1.0rc1')
+            self.assertEqual(len(inventory(packages, proofs, '0.1.0-rc.1', COMMIT)), 14)
 
     def test_missing_target_check_asset_or_source_proof_is_rejected(self):
         for change in ['target', 'check', 'asset', 'source', 'checksum', 'revision', 'helper', 'python']:
@@ -131,11 +136,34 @@ class PackageContentTests(unittest.TestCase):
                     inspect_wheel(wheel, VERSION, binary)
 
 
+    def test_a_pre_release_wheel_records_python_spelling_of_its_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fetchloom'
+            binary.write_bytes(b'checked binary')
+            wheel = root / 'package.whl'
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('fetchloom-0.1.0rc1.dist-info/METADATA', 'Name: fetchloom\nVersion: 0.1.0rc1\nRequires-Python: >=3.10\n')
+                archive.writestr('fetchloom/__init__.py', '')
+                archive.writestr('fetchloom/py.typed', '')
+                archive.writestr('fetchloom-0.1.0rc1.data/scripts/fetchloom', binary.read_bytes())
+            inspect_wheel(wheel, '0.1.0-rc.1', binary)
+
+
 class VersionTests(unittest.TestCase):
     def test_version_prefix_does_not_accept_another_version(self):
         with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.01\n'):
             with self.assertRaises(AssertionError):
                 check_version(Path('fetchloom'), VERSION)
+
+    def test_a_wheel_spells_a_pre_release_as_pep_440_does(self):
+        for cargo, python in [('0.1.0', '0.1.0'), ('0.1.0-rc.1', '0.1.0rc1'),
+                              ('1.2.3-alpha.4', '1.2.3a4'), ('1.2.3-beta.10', '1.2.3b10')]:
+            with self.subTest(cargo=cargo):
+                self.assertEqual(wheel_version(cargo), python)
+        for other in ['0.1.0-dev.1', '0.1.0-rc', '0.1.0+build.1']:
+            with self.subTest(other=other), self.assertRaises(AssertionError):
+                wheel_version(other)
 
     def test_python_module_entrypoint_keeps_its_interpreter_arguments(self):
         command = [Path('venv/python'), '-I', '-m', 'fetchloom']
