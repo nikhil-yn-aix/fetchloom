@@ -25,8 +25,9 @@ def check(binary, version, commit):
                 project = journey.project('project')
                 result = journey.run(project, 'add', server.url('/' + name), '--as', 'sample')
                 warnings = result['warnings']
-                require(len(warnings) == 1, f'expected one rar warning: {warnings}')
-                commands = re.findall(r'`([^`]+)`', warnings[0])
+                require(len(warnings) == 1 and warnings[0].get('kind') == 'archive.packed',
+                        f'expected one rar warning: {warnings}')
+                commands = re.findall(r'`([^`]+)`', warnings[0]['help'])
                 if sys.platform == 'win32':
                     commands = [command for command in commands if command.startswith('& ') and '7z.exe' in command]
                     prefix = "$ErrorActionPreference = 'Stop'\n"
