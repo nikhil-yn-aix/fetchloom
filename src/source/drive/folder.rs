@@ -8,7 +8,7 @@ use url::Url;
 use super::{Item, ItemKind, file_url, html};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many};
+use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many_of};
 
 /// a drive id, with the resource key drive asks for along with items shared before 2021.
 #[derive(Debug, PartialEq, Eq)]
@@ -38,17 +38,31 @@ struct Walk {
     unavailable: Vec<Unavailable>,
     folders: VecDeque<(Key, String)>,
     seen: HashSet<String>,
+    /// the most files, and the most folders, the walk takes in.
+    most: usize,
 }
 
 /// lists every file in the folder and in its subfolders, each at its path inside the folder.
 pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> {
+    list_at_most(item, api, most_files()).await
+}
+
+/// [`list`] of a folder that may hold at most `most` files and `most` folders.
+pub(super) async fn list_at_most(
+    item: &Item,
+    api: &impl Api,
+    most: usize,
+) -> Result<Listing, Error> {
     let root = Key {
         id: item.id.clone(),
         resource: item.resource.clone(),
     };
     let page = read(item, api, &root, "").await?;
     let title = Some(page.name.clone()).filter(|name| !name.is_empty());
-    let mut walk = Walk::default();
+    let mut walk = Walk {
+        most,
+        ..Walk::default()
+    };
     walk.seen.insert(root.id);
     walk.add(item, "", page)?;
     while let Some((key, path)) = walk.folders.pop_front() {
@@ -95,9 +109,10 @@ impl Walk {
                             &format!("the folder {path} appears twice"),
                         ));
                     }
-                    if self.seen.len() > most_files() {
-                        return Err(too_many(
+                    if self.seen.len() > self.most {
+                        return Err(too_many_of(
                             link(&item.id),
+                            self.most,
                             "pass the link of each subfolder you need to `fetchloom add`",
                         ));
                     }
@@ -113,9 +128,10 @@ impl Walk {
                     etag: None,
                 }),
             }
-            if self.files.len() + self.unavailable.len() > most_files() {
-                return Err(too_many(
+            if self.files.len() + self.unavailable.len() > self.most {
+                return Err(too_many_of(
                     link(&item.id),
+                    self.most,
                     "pass the link of each subfolder you need to `fetchloom add`",
                 ));
             }

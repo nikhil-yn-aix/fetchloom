@@ -199,9 +199,14 @@ fn relative_file_links_are_resolved_on_drive() {
     );
 }
 
+/// a listing limit far below the run's, so a folder past it lists fast, with a thousand to
+/// group in the message.
+const MOST: usize = 1_000;
+
 #[test]
 fn a_folder_allows_the_file_limit_but_not_one_more() {
-    for (count, allowed) in [(100_000, true), (100_001, false)] {
+    let most = MOST;
+    for (count, allowed) in [(most, true), (most + 1, false)] {
         let mut body = String::from("<html><title>many</title><div class=\"flip-entries\">");
         for number in 0..count {
             use std::fmt::Write as _;
@@ -209,8 +214,7 @@ fn a_folder_allows_the_file_limit_but_not_one_more() {
         }
         body.push_str("</div></html>");
         let recorded = Recorded::default().on(&page(DEEP), 200, body);
-        let reference = Reference::Drive(folder(DEEP));
-        let listing = block_on(reference.resolve(&recorded));
+        let listing = block_on(super::folder::list_at_most(&folder(DEEP), &recorded, most));
         if allowed {
             assert_eq!(listing.unwrap().files.len(), count);
         } else {
@@ -232,7 +236,8 @@ fn unsafe_folder_names_are_refused_before_reading_them() {
 
 #[test]
 fn unavailable_entries_count_toward_the_listing_limit() {
-    for (count, allowed) in [(100_000, true), (100_001, false)] {
+    let most = MOST;
+    for (count, allowed) in [(most, true), (most + 1, false)] {
         let mut body = String::from("<html><title>docs</title><div class=\"flip-entries\">");
         for number in 0..count {
             use std::fmt::Write as _;
@@ -240,7 +245,7 @@ fn unavailable_entries_count_toward_the_listing_limit() {
         }
         body.push_str("</div></html>");
         let recorded = Recorded::default().on(&page(DEEP), 200, body);
-        let result = block_on(Reference::Drive(folder(DEEP)).resolve(&recorded));
+        let result = block_on(super::folder::list_at_most(&folder(DEEP), &recorded, most));
         if allowed {
             let listing = result.unwrap();
             assert_eq!(listing.files, [] as [Remote; 0]);
@@ -248,7 +253,7 @@ fn unavailable_entries_count_toward_the_listing_limit() {
         } else {
             let error = result.unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
-            assert!(error.message.contains("more than 100,000"));
+            assert!(error.message.contains("more than 1,000 files"));
         }
     }
 }

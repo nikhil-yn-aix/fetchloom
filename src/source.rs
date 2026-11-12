@@ -57,11 +57,16 @@ pub(crate) fn most_files() -> usize {
 /// the error for `subject`, a dataset that lists more than [`most_files`] files, with `instead`
 /// saying how to need fewer.
 pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
+    too_many_of(subject, most_files(), instead)
+}
+
+/// [`too_many`] for a listing that allows `most` files.
+pub(crate) fn too_many_of(subject: impl fmt::Display, most: usize, instead: &str) -> Error {
     Error::new(
         Kind::SourceInvalid,
         format!(
             "{subject} lists more than {} files, the most this run lists for one dataset",
-            crate::units::grouped(most_files() as u64)
+            crate::units::grouped(most as u64)
         ),
     )
     .help(format!(
