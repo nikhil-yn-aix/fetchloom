@@ -344,8 +344,8 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
 /// the links typed for one add, `links`, which add a dataset each, as the lines of a list do:
 /// `--as` and the patterns that choose files are each for one dataset, so they are refused.
 fn several(args: &Add, links: Vec<String>) -> Result<List, Error> {
-    let count = links.len();
-    let what = units::count(count as u64, "link", "links");
+    let count = units::grouped(links.len() as u64);
+    let what = units::count(links.len() as u64, "link", "links");
     if args.name.is_some() {
         return Err(Error::new(
             Kind::Usage,
@@ -1097,7 +1097,7 @@ fn tell_system(output: &Output, shown: &str, system: &[String]) {
             "Skipped",
             &format!(
                 "{first} and {} more the system makes in {shown}",
-                rest.len()
+                units::grouped(rest.len() as u64)
             ),
         ),
     }
@@ -2716,6 +2716,43 @@ mod tests {
         context.yes = true;
         assert!(start_here(&context, root, None).is_ok());
         assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
+    }
+
+    /// a count a person reads has its thousands apart: the files the system made that an import
+    /// skips, and the links one add with `--as` was given.
+    #[test]
+    fn counts_in_add_lines_have_their_thousands_apart() {
+        use clap::Parser as _;
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let output = Output::new(style, Level::Normal, false, false);
+        let system: Vec<String> = (0..1001).map(|n| format!("f{n}/.DS_Store")).collect();
+        tell_system(&output, "../photos", &system);
+        assert_eq!(
+            output.said(),
+            ["    Skipped f0/.DS_Store and 1,000 more the system makes in ../photos"]
+        );
+        let links: Vec<String> = (0..1200)
+            .map(|n| format!("https://a.example/{n}"))
+            .collect();
+        let line = ["fetchloom", "add", "--as", "x"].map(str::to_owned);
+        let parsed =
+            super::super::args::Args::try_parse_from(line.into_iter().chain(links.clone()));
+        let Some(super::super::args::Command::Add(add)) = parsed.unwrap().command else {
+            panic!("not an add");
+        };
+        let Err(refused) = several(&add, links) else {
+            panic!("--as with several links was taken");
+        };
+        assert_eq!(
+            refused.message,
+            "--as names one dataset, and 1,200 links add 1,200"
+        );
     }
 
     #[test]

@@ -1045,7 +1045,7 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
         .iter()
         .all(|(_, error)| error.message == first.message && error.help == first.help)
     {
-        let count = failed.len();
+        let count = units::grouped(failed.len() as u64);
         let (_, mut error) = failed.swap_remove(0);
         error.failures = failures;
         return Some(error.detail(format!("the same for all {count} files")));
@@ -1072,7 +1072,10 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
         .collect();
     let mut error = Error::new(
         first.kind,
-        format!("{} files could not be downloaded", failed.len()),
+        format!(
+            "{} could not be downloaded",
+            units::count(failed.len() as u64, "file", "files")
+        ),
     );
     error.details = alike(&told, shared_help.is_some());
     error.failures = failures;
@@ -1128,7 +1131,10 @@ pub(super) fn alike(failed: &[Told<'_>], shared: bool) -> Vec<String> {
         }
     }
     if failed.len() > NAMED {
-        lines.push(format!("and {} more", failed.len() - NAMED));
+        lines.push(format!(
+            "and {} more",
+            units::grouped((failed.len() - NAMED) as u64)
+        ));
     }
     lines
 }
@@ -1857,5 +1863,21 @@ mod tests {
                 "downloaded files stay in the cache. fix the errors above, then run the same command again"
             )
         );
+    }
+
+    /// a count of failed files has its thousands apart, as every count a person reads does.
+    #[test]
+    fn many_download_failures_are_counted_with_thousands_apart() {
+        let labels: Vec<String> = (0..1200).map(|n| format!("f{n}.csv")).collect();
+        let refused = |n| (n, Error::new(Kind::AuthRequired, "refused").help("sign in"));
+        let error = together(&labels, (0..1200).map(refused).collect()).unwrap();
+        assert_eq!(error.details, ["the same for all 1,200 files"]);
+        let missing = |n| {
+            let error = Error::new(Kind::ReferenceUnresolved, format!("f{n}.csv is missing"));
+            (n, error.help("check its link"))
+        };
+        let error = together(&labels, (0..1200).map(missing).collect()).unwrap();
+        assert_eq!(error.message, "1,200 files could not be downloaded");
+        assert_eq!(error.details.last().unwrap(), "and 1,190 more");
     }
 }

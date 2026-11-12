@@ -1043,7 +1043,7 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
         .flatten();
     let failed_links = format!(
         "{} of {} could not be fetched",
-        failed.len(),
+        units::grouped(failed.len() as u64),
         units::count(links.len() as u64, "link", "links")
     );
     // a stop says first that it stopped, as every stop does
@@ -1715,6 +1715,21 @@ mod tests {
         );
         let failed = some_failed(&links, &[(0, Error::new(Kind::SourceInvalid, "x"))]);
         assert_eq!(failed.message, "1 of 2 links could not be fetched");
+    }
+
+    /// the count of links that failed has its thousands apart, as every count a person reads.
+    #[test]
+    fn many_failed_links_are_counted_with_thousands_apart() {
+        let links: Vec<String> = (0..1200)
+            .map(|n| format!("https://a.example/{n}"))
+            .collect();
+        let failed: Vec<(usize, Error)> = (0..1200)
+            .map(|n| (n, Error::new(Kind::ReferenceUnresolved, "missing")))
+            .collect();
+        assert_eq!(
+            some_failed(&links, &failed).message,
+            "1,200 of 1,200 links could not be fetched"
+        );
     }
 
     fn approval_context() -> Context {
