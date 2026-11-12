@@ -1,76 +1,87 @@
 # fetchloom
 
-fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64. `data.toml` lists the datasets, `data.lock` pins their files by SHA-256 and size, and one cache folder keeps each file once for every project. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
+> fetchloom pins research datasets for a project: `data.toml` lists them, `data.lock` pins each file by SHA-256 and size, and one cache folder keeps each file once for every project. `fetchloom sync` puts the pinned files into `data/` by reflink, hardlink or copy. it runs on windows, linux and macos, on x86_64 and arm64.
 
-scripts and agents write `fetchloom`. `fl` is a short name the installers give a person, and on another machine it may be missing or another program.
+agents and scripts pass `--json`, which makes stdout one JSON document with no colors and no questions, and write `fetchloom`, never `fl`, a short name some installs give a person. `fetchloom help --json` lists every command and option.
 
-## using fetchloom
+## for agents
+
+- [agent skill](skills/fetchloom/SKILL.md): which command fits which task, what to ask the user first, and how to read a failure
+- [JSON output](docs/user/reference/json-output.md): the document `--json` prints, every command's result fields, dry runs and work counters
+- [exit codes](docs/user/reference/exit-codes.md): each error kind, its exit code and the next step
+- [add](docs/user/commands/add.md): `fetchloom add <ref>` puts a dataset in the project, downloads and pins it; `--as` names it, `--select`, `--exclude` and `--no-extract` choose its files, `-i` reads a list of links, `-n` previews, and a path such as `./flowers` pins files on this machine
+- [sync](docs/user/commands/sync.md): `fetchloom sync` places what data.lock pins and keeps local edits; `--force` replaces them, `--locked` fails rather than change data.lock, `--verify` hashes every placed file, `-n` previews, and names sync only those datasets
+- [path](docs/user/commands/path.md): `fetchloom path <name>` prints a dataset's or file's absolute path, syncing that dataset first when needed; `--locked` never changes data.lock
+- [status](docs/user/commands/status.md): `fetchloom status` lists missing, edited and extra files and exits 0 either way; `--verify` hashes every placed file
+- [lock](docs/user/commands/lock.md): `fetchloom lock` pins without placing; `--check` checks data.lock against data.toml, `--upgrade` pins newer versions, `-n` previews, and after a git merge `--ours` and `--theirs` choose a side
+- [offline](docs/user/concepts.md#offline): `--offline` or `FETCHLOOM_OFFLINE=1` uses only the cache, the data folder and folder mirrors
+- [CI](docs/user/ci.md): a cache kept between jobs, keyed on data.lock, `sync --locked --yes`, keys from CI secrets and exact-input checks
+- [AI agents](docs/user/ai-agents.md): where to put the skill, what agents rely on and why there is no MCP server
+
+## other commands
+
+- [commands](docs/user/commands/README.md): every command, the global options `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C` and `--mirror`, `fetchloom help` and its topics, and what goes to stdout and stderr
+- [get](docs/user/commands/get.md): `fetchloom get` downloads once without a project, into a folder `-d` names, or one checked file at the path `-o` names, replaced only with `--force`; `--sha256` checks a single file, `-i` reads a list of links, and `--select`, `--exclude` and `--no-extract` choose files
+- [search](docs/user/commands/search.md): `fetchloom search` finds datasets on hugging face, kaggle and zenodo; `--source` and `--limit` narrow or widen it
+- [build](docs/user/commands/build.md): `fetchloom build` runs the recipes' steps and pins and places what they made; `-n` shows the commands first, `--check` runs them again to compare with data.lock, `--accept` pins a rebuild that differs, `--locked` never writes data.lock, and `--prepare` fetches what a build reads
+- [list](docs/user/commands/list.md): each dataset's reference, size, folder and pinned files
+- [export](docs/user/commands/export.md): `fetchloom export` writes SHA-256 lines for `sha256sum -c`, or links with `--format links` or `--format aria2`; `-o` writes a file and keeps one already there unless `--force`
+- [push](docs/user/commands/push.md): `fetchloom push` copies the pinned files into the folder mirror `--to` names; `--inputs` adds what recipes are made from, and `-n` previews
+- [remove](docs/user/commands/remove.md): `fetchloom remove` takes a dataset out with the unchanged files it placed; `-n` previews
+- [drop](docs/user/commands/drop.md): `fetchloom drop` leaves files out of a dataset for good, as patterns in data.toml; `-n` previews
+- [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, and `-n` previews; `cache verify` hashes every cached file
+- [settings](docs/user/commands/settings.md): each setting's value and where it came from
+- [auth](docs/user/commands/auth.md): `auth login` signs in once, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; `auth logout` signs out, with `--host` too
+- [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish
+
+## guides
 
 - [front page](README.md): install and quick start
 - [user guide](docs/user/README.md): every user page and when to read it
-- [getting started](docs/user/getting-started.md): install from source until the first release, first project, restoring and undoing it
-- [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives, archives cut into parts, webdataset shards and offline preparation
-- [working with raw data](docs/user/raw-data.md): results outside the data folder, extras kept, put-back warnings and drop for bad samples, copy = true for edits, which no recipe's step reads, path and members for layout, place = false once a recipe reads the raw data, remove and gc to free space
-- [other tools](docs/user/other-tools.md): the fetchloom command for each download step from curl, wget, gdown, zenodo_get, osfclient, kaggle, hf, aws s3, dvc import-url, pooch and kagglehub; sha256sums and registry lists; which tools to keep; dvc, git-lfs and datalad beside fetchloom; leaving with export and aria2c
-- [recipes](docs/user/recipes.md): datasets a command makes from others, declared with from, run, code and env, keyed by content, built with `fetchloom build`, and reported as `build.needed` when they change; `place = false` keeps raw data pinned and cached for builds but out of the data folder
-- [commands](docs/user/commands/README.md): command table, the global options `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C` and `--mirror`, `fetchloom help` and its topics, and terminal output
-- [add](docs/user/commands/add.md): add and pin datasets, matching current references, several links at once or a list of links with `-i`, or files on this machine pinned by their bytes with `ref = "local"`; `--as` names the dataset, `--select`, `--exclude` and `--no-extract` choose its files, and `-n` previews; recovery copies stay out of logs
-- [sync](docs/user/commands/sync.md): restore pins, preserve local edits unless `--force`, stop rather than change data.lock with `--locked`, hash every placed file with `--verify`, sync named datasets alone and preview required repairs with `-n`
-- [build](docs/user/commands/build.md): runs each recipe's step on private copies of what it reads, pins what it wrote in data.lock and places it; `build --dry-run` says what the build would do with each step, shows each command that would run, and runs nothing; `build --check` runs every step again and compares with data.lock; a rebuild that differs from its pin is kept, and `build --accept` pins it; `--locked` never writes data.lock, and `--prepare` fetches what a build reads
-- [lock](docs/user/commands/lock.md): check pins with `--check` or upgrade them with `--upgrade`, without placement, preview with `-n`, and merge data.toml and data.lock offline after a git merge, with `--ours` and `--theirs` for datasets both sides changed, or one side removed while the other pinned anew
-- [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
-- [export](docs/user/commands/export.md): with `--format` sha256, links or aria2, SHA-256 lines for `sha256sum -c`, link lists and aria2c input files from the pins, complete or refused, leaving out with a warning recipes' results and files imported from a folder, which have no link, and from `sha256` datasets with `place = false`, with gaps and what is left out named in JSON; `-o` writes a file, and keeps one already there unless `--force`
-- [push](docs/user/commands/push.md): copy the pinned files and archives' file lists from the cache into the folder mirror `--to` names, previewed with `-n`, each checked before it takes its name and never replacing a file; `--inputs` adds what recipes are made from; asks before data whose source wanted an account or terms, or did not say; takes into the cache a file the data folder holds with its pinned bytes and downloads what neither holds, mirrors first, as sync would; never builds
-- [search](docs/user/commands/search.md): concurrent search of hugging face, kaggle and zenodo, narrowed with `--source` and `--limit`, and explicit selection
-- [status](docs/user/commands/status.md): local differences, `--verify` to hash every placed file, and success-with-differences behavior
-- [path](docs/user/commands/path.md): absolute paths, an implicit sync of that dataset alone, `--locked` and the `result.path` JSON answer
-- [remove](docs/user/commands/remove.md): remove entries and unchanged managed files, previewed with `-n`
-- [drop](docs/user/commands/drop.md): leave files out of a dataset for good, such as bad samples, as patterns in data.toml, offline; files inside an archive by its members table, files a source lists by exclude with data.lock rewritten, files of a place = false dataset by the paths they would have; `-n` previews
-- [get](docs/user/commands/get.md): one-off downloads into a folder, which `-d` chooses, or, with `-o`, one checked file at a path that is never replaced without `--force`; `--sha256` checks a single file, and `--select`, `--exclude` and `--no-extract` choose files; batch folders, cancellable link lists read with `-i` with an optional SHA-256 a line, and output-folder link rules
-- [cache](docs/user/commands/cache.md): where the cache's space goes and what gc frees; `cache gc`, exclusively locked, with `--now` for files under a day old and `-n` to preview, and `cache verify`; `gc --inputs` frees raw data only builds read once a folder mirror's copy hashes right and a person says yes; a project moved with its data folder fills a new cache from it; filesystem failures retain their causes
-- [settings](docs/user/commands/settings.md): each setting's value and origin: variable, settings file, machine or default, and `--mirror` for mirrors
-- [auth](docs/user/commands/auth.md): `auth login` and `auth logout`, with `--host` for a dataverse site and `--with-token` for a key from stdin: signing in once, with keys shared with each source's own tools
-- [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish
-- [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each family
-- [URLs and DOIs](docs/user/sources/urls-and-dois.md): direct links, DOI handles routed to known sources, and raw github and gitlab file links
-- [zenodo](docs/user/sources/zenodo.md): concrete record pins, checked source identity and re-resolution limits
-- [figshare](docs/user/sources/figshare.md): article links, explicit versions, numeric titles, portal-page refusal and download restrictions
-- [dataverse](docs/user/sources/dataverse.md): published dataset and file pins, explicit link versions and installation-scoped access
-- [OSF](docs/user/sources/osf.md): osfstorage folders, file GUIDs and versioned download links
-- [hugging face](docs/user/sources/hugging-face.md): repository revisions resolved to full commits, folder listings and gated access
-- [kaggle](docs/user/sources/kaggle.md): dataset versions, kaggle DOIs and competition data with kaggle credentials
-- [google drive](docs/user/sources/google-drive.md): shared files and folders, resource keys and download confirmation pages
-- [dropbox](docs/user/sources/dropbox.md): shared file links and folder zips
-- [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, listing, version pins, and private S3 buckets read with AWS keys once `s3_buckets` lists them
-- [data.toml](docs/user/reference/data-toml.md): manifest keys, members tables for files inside archives, one under a glob key for many shards, path rules, `path = "."` for files straight in `data/`, `place = false` for data only recipes read, shared folders and clashes, secret-URL rejection and credential-safe diagnostic citations
-- [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, split archives' parts, source records, hash encodings and the links it refuses
-- [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
-- [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
-- [environment](docs/user/reference/environment.md): runtime settings, proxies, credentials and color behavior
-- [compatibility](docs/user/reference/compatibility.md): configured platform targets, the program each system uses for a `.rar` fetchloom leaves packed, terminals and build requirements
-- [cache folder](docs/user/reference/cache-folder.md): shared cache layout, durable records, URL fingerprints and unreadable change-mark errors
-- [project folder](docs/user/reference/project-folder.md): finding the project inside its git repository, owner records, placement state and metadata publication
-- [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
-- [mirrors](docs/user/mirrors.md): folders and web servers that hold pinned files by SHA-256, asked before sources and checked before use; folders are read offline
-- [CI](docs/user/ci.md): a cache kept between jobs and keyed on data.lock, recipes for github actions and gitlab, keys from CI secrets and exact-input checks
-- [clusters](docs/user/hpc.md): home and scratch disks, many jobs, inode quotas and webdataset shards, offline compute nodes and `build --prepare` on a login node, shared-disk locks, one cache for a lab and backups that keep hardlinks
-- [notebooks and containers](docs/user/notebooks.md): where the cache lasts on hosted notebooks, dev containers and codespaces, read-only roots, a kubernetes job and small disks
-- [AI agents](docs/user/ai-agents.md): the agent skill, JSON contract and why there is no MCP server
-- [agent skill](skills/fetchloom/SKILL.md): which command fits which task, safe flags and reading failures
-- [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders, long paths, and how a recipe's step finds its program and ends with all it started
-- [macos](docs/user/macos.md): cache location, apfs clones, icloud drive and cloud storage folders, unicode names
-- [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
-- [limits](docs/user/limits.md): excluded workflows and reproducibility boundaries
+- [getting started](docs/user/getting-started.md): install from source until the first release, a first project, restoring it and undoing it
+- [concepts](docs/user/concepts.md): data.toml, data.lock, the cache, placement, archives, offline work, approval and interruptions
+- [working with raw data](docs/user/raw-data.md): results outside the data folder, bad samples, edits with copy = true and freeing space
+- [other tools](docs/user/other-tools.md): the fetchloom command for each download step from curl, gdown, kaggle, hf, aws s3, dvc or pooch, and working beside dvc, git-lfs and datalad
+- [recipes](docs/user/recipes.md): datasets a command of yours makes from others, declared with from, run, code and env, and built with `fetchloom build`
+- [scripting](docs/user/scripting.md): JSON checks for scripts and the python helper
+- [mirrors](docs/user/mirrors.md): folders and web servers that hold pinned files by SHA-256, asked before sources
+- [clusters](docs/user/hpc.md): home and scratch disks, many jobs, offline compute nodes and one cache for a lab
+- [notebooks and containers](docs/user/notebooks.md): where the cache lasts in hosted notebooks, dev containers and kubernetes jobs
+- [windows](docs/user/windows.md): drives, synced folders, long paths and recipe steps
+- [macos](docs/user/macos.md): the cache, apfs clones, icloud drive and unicode names
+- [troubleshooting](docs/user/troubleshooting.md): error text, causes and fixes
+- [limits](docs/user/limits.md): what fetchloom does not do, and its size limits
+
+## sources
+
+- [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each site
+- [URLs and DOIs](docs/user/sources/urls-and-dois.md): direct links and DOIs routed to known sources
+- [zenodo](docs/user/sources/zenodo.md): records and record files
+- [figshare](docs/user/sources/figshare.md): article versions
+- [dataverse](docs/user/sources/dataverse.md): published dataset and file versions
+- [OSF](docs/user/sources/osf.md): osfstorage files and folders
+- [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
+- [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions
+- [google drive](docs/user/sources/google-drive.md): shared files and folders
+- [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
+- [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, and private S3 buckets read with AWS keys once `s3_buckets` lists them
+
+## reference
+
+- [data.toml](docs/user/reference/data-toml.md): every key, patterns, members tables for files inside archives and dataset names
+- [data.lock](docs/user/reference/data-lock.md): every field, spec and tree hashes, recipe results and split archives
+- [environment](docs/user/reference/environment.md): every variable, the settings file, proxies and credentials
+- [compatibility](docs/user/reference/compatibility.md): systems, terminals, source APIs and the programs that unpack a `.rar`
+- [cache folder](docs/user/reference/cache-folder.md): where the cache is and what it holds
+- [project folder](docs/user/reference/project-folder.md): finding the project, and the files fetchloom keeps in `.fetchloom/`
 
 ## working on the code
 
 - [contributing](CONTRIBUTING.md): contributor entry point
 - [developer guide](docs/dev/README.md): setup, tests, debugging and the component map
 - [architecture](docs/dev/architecture/README.md): code organization and data flow
-- [performance](docs/dev/performance/README.md): performance work and its conditions
-- [native checks](docs/dev/performance/native-checks.md): byte verification, native filesystems, credentials and resource measurements
 - [engineering](docs/dev/engineering/README.md): builds, tests and releases
-- [running benchmarks](docs/dev/engineering/benchmarks.md): linux setup, smoke runs and full comparisons
+- [performance](docs/dev/performance/README.md): performance work and its conditions
 - [style](docs/dev/style.md): prose, code and commit conventions
 - [decisions](docs/dev/decisions.md): design choices
 - [roadmap](docs/dev/roadmap.md): future work
