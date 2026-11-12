@@ -33,6 +33,10 @@ pub(crate) enum Level {
 }
 
 /// the one writer to the terminal, so lines, bars and questions never trample each other.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a separate yes or no the run was given"
+)]
 pub(crate) struct Output {
     style: Style,
     level: Level,
@@ -46,6 +50,8 @@ pub(crate) struct Output {
     failed: Mutex<Option<Error>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
     hints: bool,
+    /// whether plain progress lines still go to stderr beside `--json`, as `--progress` asks.
+    progress: bool,
     /// whether the run was asked to leave data.lock as it is, as `--locked` asks, so no fix may
     /// change it.
     locked: AtomicBool,
@@ -161,6 +167,7 @@ impl Output {
             warnings: Mutex::new(Vec::new()),
             failed: Mutex::new(None),
             hints: true,
+            progress: false,
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
             report_color: Style::stdout_colored(),
@@ -278,6 +285,13 @@ impl Output {
 
     pub(crate) fn without_hints(mut self, off: bool) -> Self {
         self.hints = !off;
+        self
+    }
+
+    /// keeps the plain progress lines on stderr under `--json`, as `--progress` asks, so a
+    /// script that reads the one document still shows a person how a long run goes.
+    pub(crate) fn with_progress(mut self, on: bool) -> Self {
+        self.progress = on;
         self
     }
 
@@ -477,15 +491,17 @@ impl Output {
         }
     }
 
-    /// plain lines about a batch of work where no bar shows it, such as `Downloading 3 files`.
-    /// `sizes` holds each file's size, or none for one whose download tells it.
+    /// plain lines about a batch of work where no bar shows it, such as `Downloading 3 files`,
+    /// also beside `--json` when `--progress` asks. `sizes` holds each file's size, or none for
+    /// one whose download tells it.
     pub(crate) fn ticker(
         &self,
         verb: &'static str,
         what: String,
         sizes: impl IntoIterator<Item = Option<u64>>,
     ) -> Ticker {
-        if self.bars.is_some() || !self.tells(Level::Normal) {
+        let told = self.level >= Level::Normal && (!self.json || self.progress);
+        if self.bars.is_some() || !told {
             return Ticker::quiet();
         }
         // tests turn off these lines, since how fast a machine runs decides when they come.

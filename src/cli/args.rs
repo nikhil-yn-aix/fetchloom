@@ -446,6 +446,10 @@ pub(crate) struct Global {
     #[arg(long, global = true, help_heading = "options")]
     pub(crate) json: bool,
 
+    /// with --json, keep plain progress lines on stderr
+    #[arg(long, global = true, help_heading = "options")]
+    pub(crate) progress: bool,
+
     /// use only what is already on this machine
     #[arg(long, global = true, help_heading = "options")]
     pub(crate) offline: bool,

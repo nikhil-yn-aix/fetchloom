@@ -44,6 +44,7 @@ options:
   -q, --quiet         print only the answer, warnings and errors
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
       --json          print one JSON document on stdout, not the usual output
+      --progress      with --json, keep plain progress lines on stderr
       --offline       use only what is already on this machine
   -y, --yes           answer yes to questions, but never pick a dataset for you
       --color <when>  when to use color: auto, the default, always or never

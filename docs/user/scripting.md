@@ -24,6 +24,19 @@ stop when the lock check fails. after sync, inspect kept conflicts before using 
 
 JSON appears on stdout on success and failure, including usage errors and help: `fetchloom help --json` describes every command and option. explicit debug logging can still write stderr. a killed process may leave no valid JSON; treat missing or invalid JSON as failure.
 
+a long job that a person watches can still show how it goes: `--progress` keeps the plain lines a download or a wait prints on stderr where no bar shows, after 2 s and then every 10 s, while stdout holds the one document. `-q` hides them. the lines are for a person to read, so read stdout and stderr apart and never parse the lines.
+
+```sh
+fetchloom --json --progress get https://example.org/big.bin
+```
+
+while the download runs, stderr shows:
+
+```text
+Downloading big.bin · 1.9 MiB
+Downloading 1.4 MiB of 1.9 MiB · 10 s
+```
+
 bare `fetchloom` in a project reports command `status`. [JSON output](reference/json-output.md) defines every result and counter. zero `bytes_down` does not prove there were no requests. `placed_from_cache` counts the files a run placed from bytes the cache already held, and `downloads_skipped` only the downloads the cache made unnecessary.
 
 ## checking and syncing

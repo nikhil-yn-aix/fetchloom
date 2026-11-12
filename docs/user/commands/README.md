@@ -31,7 +31,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
+every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
 
 | option | effect |
 |---|---|
@@ -39,6 +39,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <
 | `-v`, `--verbose` | add details, error kinds and work counters |
 | `-vv` | also enable debug logs, which name local paths, dataset references and the queries sent to sources; read them before you share them, as [what leaves your machine](../concepts.md#what-leaves-your-machine) says |
 | `--json` | print one result document on stdout, including failures; never prompt |
+| `--progress` | with `--json`, keep the plain progress lines a long run prints on stderr where no bar shows: what it does after 2 s, then how far it got every 10 s. stdout still holds the one document; `-q` hides the lines |
 | `--offline` | prevent HTTP and DNS requests by fetchloom |
 | `-y`, `--yes` | answer yes to questions, but never pick a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |
@@ -72,7 +73,7 @@ a command, option, dataset name, path in a dataset or help topic that fetchloom 
 
 stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
 
-a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested. quiet mode keeps stdout answers, warnings and errors. JSON mode returns one document and never prompts; explicit debug logging can still write stderr.
+a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested. quiet mode keeps stdout answers, warnings and errors. JSON mode returns one document and never prompts; `--progress` keeps plain progress lines on stderr beside it, and explicit debug logging can still write stderr.
 
 [terminal output](../../dev/architecture/output.md) defines the palette and terminal fallbacks. [search selection](search.md#choosing-a-dataset) explains the picker and noninteractive refusal to guess.
 

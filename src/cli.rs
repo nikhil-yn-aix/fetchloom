@@ -482,7 +482,8 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let output = Output::new(style, level, global.json, logs.on_stderr())
-        .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"));
+        .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"))
+        .with_progress(global.progress);
     let mut context = Context::new(output);
     if let Some(refused) = &logs.refused {
         context.output.warn(refused);
