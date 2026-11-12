@@ -134,7 +134,10 @@ mod tests {
     const CHILD: &str = "FETCHLOOM_TEST_PIPE_CHILD";
     const BYTES: usize = 4 * 1024 * 1024;
 
+    /// the child `stderr_readiness_does_not_wait_for_stdout_collection` starts: it fills more
+    /// stdout than a pipe holds, then says on stderr that it is ready. alone it tests nothing.
     #[test]
+    #[ignore = "a child process its parent test starts"]
     fn stdout_pipe_child() -> Result {
         if std::env::var_os(CHILD).is_none() {
             return Ok(());
@@ -156,6 +159,7 @@ mod tests {
             .args([
                 "--exact",
                 "support::running::tests::stdout_pipe_child",
+                "--ignored",
                 "--nocapture",
             ])
             .env(CHILD, "1");
