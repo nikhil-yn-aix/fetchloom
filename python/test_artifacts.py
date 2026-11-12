@@ -10,13 +10,14 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import urllib.request
 import zipfile
 
 from check_archive import check_machine, unpack
 from check_artifacts import TARGETS, archive_name, inventory, stages
 import check_wheel
 from check_wheel import inspect_wheel
-from ci_journey import check_version
+from ci_journey import Server, check_version
 
 VERSION = '0.1.0'
 COMMIT = 'a' * 40
@@ -137,6 +138,14 @@ class VersionTests(unittest.TestCase):
         with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.0\n') as run:
             check_version(command, VERSION)
         self.assertEqual(run.call_args.args[0], [str(Path('venv/python')), '-I', '-m', 'fetchloom', '--version'])
+
+
+class LoopbackServerTests(unittest.TestCase):
+    def test_serving_needs_no_name_lookup(self):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with patch('socket.getfqdn', side_effect=AssertionError('the server looked up a name')), \
+             Server({'/file': b'body'}) as server, opener.open(server.url('/file'), timeout=10) as response:
+            self.assertEqual(response.read(), b'body')
 
 
 class WheelEnvironmentTests(unittest.TestCase):

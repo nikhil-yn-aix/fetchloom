@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socketserver
 import stat
 import subprocess
 import sys
@@ -103,10 +104,12 @@ class Server:
                     self.wfile.write(content)
                 self.close_connection = True
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        # not http.server's server: it looks up the name of 127.0.0.1 as it binds, which takes 35 s
+        # in every new process on the mac runners
+        self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def __enter__(self):
         self.thread.start()
