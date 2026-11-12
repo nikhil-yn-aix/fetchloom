@@ -29,19 +29,19 @@ fetchloom add [options] -i <file>
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
-[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote several words, as in `fetchloom add "fashion mnist"`. the manifest stores the chosen canonical id, not the search words.
+[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle and zenodo; quote several words, as in `fetchloom add "fashion mnist"`. data.toml records the id you chose, not the search words.
 
 ## what happens
 
-1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end, a folder below your home folder as `~/…`. an add that waited while another add started the project there adds to that project, without the line. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
-2. resolve the reference, filter its listed files and choose a dataset name. a `Resolved` line on stderr names what the reference resolved to and counts the files kept, as `1 of 4 files` with their size, when a pasted file link, `--select` or `--exclude` keeps fewer files than the source lists. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
-3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
-4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache. the entry goes before the dataset whose name follows its own, as `data.lock` keeps them in name order, so two people adding different datasets rarely change the same lines.
+1. find the nearest project. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
+2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../concepts.md#webdataset-shards) get a hint before anything downloads.
+3. download every file the project lacks into the cache, with the project still as it was.
+4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
-run in a folder below a project's folder, `add` works on that project. a person at a terminal sees `using the project in <folder>` once, and the folder the dataset's files are in is given from where you stand, such as `../data/iris`. the search stops at a git repository, so inside a repository with no `data.toml` of its own, `add` starts a project in the current folder even when a folder above the repository holds one; [finding the project](../reference/project-folder.md#finding-the-project) says why.
+run in a folder below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search stops at a git repository, so inside a repository with no `data.toml` of its own, `add` starts a project there; [finding the project](../reference/project-folder.md#finding-the-project) says why.
 
-there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
+there is no `init` command: `add` starts a project, and `fetchloom init` is a usage error, exit 2, whose help says so.
 
 stderr for a single-file addition in a new project, matching a test snapshot. `[time]` replaces the measured duration and `[sandbox]` the test's folder:
 
@@ -52,9 +52,9 @@ stderr for a single-file addition in a new project, matching a test snapshot. `[
   hint: scripts can find it with `fetchloom path iris`
 ```
 
-commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rules](../reference/data-toml.md). a zenodo file-page link selects that file unless you supply `--select`.
+commit `data.toml` and `data.lock`, not `data/`. a zenodo file-page link selects that file unless you supply `--select`.
 
-a link you type may be on this machine or your network, such as a lab server: `add` reaches its origin, the scheme, host and port, for that run alone. a later run that downloads from it, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists that origin, so the add warns of it, with `-q` too, quoting the line to write. a clone's machine has settings of its own, so the closing line at a terminal says that anyone who clones lists the origin before `fetchloom sync`, even when your settings list it already and no warning comes. the last lines of a real run in a git repository, on stderr, where the settings file, as every path below your home folder, reads as `~/…`:
+a link you type may be on this machine or your network, such as a lab server. `add` trusts its origin, the scheme, host and port, for that run alone; a later run that downloads from it, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists it. so the add warns, with `-q` too, and quotes the line to write. a clone's machine has its own settings, so the closing line says that anyone who clones lists the origin too, even when your settings list it already. the last lines of a real run in a git repository, on stderr:
 
 ```text
       Added cows, its files are in data/cows
@@ -64,7 +64,7 @@ warning: a later run downloads from http://127.0.0.1:19450, a private address, o
   next: commit data.toml, data.lock and .gitignore; anyone who clones adds `allowed_origins = ["http://127.0.0.1:19450"]` to their settings file, then runs `fetchloom sync`
 ```
 
-a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet, so the help runs the add again, from a real run in an empty folder:
+a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet. from a real run in an empty folder:
 
 ```text
 error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
@@ -73,15 +73,15 @@ error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
 
 a link data.toml has already keeps the help that names its `ref` there, whether you add it again or another add syncs it.
 
-adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. a resolved reference from an old lock identifies that entry only while its manifest reference is unchanged; editing `ref` does not make the old source count as already added. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
+adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry. with other settings it fails unless you give an unused `--as` name; edit `data.toml` to change an existing entry.
 
-if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads stay, so running the add again reuses them, while the files it placed for the new dataset are removed with it.
+if the add fails, it puts `data.toml` and `data.lock` back as they were, or removes them if it made them, and removes the files it placed. what it downloaded stays cached, so running the add again reuses it. before it changes either file it saves a copy under `.fetchloom/`, readable only by you on unix; if putting a file back fails, the error names that copy, which stays, without printing it, since it may hold credentials.
 
 ## files on this machine
 
-a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: a folder's every plain file, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`, since no source holds them. a plain word that names a folder here, such as `iris` beside an `iris` folder, is not imported: it exits 2 and says to write `./iris`.
+a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: every plain file in a folder, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`. a plain word that names a folder here, such as `iris` beside an `iris` folder, is not imported: it exits 2 and says to write `./iris`.
 
-the files are copied into the cache and hashed as they are copied, several at once as placing works, which [`FETCHLOOM_THREADS`](../reference/environment.md) can cap. a bar counts the bytes copied; once every file is copied, a `Finishing` line, such as `Finishing 20,000 files`, stays until the cache holds them all, since writing many small files out to the disk can take seconds more. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. the files themselves are only read: never changed, moved or linked, since a link to the cache's copy would make your file read-only. an import bigger than the free space on the cache's disk asks first, as a big download does, and `--yes` goes on, as on a disk that clones the files. the cache is yours alone unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab), where everyone who reads it can read what you import. stderr from a project whose data.toml already existed:
+the files are copied into the cache and hashed as they are copied, several at once, as many as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
 
 ```text
    Imported flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
@@ -89,17 +89,17 @@ the files are copied into the cache and hashed as they are copied, several at on
   hint: scripts can find it with `fetchloom path flowers`
 ```
 
-pinning the files in data.lock and placing them in the data folder come after `Imported`. for a folder of many files each takes a moment, so a terminal shows `Pinning flowers`, then `Placing 20,000 files`, each with the time it has taken once it lasts a second, and a log or a pipe gets those lines after 2 seconds and again every 10 seconds, as other long work does. an add of a link shows `Pinning` only once every file is downloaded, since downloads tell their own lines.
+a folder of many files takes a moment to pin and place after `Imported`, so a terminal shows `Pinning flowers` and then `Placing 20,000 files`, each with its time once it lasts a second.
 
-below the folder, `.git`, `.hg`, `.svn` and `.fetchloom` are left out unseen. what a system writes into folders by itself is no data, so it is left out too, and one `Skipped` line names it: finder's `.DS_Store`, the `._` files a mac leaves beside each file on a disk not its own, `__MACOSX`, the `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems` and `.Trash-<uid>` folders of removable disks, and windows' `Thumbs.db`, `ehthumbs.db`, `desktop.ini`, `$RECYCLE.BIN` and `System Volume Information`. a folder supplied after finder wrote more of them still matches its pins. links and special files, such as named pipes, are left out with a warning and never followed. names are checked as an archive's members are, before anything is copied: a name with a control character or a `\`, one longer than 4096 bytes, one this machine cannot store, or two names that are one on disks that ignore case or unicode composition, stop the import with `source.invalid`, exit 10. `--select` and `--exclude` match the paths below the folder, and a select pattern that keeps nothing is a usage error. a folder holding more files than `most_files`, 100,000 unless raised, is refused before it is all read; past 50,000 files data.lock keeps the list in [data.lock.d](../reference/data-lock.md#big-datasets). archives in the folder unpack as a downloaded dataset's do.
+below the folder, `.git`, `.hg`, `.svn` and `.fetchloom` are left out unseen. files a system writes by itself are left out too, and one `Skipped` line names them: finder's `.DS_Store`, `._` files and `__MACOSX`, the `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems` and `.Trash-<uid>` folders of removable disks, and windows' `Thumbs.db`, `ehthumbs.db`, `desktop.ini`, `$RECYCLE.BIN` and `System Volume Information`. links and special files, such as named pipes, are left out with a warning and never followed. names are checked as an archive's members are, before anything is copied: a name with a control character or a `\`, one longer than 4096 bytes, one this machine cannot store, or two names that are one on disks that ignore case or unicode composition, stop the import with `source.invalid`, exit 10. `--select` and `--exclude` match the paths below the folder, and a select pattern that keeps nothing is a usage error. a folder holding more files than [`most_files`](../reference/environment.md) is refused before it is all read. archives in the folder unpack as a downloaded dataset's do.
 
-a folder that holds the project, sits in its data folder, where fetchloom places what data.lock pins, or holds or sits in the cache, is refused with `usage`, exit 2. the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
+a folder that holds the project, sits in its data folder, or holds or sits in the cache, is refused with `usage`, exit 2. the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
 
-no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, though once a cached archive is unpacked its own bytes leave the cache, as a downloaded archive's do, so a switch to `extract = false` then needs them supplied again.
+no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, but once a cached archive is unpacked its own bytes leave the cache, so a switch to `extract = false` then needs them supplied again.
 
 ### a clone without the files
 
-a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, naming the files it lacks, up to ten. with `--json`, `fix` is null, since sync fails again until the files are there:
+a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, naming up to ten of the files it lacks. with `--json`, `fix` is null, since sync fails again until the files are there:
 
 ```text
 error: flowers was imported from files, and this machine's cache does not hold them
@@ -108,16 +108,16 @@ error: flowers was imported from files, and this machine's cache does not hold t
   help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
 
-a [mirror](../mirrors.md) that holds them gives them instead, as `fetchloom push` fills one. a file no mirror holds is named with what each mirror said, as in [what goes wrong](../mirrors.md#what-goes-wrong).
+a [mirror](../mirrors.md) that `fetchloom push` filled gives them instead. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
 
-files copied to `data/flowers` by hand are adopted when they hold the pinned bytes, and a build or a push takes them into the cache from there. `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset: the paths and sizes are compared with data.lock first, then the bytes as they are copied, and other files stop it with `local.io`, exit 50, naming the first difference, with data.toml and data.lock as they were. matching files change neither file:
+`add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset. the paths and sizes are compared with data.lock first, then the bytes as they are copied; other files stop it with `local.io`, exit 50, naming the first difference, and leave data.toml and data.lock as they were. matching files change neither:
 
 ```text
    Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
          Ok flowers is in data.toml and data.lock as it was, its files are in data/flowers
 ```
 
-a supply takes the patterns and `extract` data.toml gives, so `--select`, `--exclude` and `--no-extract` are refused with it. when data.lock holds no pin of the import, as after a lost data.lock, supplying pins the files again.
+a supply takes the patterns and `extract` data.toml gives, so `--select`, `--exclude` and `--no-extract` are refused with it. when data.lock holds no pin of the import, as after a lost data.lock, a supply pins the files again.
 
 ## a list of links
 
@@ -129,11 +129,13 @@ https://example.org/iris.csv sha256:d144ff83495e88cf892b8415db97343ff575bf11e47b
 zenodo:3608990
 ```
 
-the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, and a link carrying a secret data.toml and data.lock would keep, stop the add naming the line, the secret masked. the links resolve together, then each dataset gets a name as a single add would, the next number when one is taken, and every file downloads together. a line with a SHA-256 must keep one file, and the bytes must have that hash, or the add stops with `integrity.mismatch`, exit 30, naming the line. a link data.toml has already stays as it is. a link that fails later, while its file downloads, is named by its line too, in the error and in each of the JSON `failures`, and a link with nothing at it gets help to fix that line, since data.toml has no entry for it yet, as in `line 3 of links.txt: 127.0.0.1 has nothing at http://127.0.0.1:43121/files/missing.csv (404)`. files that fail alike are told once, the others listed under the first with their help once, which for links with nothing at them says to fix each on its line of the list. data.toml and data.lock are each written once, and any failure leaves both as they were and takes back the files it placed. the add ends with one `Added` line for each dataset, as a single add does; `-v` adds the `Pinned` and `Placed` lines that say what each one pinned and where its files went. hosts a list names are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md), and the closing line names its origin for anyone who clones, as it does for a typed link. `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
+the whole list is checked before any request. a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, or a link carrying a secret data.toml would keep, stops the add, naming the line with the secret masked. then the links resolve and download together, and each dataset gets a name as a single add would. a line with a SHA-256 must keep one file with that hash, or the add stops with `integrity.mismatch`, exit 30. a link data.toml has already stays as it is.
+
+a link that fails while its file downloads is named by its line too, in the error and in each of the JSON `failures`, as in `line 3 of links.txt: 127.0.0.1 has nothing at http://127.0.0.1:43121/files/missing.csv (404)`. data.toml and data.lock are each written once, and any failure leaves both as they were. the add ends with one `Added` line for each dataset; `-v` adds what each one pinned and where its files went. hosts in a list are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md#settings-file) first. `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
 
 ### several links at once
 
-several links on the command line add a dataset each, as the lines of a list do: they are checked before any request, resolve and download together, and data.toml and data.lock are each written once, or not at all when one fails. each link you type is trusted as a single typed link is, so a lab server on a private address gets the warning above. messages name a link by itself rather than by a line, and the help for one with nothing at it says to run the add again with the new link in its place. search words go alone, in quotes, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2, as with `-i`:
+several links on the command line add a dataset each, as the lines of a list do, but each is trusted as a typed link is, so a lab server on a private address gets the warning above. search words go alone, in quotes, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2:
 
 ```text
 error: --as names one dataset, and 2 links add 2
@@ -142,17 +144,17 @@ error: --as names one dataset, and 2 links add 2
 
 ## stopping an add
 
-ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were. `add` writes them only once every file is in the cache, so an add stopped while it downloads, or ended at once by a second ctrl-c, has changed neither; one stopped while it places files puts both back, as a failed addition does. the add then ends with `Stopped, and nothing was added`, and a line under it says how much the unfinished downloads keep. what arrived stays in the cache, so running the same add again continues where it stopped. exit code 130 means interrupted. a ctrl-c once every byte is in, while the disk keeps the files, lets the add finish rather than download them again next time, and says `Finishing (the download is complete; ctrl-c again to quit at once)`. once every file is placed the add is done: a ctrl-c while it prints its last lines says `Finishing what it started (ctrl-c again to quit at once)`, and the add ends with its `Added` line, exit 0.
+ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were: `add` writes them only once every file is in the cache, and one stopped while it places files puts both back. the add ends with `Stopped, and nothing was added`, exit 130. what arrived stays in the cache, so running the same add again continues where it stopped. a ctrl-c after the last byte arrived lets the add finish, as [interruptions](../concepts.md#interruptions) explains.
 
 ## editing during an add
 
-an add reads `data.toml` and `data.lock` when it starts and writes them only after its downloads, which can take hours. if either file changed in the meantime, as when you edit `data.toml` or switch git branches, the add writes neither, so your change stays. it stops with `project.changed`, exit 50. it checks again right before its first write, and again before it writes `data.lock` after `data.toml`: a `data.lock` changed in between stays as you changed it, and the add puts `data.toml` back and stops the same way. what it downloaded stays in the cache, and running the same add again uses it, adding the dataset to the files as they are now. a file changed after the add wrote it, while it placed files, is left as you changed it if the add then fails or is stopped; the error names the recovery copy that holds the file as it was before the add.
+an add reads `data.toml` and `data.lock` when it starts and writes them only after its downloads, which can take hours. if either file changed in the meantime, as when you edit `data.toml` or switch git branches, the add writes neither, keeps your change and stops with `project.changed`, exit 50. it checks again before each write, and a `data.lock` changed between them stays as you changed it while the add puts `data.toml` back. what it downloaded stays in the cache, so running the same add again adds the dataset to the files as they are now.
 
-a first add that ends without adding anything, because it failed, was stopped or was cancelled, leaves its folder as it was: it removes the `.fetchloom` folder it made, and the data folder it made when that holds no file. search words are answered before the project is touched, so q or ctrl-c at the list of results changes nothing. a first add ended at once by a second ctrl-c before it wrote anything removes `.fetchloom` too; one killed, or quit while it writes, can leave `.fetchloom` behind, and the next command in that folder takes it over.
+a first add that ends without adding anything, because it failed, was stopped or was cancelled, leaves its folder as it was: it removes the `.fetchloom` folder it made, and the data folder it made when that holds no file. search words are answered before the project is touched, so q or ctrl-c at the list of results changes nothing. a first add that was killed can leave `.fetchloom` behind, and the next command in that folder takes it over.
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. explicit `FETCHLOOM_TRACE` output is still created or truncated. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr from a git repository with no manifest yet, matching a test snapshot, where `[port]` stands for the test server's port:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition. stderr from a git repository with no manifest yet, matching a test snapshot, where `[port]` stands for the test server's port:
 
 ```text
       Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
@@ -165,7 +167,7 @@ a first add that ends without adding anything, because it failed, was stopped or
 
 `add <path> --dry-run` reads no file's bytes: it names the files it would import, their count and size, and the dataset it would add, and lists their places in `changes.place`. it cannot tell yet whether the same files are in data.toml already.
 
-the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place; when a file already stands where it goes, it is listed under `Would check` instead, with no warning, since only the download tells whether it holds the pinned bytes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. a plain link is asked nothing, so what only the real add finds shows then: a web page served in place of the file, a private address `allowed_origins` does not name, a redirect, and an archive's files, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, or as one to check, under `Would check`, when a file already stands where it goes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link; pass `--as` to fix the name. a plain link is asked nothing, so what only the real add finds shows then, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 
@@ -173,7 +175,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 
 ## exit codes
 
-0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means a question went unanswered or was answered no: approval of a large download, or of a project in the home folder or at a disk's root. 2 means invalid usage. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
+0 means the add succeeded, also when sync kept local conflicts, which JSON lists in `result.placement.kept`. 1 means a question went unanswered or was answered no: a large download, or a project in the home folder or at a disk's root. 2 means invalid usage. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. the others are the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
