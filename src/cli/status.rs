@@ -2,6 +2,7 @@
 //! downloads nothing and hashes only files whose size and time cannot vouch for them, so it
 //! answers at once even for large projects. asked to verify, it hashes every placed file.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -507,9 +508,10 @@ fn check(
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned)?;
+    let unplaced: HashSet<&str> = status.unplaced.iter().map(String::as_str).collect();
     for path in &status.unneeded {
         if let Some(placed) = survey.state.files.get(path)
-            && status.unplaced.contains(&placed.dataset)
+            && unplaced.contains(placed.dataset.as_str())
         {
             let folder = || plan::folder(&manifest, &placed.dataset);
             let (_, paths) = status
@@ -725,7 +727,11 @@ fn compare(
     planned: &plan::Plan<'_>,
 ) -> Result<(), Error> {
     let targets = &planned.targets;
-    let mut going = None;
+    let going = OnceCell::new();
+    let going_now =
+        || going.get_or_init(|| place::going(survey, targets, &planned.unknown, &project.root));
+    let freeing = OnceCell::new();
+    let mut listed = HashSet::new();
     for target in targets {
         let seen = survey.disk.get(&target.path);
         let file = project.root.join(&target.path);
@@ -733,18 +739,11 @@ fn compare(
             (None, _) => match survey.blocker(&target.path) {
                 // what sync removes before it places anything stands in no file's way
                 Some(blocker)
-                    if !survey.frees(
-                        &blocker,
-                        going.get_or_insert_with(|| {
-                            place::going(survey, targets, &planned.unknown, &project.root)
-                        }),
-                    ) =>
+                    if !freeing
+                        .get_or_init(|| survey.freeing(going_now()))
+                        .frees(&blocker) =>
                 {
-                    if !status
-                        .blocked
-                        .iter()
-                        .any(|known| known.path == blocker.path)
-                    {
+                    if listed.insert(blocker.path.clone()) {
                         status.blocked.push(blocker);
                     }
                     continue;
@@ -804,8 +803,7 @@ fn compare(
     let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     // a file in the way is listed as blocking, not also as extra
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
-    let going =
-        going.get_or_insert_with(|| place::going(survey, targets, &planned.unknown, &project.root));
+    let going = going_now();
     // what fetchloom placed of a dataset whose archive's list this machine lacks may be that
     // archive's files, which only the list tells, so it is neither extra nor going
     let unsure: HashSet<&str> = planned

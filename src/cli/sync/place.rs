@@ -18,7 +18,7 @@ use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::{emptied, holding, tell_preview};
 use super::Scope;
-use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
+use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
@@ -215,6 +215,28 @@ struct SetAside {
     /// the files placed in its stead, by path and the bytes data.lock pins there: the one at its
     /// path, or those under it for a file where a folder belongs.
     stead: Vec<(String, Sha256)>,
+}
+
+/// where each file `--force` set aside is among [`Placement::set_aside`], the first set aside
+/// from each path, as a search from the start finds it, so a run that sets thousands aside notes
+/// the files placed in their stead without searching for each.
+#[derive(Default)]
+struct AsideAt {
+    by_path: HashMap<String, usize>,
+    /// how many of the files set aside are indexed.
+    indexed: usize,
+}
+
+impl AsideAt {
+    /// the first file of `set_aside` set aside from `path`, once those set aside since the last
+    /// call are indexed.
+    fn find(&mut self, set_aside: &[SetAside], path: &str) -> Option<usize> {
+        for (at, set) in set_aside.iter().enumerate().skip(self.indexed) {
+            self.by_path.entry(set.path.clone()).or_insert(at);
+        }
+        self.indexed = set_aside.len();
+        self.by_path.get(path).copied()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -466,9 +488,10 @@ impl<'a> Placing<'a> {
                 .map(|target| target.path.as_str())
                 .collect();
             let going = removable(&survey, &wanted, &unknown, scope, &project.root);
+            let freeing = survey.freeing(&going);
             actions = actions
                 .into_iter()
-                .map(|action| clearing(action, &survey, &going, scope))
+                .map(|action| clearing(action, &survey, &freeing, scope))
                 .collect();
         }
         Ok(Placing {
@@ -727,6 +750,7 @@ impl<'a> Placing<'a> {
             &self.unlisted,
         );
         let placement = &mut preview.placement;
+        let taken = taken_paths(&self.survey, &self.targets);
         for (target, action) in self.targets.iter().zip(&self.actions) {
             if matches!(action, Action::Unselected) {
                 continue;
@@ -775,10 +799,9 @@ impl<'a> Placing<'a> {
                     restore(&self.survey, &target.path, placement);
                     if !matches!(action, Action::Unblock(_))
                         && self.survey.elsewhere.contains(&target.path)
-                        && let Some(kept_as) =
-                            aside_names(&target.path, &self.targets).find(|name| {
-                                fs::symlink_metadata(self.project.root.join(name)).is_err()
-                            })
+                        && let Some(kept_as) = aside_names(&target.path, &taken).find(|name| {
+                            fs::symlink_metadata(self.project.root.join(name)).is_err()
+                        })
                     {
                         placement.changed_copies.push(ChangedCopy {
                             path: target.path.clone(),
@@ -1301,6 +1324,8 @@ fn settle<'t, 'a>(
     let mut adopted = false;
     // each entry in the way once, by path: whether it is gone
     let mut cleared: BTreeMap<String, bool> = BTreeMap::new();
+    let taken = taken_paths(survey, targets);
+    let mut aside = AsideAt::default();
     for (target, action) in targets.iter().zip(actions) {
         placer.stop().check()?;
         // a file that stays where another dataset placed it is this dataset's now, so its
@@ -1329,12 +1354,10 @@ fn settle<'t, 'a>(
                     gone
                 };
                 if gone {
-                    if let Some(set) = placement
-                        .set_aside
-                        .iter_mut()
-                        .find(|set| set.path == blocker.path)
-                    {
-                        set.stead.push((target.path.clone(), target.sha256));
+                    if let Some(at) = aside.find(&placement.set_aside, &blocker.path) {
+                        placement.set_aside[at]
+                            .stead
+                            .push((target.path.clone(), target.sha256));
                     }
                     placement.replaced += 1;
                     todo.push(target);
@@ -1382,7 +1405,7 @@ fn settle<'t, 'a>(
                     }
                     Some(_) => {
                         let forced = matches!(action, Action::Overwrite(_));
-                        make_way(project, placer, survey, targets, target, forced, placement)?;
+                        make_way(project, placer, survey, &taken, target, forced, placement)?;
                     }
                     None => {}
                 }
@@ -1449,7 +1472,7 @@ fn make_way(
     project: &Project,
     placer: &mut Placer,
     survey: &Survey,
-    targets: &[Target<'_>],
+    taken: &HashSet<&str>,
     target: &Target,
     forced: bool,
     placement: &mut Placement,
@@ -1457,7 +1480,7 @@ fn make_way(
     let path = target.path.as_str();
     let method = survey.state.files.get(path).map(|placed| placed.method);
     if survey.elsewhere.contains(path) {
-        let kept_as = keep_aside(project, placer, targets, path, method)?;
+        let kept_as = keep_aside(project, placer, taken, path, method)?;
         placement.changed_copies.push(ChangedCopy {
             path: path.to_owned(),
             kept_as,
@@ -1483,7 +1506,7 @@ fn make_way(
 
 /// the names a changed copy of `path` may be kept under, in the order tried: `<path>.changed`,
 /// then `<path>.changed.2` and on, skipping any name another locked file takes.
-fn aside_names<'n>(path: &'n str, targets: &'n [Target<'_>]) -> impl Iterator<Item = String> + 'n {
+fn aside_names<'n>(path: &'n str, taken: &'n HashSet<&str>) -> impl Iterator<Item = String> + 'n {
     (1..=MOST_KEPT)
         .map(move |number| {
             if number == 1 {
@@ -1492,7 +1515,16 @@ fn aside_names<'n>(path: &'n str, targets: &'n [Target<'_>]) -> impl Iterator<It
                 format!("{path}.changed.{number}")
             }
         })
-        .filter(move |name| targets.iter().all(|target| target.path != *name))
+        .filter(move |name| !taken.contains(name.as_str()))
+}
+
+/// the paths of `targets` when a file of the survey was changed through another of its links,
+/// which [`aside_names`] passes over, and none otherwise.
+fn taken_paths<'t>(survey: &Survey, targets: &'t [Target<'_>]) -> HashSet<&'t str> {
+    if survey.elsewhere.is_empty() {
+        return HashSet::new();
+    }
+    targets.iter().map(|target| target.path.as_str()).collect()
 }
 
 /// keeps the cache's changed copy, linked at `path`, under the first free name of
@@ -1504,14 +1536,14 @@ fn aside_names<'n>(path: &'n str, targets: &'n [Target<'_>]) -> impl Iterator<It
 fn keep_aside(
     project: &Project,
     placer: &mut Placer,
-    targets: &[Target<'_>],
+    taken: &HashSet<&str>,
     path: &str,
     method: Option<Method>,
 ) -> Result<String, Error> {
     let from = project.root.join(path);
     let shared = place::has_other_names(&from);
     let writable = now_writable(&from);
-    for name in aside_names(path, targets) {
+    for name in aside_names(path, taken) {
         let aside = project.root.join(&name);
         let kept = if shared {
             placer.copy_file(&from, &aside, writable).map(drop)
@@ -1828,11 +1860,11 @@ fn removable(
 /// what becomes of a file an entry keeps out, as `action` decided: placed once removing what
 /// sync removes first, `going`, clears the way. an entry that is a file of a dataset outside
 /// `scope`, or a folder holding one, stays even with `--force` and names that dataset.
-fn clearing(action: Action, survey: &Survey, going: &HashSet<String>, scope: &Scope) -> Action {
+fn clearing(action: Action, survey: &Survey, freeing: &Freeing, scope: &Scope) -> Action {
     let (Action::Blocked(blocker) | Action::Unblock(blocker)) = &action else {
         return action;
     };
-    if survey.frees(blocker, going) {
+    if freeing.frees(blocker) {
         return Action::Freed(blocker.clone());
     }
     if *scope == Scope::All {
@@ -2056,6 +2088,38 @@ mod tests {
             tell::copy_warning(crate::place::Unlinked::NoLinks, "data").to_string(),
             "the drive holding data cannot link files, so files were copied"
         );
+    }
+
+    /// a changed copy is kept under the first `.changed` name no locked file takes.
+    #[test]
+    fn a_changed_copy_skips_names_locked_files_take() {
+        let taken = HashSet::from(["data/a.csv.changed", "data/a.csv.changed.2"]);
+        assert_eq!(
+            aside_names("data/a.csv", &taken).next().as_deref(),
+            Some("data/a.csv.changed.3")
+        );
+        assert_eq!(
+            aside_names("data/a.csv", &HashSet::new()).next().as_deref(),
+            Some("data/a.csv.changed")
+        );
+    }
+
+    /// the files placed in a set-aside file's stead are noted on the first file set aside from
+    /// its path, as a search from the start finds it, one set aside since included.
+    #[test]
+    fn a_file_set_aside_is_found_by_its_path() {
+        let set = |path: &str| SetAside {
+            path: path.to_owned(),
+            aside: std::path::PathBuf::from(format!("{path}.aside")),
+            stead: Vec::new(),
+        };
+        let mut set_aside = vec![set("data/a"), set("data/b")];
+        let mut at = AsideAt::default();
+        assert_eq!(at.find(&set_aside, "data/b"), Some(1));
+        set_aside.extend([set("data/a"), set("data/c")]);
+        assert_eq!(at.find(&set_aside, "data/a"), Some(0));
+        assert_eq!(at.find(&set_aside, "data/c"), Some(3));
+        assert_eq!(at.find(&set_aside, "data/d"), None);
     }
 
     /// a cached file that cannot be checked or noted as changed is named as a file in the cache,

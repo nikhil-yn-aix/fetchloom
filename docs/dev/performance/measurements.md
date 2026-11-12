@@ -57,6 +57,14 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | the same map built in merged chunks | 0.85, but on musl peak memory 1.05 to 1.06 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | project state written as a stream | no measured win | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| lock and names | a whole dataset a command hands over, and a draft, found through sets while drafting | `add -i` of 40,000 small links 1.013 [0.985, 1.017] | dropped, no win | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| project state | an unplaced dataset's files told through a set of the unplaced | status with 40,000 datasets set to `place = false`: 4.42 to 1.38 s, 0.315 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| project state | each blocker listed once through a set, not a search of those listed | status with 40,000 folders where files belong: 5.04 to 1.54 s, with the scans below already gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| placement | whether a folder in a file's way holds anything, from the folders the scan found something in | the same status: 7.26 to 1.54 s, with the other scans gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| placement | what removing a run's unneeded files frees, worked out once for every blocker | 40,000 folders holding a file where files belong: status 10.45 to 1.75 s, `sync --dry-run` 10.22 to 1.55 s | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| placement | a changed copy's name checked against a set of the target paths | `sync --verify --dry-run` of 10,000 files edited through other links beside 100,000: 0.403 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| placement | the files `--force` set aside found through an index | `sync --force` through 40,000 files where folders belong: 0.445 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| push | the files the data folder held other bytes of found through a set | a push taking 100,000 files, 10,000 of them edited: 0.699 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | lock and names | indexed pin membership and unique rename signatures | status at 40,000 0.146/0.254; 1,000 renames 0.0044/0.0031, musl +7.1 MiB | kept | [rename indexes](#indexing-pin-membership-and-renames-2026-11-12) |
 | lock and names | indexed export selection | 40,000 names wall 0.0367/0.0275, but musl peak 137.6–144.4 to 184.2–184.4 MiB | dropped, memory | [export selection](#indexing-export-selection-2026-11-12) |
 | lock and names | fast lock reader for commented locks | list at 100,000 files 0.213 to 0.100 s; peak memory 334 to 78 MB | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -505,6 +513,27 @@ a limit of 1,024 or more keeps groups of 256, so ordinary runs do what they did:
 the walk that lists every file under the data folder for a survey looked at no stop, so a first ctrl-c during it waited for the whole listing, which on a network filesystem of a million files can take many seconds. it now looks at the run's stop before each folder it lists, and `Survey::read` ends with `interrupted`. `a_survey_ends_at_a_stop_asked_before_it` lists a data folder with a stop already asked: it failed while the walk ignored the stop, and again with the check taken out.
 
 an atomic load per folder costs nothing measurable: status of 100,000 files in 102 folders, in place on ext4 over nvme, efbf3adf against the clean release build of this batch, 0.996 [0.988, 1.003] on glibc (43 pairs) and 1.003 [0.997, 1.011] on musl (46 pairs), peak memory 79.1 to 79.6 MiB and 95.2 to 95.8 MiB. how long a stop takes on a large slow tree was not timed.
+
+## scans inside per-file loops, 2026-11-12
+
+a code review found seven loops that search a list once for each file or target. each is quadratic only when its trigger is large, so these ran each trigger at the checklist's scales, 40,000 datasets or 10,000 files among 100,000, with projects made for the purpose. every one of these runs took seconds, except `add -i`, whose whole datasets are searched once each, and that change was dropped.
+
+| trigger | command | before | after | ratio [95%] | pairs |
+|---|---|---:|---:|---|---:|
+| 40,000 datasets set to `place = false` after they were placed | `status` | 4.42 s | 1.38 s | 0.315 [0.308, 0.317] | 6 |
+| 40,000 folders where the datasets' files belong | `status` | 14.36 s | 1.54 s | 0.108 [0.107, 0.109] | 5 |
+| 40,000 such folders, each holding a file of someone's | `status` | 23.83 s | 1.75 s | 0.073 [0.072, 0.078] | 4 |
+| the same | `sync --dry-run` | 18.70 s | 1.55 s | 0.084 [0.079, 0.085] | 4 |
+| 10,000 of 100,000 hardlinked files edited through another link, their times kept | `sync --verify --dry-run` | 2.50 s | 1.02 s | 0.403 [0.372, 0.426] | 8 |
+| 100,000 files the cache lacks, 10,000 of them edited, so the data folder holds other bytes | `push` | 12.45 s | 8.67 s | 0.699 [0.691, 0.704] | 5 |
+| 40,000 files where the datasets' folders belong | `sync --force` | 12.13 s | 5.40 s | 0.445 [0.436, 0.461] | 4 |
+| 40,000 links of 64 to 256 B from a local server | `add -i` | 11.59 s | 11.56 s | 1.013 [0.985, 1.017] | 3 |
+
+the folders blocking a status were three searches at once, so one experiment build chose each old search at run time, `FETCHLOOM_EXP_SCAN4`, `5` and `8`: with only the listing of blockers searching, 5.04 s; with only the search of the listing for what a folder holds, 7.26 s; with only the search for what removing frees, 10.45 s on the folders that hold a file and 10.22 s for `sync --dry-run`. so each costs seconds of its own.
+
+glibc release builds of 50fef54d and of the change, the push and the forced sync on fresh copies each run, the others read only; projects on ext4 over nvme copied from the scale lab's datasets-40000 and files-100000, the edits made with python. rounds were interleaved after a warmup, under the measure lock on cores 12-23, few because each old run took seconds; the add's third round had a load burst. peak memory fell or held on every row but the dry run's, 140.8 to 143.7 MiB, the sets a run with 40,000 blockers builds. ordinary runs build none of them: status of 100,000 files on ext4 1.006 [0.993, 1.017] (30 pairs, under load), a sync placing 40,000 datasets 0.990 [0.963, 1.000], peak memory 0.980 and 0.989.
+
+each change keeps every decision, so the tests pin the decisions and fail when the code is broken on purpose: `a_folder_in_the_way_is_freed_only_when_removing_files_empties_it` with the check for what else a folder holds taken out; `a_changed_copy_skips_names_locked_files_take` with the set ignored; `a_file_set_aside_is_found_by_its_path` with late entries unindexed; `status_names_a_file_in_a_folders_way_once` with every blocker listed; the existing `whatever_stands_in_a_files_way_is_found_from_the_scan_alone` with every folder said to hold nothing; three status tests with the unplaced set inverted; and two of `copied`'s push tests with the refused set inverted.
 
 ## pending archive reader budgets, 2026-11-12
 

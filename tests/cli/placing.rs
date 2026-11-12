@@ -6,7 +6,8 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, delete, edit, file, json, reply, skipped, text, zip_of,
+    Part, Result, Sandbox, Server, delete, delete_folder, edit, file, json, reply, skipped, text,
+    zip_of,
 };
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -2201,6 +2202,28 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     assert_eq!(
         text(&after.stderr)?,
         "         Ok everything matches data.lock by size and time\n"
+    );
+    Ok(())
+}
+
+/// a file where a dataset's folder belongs keeps each of its files out, and status names that
+/// file once.
+#[test]
+fn status_names_a_file_in_a_folders_way_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
+    fs::write(flowers.join("sepals.csv"), b"length\n5.1\n")?;
+    let added = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data").join("flowers");
+    delete_folder(&folder)?;
+    fs::write(&folder, b"notes\n")?;
+    let report = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        report["result"]["blocked"],
+        serde_json::json!(["data/flowers"]),
+        "{report}"
     );
     Ok(())
 }

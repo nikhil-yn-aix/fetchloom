@@ -527,11 +527,12 @@ fn take(
     if rest.is_empty() {
         return Ok(());
     }
+    let refused: HashSet<Sha256> = rest.iter().map(|want| want.digest).collect();
     let lacked: Vec<&Needed> = planned
         .taking
         .iter()
         .map(|at| &planned.needed[*at])
-        .filter(|needed| rest.iter().any(|want| want.digest == needed.item.digest))
+        .filter(|needed| refused.contains(&needed.item.digest))
         .collect();
     if let Some(error) = unbuilt(&lacked) {
         return Err(error.with_report(&report(planned, Outcome::Stopped)));

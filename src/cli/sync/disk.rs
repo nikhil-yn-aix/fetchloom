@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use super::Scope;
@@ -56,6 +57,9 @@ pub(crate) struct Survey {
     /// what else the data folder holds, by path in the project: folders, and links and special
     /// files, which the survey never follows or reads.
     pub(crate) entries: HashMap<String, Entry>,
+    /// every folder the listing found something in, by path in the project, gathered the first
+    /// time a blocker asks and dropped when a path takes another spelling.
+    holding: OnceLock<HashSet<String>>,
     /// the data folder's path in the project, below which entries can stand in a file's way.
     data_dir: String,
     /// the files the state records outside the data folder that are still there, by their paths
@@ -114,6 +118,44 @@ pub(crate) struct Blocker {
     /// run leaves that dataset alone, as a sync of other datasets does. such an entry stays
     /// even with `--force`.
     pub(crate) dataset: Option<String>,
+}
+
+/// what removing the files of a run's `going` takes out of the way, from one survey.
+pub(crate) struct Freeing<'s> {
+    going: &'s HashSet<String>,
+    /// the folders holding a file of `going`.
+    holding_going: HashSet<&'s str>,
+    /// the folders holding something removing `going` leaves: another file, a link, a special
+    /// file or a folder that holds no file of `going`.
+    holding_others: HashSet<&'s str>,
+}
+
+impl Freeing<'_> {
+    /// whether removing the files in `going`, with the folders that leaves empty, takes
+    /// `blocker` out of the way: a file in the way that is one of them, or a folder that holds
+    /// nothing else, since a folder goes with the last file removed from it.
+    pub(crate) fn frees(&self, blocker: &Blocker) -> bool {
+        match blocker.found {
+            Entry::File => self.going.contains(&blocker.path),
+            Entry::Folder => {
+                self.holding_going.contains(blocker.path.as_str())
+                    && !self.holding_others.contains(blocker.path.as_str())
+            }
+            Entry::Link | Entry::Special => false,
+        }
+    }
+}
+
+/// adds every folder above `path` to `folders`.
+fn gather_folders<'p>(folders: &mut HashSet<&'p str>, path: &'p str) {
+    let mut inner = path;
+    while let Some((above, _)) = inner.rsplit_once('/') {
+        // the folders above one already gathered were gathered with it
+        if !folders.insert(above) {
+            break;
+        }
+        inner = above;
+    }
 }
 
 impl Survey {
@@ -178,6 +220,7 @@ impl Survey {
             needs_writing: false,
             temporaries,
             entries,
+            holding: OnceLock::new(),
             data_dir: data_dir.to_owned(),
             outside: Vec::new(),
         };
@@ -395,6 +438,7 @@ impl Survey {
                 continue;
             };
             self.disk.insert(path.clone(), look);
+            self.holding.take();
             self.listed.insert(path.clone(), listed);
             if let Some(placed) = self.state.files.get(path)
                 && placed.look.modified >= written
@@ -457,6 +501,7 @@ impl Survey {
                 continue;
             };
             self.disk.insert(path.clone(), look);
+            self.holding.take();
             if self.writable.remove(&previous) {
                 self.writable.insert(path.clone());
             }
@@ -529,43 +574,39 @@ impl Survey {
         })
     }
 
-    /// whether removing the files in `going`, with the folders that leaves empty, takes
-    /// `blocker` out of the way: a file in the way that is one of them, or a folder that holds
-    /// nothing else, since a folder goes with the last file removed from it.
-    pub(crate) fn frees(&self, blocker: &Blocker, going: &HashSet<String>) -> bool {
-        match blocker.found {
-            Entry::File => going.contains(&blocker.path),
-            Entry::Folder => {
-                let prefix = format!("{}/", blocker.path);
-                let mut files = self
-                    .disk
-                    .keys()
-                    .filter(|path| path.starts_with(&prefix))
-                    .peekable();
-                files.peek().is_some()
-                    && files.all(|path| going.contains(path))
-                    && self
-                        .entries
-                        .iter()
-                        .filter(|(path, _)| path.starts_with(&prefix))
-                        .all(|(path, entry)| {
-                            let below = format!("{path}/");
-                            *entry == Entry::Folder
-                                && going.iter().any(|file| file.starts_with(&below))
-                        })
+    /// what removing the files in `going`, with the folders that leaves empty, takes out of the
+    /// way, worked out once for every blocker a run asks about.
+    pub(crate) fn freeing<'s>(&'s self, going: &'s HashSet<String>) -> Freeing<'s> {
+        let mut holding_going = HashSet::new();
+        for path in going.iter().filter(|path| self.disk.contains_key(*path)) {
+            gather_folders(&mut holding_going, path);
+        }
+        let mut holding_others = HashSet::new();
+        for path in self.disk.keys().filter(|path| !going.contains(*path)) {
+            gather_folders(&mut holding_others, path);
+        }
+        for (path, entry) in &self.entries {
+            if *entry != Entry::Folder || !holding_going.contains(path.as_str()) {
+                gather_folders(&mut holding_others, path);
             }
-            Entry::Link | Entry::Special => false,
+        }
+        Freeing {
+            going,
+            holding_going,
+            holding_others,
         }
     }
 
     /// whether the folder at `path` was empty when the survey listed it.
     fn holds_nothing_under(&self, path: &str) -> bool {
-        let prefix = format!("{path}/");
-        !self
-            .disk
-            .keys()
-            .chain(self.entries.keys())
-            .any(|inner| inner.starts_with(&prefix))
+        let holding = self.holding.get_or_init(|| {
+            let mut holding = HashSet::new();
+            for inner in self.disk.keys().chain(self.entries.keys()) {
+                gather_folders(&mut holding, inner);
+            }
+            holding.into_iter().map(str::to_owned).collect()
+        });
+        !holding.contains(path)
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which
@@ -2314,6 +2355,61 @@ mod tests {
         assert_eq!(blocker("data/real/free.csv"), None);
         assert_eq!(blocker("data/absent/a.csv"), None);
         assert_eq!(blocker("elsewhere/a.csv"), None);
+    }
+
+    /// a folder in a file's way goes with the files a run removes only when that leaves it
+    /// empty: every file in it removed, and every folder in it holding one of them.
+    #[test]
+    fn a_folder_in_the_way_is_freed_only_when_removing_files_empties_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let data = project.root.join("data");
+        for folder in ["alone", "mixed", "nested/inner", "beside/empty", "empty"] {
+            fs::create_dir_all(data.join(folder)).unwrap();
+        }
+        for file in [
+            "alone/a",
+            "mixed/a",
+            "mixed/kept",
+            "nested/inner/a",
+            "beside/a",
+            "going",
+            "staying",
+        ] {
+            fs::write(data.join(file), file).unwrap();
+        }
+        let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+        let going: HashSet<String> = [
+            "data/alone/a",
+            "data/mixed/a",
+            "data/nested/inner/a",
+            "data/beside/a",
+            "data/going",
+        ]
+        .map(str::to_owned)
+        .into();
+        let freeing = survey.freeing(&going);
+        let frees = |path: &str, found: Entry| {
+            freeing.frees(&Blocker {
+                path: path.to_owned(),
+                found,
+                folder: false,
+                clearable: true,
+                dataset: None,
+            })
+        };
+        assert!(frees("data/alone", Entry::Folder));
+        assert!(frees("data/nested", Entry::Folder));
+        assert!(!frees("data/mixed", Entry::Folder), "a file that stays");
+        assert!(
+            !frees("data/beside", Entry::Folder),
+            "an empty folder stays"
+        );
+        assert!(!frees("data/empty", Entry::Folder), "nothing to remove");
+        assert!(frees("data/going", Entry::File));
+        assert!(!frees("data/staying", Entry::File));
     }
 
     #[cfg(unix)]
