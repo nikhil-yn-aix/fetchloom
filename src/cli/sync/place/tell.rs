@@ -19,7 +19,7 @@ pub(super) fn tell(
     placer: &Placer,
     tallies: &BTreeMap<&str, Tally>,
     placement: &Placement,
-    told: Option<&str>,
+    told: Option<&BTreeSet<String>>,
     scope: &Scope,
 ) {
     for (path, found) in &placement.cleared {
@@ -40,9 +40,10 @@ pub(super) fn tell(
     }
     // datasets that share a folder share its line, where the first of them comes
     let mut folders: Vec<(String, Tally)> = Vec::new();
+    let told = told.filter(|_| !output.shows_details());
     for (dataset, tally) in tallies
         .iter()
-        .filter(|(dataset, _)| told != Some(**dataset))
+        .filter(|(dataset, _)| !told.is_some_and(|told| told.contains(**dataset)))
     {
         let folder = plan::folder(manifest, dataset);
         let at = folders

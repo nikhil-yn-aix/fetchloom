@@ -2313,6 +2313,50 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     Ok(())
 }
 
+/// a list whose placing fails is rolled back whole, and the files it placed for each of its
+/// datasets go with data.toml and data.lock, as a single add's do.
+#[cfg(unix)]
+#[test]
+fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [("a.csv", b"first"), ("sub/b.csv", b"other")] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
+        zip.write_all(bytes)?;
+    }
+    let bytes = zip.finish()?.into_inner();
+    let archive = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    let plain = Server::start("/files/c.csv", vec![file(b"c\n", "\"c1\"")])?;
+    sandbox.allow(&archive.url);
+    sandbox.allow(&plain.url);
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{}\n{}\n", plain.url, archive.url),
+    )?;
+    // a folder the second dataset needs that refuses new files, so its second file cannot be
+    // placed
+    let refusing = sandbox.work().join("data").join("files").join("sub");
+    fs::create_dir_all(&refusing)?;
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
+
+    let added = sandbox.run(&["add", "-i", "links.txt"]);
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o755))?;
+    let added = added?;
+
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(50), "{stderr}");
+    assert!(!sandbox.work().join("data.toml").exists(), "{stderr}");
+    for placed in ["data/c/c.csv", "data/files/a.csv"] {
+        assert!(!sandbox.work().join(placed).exists(), "{placed}: {stderr}");
+    }
+    Ok(())
+}
+
 /// the work counters say how many files a run placed from bytes the cache already held, so a
 /// sync that downloads nothing does not read as one that found nothing in the cache. `-v` says
 /// it in words.

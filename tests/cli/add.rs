@@ -1005,6 +1005,54 @@ fn a_list_adds_one_dataset_per_line_and_checks_hashes() -> Result {
     Ok(())
 }
 
+/// a list ends with one line for each dataset it adds, as a single add does, and `-v` adds what
+/// each one pinned and where its files were placed.
+#[test]
+fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let links = format!("{0}{PATH}\n{0}/files/wine.csv\n", server.url);
+    let verbose = sandbox.folder("verbose")?;
+    for folder in [sandbox.work(), verbose.clone()] {
+        fs::write(folder.join("links.txt"), &links)?;
+    }
+    let output = sandbox.run(&["add", "-i", "links.txt"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let dataset_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("iris") || line.contains("wine"))
+        .collect();
+    assert_eq!(
+        dataset_lines,
+        [
+            "      Added iris, its files are in data/iris",
+            "      Added wine, its files are in data/wine"
+        ],
+        "{stderr}"
+    );
+    let output = sandbox
+        .command_in(&verbose, &["-v", "add", "-i", "links.txt"])
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    for told in [
+        format!(
+            "     Pinned iris, new in data.lock: {}{PATH} · 1 file · 32 B",
+            server.url
+        ),
+        "     Placed data/wine · 1 file".to_owned(),
+        "      Added wine, its files are in data/wine".to_owned(),
+    ] {
+        assert!(stderr.contains(&told), "{told}: {stderr}");
+    }
+    Ok(())
+}
+
 /// a list takes no --as, so the help for a name an earlier line took points at data.toml, where
 /// a dataset can be renamed with its pin.
 #[test]

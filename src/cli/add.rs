@@ -1044,7 +1044,12 @@ async fn add_list_held(
         &mut lines,
         extract,
     )?;
-    let work = Loop::new(context, project, net, cache);
+    // each dataset added gets one last line, so what it pinned and placed is told only with -v
+    let work = names
+        .iter()
+        .fold(Loop::new(context, project, net, cache), |work, name| {
+            work.telling(name)
+        });
     if dry_run {
         let nothing = format!("each link of {} is in data.toml already", list.name);
         return preview_add(&work, &manifest, old, (names, given), here, Some(&nothing)).await;

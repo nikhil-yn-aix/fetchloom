@@ -856,17 +856,17 @@ impl<'a> Placing<'a> {
     }
 
     /// removes what no dataset needs, places what is missing or outdated, and records it, with
-    /// `synced` marked complete when every file the lock asks for ended up in place. `told` is
-    /// the dataset an add adds: its line stays out of what this tells, since the add tells it
-    /// last, and when placing fails or stops, what this placed for it goes again, since the add
-    /// is then rolled back.
+    /// `synced` marked complete when every file the lock asks for ended up in place. `told`
+    /// holds the datasets an add adds: their lines stay out of what this tells but for `-v`,
+    /// since the add tells each last, and when placing fails or stops, what this placed for them
+    /// goes again, since the add is then rolled back.
     pub(crate) fn apply(
         self,
         output: &Output,
         work: &Work,
         cache: &Cache,
         synced: Option<Synced>,
-        told: Option<&str>,
+        told: Option<&BTreeSet<String>>,
         stop: &std::sync::Arc<Stop>,
     ) -> Result<Placement, Error> {
         stop.check()?;
@@ -906,7 +906,7 @@ impl<'a> Placing<'a> {
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
-        let adding = told.map(|name| added_here(name, &targets, &actions));
+        let adding = told.map(|names| added_here(names, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
         placement.notice(
             manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
@@ -1194,13 +1194,17 @@ fn link_adopted(
     }
 }
 
-/// the paths of `dataset`'s files a placing records afresh, each with whether it places the file
-/// where nothing stood, rather than taking a file already there as placed.
-fn added_here(dataset: &str, targets: &[Target], actions: &[Action]) -> Vec<(String, bool)> {
+/// the paths of the files of the datasets `names` a placing records afresh, each with whether it
+/// places the file where nothing stood, rather than taking a file already there as placed.
+fn added_here(
+    names: &BTreeSet<String>,
+    targets: &[Target],
+    actions: &[Action],
+) -> Vec<(String, bool)> {
     targets
         .iter()
         .zip(actions)
-        .filter(|(target, _)| target.dataset == dataset)
+        .filter(|(target, _)| names.contains(target.dataset))
         .filter_map(|(target, action)| match action {
             Action::Place | Action::Freed(_) => Some((target.path.clone(), true)),
             Action::Adopt(_) => Some((target.path.clone(), false)),

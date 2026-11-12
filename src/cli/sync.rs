@@ -106,8 +106,9 @@ pub(super) struct Loop<'a> {
     /// the exclude patterns of each dataset this run listed that matched no file its source
     /// listed, for placing's warning about those that name files inside an archive.
     unlisted: Mutex<plan::Unlisted>,
-    /// the dataset the command's last line tells about, so its lock and placement lines stay out.
-    told: Option<String>,
+    /// the datasets the command's last lines tell about, so their lock and placement lines stay
+    /// out, but for `-v`.
+    told: BTreeSet<String>,
     /// the datasets this run works on.
     pub(super) scope: Scope,
     /// whether this run wrote data.lock, so a download cancelled later no longer left everything
@@ -139,7 +140,7 @@ impl<'a> Loop<'a> {
             unpacked: Mutex::default(),
             told_packed: Mutex::default(),
             unlisted: Mutex::default(),
-            told: None,
+            told: BTreeSet::new(),
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
@@ -163,7 +164,7 @@ impl<'a> Loop<'a> {
     }
 
     pub(super) fn telling(mut self, name: &str) -> Self {
-        self.told = Some(name.to_owned());
+        self.told.insert(name.to_owned());
         self
     }
 
@@ -436,7 +437,7 @@ impl<'a> Loop<'a> {
             &self.context.work,
             &self.cache,
             synced,
-            self.told.as_deref(),
+            Some(&self.told),
             &self.context.stop,
         )?;
         for (dataset, path, why) in packed {
@@ -882,7 +883,7 @@ impl<'a> Loop<'a> {
             before,
             lock,
             Verbs::DONE,
-            self.told.as_deref(),
+            Some(&self.told),
             &HashSet::new(),
         );
         Ok(text)
@@ -1640,14 +1641,14 @@ pub(super) fn sizeless(jobs: &[Job]) -> HashSet<String> {
 
 /// says which datasets `lock` pins anew and which it no longer has, beside data.lock as it was
 /// `before`, with `verbs` for each. a dataset pinned for the first time gets a line of its own
-/// with what it pinned, so a typo in data.toml that pins an unrelated record stands out. `told`
-/// is left out, since a later line tells about it.
+/// with what it pinned, so a typo in data.toml that pins an unrelated record stands out. the
+/// datasets `told` names are left out but for `-v`, since a later line tells about each.
 pub(super) fn tell_lock(
     output: &Output,
     before: &Before,
     lock: &Lock,
     verbs: Verbs,
-    told: Option<&str>,
+    told: Option<&BTreeSet<String>>,
     sizeless: &HashSet<String>,
 ) {
     for (verb, text) in lock_lines(output, before, lock, verbs, told, sizeless) {
@@ -1661,13 +1662,15 @@ fn lock_lines(
     before: &Before,
     lock: &Lock,
     verbs: Verbs,
-    told: Option<&str>,
+    told: Option<&BTreeSet<String>>,
     sizeless: &HashSet<String>,
 ) -> Vec<(&'static str, String)> {
+    let told = told.filter(|_| !output.shows_details());
+    let is_told = |name: &str| told.is_some_and(|told| told.contains(name));
     let mut first = Vec::new();
     let mut again: Vec<&Locked> = Vec::new();
     for dataset in &lock.datasets {
-        if told == Some(dataset.name.as_str()) {
+        if is_told(&dataset.name) {
             continue;
         }
         match before.get(lock, &dataset.name) {
@@ -1699,7 +1702,7 @@ fn lock_lines(
         ));
     }
     for rename in &before.renamed {
-        if told == Some(rename.new.as_str()) {
+        if is_told(&rename.new) {
             continue;
         }
         lines.push(if rename.moved {
@@ -2589,7 +2592,7 @@ mod tests {
                 &before,
                 &lock,
                 Verbs::DONE,
-                Some("climate-precip"),
+                Some(&BTreeSet::from(["climate-precip".to_owned()])),
                 &sized
             ),
             [("Removed", "gone from data.lock".to_owned())],
