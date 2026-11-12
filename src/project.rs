@@ -220,10 +220,12 @@ fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
 impl Project {
     /// the nearest folder at or above `start` that holds a data.toml, inside the git repository
     /// `start` is in: a data.toml above the repository belongs to another history, so `-C` must
-    /// name it. each folder's data.toml is looked for before its `.git`.
+    /// name it. each folder's data.toml is looked for before its `.git`. any entry named data.toml
+    /// marks the project, so one that is no file, as a folder, is told as such when read rather
+    /// than passed over for a folder above it or no project at all.
     pub(crate) fn find(start: &Path) -> Option<Project> {
         for folder in start.ancestors() {
-            if folder.join(manifest::FILE).is_file() {
+            if fs::symlink_metadata(folder.join(manifest::FILE)).is_ok() {
                 return Some(Project {
                     root: folder.to_path_buf(),
                 });
@@ -247,7 +249,23 @@ impl Project {
 
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
         let _span = tracing::debug_span!("read_manifest").entered();
-        let text = fs::read_to_string(self.manifest_path()).map_err(|err| {
+        let path = self.manifest_path();
+        // a folder or a pipe there would fail the read, or never end it
+        if let Ok(found) = fs::metadata(&path)
+            && !found.is_file()
+        {
+            let what = if found.is_dir() {
+                "a folder"
+            } else {
+                "a special file"
+            };
+            return Err(Error::new(
+                Kind::LocalIo,
+                format!("{} is {what}, not a file", path.display()),
+            )
+            .help("move it aside, then put the project's data.toml file there, or run the command in another folder"));
+        }
+        let text = fs::read_to_string(&path).map_err(|err| {
             if err.kind() == io::ErrorKind::InvalidData {
                 Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
                     .help("save it as UTF-8, then run the command again")

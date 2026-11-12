@@ -26,7 +26,7 @@ inside the data folder, a file being copied or cloned into place is first writte
 
 ## finding the project
 
-project commands use the nearest folder at or above the working directory that holds `data.toml`. the search never leaves the git repository it starts in: it checks each folder for `data.toml` first, then stops at the first folder holding `.git`, as a folder or as the file a submodule or worktree has. a `data.toml` above that folder belongs to another repository's history, where a command would pin data in the wrong one, and a stray `data.toml` in a home folder would otherwise take in every repository below it.
+project commands use the nearest folder at or above the working directory that holds `data.toml`. the search never leaves the git repository it starts in: it checks each folder for `data.toml` first, then stops at the first folder holding `.git`, as a folder or as the file a submodule or worktree has. a `data.toml` above that folder belongs to another repository's history, where a command would pin data in the wrong one, and a stray `data.toml` in a home folder would otherwise take in every repository below it. any entry named `data.toml` marks its folder, so one that is no file, as a folder made by mistake, stops a command there with `local.io`, exit 50, as `/home/ada/thesis/data.toml is a folder, not a file`, rather than a search above it or an offer to start a project; nothing is written.
 
 in a git repository with no `data.toml` of its own, project commands fail with exit 50 and name the repository, and `add` starts a new project in the working directory. to use a project above the repository on purpose, name its folder with `-C`, as in `fetchloom -C .. sync`.
 

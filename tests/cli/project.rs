@@ -2718,3 +2718,30 @@ fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Resu
     assert_eq!(document["errors"][0]["kind"], "integrity.mismatch");
     Ok(())
 }
+
+/// a folder named data.toml still marks its project, so commands there say it is no file rather
+/// than that no project exists and how to start one, and they write nothing.
+#[test]
+fn a_folder_named_data_toml_is_told_as_such() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("data.toml"))?;
+    let sub = work.join("sub");
+    fs::create_dir_all(&sub)?;
+    for folder in [&work, &sub] {
+        let output = sandbox.command_in(folder, &["status"]).output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains("data.toml is a folder, not a file"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("fetchloom add"), "{stderr}");
+    }
+    let mut left: Vec<String> = fs::read_dir(&work)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_>>()?;
+    left.sort();
+    assert_eq!(left, ["data.toml", "sub"]);
+    Ok(())
+}
