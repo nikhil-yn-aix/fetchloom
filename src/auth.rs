@@ -8,6 +8,7 @@ pub(crate) mod lease;
 pub(crate) mod netrc;
 pub(crate) mod store;
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
@@ -467,6 +468,11 @@ impl Account {
 
     /// the key on this machine, in the order the source's own tools look.
     pub(crate) fn find(&self, var: Var<'_>) -> Option<Found> {
+        self.find_in(var, &store::saved(var))
+    }
+
+    /// [`Account::find`], with `saved` the index of keys saved through fetchloom, read already.
+    fn find_in(&self, var: Var<'_>, saved: &BTreeMap<String, store::Place>) -> Option<Found> {
         let set = |name: &'static str| {
             var(name)
                 .and_then(|value| value.into_string().ok())
@@ -487,8 +493,8 @@ impl Account {
             })
         };
         let stored = |id: &str| {
-            let place = *store::saved(var).get(id)?;
-            store::read(var, id).map(|secret| Found {
+            let place = *saved.get(id)?;
+            store::read(var, id, place).map(|secret| Found {
                 origin: match place {
                     store::Place::Keyring => Origin::Keyring,
                     store::Place::File => Origin::File(
@@ -578,10 +584,16 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
         Account::GitHub,
         Account::GitLab,
     ];
-    accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
+    // the index of saved keys is read once here, rather than again for each account
+    let saved = store::saved(var);
+    accounts.extend(
+        saved_dataverses(var, &saved)
+            .into_iter()
+            .map(Account::Dataverse),
+    );
     let mut found: Vec<Credential> = accounts
         .iter()
-        .filter_map(|account| Some(account.credentials(&account.find(var)?)))
+        .filter_map(|account| Some(account.credentials(&account.find_in(var, &saved)?)))
         .flatten()
         .collect();
     // the file is read once here, rather than again for each login it holds
@@ -600,7 +612,12 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
 
 /// every dataverse installation a key is known for.
 pub(crate) fn dataverses(var: Var<'_>) -> Vec<String> {
-    let mut hosts: Vec<String> = store::saved(var)
+    saved_dataverses(var, &store::saved(var))
+}
+
+/// [`dataverses`], with `saved` the index of keys saved through fetchloom, read already.
+fn saved_dataverses(var: Var<'_>, saved: &BTreeMap<String, store::Place>) -> Vec<String> {
+    let mut hosts: Vec<String> = saved
         .keys()
         .filter_map(|id| id.strip_prefix("dataverse:").and_then(dataverse_host))
         .collect();

@@ -18,7 +18,7 @@ pub(crate) mod sign;
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use reqwest::StatusCode;
@@ -227,7 +227,9 @@ pub(crate) struct Net {
     offline: Offline,
     metadata: api::Memo,
     typed: address::Typed,
-    credentials: Vec<Key>,
+    /// the keys requests may carry, looked for when the first request needs one, so a run that
+    /// sends none reads no key files and asks no credential store.
+    credentials: LazyLock<Vec<Key>, Box<dyn FnOnce() -> Vec<Key> + Send>>,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: crate::source::Signing,
     /// which requests to cloud storage buckets carry a google token.
@@ -268,6 +270,39 @@ struct Key {
     name: HeaderName,
     value: HeaderValue,
     every_hop: bool,
+}
+
+/// `credentials` as requests carry them. one value per header, host and port: the first, so a
+/// key just signed in with wins over an older one for the same host.
+fn keys(credentials: Vec<Credential>) -> Vec<Key> {
+    let mut seen = std::collections::HashSet::new();
+    credentials
+        .into_iter()
+        .filter_map(|credential| {
+            let (host, port) = key_origin(&credential.host)?;
+            let name = HeaderName::from_static(credential.header);
+            let Ok(mut value) = HeaderValue::from_str(&credential.value) else {
+                // the host and header only; the value is the secret
+                if !UNSENDABLE_TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        host,
+                        header = credential.header,
+                        "a key was found but cannot be sent, since no header holds its value"
+                    );
+                }
+                return None;
+            };
+            value.set_sensitive(true);
+            Some(Key {
+                host,
+                port,
+                name,
+                value,
+                every_hop: credential.every_hop,
+            })
+        })
+        .filter(|key| seen.insert((key.host.clone(), key.port, key.name.clone())))
+        .collect()
 }
 
 /// the host and port a credential's host names: lowercase, with port 443 unless it names
@@ -379,43 +414,13 @@ impl Wire {
 
 impl Net {
     pub(crate) fn new(options: Options, work: Arc<Work>, stop: Arc<Stop>, notify: Notify) -> Net {
-        // one value per header, host and port: the first, so a key just signed in with wins over
-        // an older one for the same host
-        let mut seen = std::collections::HashSet::new();
-        let credentials = options
-            .credentials
-            .into_iter()
-            .filter_map(|credential| {
-                let (host, port) = key_origin(&credential.host)?;
-                let name = HeaderName::from_static(credential.header);
-                let Ok(mut value) = HeaderValue::from_str(&credential.value) else {
-                    // the host and header only; the value is the secret
-                    if !UNSENDABLE_TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!(
-                            host,
-                            header = credential.header,
-                            "a key was found but cannot be sent, since no header holds its value"
-                        );
-                    }
-                    return None;
-                };
-                value.set_sensitive(true);
-                Some(Key {
-                    host,
-                    port,
-                    name,
-                    value,
-                    every_hop: credential.every_hop,
-                })
-            })
-            .filter(|key| seen.insert((key.host.clone(), key.port, key.name.clone())))
-            .collect();
+        let given = options.credentials;
         Net {
             wire: OnceLock::new(),
             offline: options.offline,
             metadata: api::Memo::new(crate::settings::LEAST_MEMORY / 16),
             typed: address::Typed::default(),
-            credentials,
+            credentials: LazyLock::new(Box::new(move || keys(given))),
             signing: crate::source::Signing::default(),
             google: Google::default(),
             azure: Azure::default(),
@@ -435,6 +440,16 @@ impl Net {
             stop,
             notify,
         }
+    }
+
+    /// the keys requests may carry, from `find` in place of those the options gave, looked for
+    /// when the first request needs one.
+    pub(crate) fn finding_credentials(
+        mut self,
+        find: impl FnOnce() -> Vec<Credential> + Send + 'static,
+    ) -> Net {
+        self.credentials = LazyLock::new(Box::new(move || keys(find())));
+        self
     }
 
     /// the client, made once even when the first requests start together. a client that could
@@ -781,7 +796,7 @@ impl Net {
             && let Some(host) = url.host_str()
         {
             let port = url.port_or_known_default();
-            for key in &self.credentials {
+            for key in &*self.credentials {
                 if (credentials || key.every_hop)
                     && port == Some(key.port)
                     && host.eq_ignore_ascii_case(&key.host)

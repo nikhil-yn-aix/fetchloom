@@ -76,9 +76,9 @@ pub(crate) fn saved(var: Var<'_>) -> BTreeMap<String, Place> {
         .unwrap_or_default()
 }
 
-/// the key saved for `id`, or none.
-pub(crate) fn read(var: Var<'_>, id: &str) -> Option<String> {
-    match saved(var).get(id)? {
+/// the key saved for `id` in `place`, as the index lists it, or none.
+pub(crate) fn read(var: Var<'_>, id: &str, place: Place) -> Option<String> {
+    match place {
         Place::Keyring => keyring::Entry::new(SERVICE, id).ok()?.get_password().ok(),
         Place::File => file(var).remove(id),
     }
@@ -294,19 +294,20 @@ mod tests {
             }
         };
         assert!(!keyring_usable(&var));
+        let saved_key = |id: &str| saved(&var).get(id).and_then(|&place| read(&var, id, place));
         save(&var, "zenodo", "z-key", Place::File).unwrap();
         save(&var, "dataverse:demo.dataverse.org", "d-key", Place::File).unwrap();
         save(&var, "zenodo", "z-new", Place::File).unwrap();
-        assert_eq!(read(&var, "zenodo").as_deref(), Some("z-new"));
+        assert_eq!(saved_key("zenodo").as_deref(), Some("z-new"));
         assert_eq!(
             saved(&var).keys().map(String::as_str).collect::<Vec<_>>(),
             ["dataverse:demo.dataverse.org", "zenodo"]
         );
         assert!(forget(&var, "zenodo").unwrap());
         assert!(!forget(&var, "zenodo").unwrap());
-        assert_eq!(read(&var, "zenodo"), None);
+        assert_eq!(saved_key("zenodo"), None);
         assert_eq!(
-            read(&var, "dataverse:demo.dataverse.org").as_deref(),
+            saved_key("dataverse:demo.dataverse.org").as_deref(),
             Some("d-key")
         );
         let index = fs::read_to_string(folder(&var).unwrap().join("accounts.json")).unwrap();

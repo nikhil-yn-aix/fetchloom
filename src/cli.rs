@@ -68,7 +68,7 @@ struct Context {
     /// a key signed in with during this command but not saved, which the run again still uses.
     unsaved: std::sync::Mutex<Vec<net::Credential>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
-    cautioned: std::sync::atomic::AtomicBool,
+    cautioned: Arc<std::sync::atomic::AtomicBool>,
     /// the mirrors asked for pinned files before their sources, and what they answered.
     mirrors: fetch::mirrors::Mirrored,
     /// the project whose `fetchloom build` runs this one inside a step, from
@@ -110,7 +110,7 @@ impl Context {
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
             unsaved: std::sync::Mutex::default(),
-            cautioned: std::sync::atomic::AtomicBool::default(),
+            cautioned: Arc::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
             building: None,
             lists: std::sync::Mutex::default(),
@@ -125,52 +125,21 @@ impl Context {
             .extend(written.into_iter().map(|part| (root.to_path_buf(), part)));
     }
 
-    /// the network, with credentials from where each source keeps them, and retries reported as
-    /// warnings.
+    /// the network, with credentials from where each source keeps them, looked for when a
+    /// request first needs one, and retries reported as warnings.
     fn net(&self) -> Net {
         let mut credentials = self
             .unsaved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        credentials.extend(crate::auth::credentials(&crate::auth::env));
-        self.caution(&credentials);
-        self.net_with(credentials)
-    }
-
-    /// warns once per run about a `.netrc` other users can open and about keys no request header
-    /// can carry, so a command that quietly signs in without them says why.
-    fn caution(&self, credentials: &[net::Credential]) {
-        if self
-            .cautioned
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return;
-        }
-        if let Some(path) = crate::auth::netrc::path(&crate::auth::env)
-            .filter(|path| crate::auth::netrc::too_open(path))
-        {
-            self.output.warn_with(
-                Warning::AuthReadable,
-                &format!(
-                    "other users of this machine can open {}, which holds logins",
-                    path.display()
-                ),
-                &format!("limit it to yourself with `chmod 600 {}`", path.display()),
-            );
-        }
-        for credential in credentials {
-            if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
-                self.output.warn_with(
-                    Warning::AuthKeyUnsendable,
-                    &format!(
-                        "a key for {} is never sent, since it holds a character no request header can carry, such as a line break",
-                        credential.host
-                    ),
-                    "`fetchloom auth` shows where it is kept",
-                );
-            }
-        }
+        let output = Arc::clone(&self.output);
+        let cautioned = Arc::clone(&self.cautioned);
+        self.net_with(Vec::new()).finding_credentials(move || {
+            credentials.extend(crate::auth::credentials(&crate::auth::env));
+            caution(&output, &cautioned, &credentials);
+            credentials
+        })
     }
 
     /// the `allowed_origins` setting, with where a person changes it.
@@ -252,6 +221,42 @@ impl Context {
         // may be one. each mirror's origin is trusted, and no other port or scheme of its host
         net.trust(self.mirrors.mirrors.web().map(url::Url::origin));
         net
+    }
+}
+
+/// warns once per run about a `.netrc` other users can open and about keys no request header
+/// can carry, so a command that quietly signs in without them says why.
+fn caution(
+    output: &Output,
+    cautioned: &std::sync::atomic::AtomicBool,
+    credentials: &[net::Credential],
+) {
+    if cautioned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Some(path) = crate::auth::netrc::path(&crate::auth::env)
+        .filter(|path| crate::auth::netrc::too_open(path))
+    {
+        output.warn_with(
+            Warning::AuthReadable,
+            &format!(
+                "other users of this machine can open {}, which holds logins",
+                path.display()
+            ),
+            &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+        );
+    }
+    for credential in credentials {
+        if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
+            output.warn_with(
+                Warning::AuthKeyUnsendable,
+                &format!(
+                    "a key for {} is never sent, since it holds a character no request header can carry, such as a line break",
+                    credential.host
+                ),
+                "`fetchloom auth` shows where it is kept",
+            );
+        }
     }
 }
 
@@ -716,19 +721,24 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     outcome
 }
 
-/// how long the end of a run waits for the runtime's threads to have exited. each of 1,920 normal
-/// and settled runs measured let go of them within 10.1 ms, the slowest on two cores each shared
-/// with three busy loops; a stopped run whose scan still runs, as `status --verify`'s, ends this
-/// much after `Stopped`.
+/// how long the end of a run on windows waits for the runtime's threads to have exited. each of
+/// 1,920 normal and settled runs measured let go of them within 10.1 ms, the slowest on two cores
+/// each shared with three busy loops; a stopped run whose scan still runs, as `status --verify`'s,
+/// ends this much after `Stopped`.
 const EXIT_WAIT: Duration = Duration::from_millis(25);
 
-/// ends `runtime`, waiting at most `wait` until its threads have exited, their thread-local
-/// destructors included. on windows, returning from main ends every other thread wherever it is
-/// and then runs main's destructors, which take the same locks as theirs, as `-vv`'s logging does,
-/// so a runtime thread ended inside one left the run hanging after its last line. a blocking task
-/// still running after `wait`, as a scan a stop left behind, ends with the process.
+/// ends `runtime`. on windows it waits at most `wait` until the runtime's threads have exited,
+/// their thread-local destructors included: returning from main there ends every other thread
+/// wherever it is and then runs main's destructors, which take the same locks as theirs, as
+/// `-vv`'s logging does, so a runtime thread ended inside one left the run hanging after its last
+/// line. linux and macos end the other threads only after main's destructors have run, so there
+/// the run ends at once, as a blocking task still running after `wait` does on windows.
 fn end_runtime(runtime: tokio::runtime::Runtime, wait: Duration) {
-    runtime.shutdown_timeout(wait);
+    if cfg!(windows) {
+        runtime.shutdown_timeout(wait);
+    } else {
+        runtime.shutdown_background();
+    }
 }
 
 /// whether `command`, as help quotes it, is a whole command line fetchloom would accept, so a
@@ -1633,10 +1643,11 @@ mod tests {
         assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
     }
 
-    /// the end of a run waits until the runtime's threads have exited, their thread-local
-    /// destructors included. on windows, returning from main ends every other thread wherever it
-    /// is, then runs main's destructors, which take the same locks as theirs: a runtime thread
-    /// ended inside one left the run hanging after its last line.
+    /// on windows the end of a run waits until the runtime's threads have exited, their
+    /// thread-local destructors included. returning from main there ends every other thread
+    /// wherever it is, then runs main's destructors, which take the same locks as theirs: a
+    /// runtime thread ended inside one left the run hanging after its last line.
+    #[cfg(windows)]
     #[test]
     fn ending_the_runtime_waits_until_its_threads_have_exited() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1668,6 +1679,52 @@ mod tests {
             EXITED.load(Ordering::SeqCst),
             2,
             "the run ended while a runtime thread was still exiting"
+        );
+    }
+
+    /// on linux and macos the end of a run leaves the runtime's threads to exit with the process,
+    /// since waiting for them cost commands such as `path` most of a millisecond after their answer.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_run_ends_without_waiting_for_threads_still_exiting() {
+        use std::sync::Mutex;
+        use std::sync::mpsc::{Receiver, channel};
+        static HELD: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+        struct Exiting;
+        impl Drop for Exiting {
+            fn drop(&mut self) {
+                let held = HELD
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(held) = held {
+                    let _ = held.recv();
+                }
+            }
+        }
+        thread_local! {
+            static EXITING: Exiting = const { Exiting };
+        }
+        let (release, held) = channel::<()>();
+        *HELD.lock().unwrap() = Some(held);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async { EXITING.with(|_| ()) }).await.unwrap();
+        });
+        let (ended, end) = channel();
+        std::thread::spawn(move || {
+            end_runtime(runtime, Duration::from_secs(600));
+            let _ = ended.send(());
+        });
+        let waited = end.recv_timeout(Duration::from_secs(60));
+        drop(release);
+        assert!(
+            waited.is_ok(),
+            "the run waited for a runtime thread still exiting"
         );
     }
 
@@ -1773,8 +1830,8 @@ mod tests {
             value: "Bearer abc\ndef".to_owned(),
             every_hop: false,
         });
-        let _ = context.net();
-        let _ = context.net();
+        let _ = context.net().credential_hosts();
+        let _ = context.net().credential_hosts();
         let told = context.output.told();
         let about = told
             .iter()
@@ -1782,6 +1839,40 @@ mod tests {
             .count();
         assert_eq!(about, 1, "{told:?}");
         assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
+    }
+
+    /// keys are looked for when a request first needs one, so a run that sends none, as a settled
+    /// sync, reads no key files and asks no credential store.
+    #[test]
+    fn a_network_that_sends_nothing_looks_for_no_keys() {
+        let context = Context::new(Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            true,
+            false,
+        ));
+        context.unsaved.lock().unwrap().push(net::Credential {
+            host: "lab.example.org".to_owned(),
+            header: "authorization",
+            value: "Bearer abc\ndef".to_owned(),
+            every_hop: false,
+        });
+        let net = context.net();
+        let about = |told: Vec<String>| {
+            told.iter()
+                .filter(|text| text.contains("a key for lab.example.org is never sent"))
+                .count()
+        };
+        assert_eq!(about(context.output.told()), 0);
+        let _ = net.credential_hosts();
+        assert_eq!(about(context.output.told()), 1);
     }
 
     /// the first interrupt, ctrl-c or SIGTERM, stops the work, told as the one it was, and the

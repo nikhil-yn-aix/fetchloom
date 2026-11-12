@@ -71,7 +71,8 @@ every change measured with the current harness, one row each: what it gained whe
 | process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | process | mimalloc for libc's own allocations on musl | no-op sync 0.833 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | process | `panic = unwind` for a clean thread error | no faster anywhere; binary 14.5% larger | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
-| process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
+| process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept on windows, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
+| process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
 
 ## final benchmark on the linux lab, 2026-11-09
 
@@ -376,6 +377,57 @@ a stopped run pays the whole bound when a blocking task outlives it: `status --v
 | 1 s | 1,001.12 ms | 1,001.12 ms |
 
 a second SIGINT sent as `Stopped` showed did not shorten the wait at 100 ms or 1 s, since the run's listener goes with the runtime; a second ctrl-c while the command still runs exits 130 from a runtime thread without the wait.
+
+since [tiny commands](#tiny-commands-2026-11-12), only windows waits: linux and macos end the runtime with `shutdown_background` again, and a stopped run there ends about 1 ms after `Stopped`, as the first row of the table above.
+
+## tiny commands, 2026-11-12
+
+commands that take a few milliseconds were 0.1 to 1.9 ms slower than at a8f9dad7: `path` of a 3-file dataset beside 100,000 state records 1.035 on glibc, a settled sync of 3 files 1.115. two causes were found. the end of a run waited for the runtime's threads to exit, as [the end of a run](#the-end-of-a-run-2026-11-12) added for windows. and every command that builds the network, as a settled sync does before it finds every file in place, looked for every key on the machine: each source's token file, `.netrc`, kaggle's files and fetchloom's index of saved keys, `accounts.json`, which it read once for each account, seven times. a key in the credential store would also have been asked for over d-bus. three changes, one commit:
+
+- linux and macos end the runtime without waiting, since they run main's destructors before ending the other threads; windows keeps the wait.
+- `Context::net` hands the network the search for keys, which runs when the first HTTPS request needs a key, so a run that sends none reads no key file. the warnings about a `.netrc` others can open and about a key no header can carry come then too.
+- a search for keys reads `accounts.json` once: 7 opens to 1 under strace, on a run that searches.
+
+one experiment release build of each libc, the change with two switches added, chose the old end with `FETCHLOOM_EXP_JOIN=1` and the old search for keys, when the network is built, with `FETCHLOOM_EXP_EAGER=1`. it ran beside the stock release builds of a8f9dad7 (glibc sha256 0ddf803c…, musl 33c84fa9…) and of 89cc7ca6, whose source is the same as efbf3adf's, every arm once a round in a seeded shuffled order after a warmup round, on tmpfs, under the measure lock on cores 12-23. a ratio is the median of paired ratios with its 95% bootstrap interval from `bench/ab.py`; rounds whose other load passed 12 cores were dropped for every arm. the fixtures are the audit's: the scale lab's named-100000 project and a project of 3 imported files of 1 to 8 KiB.
+
+against efbf3adf, five arms a round:
+
+| case | libc | pairs | end without the wait | keys when needed | both, and the index once |
+|---|---|---:|---|---|---|
+| settled sync of 3 files | glibc | 100 | 0.973 [0.962, 0.982] | 0.978 [0.970, 0.984] | 0.958 [0.952, 0.966] |
+| | musl | 100 | 0.966 [0.952, 0.975] | 0.971 [0.962, 0.976] | 0.950 [0.942, 0.958] |
+| `path` beside 100,000 | glibc | 33 | 0.995 [0.990, 1.000] | 0.999 [0.990, 1.001] | 0.997 [0.987, 1.003] |
+| | musl | 33 | 0.997 [0.989, 1.003] | 0.998 [0.991, 1.005] | 0.993 [0.987, 0.996] |
+
+the `path` batch ran beside other agents' builds, and 27 of its 60 rounds were dropped. a second batch of three arms a round:
+
+| case | libc | pairs | a8f9dad7 → efbf3adf | a8f9dad7 → the change | efbf3adf → the change |
+|---|---|---:|---|---|---|
+| `path` beside 100,000 | glibc | 167 | 1.026 [1.023, 1.029] | 1.019 [1.017, 1.022] | 0.992 [0.991, 0.995] |
+| | musl | 167 | 1.014 [1.010, 1.018] | 1.013 [1.009, 1.016] | 0.997 [0.993, 1.002] |
+| settled sync of 3 files | glibc | 150 | 1.038 [1.029, 1.041] | 1.017 [1.012, 1.023] | 0.981 [0.975, 0.987] |
+| | musl | 150 | 1.022 [1.017, 1.031] | 0.991 [0.985, 1.001] | 0.969 [0.962, 0.976] |
+| `--version` | glibc | 150 | 1.006 [1.001, 1.011] | 1.018 [1.008, 1.024] | 1.009 [1.003, 1.017] |
+| | musl | 150 | 0.996 [0.991, 1.004] | 1.002 [0.997, 1.008] | 1.002 [0.996, 1.011] |
+| `help` | glibc | 150 | 1.013 [1.006, 1.018] | 1.026 [1.020, 1.031] | 1.011 [1.005, 1.018] |
+| | musl | 150 | 1.009 [1.000, 1.016] | 1.010 [1.004, 1.015] | 1.007 [0.997, 1.011] |
+
+then the clean release build of the batch this change came in, with the flush groups and the data folder walk's stop that follow it, against the same two, three arms a round:
+
+| case | libc | pairs | a8f9dad7 → efbf3adf | a8f9dad7 → the batch | efbf3adf → the batch |
+|---|---|---:|---|---|---|
+| `path` beside 100,000 | glibc | 147 | 1.020 [1.016, 1.023] | 1.025 [1.021, 1.027] | 1.004 [1.000, 1.007] |
+| | musl | 147 | 1.022 [1.019, 1.025] | 1.003 [1.001, 1.008] | 0.981 [0.977, 0.984] |
+| settled sync of 3 files | glibc | 150 | 1.065 [1.058, 1.073] | 1.014 [1.006, 1.020] | 0.951 [0.946, 0.956] |
+| | musl | 150 | 1.066 [1.056, 1.077] | 0.992 [0.979, 1.005] | 0.929 [0.921, 0.937] |
+| `--version` | glibc | 100 | 1.028 [1.019, 1.040] | 1.012 [1.002, 1.020] | 0.976 [0.969, 0.987] |
+| | musl | 100 | 1.048 [1.028, 1.059] | 1.003 [0.996, 1.013] | 0.960 [0.950, 0.973] |
+| `help` | glibc | 98 | 1.043 [1.030, 1.050] | 1.026 [1.018, 1.033] | 0.981 [0.967, 0.990] |
+| | musl | 98 | 1.041 [1.031, 1.054] | 1.001 [0.985, 1.016] | 0.961 [0.956, 0.976] |
+
+`--version` and `help` run none of the changed code, yet they moved by 1 to 5% between builds and batches: on commands this short, where the binary's code lands and what else the machine does weigh as much as the work. what is left of `path` on glibc is of that kind: a8f9dad7 and the change run the same number of user instructions within 0.5% (288.6 and 289.9 million, `perf stat -r 10`) in the loop that passes over the state's 24 MB, but the binary is 1.2 MB larger, with 15 more page faults and 1.0 MiB more peak memory, and its user time is 1.2 ms longer. the voluntary context switches of `path` fell from 21 to 15, a8f9dad7's 14. the settled sync's peak memory fell 0.1 to 0.3 MiB on glibc; musl's was 16.1 to 16.5 MiB with or without the change, 2.0 to 2.4 MiB above a8f9dad7, which this change did not look into.
+
+the change is kept: it is faster where it aimed, 0.929 to 0.981 on the settled sync, flat on `path`, slower nowhere it runs, and the settled sync is back within 1.02 of a8f9dad7 on both libcs, as is `path` on musl. `path` on glibc is not, at 1.019 to 1.025, for the reason above, which none of the three changes touches. `the_run_ends_without_waiting_for_threads_still_exiting` failed on the old end, and on the new one with `cfg!(unix)` put in place of `cfg!(windows)`; `a_network_that_sends_nothing_looks_for_no_keys` failed on the old search and with the search forced when the network is built.
 
 ## pending archive reader budgets, 2026-11-12
 
