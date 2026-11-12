@@ -1234,6 +1234,81 @@ fn editing_code_makes_build_pin_again() -> Result {
     Ok(())
 }
 
+/// the warnings of the json document `value` about recipe code git does not have.
+fn code_warnings(value: &Value) -> Vec<&str> {
+    value["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|warning| warning.contains(", code of "))
+        .collect()
+}
+
+/// a commit that leaves out a recipe's code leaves a clone unable to build it from the same
+/// code, so every build that succeeds warns of code git does not have: here a new file in a code
+/// folder, after which the step made the same files and no new list joined data.lock.d, and
+/// again in the build after it, which finds the result up to date.
+#[test]
+fn a_build_warns_of_recipe_code_git_does_not_have() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let lib = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\ncode = [\"lib\"]\n";
+    with(&sandbox, &server, lib)?;
+    let lib = sandbox.work().join("lib");
+    fs::create_dir(&lib)?;
+    fs::write(lib.join("a.py"), "a = 1\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    crate::merge::ok(&sandbox, &["add", "."])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "clean"])?;
+    fs::write(lib.join("new.py"), "b = 2\n")?;
+    for action in ["ran", "up_to_date"] {
+        let output = build(&sandbox, &["--json", "build"])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        assert_eq!(document["result"]["steps"][0]["action"], action);
+        assert_eq!(
+            code_warnings(&document),
+            [
+                "git does not have lib/new.py, code of clean; run `git add lib/new.py`, then commit it, since a clone without it cannot build clean from the same code"
+            ]
+        );
+    }
+    assert_eq!(
+        fs::read_dir(sandbox.work().join("data.lock.d"))?.count(),
+        1,
+        "the step made the same files"
+    );
+    Ok(())
+}
+
+/// code a recipe names that the project lacks, as in a clone of a commit that left it out, is
+/// to be brought back: taking it out of the recipe changes the recipe for everyone.
+#[test]
+fn missing_code_is_brought_back_before_it_leaves_the_recipe() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY_CODE)?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "project.invalid");
+    assert_eq!(
+        message,
+        "clean cannot be built: its code clean.py is not in the project"
+    );
+    assert_eq!(
+        help,
+        "bring clean.py back: `git restore clean.py` if git has it, else ask whoever built clean to commit it; take it out of code in data.toml only once the step no longer reads it"
+    );
+    assert_eq!(runs(&sandbox.work())?, 0);
+    Ok(())
+}
+
 /// a recipe made from another takes that one's tree, so an upstream rebuild that makes the same
 /// files leaves the downstream pin, and its step, alone.
 #[test]

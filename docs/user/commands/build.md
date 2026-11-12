@@ -45,6 +45,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
    - otherwise put in the cache the files of the datasets it reads, from the data folder, a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache and data folder lack it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`.
 5. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
 6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would. a file you edited stays, and when it is an edit of an earlier result than the one now pinned, as `copy = true` on the recipe allows, the warning says so and names `fetchloom sync --force` with that recipe alone, as [recipes](../recipes.md) shows.
+7. warn of each file of a recipe's `code` that git does not have, as `fetchloom status` does: a file never added, such as a new file in a code folder, or one `.gitignore` leaves out. a commit would leave it out, and a clone without it cannot build the recipe from the same code. a build that ran no step warns too, so a change to code that made the same files is not missed.
 
 this output is from a project where `clean` is made from `iris` with `python3 clean.py`:
 
@@ -75,6 +76,15 @@ on a machine whose cache lacks the result `data.lock` pins, as in a fresh clone 
 ```
 
 when it makes other files, the build fails instead, as [a rebuild that differs](#a-rebuild-that-differs) describes.
+
+in a git repository, a build whose recipe has code git does not have says so before its last line, here for `made`, whose `step.py` was never added (stderr):
+
+```text
+     Placed data/made · 1 file linked to the cache
+warning: git does not have step.py, code of made
+  help: run `git add step.py`, then commit it, since a clone without it cannot build made from the same code
+         Ok pinned made's result in data.lock
+```
 
 ## the step
 
@@ -134,6 +144,13 @@ error: clean failed: python3 exited with code 1 after 32 ms
 the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
 
 a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from the data folder or a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files is not reproducible, as [a rebuild that differs](#a-rebuild-that-differs) describes.
+
+code a recipe names that the project lacks, as in a clone of a commit that left it out, stops the build with `project.invalid`, exit 50, before its step runs. the help asks for the code first, since taking it out of `code` would change the recipe, and its key, for everyone. the end of the output (stderr):
+
+```text
+error: clean cannot be built: its code clean.py is not in the project
+  help: bring clean.py back: `git restore clean.py` if git has it, else ask whoever built clean to commit it; take it out of code in data.toml only once the step no longer reads it
+```
 
 ## check
 

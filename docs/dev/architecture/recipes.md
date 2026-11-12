@@ -97,7 +97,7 @@ once the step exits with 0, the build hashes its code again and fails when a fil
 
 ## committing
 
-the build writes `data.lock` and its parts once, after its last step, with `Loop::write_rendered`, only when the lock it made differs from the one it read; a pin keeps its `locked` time while its key and tree stay. a step that fails, is stopped or writes what a result cannot hold returns before that, so `data.lock`, `data.lock.d` and the data folder stay byte for byte as they were, while the results of the steps before it stay in the cache by key and a build run again reuses them. the errors are `build.failed`, with the exit code or signal and the tail, and `build.differs`, both exit 60, and the JSON `result` of the steps that finished stays beside them.
+the build writes `data.lock` and its parts once, after its last step, with `Loop::write_rendered`, only when the lock it made differs from the one it read; a pin keeps its `locked` time while its key and tree stay. a step that fails, is stopped or writes what a result cannot hold returns before that, so `data.lock`, `data.lock.d` and the data folder stay byte for byte as they were, while the results of the steps before it stay in the cache by key and a build run again reuses them. the errors are `build.failed`, with the exit code or signal and the tail, and `build.differs`, both exit 60, and the JSON `result` of the steps that finished stays beside them. a build that ends well calls `warn_recipe_code` of `cli/project.rs`, as `status` does, whether data.lock changed or not: a new file in a code folder that made the same files moves the key without adding a list to data.lock.d.
 
 ## checking
 

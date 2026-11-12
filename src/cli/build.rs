@@ -25,7 +25,9 @@ use serde::Serialize;
 use self::preview::{Previewed, preview};
 use super::args;
 use super::fetch::data_folder::DataFolder;
-use super::project::{Run, committed, find, hold, ignore_data, known, locked, register, sync_all};
+use super::project::{
+    Run, committed, find, hold, ignore_data, known, locked, register, sync_all, warn_recipe_code,
+};
 use super::sync::disk::Survey;
 use super::sync::place::{Placement, Seen};
 use super::sync::{Before, Loop, Scope, Upgrade, repinned};
@@ -978,6 +980,7 @@ impl<'a> Building<'a> {
             .filter(|step| !matches!(step.action, Did::UpToDate | Did::Fetched))
             .map(|step| step.name.as_str())
             .collect();
+        warn_recipe_code(output, self.work.project, &self.manifest);
         output.done("Ok", &closing(&built, &rebuilt));
         if changed {
             output.next(&format!("commit {}", committed(self.work.project)));
@@ -1094,7 +1097,10 @@ fn keyed(step: &Step) -> Result<Sha256, Error> {
             Kind::ProjectInvalid,
             format!("{name} cannot be built: its code {path} is not in the project"),
         )
-        .help("restore it, or take it out of code in data.toml"));
+        .help(format!(
+            "bring {path} back: `git restore {}` if git has it, else ask whoever built {name} to commit it; take it out of code in data.toml only once the step no longer reads it",
+            super::shell_word(path)
+        )));
     }
     let unpinned: Vec<&str> = step
         .inputs
