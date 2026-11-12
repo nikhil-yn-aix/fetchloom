@@ -53,6 +53,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [mirrors](mirrors.md) | restore pinned files from a lab disk, a usb drive or a company server instead of their sources |
 | [CI](ci.md) | keep data between CI jobs so it downloads once per lock change |
 | [clusters](hpc.md) | use a cluster's home and scratch disks, many jobs and offline nodes, or share one cache in a lab |
+| [resources](resources.md) | trade speed against memory with one word, lean, default or max, and see what a run uses |
 | [notebooks and containers](notebooks.md) | keep the cache in hosted notebooks, dev containers and kubernetes jobs, with read-only roots and small disks |
 | [AI agents](ai-agents.md) | let a coding agent find and fetch data safely |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |

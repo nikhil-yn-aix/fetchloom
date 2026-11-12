@@ -35,7 +35,7 @@ memory           4.0 GiB                  this machine   FETCHLOOM_MEMORY
 | `settings file` | the [settings file](../reference/environment.md#settings-file) |
 | `this machine` | sized from this machine: its processors, the memory it has available, or for `build_floor` the disk holding the cache |
 | `default` | fetchloom's own default |
-| `resources = lean`, `resources = max` | the resources level, for a setting no variable or settings file key sets. the `resources` row shows the level and where it came from |
+| `resources = lean`, `resources = max` | the [resources level](../resources.md), for a setting no variable or settings file key sets. the `resources` row shows the level and where it came from |
 | `command line` | `--mirror`, for the mirrors it names. a run asks them before those of the setting, so with a setting that names others the `mirrors` row shows both, as `command line, settings file` |
 
 the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.

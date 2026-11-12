@@ -46,6 +46,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [scripting](docs/user/scripting.md): JSON checks for scripts and the python helper
 - [mirrors](docs/user/mirrors.md): folders and web servers that hold pinned files by SHA-256, asked before sources
 - [clusters](docs/user/hpc.md): home and scratch disks, many jobs, offline compute nodes and one cache for a lab
+- [resources](docs/user/resources.md): `resources` or `FETCHLOOM_RESOURCES`, lean, default or max, trades speed against memory; a setting set by name still wins
 - [notebooks and containers](docs/user/notebooks.md): where the cache lasts in hosted notebooks, dev containers and kubernetes jobs
 - [windows](docs/user/windows.md): drives, synced folders, long paths and recipe steps
 - [macos](docs/user/macos.md): the cache, apfs clones, icloud drive and unicode names

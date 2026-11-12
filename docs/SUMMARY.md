@@ -54,6 +54,7 @@
   - [mirrors](user/mirrors.md)
   - [CI](user/ci.md)
   - [clusters](user/hpc.md)
+  - [resources](user/resources.md)
   - [notebooks and containers](user/notebooks.md)
   - [AI agents](user/ai-agents.md)
   - [windows](user/windows.md)
