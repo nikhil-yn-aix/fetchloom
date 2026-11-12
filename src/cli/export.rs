@@ -1,8 +1,9 @@
 //! `fetchloom export`: the SHA-256 of each file a project places, or the link and SHA-256 of each
 //! file it downloads, in forms other tools read: `sha256sum -c`, a list of links, or an aria2c
 //! input file. it reads data.toml, data.lock and the cache's records of what each archive
-//! unpacked to, and asks no server anything. a text form is complete or not written at all;
-//! `--json` lists everything it knows and names what it does not.
+//! unpacked to, and asks no server anything. a text form is complete or not written at all, but
+//! for the datasets it has nothing to write for, which it names; `--json` lists everything it
+//! knows and names what it does not.
 
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
@@ -35,6 +36,8 @@ pub(super) struct Report {
     not_unpacked: Vec<String>,
     /// downloaded files, as `<dataset>/<path>`, whose link is not written.
     no_link: Vec<String>,
+    /// the datasets the chosen form never lists, by their kind, with why.
+    left_out: Vec<LeftOut>,
     /// why each fetched dataset in `unlocked` is there.
     #[serde(skip)]
     stale: Vec<String>,
@@ -59,6 +62,24 @@ struct Placed {
     sha256: Sha256,
     /// the archive it unpacks from, by its path in the dataset, or none for a downloaded file.
     unpacked_from: Option<String>,
+}
+
+/// a dataset a form never lists, and why.
+#[derive(Serialize)]
+struct LeftOut {
+    dataset: String,
+    reason: Reason,
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Reason {
+    /// a recipe makes its files, so no link holds them.
+    Recipe,
+    /// its files were imported from a folder on this machine, so no link holds them.
+    Imported,
+    /// `place = false` keeps its files out of the data folder.
+    NotPlaced,
 }
 
 /// a file downloaded for a dataset, as data.lock pins it.
@@ -88,6 +109,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     }
     let lock = project.lock()?.unwrap_or_default();
     let mut report = inventory(&manifest, lock, &super::peek_cache()?, &args.names)?;
+    report.left_out = left_out(&manifest, &args.names, args.format);
     let output = &context.output;
     if manifest.datasets.is_empty() {
         output.done("Ok", "data.toml has no datasets yet");
@@ -105,6 +127,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             output.answer(text.trim_end_matches('\n'));
         }
         tell_imported(output, &report, args.format);
+        tell_left_out(output, &report);
         return Ok(report);
     };
     match publish(path, &text, args.force) {
@@ -117,6 +140,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     };
     output.done("Exported", &format!("{what} to {}", path.display()));
     tell_imported(output, &report, args.format);
+    tell_left_out(output, &report);
     Ok(report)
 }
 
@@ -132,10 +156,8 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
         .iter()
         .map(|(name, _)| name.as_str())
         .collect();
-    let datasets = match names.split_last() {
-        Some((last, [])) => (*last).to_owned(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-        None => return,
+    let Some(datasets) = joined(&names) else {
+        return;
     };
     let (they_were, them) = if files == 1 {
         ("it was", "it")
@@ -149,6 +171,70 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
         ),
         &format!("share {them} through a folder mirror, which `fetchloom push --to <folder>` fills"),
     );
+}
+
+/// the datasets `names`, or every dataset when none is named, that `format` never lists: a
+/// recipe's result or an import has no link, and a dataset with `place = false` no file in the
+/// data folder.
+fn left_out(manifest: &Manifest, names: &[String], format: Format) -> Vec<LeftOut> {
+    manifest
+        .datasets
+        .iter()
+        .filter(|(name, _)| names.is_empty() || names.contains(name))
+        .filter_map(|(name, entry)| {
+            let reason = match format {
+                Format::Sha256 if !entry.place => Reason::NotPlaced,
+                Format::Links | Format::Aria2 if entry.recipe().is_some() => Reason::Recipe,
+                Format::Links | Format::Aria2 if entry.is_import() => Reason::Imported,
+                _ => return None,
+            };
+            Some(LeftOut {
+                dataset: name.clone(),
+                reason,
+            })
+        })
+        .collect()
+}
+
+/// says on one line which recipes' results a list of links leaves out, or which datasets with
+/// `place = false` a list of checksums does. imports have their own warning, with a count.
+fn tell_left_out(output: &crate::output::Output, report: &Report) {
+    let named = |reason: Reason| -> Vec<&str> {
+        report
+            .left_out
+            .iter()
+            .filter(|left| left.reason == reason)
+            .map(|left| left.dataset.as_str())
+            .collect()
+    };
+    let recipes = named(Reason::Recipe);
+    if let Some(datasets) = joined(&recipes) {
+        let makes = if recipes.len() == 1 {
+            "a recipe makes its"
+        } else {
+            "recipes make their"
+        };
+        output.warn(&format!(
+            "the list leaves out {datasets}: {makes} files, so no link holds them"
+        ));
+    }
+    let unplaced = named(Reason::NotPlaced);
+    if let Some(datasets) = joined(&unplaced) {
+        let its = if unplaced.len() == 1 { "its" } else { "their" };
+        output.warn(&format!(
+            "the list leaves out {datasets}: place = false keeps {its} files out of the data folder"
+        ));
+    }
+}
+
+/// `names` as a sentence lists them, as `a, b and c`, or none when there are none.
+fn joined(names: &[&str]) -> Option<String> {
+    let (last, rest) = names.split_last()?;
+    Some(if rest.is_empty() {
+        (*last).to_owned()
+    } else {
+        format!("{} and {last}", rest.join(", "))
+    })
 }
 
 /// `error` with what export found, so `--json` still lists it.
@@ -176,6 +262,7 @@ fn inventory(
         unlocked: Vec::new(),
         not_unpacked: Vec::new(),
         no_link: Vec::new(),
+        left_out: Vec::new(),
         stale: Vec::new(),
         unbuilt: Vec::new(),
         refused: Vec::new(),

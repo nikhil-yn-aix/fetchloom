@@ -4,7 +4,7 @@
 use std::fs;
 use std::process::Command;
 
-use crate::support::{Result, Routes, Sandbox, file, json, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const A: &[u8] = b"a\n";
@@ -296,6 +296,51 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     assert_eq!(
         fs::read_to_string(sandbox.work().join("links.txt"))?,
         format!("{url}/iris.csv {}\n", sha256(IRIS))
+    );
+    Ok(())
+}
+
+/// nothing downloads a recipe's result, so a list of links has none of its files, and a dataset
+/// with `place = false` has no file in the data folder to check. a form that leaves a dataset out
+/// says so on one line and names it with why under `left_out`; an empty answer is still a success.
+#[test]
+fn a_form_names_each_dataset_it_leaves_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(crate::project::PATH, vec![file(IRIS, "\"v1\"")])?;
+    crate::build::with_recipe(&sandbox, &server)?;
+    crate::build::pin_clean(&sandbox, crate::build::CODE, &[])?;
+    let links = sandbox.run(&["export", "--format", "links", "clean"])?;
+    assert_eq!(links.status.code(), Some(0), "{}", text(&links.stderr)?);
+    assert_eq!(text(&links.stdout)?, "");
+    assert_eq!(
+        text(&links.stderr)?,
+        "warning: the list leaves out clean: a recipe makes its files, so no link holds them\n"
+    );
+    let aria2 = sandbox.run(&["--json", "export", "--format", "aria2"])?;
+    assert_eq!(
+        json(&aria2)?["result"]["left_out"],
+        serde_json::json!([{"dataset": "clean", "reason": "recipe"}])
+    );
+    let manifest = sandbox.work().join("data.toml");
+    let text_before = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        text_before.replace("[datasets.iris]\n", "[datasets.iris]\nplace = false\n"),
+    )?;
+    let sums = sandbox.run(&["export"])?;
+    assert_eq!(sums.status.code(), Some(0), "{}", text(&sums.stderr)?);
+    assert_eq!(
+        text(&sums.stdout)?,
+        format!("{}  data/clean/clean.csv\n", sha256(b"done"))
+    );
+    assert_eq!(
+        text(&sums.stderr)?,
+        "warning: the list leaves out iris: place = false keeps its files out of the data folder\n"
+    );
+    let listed = sandbox.run(&["--json", "export"])?;
+    assert_eq!(
+        json(&listed)?["result"]["left_out"],
+        serde_json::json!([{"dataset": "iris", "reason": "not_placed"}])
     );
     Ok(())
 }
