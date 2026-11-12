@@ -30,15 +30,15 @@ fetchloom path [options] <name>[/file]
 
 `-v` adds one line on stderr about where the bytes are: a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache. [placement](../concepts.md#placement) says when you get which.
 
-a ready dataset takes no `.fetchloom/lock` hold and prints no closing summary. member validation, readiness and the answer share one lock read and one plan, of the dataset and of those whose folders meet its folder, which a clash with its files could involve. a ready answer reads only their pins, the state's records in its folder and a listing of that folder, so it costs what the dataset holds, not what the project holds. while waiting for another command, a changed state file triggers a fresh readiness check: a reader whose dataset is now ready answers without taking the lock; otherwise fetchloom takes it and rereads the project before deciding whether sync is still needed. a subfolder is accepted when it contains locked files. when an archive tree is unknown, sync may be needed before checking its members.
-
-stderr excerpt for a path absent from a dataset:
+a ready dataset prints no closing summary, and the check costs what the dataset holds, not what the project holds. a subfolder is accepted when it holds pinned files. when an archive's files are not known yet, a sync may come before the check. a path the dataset does not hold, from a real run:
 
 ```text
-error: dataset has no file or folder called not-a-file.csv
+error: iris has no file or folder called not-a-file.csv
+  iris holds 4 files, such as Iris.csv, .gitattributes and README.md
+  help: name a path it holds, such as `fetchloom path iris/Iris.csv`
 ```
 
-a [recipe](../recipes.md) that changed since its build keeps the result data.lock pins, so `path` answers its folder and warns what changed, as sync does, naming the `fetchloom build` that makes it again. it reads the pins and data.toml entries of the datasets the recipe is made from to tell, and fetches nothing of them. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no folder in the data folder, so `path` refuses it:
+a [recipe](../recipes.md) that changed since its build keeps the result data.lock pins, so `path` answers its folder and warns what changed, as sync does, naming the `fetchloom build` that makes it again. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no folder in the data folder, so `path` refuses it:
 
 ```text
 error: raw has place = false, so it has no folder in data/
@@ -46,7 +46,7 @@ error: raw has place = false, so it has no folder in data/
   help: set place = true on datasets.raw in data.toml, then run `fetchloom sync raw`
 ```
 
-`path` returns a location, not proof of intact bytes. sync may have kept an edited file there. use [status](status.md) and inspect sync's preserved conflicts when correctness depends on unchanged inputs.
+`path` returns a location, not proof of intact bytes: sync may have kept an edited file there. use [status](status.md) when correctness depends on unchanged inputs.
 
 `--locked` never writes data.lock. a dataset already in place answers as usual, since nothing needs writing; one that needs a sync first, such as a dataset added to data.toml by hand, fails with `lock.outdated` instead of being pinned and downloaded. only the named dataset's entry counts, so another dataset's stale entry stops nothing.
 

@@ -17,7 +17,7 @@ there are no command-specific options. [global options](README.md#global-options
 
 ## what it shows
 
-stdout holds one line per setting: its name, its value, where the value came from and the variable that changes it. a value longer than 24 characters, such as a deep cache folder, runs past its column and puts the rest of its row on a line of its own, so the other rows keep their columns. at a terminal a folder below your home folder reads from `~`, and a terminal too narrow for every column leaves out the variable, which is always `FETCHLOOM_` and the setting's name in capitals. from a real run:
+stdout holds one line per setting: its name, its value, where the value came from and the variable that changes it, which is always `FETCHLOOM_` and the name in capitals. a value longer than 24 characters, such as a deep cache folder, puts the rest of its row on a line of its own, and a terminal too narrow for every column leaves out the variable. from a real run:
 
 ```text
 cache            /scratch/lab/fetchloom-cache
@@ -36,9 +36,9 @@ memory           4.0 GiB                  this machine   FETCHLOOM_MEMORY
 | `default` | fetchloom's own default |
 | `command line` | `--mirror`, for the mirrors it names. a run asks them before those of the setting, so with a setting that names others the `mirrors` row shows both, as `command line, settings file` |
 
-the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is no file there yet.
+the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.
 
-a set variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it before it starts, `settings` included, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
+a variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
 
 ```text
 warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it changes nothing
@@ -47,7 +47,7 @@ warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it chan
 
 `settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file.
 
-JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for the cache folder, the `push_to` folder and the split mode, a list of text for `allowed_origins`, `s3_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap, no cache folder or no `push_to` folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, for `--mirror`; mirrors from `--mirror` and from a setting that names others show both, the flag first, as `flag,environment` or `flag,file`. `result.machine` holds `processors`, `memory`, the bytes this machine has available, read on linux only and null elsewhere, and `open_files`, the most files a run may hold open or null where the system sets no limit. `result.file` holds `path`, null when there is no folder for a settings file, and `found`.
+JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default` or `flag`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 
 ## exit codes
 
