@@ -52,6 +52,7 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | the same map built in merged chunks | 0.85, but on musl peak memory 1.05 to 1.06 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | project state written as a stream | no measured win | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | lock and names | indexed pin membership and unique rename signatures | status at 40,000 0.146/0.254; 1,000 renames 0.0044/0.0031, musl +7.1 MiB | kept | [rename indexes](#indexing-pin-membership-and-renames-2026-11-12) |
+| lock and names | indexed export selection | 40,000 names wall 0.0367/0.0275, but musl peak 137.6–144.4 to 184.2–184.4 MiB | dropped, memory | [export selection](#indexing-export-selection-2026-11-12) |
 | lock and names | fast lock reader for commented locks | list at 100,000 files 0.213 to 0.100 s; peak memory 334 to 78 MB | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | lock and names | `add -i` writes data.toml once for the whole list | 10,000 links 415 to 4.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
 | lock and names | relocking looks datasets up in sets and maps | 40,000 links 31.7 to 21.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
@@ -810,6 +811,8 @@ one release executable per libc, built from 27811da3 with `FETCHLOOM_EXP_PIN_IND
 
 RSS is a separate GNU-time child measurement on cores 0–11 at nice 10, without the wall lock: median [minimum, maximum] of per-process peaks, not the Python-parent floor in `abh.py`'s wait4 field. there are five native observations per arm through 1,000 entries and three above it. small-n RSS stays within its observed spread. the 1,000-rename musl stress case spends 7.1 MiB more, reaching 36.0 MiB; this is a reported memory cost, not a memory-neutral claim. the ordinary 100,000-file control remains below the 150 MB budget. the 40,000-dataset musl status and lock cases already exceeded that ordinary-workload target; their additional peaks are under 1 MiB. MB is decimal and MiB is binary.
 
+a later independent native-RSS check used 32 pairs for each one- and ten-dataset status, lock and rename case. no interval established an RSS increase: every glibc interval included 1, and each musl interval either included 1 or favored lower RSS. the one-dataset musl rename used about 2 MiB less. those observations are retained separately; the table below still shows the original native sample, rather than silently replacing it.
+
 an allocator diagnostic changed only `MIMALLOC_PURGE_DELAY` to 0: the 1,000-rename musl peaks became 20.4/20.1 MiB, versus 28.9/36.0 MiB at the shipped 1,000 ms delay. that supports a retention explanation, but neither an allocator change nor the diagnostic's lower memory is part of this keep decision. all tables below use the default allocator policy.
 
 | libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
@@ -871,3 +874,48 @@ an allocator diagnostic changed only `MIMALLOC_PURGE_DELAY` to 0: the 1,000-rena
 | musl | status, files control | 100,000 | 2474.830 → 2475.101 | 12 | 0 |
 
 characterizations passed before the rewrite. the new cases are `fetched_renames_keep_bytes_and_report_new_name_order`, `named_rename_copies_the_pin_and_excludes_other_new_names`, `fetched_matches_require_unique_specs_and_the_same_extraction`, `given_and_upgraded_names_are_not_rename_candidates`, `recipe_renames_match_the_ordered_recipe_not_its_old_hashes` and `recipe_renames_refuse_ambiguous_old_or_new_shapes`. disabling the duplicate-new guard made the ambiguity cases fail; restoring it passed. the existing real-CLI fetched and recipe rename cases also passed. fixtures, experiment binaries, raw rounds, native RSS and mutation evidence remain with the sweep outside the repository.
+
+## indexing export selection, 2026-11-12
+
+dropped under the default-policy memory gate. one sorted, deduplicated vector of borrowed names removed repeated linear membership checks from named export's lock reader, inventory and left-out reporting. validation still preceded sorting, preserving the first unknown-name error; output order, duplicate arguments and stale-pin omission stayed unchanged.
+
+the build, paired analysis, noise filter and independent native-RSS method are those of [the rename comparison](#indexing-pin-membership-and-renames-2026-11-12). `FETCHLOOM_EXP_EXPORT_INDEX` selected the two paths in one executable per libc. `export` named every dataset at 1, 10, 1,000 and 40,000; an unnamed export of one 100,000-file dataset was the control. all commands used offline JSON output. RSS below is median [minimum, maximum] of per-process peaks in MiB, not the harness's parent floor.
+
+wall time improved substantially at 40,000 names and the small cases showed no established slowdown, but native musl RSS rose from 137.6–144.4 MiB to 184.2–184.4 MiB. that is much more than the modest memory allowance, so the change did not stay. the unnamed 100,000-file export already misses the 150 MB target and is unchanged; it does not excuse a new increase elsewhere. no production code or allocator setting was retained for this proposal.
+
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+|---|---|---:|---|---|---|---|
+| glibc | all named exports | 1 | 3.830 [3.753, 3.925] | 3.762 [3.685, 3.931] | 0.9916 [0.9728, 1.0106] | 10.99 [10.85, 11.14] → 10.78 [10.18, 10.98] |
+| musl | all named exports | 1 | 3.596 [3.567, 3.619] | 3.579 [3.560, 3.621] | 0.9935 [0.9859, 1.0026] | 15.56 [15.56, 15.57] → 15.56 [15.55, 15.57] |
+| glibc | all named exports | 10 | 3.964 [3.825, 4.026] | 3.802 [3.776, 3.950] | 0.9824 [0.9586, 1.0136] | 10.68 [10.22, 10.99] → 10.73 [10.35, 11.14] |
+| musl | all named exports | 10 | 4.129 [4.049, 4.251] | 4.162 [4.022, 4.229] | 0.9935 [0.9858, 1.0203] | 15.57 [15.56, 15.57] → 15.56 [15.56, 15.61] |
+| glibc | all named exports | 1,000 | 27.275 [26.833, 27.860] | 16.389 [16.146, 17.001] | 0.6045 [0.5944, 0.6177] | 14.16 [13.61, 14.23] → 14.14 [13.43, 14.16] |
+| musl | all named exports | 1,000 | 26.128 [25.391, 26.518] | 14.756 [14.343, 15.112] | 0.5659 [0.5560, 0.5823] | 35.82 [35.77, 35.82] → 35.82 [35.82, 35.83] |
+| glibc | all named exports | 40,000 | 17657.924 [17186.672, 17752.020] | 636.157 [625.705, 643.062] | 0.0367 [0.0356, 0.0374] | 144.78 [144.77, 144.92] → 146.40 [145.85, 146.91] |
+| musl | all named exports | 40,000 | 14356.194 [14332.797, 14361.045] | 394.845 [394.072, 397.699] | 0.0275 [0.0275, 0.0277] | 143.02 [137.62, 144.43] → 184.27 [184.15, 184.35] |
+| glibc | unnamed export, files control | 100,000 | 334.756 [327.599, 337.032] | 334.278 [331.241, 335.977] | 1.0023 [0.9901, 1.0134] | 105.09 [104.79, 105.33] → 104.91 [104.89, 105.16] |
+| musl | unnamed export, files control | 100,000 | 264.906 [263.350, 268.155] | 265.317 [263.419, 266.273] | 1.0006 [0.9926, 1.0022] | 177.88 [177.88, 177.89] → 177.88 [177.88, 177.88] |
+
+| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+|---|---|---:|---:|---:|---:|
+| glibc | all named exports | 1 | 3.126 → 3.127 | 32 | 34 |
+| musl | all named exports | 1 | 2.493 → 2.490 | 64 | 0 |
+| glibc | all named exports | 10 | 3.755 → 3.757 | 32 | 54 |
+| musl | all named exports | 10 | 3.047 → 3.051 | 64 | 0 |
+| glibc | all named exports | 1,000 | 158.972 → 76.988 | 10 | 0 |
+| musl | all named exports | 1,000 | 176.873 → 68.485 | 12 | 0 |
+| glibc | all named exports | 40,000 | 137582.837 → 3183.745 | 10 | 0 |
+| musl | all named exports | 40,000 | 130462.786 → 2889.036 | 12 | 0 |
+| glibc | unnamed export, files control | 100,000 | 2522.494 → 2523.609 | 10 | 12 |
+| musl | unnamed export, files control | 100,000 | 2314.885 → 2314.957 | 12 | 0 |
+
+the borrowed vector itself occupies about 0.61 MiB at 40,000 names. the shipped mimalloc 3.3.2 reports a 1,000 ms purge delay. a separate causal probe changed only that option, once per arm, and obtained:
+
+| purge policy | old peak MiB | indexed peak MiB |
+|---|---:|---:|
+| default, 1,000 ms | 144.5 | 184.2 |
+| 0 ms, diagnostic only | 133.5 | 134.2 |
+
+this supports delayed reclamation as the main source of the RSS gap. the override is not part of the gate: the default peak is real, and a global allocator change would need its own all-command checks. no inferred retained pages were subtracted from the cost.
+
+the CLI characterization `selection_keeps_error_order_deduplicates_and_omits_stale_pins` passed on the old and experimental paths. deliberately sorting before validation made its error-order assertion fail. the test and prototype remain in the saved experiment patch, not as unused product code or a new test for unchanged behavior. all five workload pairs produced identical JSON on both libc builds. raw rounds, binaries, counters and the separate purge probe remain with the sweep outside the repository.
