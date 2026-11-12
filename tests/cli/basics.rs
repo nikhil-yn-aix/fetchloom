@@ -435,37 +435,49 @@ fn help_shows_a_command_and_suggests_a_topic() -> Result {
     Ok(())
 }
 
+/// a command line fetchloom cannot run exits 2 and says what is wrong, how the command is used
+/// where that helps, and where to read more, naming options as they were typed.
+/// `cli::usage::tests` decides each answer; these rows check what the binary prints.
 #[test]
-fn an_unknown_option_is_a_usage_error() -> Result {
-    let output = Sandbox::new()?.run(&["--verison"])?;
-    assert_eq!(output.status.code(), Some(2));
-    insta::assert_snapshot!(text(&output.stderr)?);
-    Ok(())
-}
-
-#[test]
-fn a_missing_link_shows_the_usage() -> Result {
-    let output = Sandbox::new()?.run(&["get"])?;
-    assert_eq!(output.status.code(), Some(2));
-    insta::assert_snapshot!(text(&output.stderr)?);
-    Ok(())
-}
-
-/// add takes a link, a path or a list, so its usage has three lines, each of its own, with no
-/// written `\n` between them, and the sentence above them names what is missing in plain words.
-#[test]
-fn add_without_a_link_shows_each_usage_line() -> Result {
+fn usage_errors_say_what_is_wrong_and_where_help_is() -> Result {
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["add"])?;
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        text(&output.stderr)?,
-        "error: add needs <link>, <path> or -i <file>\n  \
-         usage: fetchloom add [options] <link>...\n         \
-         fetchloom add [options] <path>\n         \
-         fetchloom add [options] -i <file>\n  \
-         help: `fetchloom add --help` says what it takes\n"
-    );
+    for (args, stderr) in [
+        (
+            &["--verison"][..],
+            "error: unexpected argument \"--verison\"\n  help: did you mean `fetchloom --version`?\n",
+        ),
+        (
+            &["get"],
+            "error: get needs <link>\n  \
+             usage: fetchloom get [options] <link>...\n  \
+             help: `fetchloom get --help` says what it takes\n",
+        ),
+        (
+            &["add"],
+            "error: add needs <link>, <path> or -i <file>\n  \
+             usage: fetchloom add [options] <link>...\n         \
+             fetchloom add [options] <path>\n         \
+             fetchloom add [options] -i <file>\n  \
+             help: `fetchloom add --help` says what it takes\n",
+        ),
+        (
+            &["add", "--as"],
+            "error: --as needs a value\n  help: `fetchloom add --help` says what it takes\n",
+        ),
+        (
+            &["completions", "nope"],
+            "error: <shell> cannot be \"nope\"\n  help: use one of bash, elvish, fish, powershell or zsh\n",
+        ),
+        (
+            &["status", "-v", "-q"],
+            "error: --verbose and --quiet cannot be used together\n  \
+             help: `fetchloom status --help` says what it takes\n",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(text(&output.stderr)?, stderr, "{args:?}");
+    }
     let output = sandbox.run(&["--json", "add"])?;
     let document: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(
@@ -475,34 +487,6 @@ fn add_without_a_link_shows_each_usage_line() -> Result {
             "       fetchloom add [options] <path>",
             "       fetchloom add [options] -i <file>"
         ])
-    );
-    Ok(())
-}
-
-#[test]
-fn usage_errors_name_options_as_typed() -> Result {
-    let sandbox = Sandbox::new()?;
-    let first_two = |args: &[&str]| -> Result<String> {
-        let output = sandbox.run(args)?;
-        assert_eq!(output.status.code(), Some(2));
-        let stderr = text(&output.stderr)?;
-        Ok(stderr
-            .lines()
-            .filter(|line| !line.starts_with("  usage:"))
-            .collect::<Vec<_>>()
-            .join("\n"))
-    };
-    assert_eq!(
-        first_two(&["add", "--as"])?,
-        "error: --as needs a value\n  help: `fetchloom add --help` says what it takes"
-    );
-    assert_eq!(
-        first_two(&["completions", "nope"])?,
-        "error: <shell> cannot be \"nope\"\n  help: use one of bash, elvish, fish, powershell or zsh"
-    );
-    assert_eq!(
-        first_two(&["status", "-v", "-q"])?,
-        "error: --verbose and --quiet cannot be used together\n  help: `fetchloom status --help` says what it takes"
     );
     Ok(())
 }
@@ -615,44 +599,34 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     Ok(())
 }
 
-/// a mistyped command or option keeps the other words typed, so the suggestion runs what the
-/// person meant.
+/// a mistyped command, option or dataset name exits 2, changes nothing and suggests the line
+/// typed with that one word fixed. `cli::usage::tests` guesses each word and
+/// `cli::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines; these
+/// rows check what the binary prints, in text and in json.
 #[test]
-fn a_typo_keeps_the_other_words_typed() -> Result {
+fn a_typo_suggests_the_line_typed_with_one_word_fixed() -> Result {
     let sandbox = Sandbox::new()?;
+    let manifest = "[datasets.iris]\nref = \"https://example.org/iris.csv\"\n\n[datasets.penguins]\nref = \"https://example.org/penguins.csv\"\n";
+    std::fs::write(sandbox.work().join("data.toml"), manifest)?;
     for (typed, meant) in [
         (
             &["seach", "iris", "--limit", "5"][..],
             "fetchloom search iris --limit 5",
         ),
         (
-            &["-q", "Search", "iris", "--source", "hf"],
-            "fetchloom -q search iris --source hf",
-        ),
-        (&["ad", "iris", "--dry-run"], "fetchloom add iris --dry-run"),
-        (
-            &["add", "--yse", "zenodo:3608990"],
-            "fetchloom add --yes zenodo:3608990",
-        ),
-        (
             &["search", "iris", "--limt=5"],
             "fetchloom search iris --limit=5",
+        ),
+        (
+            &["remove", "--dry-run", "imdb"],
+            "fetchloom remove --dry-run iris",
         ),
     ] {
         let output = sandbox.run(typed)?;
         assert_eq!(output.status.code(), Some(2), "{typed:?}");
         let said = text(&output.stderr)?;
-        assert!(
-            said.contains(&format!("help: did you mean `{meant}`?")),
-            "{typed:?}: {said}"
-        );
+        assert!(said.contains(&format!("`{meant}`")), "{typed:?}: {said}");
     }
-    Ok(())
-}
-
-#[test]
-fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
-    let sandbox = Sandbox::new()?;
     let output = sandbox.run(&["cache", "verfiy", "--json"])?;
     assert_eq!(output.status.code(), Some(2));
     let document: Value = serde_json::from_slice(&output.stdout)?;
@@ -660,12 +634,9 @@ fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
         document["errors"][0]["help"],
         "did you mean `fetchloom cache verify --json`?"
     );
-    let corrected = sandbox.run(&["cache", "verify"])?;
     assert_eq!(
-        corrected.status.code(),
-        Some(0),
-        "{}",
-        text(&corrected.stderr)?
+        std::fs::read_to_string(sandbox.work().join("data.toml"))?,
+        manifest
     );
     Ok(())
 }

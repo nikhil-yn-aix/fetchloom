@@ -1899,6 +1899,30 @@ mod tests {
                 &["fashion mnist"],
                 "fetchloom add \"fashion mnist\" --select \"*.csv\"",
             ),
+            (
+                &["-q", "Search", "iris", "--source", "hf"],
+                &["Search"],
+                &["search"],
+                "fetchloom -q search iris --source hf",
+            ),
+            (
+                &["ad", "iris", "--dry-run"],
+                &["ad"],
+                &["add"],
+                "fetchloom add iris --dry-run",
+            ),
+            (
+                &["add", "--yse", "zenodo:3608990"],
+                &["--yse"],
+                &["--yes"],
+                "fetchloom add --yes zenodo:3608990",
+            ),
+            (
+                &["cache", "verfiy", "--json"],
+                &["verfiy"],
+                &["verify"],
+                "fetchloom cache verify --json",
+            ),
         ] {
             assert_eq!(
                 line(args, typed, meant).as_deref(),
