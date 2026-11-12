@@ -16,7 +16,7 @@ mirrors = ["/mnt/lab/fetchloom", "https://data.lab.example/fetchloom"]
 fetchloom sync --mirror /media/usb/fetchloom
 ```
 
-text holding `://` is a web address and anything else a folder, so `C:\lab` is a folder. `--mirror` can be repeated; its mirrors come first, in the order given, then those of `FETCHLOOM_MIRRORS`, or of the settings file when the variable is unset. a relative folder in the settings file is taken from the file's folder, and one on the command line or in the variable from the working folder. [`fetchloom settings`](commands/settings.md) shows the mirrors a run would ask.
+text holding `://` is a web address and anything else a folder, so `C:\lab` is a folder. `--mirror` can be repeated; its mirrors come first, in the order given, then those of `FETCHLOOM_MIRRORS`, or of the settings file when the variable is unset. a relative folder in the settings file is taken from the file's folder, and one on the command line or in the variable from the working folder. [`fetchloom settings`](commands/settings.md) shows the mirrors a run would ask, those of `--mirror` first, and where each came from.
 
 ## a folder mirror
 

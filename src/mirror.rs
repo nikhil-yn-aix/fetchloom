@@ -122,6 +122,8 @@ pub(crate) struct Refusal {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Mirrors {
     pub(crate) list: Vec<Location>,
+    /// how many of `list`, from its start, the command line named.
+    pub(crate) flagged: usize,
     /// requests go to mirrors alone, as the `mirrors_only` setting asks.
     pub(crate) only: bool,
 }
@@ -130,12 +132,22 @@ impl Mirrors {
     /// the mirrors `given` on the command line, then those the settings list, each once.
     pub(crate) fn new(given: Vec<Location>, listed: &[Location], only: bool) -> Mirrors {
         let mut list: Vec<Location> = Vec::with_capacity(given.len() + listed.len());
-        for location in given.into_iter().chain(listed.iter().cloned()) {
+        for location in given {
             if !list.contains(&location) {
                 list.push(location);
             }
         }
-        Mirrors { list, only }
+        let flagged = list.len();
+        for location in listed {
+            if !list.contains(location) {
+                list.push(location.clone());
+            }
+        }
+        Mirrors {
+            list,
+            flagged,
+            only,
+        }
     }
 
     /// the web mirrors' addresses.
@@ -225,5 +237,6 @@ mod tests {
             mirrors.list,
             [folder("/usb"), folder("/nas"), folder("/home/lab")]
         );
+        assert_eq!(mirrors.flagged, 2);
     }
 }

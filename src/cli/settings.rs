@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::Context;
+use crate::mirror::Mirrors;
 use crate::net::Splitting;
 use crate::settings::{Origin, Set};
 use crate::units;
@@ -24,7 +25,10 @@ struct Shown {
     name: &'static str,
     /// a number for counts, bytes and seconds, text for a folder or a mode, null for no limit.
     value: Value,
-    origin: Origin,
+    /// where the value came from: one origin, or for mirrors `--mirror` names before the
+    /// setting's, the command line and then the setting's origin.
+    #[serde(serialize_with = "named")]
+    origin: Vec<Origin>,
     variable: &'static str,
     /// the value as a person reads it.
     #[serde(skip)]
@@ -96,13 +100,13 @@ fn rows(context: &Context) -> Vec<Shown> {
         value: cache
             .as_ref()
             .map_or(Value::Null, |path| json!(path.display().to_string())),
-        origin: if var("FETCHLOOM_CACHE").is_some() {
+        origin: vec![if var("FETCHLOOM_CACHE").is_some() {
             Origin::Environment
         } else if settings.file.cache().is_some() {
             Origin::File
         } else {
             Origin::Default
-        },
+        }],
         variable: "FETCHLOOM_CACHE",
         said: cache.map_or_else(
             || "none: set FETCHLOOM_CACHE".to_owned(),
@@ -123,7 +127,7 @@ fn rows(context: &Context) -> Vec<Shown> {
     shown.push(Shown {
         name: "timeout",
         value: json!(settings.timeout.value.as_secs()),
-        origin: settings.timeout.origin,
+        origin: vec![settings.timeout.origin],
         variable: "FETCHLOOM_TIMEOUT",
         said: format!("{} s", settings.timeout.value.as_secs()),
     });
@@ -152,22 +156,18 @@ fn rows(context: &Context) -> Vec<Shown> {
             .value
             .iter()
             .map(url::Origin::ascii_serialization),
-        settings.allowed_origins.origin,
+        vec![settings.allowed_origins.origin],
     ));
     shown.push(list(
         "s3_buckets",
         settings.s3_buckets.value.iter().map(ToString::to_string),
-        settings.s3_buckets.origin,
+        vec![settings.s3_buckets.origin],
     ));
-    shown.push(list(
-        "mirrors",
-        settings.mirrors.value.iter().map(ToString::to_string),
-        settings.mirrors.origin,
-    ));
+    shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
     shown.push(Shown {
         name: "mirrors_only",
         value: json!(settings.mirrors_only.value),
-        origin: settings.mirrors_only.origin,
+        origin: vec![settings.mirrors_only.origin],
         variable: crate::settings::variable("mirrors_only"),
         said: settings.mirrors_only.value.to_string(),
     });
@@ -175,7 +175,7 @@ fn rows(context: &Context) -> Vec<Shown> {
     shown.push(Shown {
         name: "push_to",
         value: push_to.map_or(Value::Null, |folder| json!(folder.display().to_string())),
-        origin: settings.push_to.origin,
+        origin: vec![settings.push_to.origin],
         variable: crate::settings::variable("push_to"),
         said: push_to.map_or_else(|| "none".to_owned(), |folder| folder.display().to_string()),
     });
@@ -200,7 +200,7 @@ fn floor(settings: &crate::settings::Settings, cache: Option<&std::path::Path>) 
     Shown {
         name: "build_floor",
         value: json!(value),
-        origin,
+        origin: vec![origin],
         variable: crate::settings::variable("build_floor"),
         said: units::size(value),
     }
@@ -222,11 +222,11 @@ fn variables(context: &Context) -> Vec<Shown> {
     shown.push(Shown {
         name: "threads",
         value: json!(threads),
-        origin: if context.threads.is_limited() {
+        origin: vec![if context.threads.is_limited() {
             Origin::Environment
         } else {
             Origin::Machine
-        },
+        }],
         variable: "FETCHLOOM_THREADS",
         said: threads.to_string(),
     });
@@ -236,7 +236,7 @@ fn variables(context: &Context) -> Vec<Shown> {
             .rate
             .as_ref()
             .map_or(Value::Null, |rate| json!(rate.per_second())),
-        origin: from_env("FETCHLOOM_RATE"),
+        origin: vec![from_env("FETCHLOOM_RATE")],
         variable: "FETCHLOOM_RATE",
         said: context.rate.as_ref().map_or_else(
             || "no limit".to_owned(),
@@ -251,7 +251,7 @@ fn variables(context: &Context) -> Vec<Shown> {
     shown.push(Shown {
         name: "split",
         value: json!(mode),
-        origin: from_env("FETCHLOOM_SPLIT"),
+        origin: vec![from_env("FETCHLOOM_SPLIT")],
         variable: "FETCHLOOM_SPLIT",
         said: said.to_owned(),
     });
@@ -262,14 +262,14 @@ fn count(name: &'static str, value: impl Into<Value> + ToString + Copy, origin: 
     Shown {
         name,
         value: value.into(),
-        origin,
+        origin: vec![origin],
         variable: crate::settings::variable(name),
         said: value.to_string(),
     }
 }
 
 /// a setting that holds a list, shown as its items separated by commas, or none.
-fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Origin) -> Shown {
+fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Vec<Origin>) -> Shown {
     let items: Vec<String> = items.collect();
     Shown {
         name,
@@ -284,11 +284,34 @@ fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Origin)
     }
 }
 
+/// the mirrors a run asks, in order: those `--mirror` names, then those of the setting it did not
+/// name, from `setting`.
+fn mirrors(asked: &Mirrors, setting: Origin) -> Shown {
+    let mut origin = Vec::new();
+    if asked.flagged > 0 {
+        origin.push(Origin::Flag);
+    }
+    if asked.flagged == 0 || asked.list.len() > asked.flagged {
+        origin.push(setting);
+    }
+    list(
+        "mirrors",
+        asked.list.iter().map(ToString::to_string),
+        origin,
+    )
+}
+
+/// origins as `--json` names them, separated by commas.
+fn named<S: serde::Serializer>(origins: &[Origin], serializer: S) -> Result<S::Ok, S::Error> {
+    let names: Vec<&str> = origins.iter().map(|origin| origin.name()).collect();
+    serializer.serialize_str(&names.join(","))
+}
+
 fn size(name: &'static str, set: Set<u64>) -> Shown {
     Shown {
         name,
         value: json!(set.value),
-        origin: set.origin,
+        origin: vec![set.origin],
         variable: crate::settings::variable(name),
         said: units::size(set.value),
     }
@@ -303,7 +326,12 @@ fn table(shown: &[Shown]) -> String {
             [
                 setting.name.to_owned(),
                 setting.said.clone(),
-                setting.origin.to_string(),
+                setting
+                    .origin
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 setting.variable.to_owned(),
             ]
         })
@@ -327,4 +355,107 @@ fn table(shown: &[Shown]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::cli::fetch::mirrors::Mirrored;
+    use crate::mirror::Location;
+    use crate::output::{Level, Output, Style};
+
+    fn folder(path: &str) -> Location {
+        Location::Folder(PathBuf::from(path))
+    }
+
+    /// a run given `flagged` with `--mirror`, whose mirrors setting lists `listed` from `origin`.
+    fn context(flagged: Vec<Location>, listed: Vec<Location>, origin: Origin) -> Context {
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.mirrors = Mirrored::new(Mirrors::new(flagged, &listed, false));
+        context.settings.mirrors = Set {
+            value: listed,
+            origin,
+        };
+        context
+    }
+
+    /// the mirrors row shows what a run asks: those `--mirror` names first, then those of the
+    /// setting it did not name, each once, and where each part came from.
+    #[test]
+    fn the_mirrors_row_shows_what_a_run_asks_and_where_each_part_came_from() {
+        for (flagged, listed, origin, value, json, said) in [
+            (
+                vec![],
+                vec![folder("/mnt/lab")],
+                Origin::File,
+                json!(["/mnt/lab"]),
+                "file",
+                "settings file",
+            ),
+            (
+                vec![folder("/usb")],
+                vec![],
+                Origin::Default,
+                json!(["/usb"]),
+                "flag",
+                "command line",
+            ),
+            (
+                vec![folder("/usb")],
+                vec![folder("/mnt/lab")],
+                Origin::Environment,
+                json!(["/usb", "/mnt/lab"]),
+                "flag,environment",
+                "command line, environment",
+            ),
+            (
+                vec![folder("/mnt/lab")],
+                vec![folder("/mnt/lab"), folder("/usb")],
+                Origin::File,
+                json!(["/mnt/lab", "/usb"]),
+                "flag,file",
+                "command line, settings file",
+            ),
+            (
+                vec![folder("/usb")],
+                vec![folder("/usb")],
+                Origin::File,
+                json!(["/usb"]),
+                "flag",
+                "command line",
+            ),
+        ] {
+            let shown = rows(&context(flagged, listed, origin));
+            let row = shown.iter().find(|row| row.name == "mirrors").unwrap();
+            let document = serde_json::to_value(row).unwrap();
+            assert_eq!(document["value"], value, "{said}");
+            assert_eq!(document["origin"], json, "{said}");
+            let line = table(std::slice::from_ref(row));
+            let items: Vec<&str> = value
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            assert_eq!(
+                line,
+                format!("mirrors  {}  {said}  FETCHLOOM_MIRRORS", items.join(", "))
+            );
+        }
+    }
 }

@@ -10,8 +10,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use serde::Serialize;
-
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::mirror::Location;
@@ -69,8 +67,7 @@ const BOOLEANS: [&str; 1] = ["mirrors_only"];
 const CLEARED: [&str; 3] = ["mirrors", "mirrors_only", "push_to"];
 
 /// where a setting's value came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
     /// fetchloom's own default.
     Default,
@@ -80,6 +77,22 @@ pub(crate) enum Origin {
     Environment,
     /// the settings file.
     File,
+    /// an option on the command line, such as `--mirror`, which `fetchloom settings` shows
+    /// before what the settings give.
+    Flag,
+}
+
+impl Origin {
+    /// how `--json` names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Origin::Default => "default",
+            Origin::Machine => "machine",
+            Origin::Environment => "environment",
+            Origin::File => "file",
+            Origin::Flag => "flag",
+        }
+    }
 }
 
 impl fmt::Display for Origin {
@@ -89,6 +102,7 @@ impl fmt::Display for Origin {
             Origin::Machine => "this machine",
             Origin::Environment => "environment",
             Origin::File => "settings file",
+            Origin::Flag => "command line",
         })
     }
 }

@@ -154,6 +154,34 @@ fn the_settings_list_each_mirror_and_refuse_what_is_no_mirror() -> Result {
     Ok(())
 }
 
+/// `settings` shows the mirrors a run asks: those `--mirror` names first, then those of the
+/// setting, with where each part came from.
+#[test]
+fn settings_show_the_mirrors_a_run_asks_with_the_command_lines_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&[
+            "--json",
+            "settings",
+            "--mirror",
+            "https://usb.lab.example/fetchloom",
+        ])
+        .env("FETCHLOOM_MIRRORS", "https://data.lab.example/fetchloom")
+        .output()?;
+    ok(&output)?;
+    let document = json(&output)?;
+    let mirrors = shown(&document, "mirrors");
+    assert_eq!(
+        mirrors["value"],
+        serde_json::json!([
+            "https://usb.lab.example/fetchloom",
+            "https://data.lab.example/fetchloom"
+        ])
+    );
+    assert_eq!(mirrors["origin"], "flag,environment");
+    Ok(())
+}
+
 /// an empty `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` and `FETCHLOOM_PUSH_TO` clear what the
 /// settings file names, so a check meant to reach the sources never takes the file's mirror, and
 /// push never writes to the file's folder.
