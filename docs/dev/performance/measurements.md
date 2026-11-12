@@ -51,6 +51,7 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | the same map built in merged chunks | 0.85, but on musl peak memory 1.05 to 1.06 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | project state written as a stream | no measured win | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| lock and names | indexed pin membership and unique rename signatures | status at 40,000 0.146/0.254; 1,000 renames 0.0044/0.0031, musl +7.1 MiB | kept | [rename indexes](#indexing-pin-membership-and-renames-2026-11-12) |
 | lock and names | fast lock reader for commented locks | list at 100,000 files 0.213 to 0.100 s; peak memory 334 to 78 MB | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | lock and names | `add -i` writes data.toml once for the whole list | 10,000 links 415 to 4.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
 | lock and names | relocking looks datasets up in sets and maps | 40,000 links 31.7 to 21.6 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
@@ -798,3 +799,75 @@ a local host allowed two successful requests per second, ten distinct 4 KiB file
 dropped. none of the comparisons reduced 429s by the required 20%; time differed by about 0.1%. one successful probe did not reveal the remaining quota, so widening immediately recreated the refusal burst. ordinary-file controls also ran on both libc targets and showed no established time or RSS regression. the proposed narrowing, its state and its switch are not shipped. red and mutation checks for serialization, old in-flight responses, widening and the `Retry-After` floor remain with the prototype evidence.
 
 raw evidence: `net2/results/quota-*-v3-1`, the frozen v3 source and executables, and `results/tests`. these are local HTTP fixtures, not a claim about every provider or HTTPS/HTTP/2 profile.
+
+## indexing pin membership and renames, 2026-11-12
+
+kept. pin membership now searches the already name-sorted pin vectors. rename matching groups each source's spec and `extract`, or each recipe's input names, run words, code paths and variables, once. a signature must belong to exactly one old and one eligible new name. moved pins are moved rather than cloned; named runs still copy out-of-scope pins. no persisted state changes.
+
+one release executable per libc, built from 27811da3 with `FETCHLOOM_EXP_PIN_INDEX` read once, compared the old and new paths. the flag and old paths were then removed. rustc 1.99.1, glibc 2.39 and the default musl allocator, ext4 nvme, offline JSON commands with warm data: `status` and settled `lock` at 1, 10, 1,000 and 40,000 datasets, unique rename forecasts at 1, 10, 600 and 1,000, and a 100,000-file ordinary status control. every row uses the same binary and input on both sides. output equality was checked separately.
+
+`abh.py` shuffled each pair on cores 12–23 at nice 0 under the measurement lock, released between bounded groups. load-burst pairs were retained but excluded as whole pairs, then replaced. the initial tiny rename batches were repeated: a 0.5 s pre-batch load probe without another warmup had made their first arms slower. the reported tiny runs warm up after each acquisition. times are medians, with 95% percentile bootstrap intervals; ratios bootstrap paired log ratios through `bench/ab.py` with 20,000 resamples. these intervals do not establish exact equality or correct for checking several workloads.
+
+RSS is a separate GNU-time child measurement on cores 0–11 at nice 10, without the wall lock: median [minimum, maximum] of per-process peaks, not the Python-parent floor in `abh.py`'s wait4 field. there are five native observations per arm through 1,000 entries and three above it. small-n RSS stays within its observed spread. the 1,000-rename musl stress case spends 7.1 MiB more, reaching 36.0 MiB; this is a reported memory cost, not a memory-neutral claim. the ordinary 100,000-file control remains below the 150 MB budget. the 40,000-dataset musl status and lock cases already exceeded that ordinary-workload target; their additional peaks are under 1 MiB. MB is decimal and MiB is binary.
+
+an allocator diagnostic changed only `MIMALLOC_PURGE_DELAY` to 0: the 1,000-rename musl peaks became 20.4/20.1 MiB, versus 28.9/36.0 MiB at the shipped 1,000 ms delay. that supports a retention explanation, but neither an allocator change nor the diagnostic's lower memory is part of this keep decision. all tables below use the default allocator policy.
+
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+|---|---|---:|---|---|---|---|
+| glibc | status, datasets | 1 | 3.763 [3.721, 3.803] | 3.768 [3.737, 3.833] | 1.0032 [0.9929, 1.0113] | 10.36 [10.09, 10.56] → 10.37 [10.12, 10.76] |
+| musl | status, datasets | 1 | 3.847 [3.814, 3.924] | 3.864 [3.792, 3.927] | 0.9944 [0.9832, 1.0181] | 14.95 [14.95, 14.95] → 14.95 [14.94, 14.95] |
+| glibc | lock, datasets | 1 | 4.350 [4.271, 4.418] | 4.427 [4.345, 4.567] | 1.0064 [0.9963, 1.0244] | 11.70 [11.25, 11.80] → 11.76 [11.60, 11.79] |
+| musl | lock, datasets | 1 | 3.908 [3.825, 4.014] | 3.991 [3.936, 4.073] | 1.0090 [0.9879, 1.0436] | 14.93 [14.93, 14.93] → 14.93 [14.80, 14.93] |
+| glibc | status, datasets | 10 | 4.381 [4.245, 4.492] | 4.378 [4.268, 4.423] | 0.9925 [0.9740, 1.0237] | 10.51 [10.43, 10.67] → 10.64 [9.68, 10.76] |
+| musl | status, datasets | 10 | 4.039 [4.010, 4.110] | 4.016 [3.965, 4.094] | 0.9891 [0.9792, 1.0023] | 14.95 [14.95, 14.95] → 14.94 [14.87, 14.95] |
+| glibc | lock, datasets | 10 | 4.451 [4.385, 4.532] | 4.544 [4.442, 4.733] | 1.0171 [0.9971, 1.0345] | 12.00 [11.83, 12.07] → 11.82 [11.57, 11.99] |
+| musl | lock, datasets | 10 | 3.684 [3.661, 3.748] | 3.690 [3.647, 3.816] | 0.9962 [0.9870, 1.0093] | 14.93 [14.80, 14.93] → 14.93 [14.80, 14.93] |
+| glibc | status, datasets | 1,000 | 27.710 [27.489, 27.813] | 25.647 [25.160, 26.444] | 0.9269 [0.9159, 0.9487] | 13.30 [13.12, 13.34] → 13.37 [12.90, 13.73] |
+| musl | status, datasets | 1,000 | 27.027 [26.215, 28.016] | 25.398 [24.375, 25.745] | 0.9246 [0.9153, 0.9478] | 25.38 [25.20, 25.39] → 25.38 [25.31, 25.39] |
+| glibc | lock, datasets | 1,000 | 14.598 [14.281, 14.840] | 12.376 [12.090, 12.635] | 0.8422 [0.8328, 0.8608] | 14.10 [13.93, 14.41] → 14.22 [14.12, 14.47] |
+| musl | lock, datasets | 1,000 | 13.995 [13.565, 14.193] | 11.816 [11.491, 12.207] | 0.8353 [0.8269, 0.8655] | 31.11 [31.11, 31.11] → 31.11 [30.93, 31.11] |
+| glibc | status, datasets | 40,000 | 7593.403 [7290.038, 7822.390] | 1104.601 [1084.080, 1124.374] | 0.1455 [0.1404, 0.1505] | 116.12 [115.20, 116.25] → 116.16 [116.14, 116.18] |
+| musl | status, datasets | 40,000 | 3457.476 [3449.533, 3466.505] | 875.585 [864.818, 883.389] | 0.2536 [0.2485, 0.2554] | 154.71 [154.53, 154.77] → 155.40 [155.22, 155.41] |
+| glibc | lock, datasets | 40,000 | 7408.789 [7305.159, 7529.643] | 439.115 [436.297, 448.144] | 0.0599 [0.0588, 0.0608] | 116.55 [116.30, 116.68] → 116.44 [115.86, 116.45] |
+| musl | lock, datasets | 40,000 | 2863.722 [2856.372, 2866.920] | 285.986 [284.816, 287.958] | 0.0999 [0.0994, 0.1006] | 186.08 [186.08, 186.25] → 186.95 [186.95, 187.13] |
+| glibc | unique renames | 1 | 4.602 [4.550, 4.680] | 4.630 [4.557, 4.775] | 1.0027 [0.9918, 1.0311] | 10.96 [10.66, 11.39] → 11.14 [11.12, 11.43] |
+| musl | unique renames | 1 | 4.434 [4.392, 4.503] | 4.285 [4.212, 4.338] | 0.9685 [0.9584, 0.9787] | 17.60 [17.48, 17.61] → 15.57 [15.57, 15.57] |
+| glibc | unique renames | 10 | 4.881 [4.802, 5.010] | 4.616 [4.548, 4.701] | 0.9496 [0.9222, 0.9684] | 11.08 [10.57, 11.51] → 11.10 [10.87, 11.23] |
+| musl | unique renames | 10 | 4.413 [4.382, 4.458] | 4.324 [4.284, 4.347] | 0.9773 [0.9633, 0.9898] | 17.61 [17.35, 17.61] → 17.60 [17.48, 17.61] |
+| glibc | unique renames | 600 | 1335.849 [1280.093, 1342.686] | 15.836 [15.450, 15.935] | 0.0119 [0.0116, 0.0123] | 12.97 [12.92, 13.04] → 12.85 [12.64, 12.92] |
+| musl | unique renames | 600 | 1649.760 [1646.830, 1651.957] | 14.560 [14.471, 14.932] | 0.0088 [0.0088, 0.0091] | 24.88 [24.88, 24.89] → 26.02 [26.01, 26.02] |
+| glibc | unique renames | 1,000 | 5472.140 [5400.593, 5495.236] | 23.760 [22.958, 24.773] | 0.0044 [0.0042, 0.0045] | 14.20 [13.71, 14.52] → 14.38 [14.11, 14.55] |
+| musl | unique renames | 1,000 | 6838.609 [6829.122, 6847.039] | 21.511 [21.101, 21.947] | 0.0031 [0.0031, 0.0032] | 28.89 [28.88, 28.89] → 36.01 [35.82, 36.02] |
+| glibc | status, files control | 100,000 | 447.400 [429.189, 463.357] | 429.063 [423.937, 448.631] | 0.9597 [0.9312, 1.0064] | 78.49 [78.38, 78.58] → 78.38 [78.00, 78.63] |
+| musl | status, files control | 100,000 | 385.965 [369.276, 392.810] | 381.148 [370.645, 390.603] | 1.0021 [0.9912, 1.0105] | 97.39 [85.35, 99.14] → 95.44 [85.21, 100.99] |
+
+| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+|---|---|---:|---:|---:|---:|
+| glibc | status, datasets | 1 | 3.173 → 3.173 | 64 | 0 |
+| musl | status, datasets | 1 | 2.526 → 2.527 | 64 | 0 |
+| glibc | lock, datasets | 1 | 3.152 → 3.155 | 64 | 0 |
+| musl | lock, datasets | 1 | 2.483 → 2.486 | 64 | 0 |
+| glibc | status, datasets | 10 | 3.997 → 3.999 | 64 | 0 |
+| musl | status, datasets | 10 | 3.244 → 3.239 | 64 | 0 |
+| glibc | lock, datasets | 10 | 3.579 → 3.579 | 60 | 4 |
+| musl | lock, datasets | 10 | 2.875 → 2.875 | 64 | 0 |
+| glibc | status, datasets | 1,000 | 115.099 → 98.731 | 10 | 0 |
+| musl | status, datasets | 1,000 | 110.030 → 88.277 | 12 | 0 |
+| glibc | lock, datasets | 1,000 | 68.819 → 52.409 | 10 | 0 |
+| musl | lock, datasets | 1,000 | 71.600 → 49.852 | 12 | 0 |
+| glibc | status, datasets | 40,000 | 30972.136 → 4036.744 | 10 | 2 |
+| musl | status, datasets | 40,000 | 29174.134 → 3655.827 | 10 | 0 |
+| glibc | lock, datasets | 40,000 | 29038.889 → 2126.822 | 10 | 0 |
+| musl | lock, datasets | 40,000 | 27560.992 → 2042.746 | 11 | 17 |
+| glibc | unique renames | 1 | 4.239 → 4.236 | 61 | 3 |
+| musl | unique renames | 1 | 3.195 → 3.187 | 64 | 0 |
+| glibc | unique renames | 10 | 6.141 → 5.362 | 64 | 0 |
+| musl | unique renames | 10 | 4.886 → 4.191 | 64 | 0 |
+| glibc | unique renames | 600 | 10758.294 → 84.639 | 10 | 5 |
+| musl | unique renames | 600 | 15987.157 → 77.303 | 12 | 0 |
+| glibc | unique renames | 1,000 | 43479.296 → 138.707 | 10 | 2 |
+| musl | unique renames | 1,000 | 68013.643 → 127.642 | 12 | 0 |
+| glibc | status, files control | 100,000 | 2000.476 → 2000.509 | 10 | 5 |
+| musl | status, files control | 100,000 | 2474.830 → 2475.101 | 12 | 0 |
+
+characterizations passed before the rewrite. the new cases are `fetched_renames_keep_bytes_and_report_new_name_order`, `named_rename_copies_the_pin_and_excludes_other_new_names`, `fetched_matches_require_unique_specs_and_the_same_extraction`, `given_and_upgraded_names_are_not_rename_candidates`, `recipe_renames_match_the_ordered_recipe_not_its_old_hashes` and `recipe_renames_refuse_ambiguous_old_or_new_shapes`. disabling the duplicate-new guard made the ambiguity cases fail; restoring it passed. the existing real-CLI fetched and recipe rename cases also passed. fixtures, experiment binaries, raw rounds, native RSS and mutation evidence remain with the sweep outside the repository.
