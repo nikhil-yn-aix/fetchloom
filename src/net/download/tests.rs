@@ -246,6 +246,79 @@ fn a_refusal_page_reaches_the_divert_with_its_status() {
     assert_eq!(err.message, "/file 403 over quota");
 }
 
+/// a page is read whole up to 4 MiB to find where the file is, and one byte more is refused, so a
+/// server cannot hand over an endless page instead of the file.
+#[test]
+fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
+    for (size, read) in [(4 << 20, true), ((4 << 20) + 1, false)] {
+        // a page whose only word, `file`, links to the file
+        let mut page = b"file".to_vec();
+        page.resize(size, b' ');
+        let (url, asked) = serve(vec![
+            reply("200 OK", &[HTML], &page),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/octet-stream")],
+                b"bytes",
+            ),
+        ]);
+        let result = download(&url.join("start").unwrap(), follow);
+        if read {
+            assert_eq!(result.unwrap().size, 5);
+            assert_eq!(lines(&asked), ["GET /start HTTP/1.1", "GET /file HTTP/1.1"]);
+            continue;
+        }
+        let Err(error) = result else {
+            panic!("a page of {size} bytes was read");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert_eq!(
+            error.message,
+            "127.0.0.1 sent a page where the file was expected"
+        );
+        assert_eq!(lines(&asked), ["GET /start HTTP/1.1"]);
+    }
+}
+
+/// a server may send three pages, such as confirmation forms, before the file, and a fourth is
+/// refused, so pages that point on and on never become a download. both runs ask for the same
+/// four links; only what the fourth answers differs.
+#[test]
+fn a_server_may_send_three_pages_before_the_file_but_not_four() {
+    for (pages, followed) in [(3, true), (4, false)] {
+        let mut answers: Vec<Vec<u8>> = (1..=pages)
+            .map(|next| reply("200 OK", &[HTML], format!("p{next}").as_bytes()))
+            .collect();
+        answers.push(reply(
+            "200 OK",
+            &[("Content-Type", "application/octet-stream")],
+            b"bytes",
+        ));
+        let (url, asked) = serve(answers);
+        let result = download(&url.join("p0").unwrap(), follow);
+        let four = [
+            "GET /p0 HTTP/1.1",
+            "GET /p1 HTTP/1.1",
+            "GET /p2 HTTP/1.1",
+            "GET /p3 HTTP/1.1",
+        ];
+        if followed {
+            assert_eq!(result.unwrap().size, 5);
+            assert_eq!(lines(&asked), four);
+            continue;
+        }
+        let Err(error) = result else {
+            panic!("the page after {pages} pages was followed");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert_eq!(
+            error.message,
+            "127.0.0.1 kept sending pages instead of the file"
+        );
+        assert_eq!(lines(&asked), four);
+    }
+}
+
 /// a server nobody typed cannot send a download on to a cloud's metadata service, which oracle
 /// keeps at 192.0.0.192, or to a private address wrapped in IPv6.
 #[test]
