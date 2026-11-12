@@ -6,7 +6,7 @@ CI checks native behavior, filesystem paths and installed release artifacts befo
 
 [ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
-the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
+the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
 
 ## native tests
 
@@ -14,7 +14,7 @@ the one required check is `ci`, with `if: always()` and `needs: [quality, docs, 
 |---|---|
 | `ubuntu-24.04` | x86_64 linux, rustdoc, python tests, btrfs, xfs and a chmod-refusing FAT mount |
 | `ubuntu-24.04-arm` | native arm64 linux |
-| `windows-2025` | native x86_64 windows on NTFS; produces the test archive for the three extra volumes |
+| `windows-2025` | native x86_64 windows on NTFS |
 | `windows-11-arm` | native arm64 windows |
 | `macos-15` | native arm64 macos on APFS, python tests and HFS+ |
 
@@ -38,7 +38,7 @@ every native runner executes the full ordinary suite on its default disk. extra 
 
 linux reruns the built tests on btrfs and xfs loop images. their mounted filesystem types are checked first. a separate root-mounted FAT image lets the runner write but refuses chmod; `FETCHLOOM_TEST_NOOP_CHMOD` names it for the one writable-copy regression. macos attaches an HFS+ image for decomposed-unicode and no-reflink behavior. cleanup traps detach the images. macos disables Spotlight indexing immediately after attachment, records the owned device from hdiutil's plist, and makes three normal detach attempts with two-second pauses before forcing that device. it uses the device rather than the mountpoint: a failed eject can already have removed the mountpoint. cleanup preserves a failed test's exit code and fails a passing run if the owned device still cannot be detached. btrfs/xfs and HFS+ each have a 12-minute step cap; the linux step logs provisioning, mount, test and detach phases.
 
-the windows x64 job archives its checked test build once, including `recipe_step` and the libtest selection record. three jobs independently create ReFS, exFAT and FAT32 volumes, verify `Get-Volume` reports the requested filesystem, and point `TMP` and `TEMP` at that volume. each runs the entire disk selection, not one third. they depend only on the windows producer, not the slower linux/mac matrix. they check out into `source/` and use nextest's workspace remapping, exercising relocation of both executable and fixture paths. no Rust build is needed in these consumers. `finally` restores the environment and detaches the VHDX. the transfer archive is retained for one day.
+a second `windows-2025` job builds and archives the test build once, including `recipe_step` and the libtest selection record, while the native job runs its suite. three jobs independently create ReFS, exFAT and FAT32 volumes, verify `Get-Volume` reports the requested filesystem, and point `TMP` and `TEMP` at that volume. each runs the entire disk selection, not one third. they depend only on the windows producer, not the slower linux/mac matrix. they check out into `source/` and use nextest's workspace remapping, exercising relocation of both executable and fixture paths. no Rust build is needed in these consumers. `finally` restores the environment and detaches the VHDX. the transfer archive is retained for one day.
 
 [building and testing](building-and-testing.md#xfs-loop-mount) gives local filesystem reproduction commands. warning assertions count their exact archive hint, and the name-collision check ignores only the known no-link copy warning; FAT/exFAT must still exercise the same cases. capability-sensitive assertions still follow the filesystem's available operations; this matrix is not a promise about every NAS or cloud-file-provider implementation.
 

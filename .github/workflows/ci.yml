@@ -23,7 +23,7 @@ env:
 
 jobs:
   ci:
-    needs: [quality, docs, test, windows, windows-fs, snapshots, artifacts]
+    needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -254,6 +254,39 @@ jobs:
       - name: doctests
         run: cargo test --locked --doc
       - run: python -m unittest discover -s python
+      - name: keep test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-windows-2025-${{ github.run_attempt }}
+          path: |
+            target/ci/native/
+            target/ci/selection.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # the volume jobs need only the test build, so a second runner builds and archives it while
+  # the windows job above runs the native suite
+  windows-build:
+    name: windows test build
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+          # the windows job saves this cache
+          save-if: false
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - run: cargo build --locked --example recipe_step
+      - name: record cargo test selections
+        run: python python/ci_tests.py record
       - name: archive the windows test build
         run: cargo nextest archive --locked --tests --profile ci --archive-file target/ci/windows-tests.tar.zst
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -265,16 +298,6 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
-      - name: keep test reports
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: tests-windows-2025-${{ github.run_attempt }}
-          path: |
-            target/ci/native/
-            target/ci/selection.json
-          if-no-files-found: warn
-          retention-days: 7
 
   snapshots:
     needs: [test, windows, windows-fs]
@@ -293,7 +316,7 @@ jobs:
 
   windows-fs:
     name: windows ${{ matrix.filesystem }}
-    needs: windows
+    needs: windows-build
     runs-on: windows-2025
     timeout-minutes: 20
     strategy:
