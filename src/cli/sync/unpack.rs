@@ -284,7 +284,41 @@ impl Loop<'_> {
         for ((draft, file), tree) in slots.into_iter().zip(trees) {
             drafts[draft].unpacked(file, tree);
         }
+        for draft in drafts.iter() {
+            self.tell_unportable(manifest, &draft.foreseen(&self.cache));
+        }
         Ok(())
+    }
+
+    /// warns once for `locked`, a dataset this run pins, naming its files windows or a fat disk
+    /// cannot store. they stay as they are, since this machine stores them.
+    fn tell_unportable(&self, manifest: &Manifest, locked: &Locked) {
+        const SHOWN: usize = 3;
+        let members = |archive: &Archive<'_>| archive.recorded(&self.cache);
+        let paths = plan::unportable(manifest, locked, &members);
+        let Some((last, _)) = paths.split_last() else {
+            return;
+        };
+        let listed = match paths.len() {
+            1 => last.clone(),
+            count if count <= SHOWN => {
+                format!("{} and {last}", paths[..count - 1].join(", "))
+            }
+            count => format!("{} and {} more", paths[..SHOWN].join(", "), count - SHOWN),
+        };
+        let name = &locked.name;
+        let said = match paths.len() {
+            1 => {
+                format!("{name} has a file whose name windows and fat disks cannot store: {listed}")
+            }
+            count => format!(
+                "{name} has {count} files whose names windows and fat disks cannot store: {listed}"
+            ),
+        };
+        self.context.output.warn_with(
+            &said,
+            "a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to",
+        );
     }
 
     /// the archives of `lock`'s datasets in the run that stay packed and that `placing` puts in
@@ -480,6 +514,9 @@ impl Loop<'_> {
         let trees = self.unpack(unpacks).await?;
         for ((index, at), tree) in slots.into_iter().zip(trees) {
             pinned[index].files[at].unpacks_to = tree;
+        }
+        for locked in pinned.iter() {
+            self.tell_unportable(manifest, locked);
         }
         Ok(())
     }

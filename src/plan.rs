@@ -619,6 +619,51 @@ pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String
     warnings
 }
 
+/// the paths below the folder of `locked`, a dataset data.toml lists, that windows or a fat disk
+/// cannot store, as [`name::unportable`] finds them, sorted: its own files and the files its
+/// archives unpack to, as `members` records them and its members tables keep them. this machine
+/// may store them fine, so they are only told.
+pub(crate) fn unportable(
+    manifest: &Manifest,
+    locked: &Locked,
+    members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
+) -> Vec<String> {
+    let Some(source) = manifest
+        .datasets
+        .get(&locked.name)
+        .and_then(manifest::Entry::source)
+    else {
+        return Vec::new();
+    };
+    let folder = folder(manifest, &locked.name);
+    let mut plan = Plan::default();
+    // a members table that no longer fits is refused where the plan is made
+    if expand(
+        &mut plan,
+        &locked.name,
+        &folder,
+        false,
+        &locked.files,
+        &source.members,
+        members,
+    )
+    .is_err()
+    {
+        return Vec::new();
+    }
+    let inside = format!("{folder}/");
+    let mut paths: Vec<String> = plan
+        .targets
+        .into_iter()
+        .filter_map(|target| {
+            let path = target.path.strip_prefix(&inside)?;
+            name::unportable(path).map(|_| path.to_owned())
+        })
+        .collect();
+    paths.sort_unstable();
+    paths
+}
+
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
 /// path as a case-insensitive disk sees it, or a file where a folder must be. datasets may share
 /// folders, so targets of two datasets clash only where their files do.
@@ -980,6 +1025,37 @@ mod tests {
         assert_eq!(
             placed_from(&selected, &locked, &[("x.zip", members)]).unwrap(),
             ["data/a/top/b.csv"]
+        );
+    }
+
+    /// a name windows or a fat disk cannot store is found among a dataset's own files and the
+    /// files its archives unpack to, as they land below its folder, but not in a member its
+    /// table leaves out.
+    #[test]
+    fn names_windows_cannot_store_are_found_in_files_and_archives() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"x.zip\"]\nexclude = \"top/left*\"\n"),
+            &[("a", &["ok.csv", "what?.csv", "x.zip"])],
+        );
+        let inside: &[&str] = &[
+            "top/con.txt",
+            "top/dot.",
+            "top/fine.txt",
+            "top/left|out.txt",
+        ];
+        let members = |unpacking: &Archive<'_>| {
+            (unpacking.file.path == "x.zip")
+                .then(|| inside.iter().map(|path| member(path)).collect())
+        };
+        assert_eq!(
+            unportable(&manifest, &locked.datasets[0], &members),
+            ["top/con.txt", "top/dot.", "what?.csv"],
+            "a lone top folder comes out as it is"
+        );
+        let (manifest, locked) = pinned(ONE, &[("a", &["ok.csv", "con-data.txt"])]);
+        assert_eq!(
+            unportable(&manifest, &locked.datasets[0], &|_| None),
+            Vec::<String>::new()
         );
     }
 

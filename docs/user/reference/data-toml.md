@@ -66,6 +66,15 @@ an explicitly supplied `--as` name that is taken is refused. a name that breaks 
 
 `data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused, with one exception: `path = "."` is the data folder itself, so a dataset's `train.csv` lands at `data/train.csv` for scripts that already read it there. `data_dir = "."` stays refused, since it would mix data with the project's own files. trailing `/` is stripped. the data folder and its child folders must be real directories; see [filesystem placement](../../dev/architecture/placing.md#choose-a-filesystem-method). a data folder that is a link to another disk is refused too, and `data_dir` cannot point there instead: to keep the data on another disk, move the whole project folder to that disk.
 
+the files inside a dataset keep the names their source, folder or archive gives them. windows, and fat or exfat disks anywhere, cannot store some names linux and macos can: one with `<`, `>`, `:`, `"`, `|`, `?` or `*`, one ending in a dot or a space, or a device name such as `con.txt` or `nul`. the run that pins a dataset holding such names places them here as they are and warns once for that dataset, naming them:
+
+```text
+warning: fatbad has 3 files whose names windows and fat disks cannot store: pipe|.csv, star*.csv and what?.csv
+  help: a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to
+```
+
+on windows a sync refuses such a file by name before anything is written; on a fat or exfat disk elsewhere, the disk itself refuses it while placing.
+
 `path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. sync places it there and warns, naming the `path` that puts it at `data/train.csv`:
 
 ```text

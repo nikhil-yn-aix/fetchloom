@@ -272,7 +272,9 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
             "{stderr}"
         );
         assert!(
-            stderr.contains(&format!("help: rename it to \"{device}-data\" in data.toml")),
+            stderr.contains(&format!(
+                "help: rename it to \"{device}-data\" in data.toml"
+            )),
             "{stderr}"
         );
     }
@@ -294,6 +296,57 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
         stderr.contains("data.lock names a dataset \"con\", which is not a valid dataset name"),
         "{stderr}"
     );
-    assert_eq!(fs::read_to_string(&lock)?, cloned, "data.lock stays as it was");
+    assert_eq!(
+        fs::read_to_string(&lock)?,
+        cloned,
+        "data.lock stays as it was"
+    );
+    Ok(())
+}
+
+/// a zip of `members`, each a path and its bytes.
+#[cfg(unix)]
+fn zipped(members: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (path, bytes) in members {
+        archive.start_file(*path, zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut archive, bytes)?;
+    }
+    Ok(archive.finish()?.into_inner())
+}
+
+/// a file name windows or a fat disk cannot store is pinned and placed here as it is, with one
+/// warning for each dataset naming its files that have one, imported, downloaded or unpacked.
+#[cfg(unix)]
+#[test]
+fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let odd = sandbox.folder("odd")?;
+    for name in ["what?.csv", "con.txt", "fine.csv"] {
+        fs::write(odd.join(name), b"x\n")?;
+    }
+    let zip = zipped(&[("pack/star*.csv", b"y\n"), ("pack/fine.csv", b"z\n")])?;
+    let server = Server::start("/pack.zip", vec![file(&zip, "\"z\"")])?;
+    sandbox.allow(&server.url);
+    for (link, warning) in [
+        (
+            "../odd",
+            "warning: odd has 2 files whose names windows and fat disks cannot store: con.txt and what?.csv\n",
+        ),
+        (
+            server.url.as_str(),
+            "warning: pack has a file whose name windows and fat disks cannot store: star*.csv\n",
+        ),
+    ] {
+        let added = sandbox.run(&["add", link])?;
+        let stderr = text(&added.stderr)?;
+        assert_eq!(added.status.code(), Some(0), "{stderr}");
+        assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+        assert!(stderr.contains(warning), "{stderr}");
+    }
+    let work = sandbox.work();
+    for placed in ["odd/what?.csv", "odd/con.txt", "pack/star*.csv"] {
+        assert!(work.join("data").join(placed).is_file(), "{placed}");
+    }
     Ok(())
 }
