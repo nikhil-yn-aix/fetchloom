@@ -242,7 +242,12 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         lock_text: None,
         unrestored: AtomicBool::new(false),
     };
-    let added = match (adding.read(), request) {
+    let read = adding.read();
+    // another add may have started the project while this one waited to hold it, and then this
+    // one neither started it nor may take it back
+    let starting = starting && adding.text.is_none();
+    let fresh = fresh.filter(|_| starting);
+    let added = match (read, request) {
         (Ok(()), Request::Link(link)) => {
             add_held(context, &mut adding, args, &link, &here, starting).await
         }

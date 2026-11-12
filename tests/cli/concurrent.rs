@@ -390,3 +390,46 @@ fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     }
     Err("every push ended before its stop arrived".into())
 }
+
+/// two first adds in one empty folder: the second waits while the first holds the project, then
+/// adds its dataset to the project the first started, so only the first says it started one.
+#[test]
+fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'a'; 1 << 20];
+    let mut held = reply(
+        "200 OK",
+        &[
+            ("Content-Length", &body.len().to_string()),
+            ("ETag", "\"a1\""),
+        ],
+        &body[..1 << 16],
+    );
+    let (release, wait) = std::sync::mpsc::channel();
+    held.push(Part::Wait(wait));
+    held.push(Part::Bytes(body[1 << 16..].to_vec()));
+    let first = Server::start("/files/a.csv", vec![held])?;
+    let second = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let adding = Running::start(&mut sandbox.command(&["add", &first.url]))?;
+    // the first add holds the project once it asks for its file
+    first.wait_for_requests(1)?;
+    let waiting = Running::start(&mut sandbox.command(&["add", &second.url]))?;
+    let told = waiting.wait_for("Waiting");
+    drop(release);
+    told?;
+    let (first, second) = (adding.finish()?, waiting.finish()?);
+    let stories = [text(&first.stderr)?, text(&second.stderr)?];
+    assert_eq!(first.status.code(), Some(0), "{}", stories[0]);
+    assert_eq!(second.status.code(), Some(0), "{}", stories[1]);
+    let started: Vec<bool> = stories
+        .iter()
+        .map(|story| story.contains("Started a project"))
+        .collect();
+    assert_eq!(started, [true, false], "{stories:?}");
+    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.a]") && manifest.contains("[datasets.iris]"),
+        "{manifest}"
+    );
+    Ok(())
+}

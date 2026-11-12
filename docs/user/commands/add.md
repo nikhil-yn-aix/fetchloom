@@ -32,7 +32,7 @@ fetchloom add [options] -i <file>
 
 ## what happens
 
-1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
+1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. an add that waited while another add started the project there adds to that project, without the line. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
 2. resolve the reference, filter its listed files and choose a dataset name. a `Resolved` line on stderr names what the reference resolved to and counts the files kept, as `1 of 4 files` with their size, when a pasted file link, `--select` or `--exclude` keeps fewer files than the source lists. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
 3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
 4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache. the entry goes before the dataset whose name follows its own, as `data.lock` keeps them in name order, so two people adding different datasets rarely change the same lines.
