@@ -1053,6 +1053,40 @@ fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
     Ok(())
 }
 
+/// several links on the command line add a dataset each, as a list does, and are trusted as one
+/// typed link is. `--as`, which names one dataset, is refused before any request.
+#[test]
+fn several_typed_links_add_a_dataset_each() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+    ])?;
+    let iris = format!("{}{PATH}", server.url);
+    let wine = format!("{}/files/wine.csv", server.url);
+    let named = sandbox.run(&["--json", "add", &iris, &wine, "--as", "flowers"])?;
+    assert_eq!(named.status.code(), Some(2), "{}", text(&named.stdout)?);
+    assert_eq!(
+        json(&named)?["errors"][0]["message"],
+        "--as names one dataset, and 2 links add 2"
+    );
+    assert_eq!(server.requests(), Vec::<String>::new());
+    let output = sandbox.run(&["--json", "add", &iris, &wine])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["result"]["datasets"],
+        serde_json::json!(["iris", "wine"])
+    );
+    let work = sandbox.work();
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        format!("[datasets.iris]\nref = \"{iris}\"\n\n[datasets.wine]\nref = \"{wine}\"\n")
+    );
+    assert_eq!(fs::read(work.join("data/iris/iris.csv"))?, IRIS);
+    assert_eq!(fs::read(work.join("data/wine/wine.csv"))?, WINE);
+    Ok(())
+}
+
 /// a list takes no --as, so the help for a name an earlier line took points at data.toml, where
 /// a dataset can be renamed with its pin.
 #[test]

@@ -14,7 +14,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | the task | run |
 |---|---|
 | a project needs a dataset | `fetchloom add <ref> --json` |
-| a project needs several datasets from a list of links | `fetchloom add -i links.txt --json`: a dataset a line, `result.datasets` names them; a SHA-256 after a link checks its one file, and any failure writes nothing |
+| a project needs several datasets | `fetchloom add <ref> <ref> --json`, or `fetchloom add -i links.txt --json` for a list of links: a dataset each, `result.datasets` names them; in a list, a SHA-256 after a link checks its one file. any failure writes nothing, and `--as`, `--select` and `--exclude`, which are for one dataset, are refused with several |
 | a project needs files that are only on this machine | `fetchloom add ./folder --json`: they are copied into the cache and pinned by their bytes, with `ref = "local"` and no path; the folder is left as it was |
 | a cloned project has data.toml but no data/ | `fetchloom sync --json` |
 | one dataset, without downloading or changing the others | `fetchloom sync <name> --json`; `result.selected` echoes the names. the other datasets keep their data.lock entries and files, and the next plain `fetchloom sync` still checks them all |

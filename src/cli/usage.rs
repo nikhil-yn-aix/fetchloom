@@ -201,16 +201,7 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let placement = (err.kind() == ErrorKind::UnknownArgument)
         .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg, parent)))
         .flatten();
-    // `fetchloom add fashion mnist` meant one search, not a link and a stray word
-    let quoted = (err.kind() == ErrorKind::UnknownArgument && parent == Some("add"))
-        .then(|| named(ContextKind::InvalidArg))
-        .flatten()
-        .filter(|arg| !arg.starts_with('-'))
-        .map(|_| {
-            "quote the words of one search, as in `fetchloom add \"fashion mnist\"`, or add one dataset at a time"
-                .to_owned()
-        });
-    let help = if let Some(placement) = placement.or(quoted) {
+    let help = if let Some(placement) = placement {
         placement
     } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand)
         .then(|| named(ContextKind::InvalidSubcommand))
@@ -271,6 +262,7 @@ fn needs(command: &str, forms: &[String]) -> String {
         .map(|form| {
             form.split_once("[options] ")
                 .map_or(form.as_str(), |(_, wanted)| wanted)
+                .trim_end_matches("...")
         })
         .collect();
     match wanted.split_last() {
@@ -495,21 +487,12 @@ mod tests {
                 "unexpected argument \"iris\"",
             ),
             (
-                &["fetchloom", "add", "https://example.org/file.csv", "iris"],
-                "unexpected argument \"iris\"",
-            ),
-            (
                 &["fetchloom", "status", "--", "-iris"],
                 "unexpected argument \"-iris\"",
             ),
         ] {
             assert_eq!(problem(arguments)?.message, expected);
         }
-        let quoted = problem(&["fetchloom", "add", "fashion", "mnist"])?;
-        assert_eq!(
-            &*quoted.help.unwrap(),
-            "quote the words of one search, as in `fetchloom add \"fashion mnist\"`, or add one dataset at a time"
-        );
         Ok(())
     }
 

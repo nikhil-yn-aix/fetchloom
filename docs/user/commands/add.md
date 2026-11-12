@@ -8,20 +8,21 @@ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 fetchloom add https://zenodo.org/records/3608990 --as flowers
 fetchloom add hf:datasets/scikit-learn/iris --select "*.csv" --dry-run
 fetchloom add ./flowers    # files on this machine, pinned by their bytes
+fetchloom add zenodo:3608990 hf:datasets/scikit-learn/iris    # a dataset for each link
 fetchloom add -i links.txt    # a dataset for each link in a list
 ```
 
 ## usage
 
 ```sh
-fetchloom add [options] <link>
+fetchloom add [options] <link>...
 fetchloom add [options] <path>
 fetchloom add [options] -i <file>
 ```
 
 | option | effect |
 |---|---|
-| `--as <name>` | choose the dataset name and its default folder under `data/` |
+| `--as <name>` | choose the dataset name and its default folder under `data/`; one link only |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
@@ -129,6 +130,15 @@ zenodo:3608990
 ```
 
 the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, and a link carrying a secret data.toml and data.lock would keep, stop the add naming the line, the secret masked. the links resolve together, then each dataset gets a name as a single add would, the next number when one is taken, and every file downloads together. a line with a SHA-256 must keep one file, and the bytes must have that hash, or the add stops with `integrity.mismatch`, exit 30, naming the line. a link data.toml has already stays as it is. a link that fails later, while its file downloads, is named by its line too, in the error and in each of the JSON `failures`, and a link with nothing at it gets help to fix that line, since data.toml has no entry for it yet, as in `line 3 of links.txt: 127.0.0.1 has nothing at http://127.0.0.1:43121/files/missing.csv (404)`. files that fail alike are told once, the others listed under the first with their help once, which for links with nothing at them says to fix each on its line of the list. data.toml and data.lock are each written once, and any failure leaves both as they were and takes back the files it placed. the add ends with one `Added` line for each dataset, as a single add does; `-v` adds the `Pinned` and `Placed` lines that say what each one pinned and where its files went. hosts a list names are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md), and the closing line names its origin for anyone who clones, as it does for a typed link. `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
+
+### several links at once
+
+several links on the command line add a dataset each, as the lines of a list do: they are checked before any request, resolve and download together, and data.toml and data.lock are each written once, or not at all when one fails. each link you type is trusted as a single typed link is, so a lab server on a private address gets the warning above. messages name a link by itself rather than by a line, and the help for one with nothing at it says to run the add again with the new link in its place. search words go alone, in quotes, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2, as with `-i`:
+
+```text
+error: --as names one dataset, and 2 links add 2
+  help: add the link to name on its own, as in `fetchloom add <link> --as <name>`
+```
 
 ## stopping an add
 

@@ -454,7 +454,7 @@ fn add_without_a_link_shows_each_usage_line() -> Result {
     assert_eq!(
         text(&output.stderr)?,
         "error: add needs <link>, <path> or -i <file>\n  \
-         usage: fetchloom add [options] <link>\n         \
+         usage: fetchloom add [options] <link>...\n         \
          fetchloom add [options] <path>\n         \
          fetchloom add [options] -i <file>\n  \
          help: `fetchloom add --help` says what it takes\n"
@@ -464,7 +464,7 @@ fn add_without_a_link_shows_each_usage_line() -> Result {
     assert_eq!(
         document["errors"][0]["details"],
         serde_json::json!([
-            "usage: fetchloom add [options] <link>",
+            "usage: fetchloom add [options] <link>...",
             "       fetchloom add [options] <path>",
             "       fetchloom add [options] -i <file>"
         ])

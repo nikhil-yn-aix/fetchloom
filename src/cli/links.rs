@@ -177,11 +177,7 @@ pub(super) fn checked(
                 .check_shareable()
                 .map_err(|error| on_line(error, &at))?;
         }
-        let key = (
-            parsed.reference.to_string(),
-            parsed.file.clone(),
-            parsed.folder.clone(),
-        );
+        let key = same_data(&parsed);
         match seen.entry(key) {
             Entry::Occupied(first) => {
                 return Err(Error::new(
@@ -203,6 +199,73 @@ pub(super) fn checked(
 pub(super) fn on_line(mut error: Error, at: &str) -> Error {
     error.message = format!("{at}: {}", error.message);
     error
+}
+
+/// several links typed on the command line for one add, each a line of a list that messages name
+/// by its link, once every one names data to fetch: search words go alone, files on this machine
+/// one folder at a time, and no link may carry a secret data.toml and data.lock would keep or name
+/// what another names. any secret in a link a message shows is masked.
+pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
+    if let Some(word) = links.iter().find(|link| is_search(link)) {
+        let example = if links.iter().all(|link| is_search(link)) {
+            links.join(" ")
+        } else {
+            "fashion mnist".to_owned()
+        };
+        return Err(Error::new(
+            Kind::Usage,
+            format!("\"{word}\" is not a link, a DOI or an id"),
+        )
+        .detail("several links add a dataset each, so each one names its data")
+        .help(format!(
+            "quote the words of one search, as in `fetchloom add \"{example}\"`, or add one dataset at a time"
+        )));
+    }
+    let mut seen: HashMap<(String, Option<String>, Option<String>), String> = HashMap::new();
+    let mut checked = Vec::with_capacity(links.len());
+    for (index, link) in links.into_iter().enumerate() {
+        let shown = net::mask_query(&link).into_owned();
+        if local::is_path(&link) {
+            return Err(Error::new(
+                Kind::Usage,
+                format!("{shown} is a path on this machine, and only links, DOIs and ids add together"),
+            )
+            .help("add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`"));
+        }
+        let parsed = Reference::parse(&link)?;
+        parsed
+            .check_shareable()
+            .map_err(|error| on_line(error, &shown))?;
+        match seen.entry(same_data(&parsed)) {
+            Entry::Occupied(first) => {
+                let message = if *first.get() == shown {
+                    format!("{shown} is given twice")
+                } else {
+                    format!("{shown} names the same data as {}", first.get())
+                };
+                return Err(Error::new(Kind::Usage, message).help("keep one of the two"));
+            }
+            Entry::Vacant(free) => {
+                free.insert(shown);
+            }
+        }
+        let line = Line {
+            number: index + 1,
+            link,
+            sha256: None,
+        };
+        checked.push((line, parsed));
+    }
+    Ok(checked)
+}
+
+/// what two links that name the same data share: the reference and the file or folder in it.
+fn same_data(parsed: &Parsed) -> (String, Option<String>, Option<String>) {
+    (
+        parsed.reference.to_string(),
+        parsed.file.clone(),
+        parsed.folder.clone(),
+    )
 }
 
 fn not_a_link(name: &str, number: usize, line: &str) -> Error {
@@ -350,6 +413,72 @@ mod tests {
                 .len(),
             2,
             "two files of one record are two links"
+        );
+    }
+
+    /// links typed for one add are checked as a list's lines are, before any request, and each
+    /// is named by its own link, any secret masked: search words go alone, and a path on this
+    /// machine is added one at a time.
+    #[test]
+    fn typed_links_are_checked_and_named_by_their_links() {
+        let typed = |links: &[&str]| typed(links.iter().map(|link| (*link).to_owned()).collect());
+        let search = "quote the words of one search, as in `fetchloom add \"fashion mnist\"`, or add one dataset at a time";
+        for (links, kind, message, help) in [
+            (
+                &["fashion", "mnist"][..],
+                Kind::Usage,
+                "\"fashion\" is not a link, a DOI or an id",
+                Some(search),
+            ),
+            (
+                &["zenodo:1", "iris"],
+                Kind::Usage,
+                "\"iris\" is not a link, a DOI or an id",
+                Some(search),
+            ),
+            (
+                &["zenodo:1", "./flowers"],
+                Kind::Usage,
+                "./flowers is a path on this machine, and only links, DOIs and ids add together",
+                Some(
+                    "add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`",
+                ),
+            ),
+            (
+                &["zenodo:3608990", "https://zenodo.org/records/3608990"],
+                Kind::Usage,
+                "https://zenodo.org/records/3608990 names the same data as zenodo:3608990",
+                Some("keep one of the two"),
+            ),
+            (
+                &["zenodo:1", "zenodo:1"],
+                Kind::Usage,
+                "zenodo:1 is given twice",
+                Some("keep one of the two"),
+            ),
+            (
+                &["zenodo:1", "https://example.org/x.csv?token=hunter2"],
+                Kind::ReferenceInvalid,
+                "https://example.org/x.csv?token=***: this link carries token, a secret that data.toml and data.lock would keep and share",
+                Some(
+                    "use a link that works without it, or download the file once with `fetchloom get`",
+                ),
+            ),
+        ] {
+            let error = typed(links).unwrap_err();
+            assert_eq!(
+                (error.kind, error.message.as_str(), error.help.as_deref()),
+                (kind, message, help),
+                "{links:?}"
+            );
+        }
+        let lines = typed(&["zenodo:1", "https://example.org/x.csv"]).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|(line, _)| (line.number, line.link.as_str()))
+                .collect::<Vec<_>>(),
+            [(1, "zenodo:1"), (2, "https://example.org/x.csv")]
         );
     }
 
