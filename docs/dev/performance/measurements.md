@@ -30,6 +30,7 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | no-replace rename for new objects | ext4 s4 1.090 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | xfs staging through `O_TMPFILE` | xfs s4 0.955 [0.914, 1.026] | dropped, no win | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | a new object published on btrfs by one rename | 0.970 | dropped, no win | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| archives | short memory moves in the musl bzip2 decoder | 64 MiB 2.843 s musl, 2.211 s glibc; 31.47% of musl user samples in `memmove` | upstream note, no change | [bzip2](#musl-bzip2-short-memory-moves-2026-11-12) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -546,6 +547,14 @@ characterization checks use independently generated hashlib vectors, including a
 
 raw commands, binary hashes, checked payload hashes, round records and noise flags are retained under `/datadisk/fl-perf/cpu2/records/p2-*`; `scripts/measure-p2.py` and `scripts/analyze-p2.py` reproduce the comparison and its paired analysis. no bandwidth, interface, global cache or global filesystem flush was changed for the test.
 
+
+## musl bzip2 short memory moves, 2026-11-12
+
+the CPU sweep found a libc-specific bzip2 gap, not a measured fix. on a8f9dad7, release builds with frame pointers and line tables unpacked one 64 MiB member to fresh tmpfs cache staging. five interleaved clean rounds on the EPYC 7V13 gave glibc 2.211 s [2.192, 2.235] and musl 2.843 s [2.817, 3.296]. native GNU tar 1.35 with bzip2 1.0.8 took 2.217 s [2.215, 2.251] in the musl batch. these bounds are observed ranges, not confidence intervals. independent hashes checked the outputs outside the clock.
+
+the static musl user profile put 31.47% of samples in `memmove`, 51.61% in `libbz2_rs_sys::decompress::decompress`, and 14.28% in the wrapper's decompressor. fetchloom uses bzip2 0.6.1 and libbz2-rs-sys 0.2.5. the short move-to-front rotations are an upstream investigation lead; they do not prove which replacement would help. the native command also omits fetchloom's SHA-256, staged publication and archive guards, so its time is not a promised decoder speedup.
+
+no dependency, decoder or allocator is changed, and no upstream issue was submitted. the raw `archive-large-tar.bz2-{glibc,musl}` rounds and `profile-musl-large-bzip` samples remain with the CPU sweep's records. a future fix needs an independent before/after comparison on both libc builds, not the native gap as its acceptance result.
 
 ## evidence limits
 
