@@ -1775,7 +1775,20 @@ fn remove(document: &mut DocumentMut, name: &str) {
 /// that one, or else before the dataset whose name follows it.
 pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
-    let copied = editable(other)?
+    let table = copied(&editable(other)?, name)?;
+    if !copy_in(&mut document, name, table) {
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            "data.toml writes its datasets inline, so fetchloom cannot merge them",
+        )
+        .help("merge data.toml by hand, then run `fetchloom lock`"));
+    }
+    Ok(document.to_string())
+}
+
+/// the table of the dataset `name` in `other`, to copy into another data.toml.
+fn copied(other: &DocumentMut, name: &str) -> Result<Table, Error> {
+    let copied = other
         .get("datasets")
         .and_then(Item::as_table_like)
         .and_then(|datasets| datasets.get(name))
@@ -1792,6 +1805,12 @@ pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<S
     };
     table.set_dotted(false);
     table.set_implicit(false);
+    Ok(table)
+}
+
+/// puts `table` in `document` as the dataset `name`, as [`with_dataset_from`] says. false when
+/// `document` writes its datasets inline.
+fn copy_in(document: &mut DocumentMut, name: &str, mut table: Table) -> bool {
     let touching = split_note(prefix(&table)).1.to_owned();
     let place = document
         .get_mut("datasets")
@@ -1806,17 +1825,190 @@ pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<S
         table.decor_mut().set_prefix(format!("{above}{touching}"));
         table.set_position(Some(position));
         *found = table;
-        return Ok(document.to_string());
+        return true;
     }
-    remove(&mut document, name);
-    if !put(&mut document, name, table) {
-        return Err(Error::new(
-            Kind::ProjectInvalid,
-            "data.toml writes its datasets inline, so fetchloom cannot merge them",
-        )
-        .help("merge data.toml by hand, then run `fetchloom lock`"));
+    remove(document, name);
+    put(document, name, table)
+}
+
+/// one dataset's edit for [`with_datasets_from`]: its table as the source at this index writes
+/// it, or its removal.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Edit {
+    From(usize),
+    Out,
+}
+
+/// data.toml's text with each edit made in turn, as [`with_dataset_from`] copies a dataset from
+/// one of `sources` and [`without_dataset`] takes one out.
+pub(crate) fn with_datasets_from(
+    text: &str,
+    sources: &[&str],
+    edits: &[(&str, Edit)],
+) -> Result<String, Error> {
+    if let Some(edited) = edited_at_once(text, sources, edits) {
+        return Ok(edited);
     }
-    Ok(document.to_string())
+    one_at_a_time(text, sources, edits)
+}
+
+/// [`with_datasets_from`]'s text, reading and writing data.toml again for each edit.
+fn one_at_a_time(text: &str, sources: &[&str], edits: &[(&str, Edit)]) -> Result<String, Error> {
+    let mut text = text.to_owned();
+    for (name, edit) in edits {
+        text = match edit {
+            Edit::From(source) => with_dataset_from(&text, sources[*source], name)?,
+            Edit::Out => without_dataset(&text, name)?,
+        };
+    }
+    Ok(text)
+}
+
+/// the text [`with_datasets_from`] writes, from one reading of `text` and of each source used,
+/// for data.toml laid out as most are; none for any other layout, or a copy that is not a plain
+/// table, which the edits one at a time then write alike, errors included.
+fn edited_at_once(text: &str, sources: &[&str], edits: &[(&str, Edit)]) -> Option<String> {
+    if edits.is_empty() {
+        return None;
+    }
+    let mut document = editable(text).ok()?;
+    if !plain(&document) {
+        return None;
+    }
+    let mut read: Vec<Option<DocumentMut>> = sources.iter().map(|_| None).collect();
+    for (name, edit) in edits {
+        match *edit {
+            Edit::From(source) => {
+                if read[source].is_none() {
+                    read[source] = Some(editable(sources[source]).ok()?);
+                }
+                let table = copied(read[source].as_ref()?, name).ok()?;
+                if !table.iter().all(|(_, item)| item.is_value())
+                    || !copy_in(&mut document, name, table)
+                {
+                    return None;
+                }
+                place_last(&mut document, name);
+            }
+            Edit::Out => {
+                remove(&mut document, name);
+                trim_top(&mut document);
+            }
+        }
+    }
+    Some(document.to_string())
+}
+
+/// whether `document` is laid out so that edits made to it at once write what the same edits
+/// write with data.toml written and read again after each: only tables at the top, none dotted
+/// nor in an array, each dataset a table with its own header, and every table written in the
+/// order its key is held.
+fn plain(document: &DocumentMut) -> bool {
+    if !document.iter().all(|(_, item)| item.is_table()) {
+        return false;
+    }
+    if let Some(datasets) = document.get("datasets") {
+        let Some(datasets) = datasets.as_table() else {
+            return false;
+        };
+        let headed = |item: &Item| {
+            item.as_table()
+                .is_some_and(|table| !table.is_implicit() && table.position().is_some())
+        };
+        if !datasets.is_implicit() || !datasets.iter().all(|(_, item)| headed(item)) {
+            return false;
+        }
+    }
+    in_order(document.as_table(), &mut None)
+}
+
+/// whether every table below `table`, visited as they are held, comes after `last` and the one
+/// before it, as reading data.toml leaves them.
+fn in_order(table: &Table, last: &mut Option<isize>) -> bool {
+    table.iter().all(|(_, item)| match item {
+        Item::Table(table) => {
+            if table.is_dotted() {
+                return false;
+            }
+            if let Some(position) = table.position() {
+                if last.is_some_and(|last| last >= position) {
+                    return false;
+                }
+                *last = Some(position);
+            }
+            in_order(table, last)
+        }
+        Item::ArrayOfTables(_) => false,
+        Item::None | Item::Value(_) => true,
+    })
+}
+
+/// gives the dataset `name`, put after all the others, the place reading data.toml again gives
+/// it: just after the last table under the datasets, or after every table when it is the only
+/// dataset.
+fn place_last(document: &mut DocumentMut, name: &str) {
+    let Some(datasets) = document.get("datasets").and_then(Item::as_table) else {
+        return;
+    };
+    if datasets
+        .get(name)
+        .and_then(Item::as_table)
+        .is_none_or(|table| table.position().is_some())
+    {
+        return;
+    }
+    let after = last_position(datasets)
+        .or_else(|| last_position(document.as_table()))
+        .unwrap_or_default()
+        + 1;
+    shift_positions(document.as_table_mut(), after);
+    if let Some(table) = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+    {
+        table.set_position(Some(after));
+    }
+}
+
+/// the latest place of any table below `table`.
+fn last_position(table: &Table) -> Option<isize> {
+    let mut last: Option<isize> = None;
+    for (_, item) in table {
+        if let Item::Table(table) = item {
+            for position in table.position().into_iter().chain(last_position(table)) {
+                last = Some(last.map_or(position, |last| last.max(position)));
+            }
+        }
+    }
+    last
+}
+
+/// takes the blank lines off the top of data.toml, as [`without_dataset`] does.
+fn trim_top(document: &mut DocumentMut) {
+    let Some(first) = first_position(document.as_table()) else {
+        let trailing = document.trailing().as_str().unwrap_or_default();
+        let trimmed = trailing.trim_start_matches('\n').to_owned();
+        document.set_trailing(trimmed);
+        return;
+    };
+    if let Some(table) = table_at(document.as_table_mut(), first) {
+        let trimmed = prefix(table).trim_start_matches('\n').to_owned();
+        table.decor_mut().set_prefix(trimmed);
+    }
+}
+
+/// the table below `table` at `position`.
+fn table_at(table: &mut Table, position: isize) -> Option<&mut Table> {
+    table.iter_mut().find_map(|(_, item)| {
+        let table = item.as_table_mut()?;
+        if table.position() == Some(position) {
+            Some(table)
+        } else {
+            table_at(table, position)
+        }
+    })
 }
 
 /// each dataset's own text: its table as it would read alone in a data.toml, with the comments
@@ -1909,6 +2101,8 @@ fn not_toml(text: &str, err: &TomlError) -> Error {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     thread_local! {
@@ -3381,5 +3575,137 @@ pub(crate) mod tests {
             parse(&added).datasets["a"].source().unwrap().reference,
             "zenodo:1"
         );
+    }
+
+    /// a seeded walk through data.toml layouts, to compare two ways of editing each.
+    struct Layouts(u64);
+
+    impl Layouts {
+        fn below(&mut self, count: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            usize::try_from(self.0 % u64::try_from(count).unwrap()).unwrap()
+        }
+
+        fn one_in(&mut self, count: usize) -> bool {
+            self.below(count) == 0
+        }
+
+        /// a data.toml holding some of `names` in an order of its own, with notes, comments
+        /// touching headers, member tables and `[project]` first or last; with `odd`, now and then
+        /// a layout less often written: `[project]` among the datasets, a `[datasets]` header, a
+        /// member table far from its dataset, a dataset written inline or with dotted keys.
+        fn text<'n>(&mut self, names: &[&'n str], odd: bool) -> (String, Vec<&'n str>) {
+            let mut chosen: Vec<&str> = names.iter().copied().filter(|_| !self.one_in(3)).collect();
+            for at in (1..chosen.len()).rev() {
+                if self.one_in(3) {
+                    let other = self.below(at + 1);
+                    chosen.swap(at, other);
+                }
+            }
+            let mut text = "\n".repeat(self.below(3));
+            if self.one_in(3) {
+                text.push_str("# a note at the top\n\n");
+            }
+            let project = self.below(if odd { 4 } else { 3 });
+            if project == 1 {
+                text.push_str("[project]\ndata_dir = \"data\"\n\n");
+                if self.one_in(2) {
+                    text.push_str("# the datasets\n\n");
+                }
+            }
+            if odd && self.one_in(8) {
+                text.push_str("[datasets]\n\n");
+            }
+            for (at, name) in chosen.iter().enumerate() {
+                if self.one_in(4) {
+                    text.push_str("# a note that stands apart\n\n");
+                }
+                if self.one_in(2) {
+                    writeln!(text, "# {name}, from its own record").unwrap();
+                }
+                let record = self.below(9);
+                if odd && self.one_in(12) {
+                    writeln!(text, "datasets.{name}.ref = \"zenodo:{record}\"").unwrap();
+                } else {
+                    writeln!(text, "[datasets.{name}]\nref = \"zenodo:{record}\"").unwrap();
+                }
+                if self.one_in(if odd { 3 } else { 8 }) {
+                    writeln!(
+                        text,
+                        "\n[datasets.{name}.members.\"{name}.zip\"]\nexclude = [\"*.tmp\"]"
+                    )
+                    .unwrap();
+                }
+                if !self.one_in(4) {
+                    text.push('\n');
+                }
+                if project == 3 && at == 0 {
+                    text.push_str("[project]\ndata_dir = \"data\"\n\n");
+                }
+            }
+            if odd
+                && self.one_in(8)
+                && let Some(first) = chosen.first()
+            {
+                writeln!(
+                    text,
+                    "[datasets.{first}.members.\"late.zip\"]\nselect = [\"*\"]"
+                )
+                .unwrap();
+            }
+            if project == 2 {
+                text.push_str("[project]\ndata_dir = \"data\"\n");
+            }
+            if self.one_in(3) {
+                text.push_str("\n# the end\n");
+            }
+            (text, chosen)
+        }
+    }
+
+    /// edits made at once write data.toml as the same edits made one at a time do, over layouts
+    /// with notes, comments, member tables, datasets out of order, and copies in place, before
+    /// another dataset or last, from either of two sources, and removals; layouts the edits at
+    /// once cannot follow are left to the edits one at a time.
+    #[test]
+    fn edits_at_once_write_what_edits_one_at_a_time_write() {
+        let names = ["a", "b", "c", "d", "e", "f"];
+        let mut layouts = Layouts(0x9e37_79b9_7f4a_7c15);
+        let (mut compared, mut cases) = (0, 0);
+        for case in 0..3000 {
+            let odd = case % 4 == 3;
+            let (text, _) = layouts.text(&names, odd);
+            let written = [layouts.text(&names, false), layouts.text(&names, odd)];
+            let sources = [written[0].0.as_str(), written[1].0.as_str()];
+            let mut edits: Vec<(&str, Edit)> = names
+                .iter()
+                .filter_map(|name| match layouts.below(4) {
+                    0 => None,
+                    1 => Some((*name, Edit::Out)),
+                    source => written[source - 2]
+                        .1
+                        .contains(name)
+                        .then_some((*name, Edit::From(source - 2))),
+                })
+                .collect();
+            if layouts.one_in(4) {
+                edits.reverse();
+            }
+            cases += 1;
+            let Some(at_once) = edited_at_once(&text, &sources, &edits) else {
+                continue;
+            };
+            compared += 1;
+            let one_at_a_time = one_at_a_time(&text, &sources, &edits).unwrap_or_else(|err| {
+                panic!("{err:?}\ntext:\n{text}\nsources:\n{sources:#?}\nedits: {edits:?}")
+            });
+            assert_eq!(
+                at_once, one_at_a_time,
+                "text:\n{text}\nsources:\n{sources:#?}\nedits: {edits:?}"
+            );
+        }
+        assert!(compared * 2 > cases, "{compared} of {cases} compared");
     }
 }

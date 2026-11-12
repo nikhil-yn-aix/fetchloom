@@ -22,7 +22,7 @@ use self::markers::Sides;
 use super::derived::Derived;
 use super::{Lock, Locked, LockedFile, Parsed, parse, resolve, spec};
 use crate::error::{Error, Kind};
-use crate::project::manifest::{self, Entry, Manifest};
+use crate::project::manifest::{self, Edit, Entry, Manifest};
 use crate::units;
 
 /// one side of a merge, as git's `--ours` and `--theirs` and the stages of its index name them.
@@ -289,7 +289,7 @@ pub(crate) fn merge(
     check_choices(choices, &decided, &manifests)?;
     let (text, merged) = match &manifests.whole {
         Some(_) if !decided.chosen.is_empty() => {
-            let text = chosen_whole(&manifests, choices, &decided, text)?;
+            let text = chosen_whole(&manifests, choices, &decided, &text)?;
             let merged = read_merged(&text)?;
             check_chosen(&manifests, &merged, choices, &decided)?;
             if let (Some(locks), Some(records)) = (&locks, &mut records) {
@@ -517,18 +517,19 @@ fn merged_text(
     takes: &BTreeMap<String, Take>,
 ) -> Result<String, Error> {
     let other = frame.other();
-    let mut text = manifests.text(frame).to_owned();
-    for (name, take) in takes {
-        if *take != Take::Side(other) {
-            continue;
-        }
-        text = if manifests.of(other).datasets.contains_key(name) {
-            manifest::with_dataset_from(&text, manifests.text(other), name)?
-        } else {
-            manifest::without_dataset(&text, name)?
-        };
-    }
-    Ok(text)
+    let edits: Vec<(&str, Edit)> = takes
+        .iter()
+        .filter(|(_, take)| **take == Take::Side(other))
+        .map(|(name, _)| {
+            let edit = if manifests.of(other).datasets.contains_key(name) {
+                Edit::From(0)
+            } else {
+                Edit::Out
+            };
+            (name.as_str(), edit)
+        })
+        .collect();
+    manifest::with_datasets_from(manifests.text(frame), &[manifests.text(other)], &edits)
 }
 
 /// what decides a dataset's files and where they go, without the lines that cite them.
@@ -751,22 +752,28 @@ fn chosen_whole(
     manifests: &Manifests<'_>,
     choices: &Choices,
     decided: &Decided,
-    mut text: String,
+    text: &str,
 ) -> Result<String, Error> {
-    let now = manifest::tables(&text)?;
+    let now = manifest::tables(text)?;
+    let sides = [Side::Ours, Side::Theirs];
+    let sources = sides.map(|side| manifests.whole(side).map_or("", |whole| whole.text));
+    let mut edits = Vec::new();
     for name in &decided.chosen {
-        let Some(whole) = choices.get(name).and_then(|side| manifests.whole(*side)) else {
+        let Some(side) = choices.get(name) else {
             continue;
         };
-        text = match (now.get(name), whole.tables.get(name)) {
-            (now, Some(wanted)) if now != Some(wanted) => {
-                manifest::with_dataset_from(&text, whole.text, name)?
-            }
-            (Some(_), None) => manifest::without_dataset(&text, name)?,
+        let Some(whole) = manifests.whole(*side) else {
+            continue;
+        };
+        let source = usize::from(*side == Side::Theirs);
+        let edit = match (now.get(name), whole.tables.get(name)) {
+            (now, Some(wanted)) if now != Some(wanted) => Edit::From(source),
+            (Some(_), None) => Edit::Out,
             _ => continue,
         };
+        edits.push((name.as_str(), edit));
     }
-    Ok(text)
+    manifest::with_datasets_from(text, &sources, &edits)
 }
 
 /// refuses a merged data.toml that does not hold a chosen side's entry as that side's branch

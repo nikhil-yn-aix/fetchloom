@@ -759,3 +759,137 @@ fn a_pin_mixed_from_both_sides_is_never_kept() {
     let kept = merge(&manifest, Some(&whole), &choices, root.path(), &|_| {}).unwrap();
     assert_eq!(kept.lock.unwrap().datasets, [photos]);
 }
+
+/// data.toml merged alone, with `choices`, as when neither side has a data.lock.
+fn text_merged(manifest: &Sides, choices: &[(&str, Side)]) -> String {
+    let root = tempfile::tempdir().unwrap();
+    let choices = choices
+        .iter()
+        .map(|(name, side)| ((*name).to_owned(), *side))
+        .collect();
+    merge(manifest, None, &choices, root.path(), &|_| {})
+        .unwrap()
+        .manifest
+}
+
+const PROJECT: &str = "[project]\ndata_dir = \"data\"\n\n# datasets the lab tracks\n";
+
+/// their side, which took a note out with the dataset under it, keeps its layout, and our
+/// addition goes in before the dataset it comes before, with the comment touching it.
+#[test]
+fn a_side_that_changed_a_note_gives_the_layout_our_additions_go_into() {
+    let ours = format!(
+        "{PROJECT}\n# the alpha set, from zenodo\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.core]\nref = \"zenodo:3\"  # pinned for the paper\n\n# a note that stands apart\n\n# gone goes with this comment\n[datasets.gone]\nref = \"zenodo:9\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let theirs = format!(
+        "{PROJECT}\n# beta, added on their side\n[datasets.beta]\nref = \"zenodo:2\"\n\n[datasets.core]\n# core moved to its new record\nref = \"zenodo:4\"\n\n[datasets.omega]\nref = \"zenodo:15\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n\n# the last one, after them all\n[datasets.zz]\nref = \"zenodo:27\"\n"
+    );
+    let base = format!(
+        "{PROJECT}\n[datasets.core]\nref = \"zenodo:3\"  # pinned for the paper\n\n# a note that stands apart\n\n# gone goes with this comment\n[datasets.gone]\nref = \"zenodo:9\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let merged = text_merged(&sides(ours, theirs, Some(base)), &[]);
+    assert_eq!(
+        merged,
+        "[project]\ndata_dir = \"data\"\n\n# datasets the lab tracks\n\n# the alpha set, from zenodo\n[datasets.alpha]\nref = \"zenodo:1\"\n\n# beta, added on their side\n[datasets.beta]\nref = \"zenodo:2\"\n\n[datasets.core]\n# core moved to its new record\nref = \"zenodo:4\"\n\n[datasets.omega]\nref = \"zenodo:15\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n\n# the last one, after them all\n[datasets.zz]\nref = \"zenodo:27\"\n"
+    );
+}
+
+/// with the text outside the datasets alike on both sides, the merge keeps our layout: their
+/// additions go in before the dataset each comes before, or last, a change of theirs replaces
+/// ours where it stands, and their removal takes our table out with the comment touching it,
+/// leaving the note that stood apart above what follows.
+#[test]
+fn a_merge_of_many_edits_keeps_our_layout_and_their_comments() {
+    let ours = format!(
+        "{PROJECT}\n# the alpha set, from zenodo\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.core]\nref = \"zenodo:3\"  # pinned for the paper\n\n# a note that stands apart\n\n# gone goes with this comment\n[datasets.gone]\nref = \"zenodo:9\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let theirs = format!(
+        "{PROJECT}\n# beta, added on their side\n[datasets.beta]\nref = \"zenodo:2\"\n\n[datasets.core]\n# core moved to its new record\nref = \"zenodo:4\"\n\n# a note that stands apart\n\n[datasets.omega]\nref = \"zenodo:15\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n\n# the last one, after them all\n[datasets.zz]\nref = \"zenodo:27\"\n"
+    );
+    let base = format!(
+        "{PROJECT}\n[datasets.core]\nref = \"zenodo:3\"  # pinned for the paper\n\n# a note that stands apart\n\n# gone goes with this comment\n[datasets.gone]\nref = \"zenodo:9\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let merged = text_merged(&sides(ours, theirs, Some(base)), &[]);
+    assert_eq!(
+        merged,
+        "[project]\ndata_dir = \"data\"\n\n# datasets the lab tracks\n\n# the alpha set, from zenodo\n[datasets.alpha]\nref = \"zenodo:1\"\n\n# beta, added on their side\n[datasets.beta]\nref = \"zenodo:2\"\n\n[datasets.core]\n# core moved to its new record\nref = \"zenodo:4\"\n\n# a note that stands apart\n\n[datasets.omega]\nref = \"zenodo:15\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n\n# the last one, after them all\n[datasets.zz]\nref = \"zenodo:27\"\n"
+    );
+}
+
+/// a choice of a side keeps that side's entry whole, as its branch writes it, or its removal,
+/// each in its place, whichever side each choice names.
+#[test]
+fn choices_keep_each_chosen_entry_whole_in_place() {
+    let ours = format!(
+        "{PROJECT}\n[datasets.core]\nref = \"zenodo:5\"  # ours moved it\n\n# the kept one\n[datasets.kept]\nref = \"zenodo:7\"\n\n# gone, changed on our side\n[datasets.gone]\nref = \"zenodo:10\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let theirs = format!(
+        "{PROJECT}\n# theirs moved core\n[datasets.core]\nref = \"zenodo:4\"\n\n# the kept one, theirs\n[datasets.kept]\nref = \"zenodo:8\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let base = format!(
+        "{PROJECT}\n[datasets.core]\nref = \"zenodo:3\"\n\n[datasets.kept]\nref = \"zenodo:6\"\n\n[datasets.gone]\nref = \"zenodo:9\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+    let mut manifest = sides(ours.clone(), theirs.clone(), Some(base));
+    manifest.whole = Some([ours, theirs]);
+    let merged = text_merged(
+        &manifest,
+        &[
+            ("core", Side::Theirs),
+            ("kept", Side::Ours),
+            ("gone", Side::Theirs),
+        ],
+    );
+    assert_eq!(
+        merged,
+        "[project]\ndata_dir = \"data\"\n\n# datasets the lab tracks\n\n# theirs moved core\n[datasets.core]\nref = \"zenodo:4\"\n\n# the kept one\n[datasets.kept]\nref = \"zenodo:7\"\n\n[datasets.zeta]\nref = \"zenodo:26\"\n"
+    );
+}
+
+/// a merge reads data.toml as often for many datasets as for few, rather than once more for each
+/// dataset it copies in, changes in place or takes out.
+#[test]
+fn a_merge_reads_data_toml_as_often_for_many_datasets_as_for_few() {
+    let datasets = |prefix: &str, count: usize, record: &dyn Fn(usize) -> Option<usize>| {
+        (0..count)
+            .filter_map(|at| {
+                let record = record(at)?;
+                Some(format!(
+                    "[datasets.{prefix}{at:03}]\nref = \"zenodo:{record}\"\n\n"
+                ))
+            })
+            .collect::<String>()
+    };
+    let reads = |count: usize| {
+        let base = datasets("c", count, &Some);
+        let ours = format!("{PROJECT}\n{}{base}", datasets("a", count, &Some));
+        let theirs = format!(
+            "{PROJECT}\n{}{}{}",
+            datasets("b", count, &|at| Some(at + 100)),
+            datasets("c", count, &|at| match at % 3 {
+                0 => Some(at + 1000),
+                1 => None,
+                _ => Some(at),
+            }),
+            datasets("z", count, &|at| Some(at + 200)),
+        );
+        let before = manifest::tests::reads();
+        let merged = text_merged(
+            &sides(ours, theirs, Some(format!("{PROJECT}\n{base}"))),
+            &[],
+        );
+        let reads = manifest::tests::reads() - before;
+        let manifest = Manifest::parse(&merged).unwrap();
+        let removed = (count + 1) / 3;
+        assert_eq!(manifest.datasets.len(), 4 * count - removed);
+        assert_eq!(
+            manifest.datasets["c000"].source().unwrap().reference,
+            "zenodo:1000"
+        );
+        reads
+    };
+    assert_eq!(
+        reads(200),
+        reads(2),
+        "data.toml is read again for each dataset"
+    );
+}

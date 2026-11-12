@@ -48,6 +48,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | `path` and `sync <name>` read only the named folder, state records, pins and lock lines (five changes) | `path` of 3 files beside 100,000 415 to 29 ms, peak memory 0.305; `sync` 392 to 30 ms | kept | [named commands](#commands-that-name-a-dataset-2026-11-12) |
 | lock and names | the number of processors read once a run | 0.997 | dropped, no win | [named commands](#commands-that-name-a-dataset-2026-11-12) |
 | lock and names | waiting `path` calls finish once the project is ready | 32 waiters 3.24 to 0.25 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| lock and names | a merge's data.toml edits made on one reading of each side | merge of 2,000 datasets 18.0 to 0.33 s, of 1,000 4.0 to 0.10 s; 1 and 10 flat | kept | [merge](#a-merge-of-many-datasets-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -439,6 +440,23 @@ the operating-system sweep of a8f9dad7 found that `copy_stoppable` calls `io::co
 strace counted one fewer `copy_file_range`, one fewer `sendfile` and two fewer `statx` calls per file, 40,000 calls across this fixture. tmpfs medians suggested about 11% less time, but the first batch and its repeat both contained unrelated-load bursts, so neither supplied a clean acceptance result. the memory fields of those early runs also inherited the harness parent's RSS floor and are not memory-regression evidence.
 
 the ext4 gain is below the 10% keep rule, and there is no checked whole-command win. the change is dropped; the copy loop and its 1 MiB cancellation boundary stay unchanged. raw commands, counts and both noisy batches remain with the sweep outside the repository.
+
+## a merge of many datasets, 2026-11-12
+
+`lock` resolving a merge wrote data.toml's merged text one dataset at a time: each dataset taken from the other side read the merged text and the other side's text whole, copied the dataset in or took it out, and wrote the text again, so its time grew with the square of the datasets. it now reads each text once and makes every edit on one document, giving each new table the place reading the text again would give it. a layout it cannot follow alike, as dotted keys, a `[datasets]` header, datasets written inline, tables written out of the order their keys hold, or a copied dataset with tables of its own, takes the old way; a test compares the two over 3,000 generated layouts, and another counts that a merge of 200 datasets reads data.toml as often as one of 2.
+
+the fixtures are the scale map's: data.toml and data.lock in git's conflict lines, each side adding n datasets of one file to an empty base, run as `--json --offline lock --dry-run`. one release build of 7dc24bb chose the old or new way by `FETCHLOOM_EXP_MERGE_BATCH`; abh.py ran the two in interleaved rounds, seeded shuffled order, with the measure lock held, on cores 12-23 of the shared 24-core machine, 30 rounds at 1 and 10 datasets and 10 at 1,000 and 2,000. a ratio is the median of new over old with its 95% paired bootstrap interval from `bench/ab.py`.
+
+| datasets | glibc, old to new | new/old | musl, old to new | new/old |
+|---:|---|---|---|---|
+| 1 | 6.1 to 6.0 ms | 0.995 [0.979, 1.001] | 6.0 to 6.1 ms | 1.005 [0.996, 1.016] |
+| 10 | 7.1 to 6.7 ms | 0.956 [0.938, 0.972] | 6.9 to 6.5 ms | 0.952 [0.944, 0.961] |
+| 1,000 | 4.02 to 0.101 s | 0.0250 [0.0247, 0.0254] | 3.74 to 0.094 s | 0.0251 [0.0247, 0.0255] |
+| 2,000 | 17.99 to 0.326 s | 0.0179 [0.0176, 0.0183] | 15.02 to 0.286 s | 0.0191 [0.0188, 0.0193] |
+
+peak memory stayed the same at 1 and 10 datasets, fell to 0.947 and 0.925 at 1,000, and was 0.969 on glibc and 1.019 [1.014, 1.021] on musl at 2,000, 59.3 to 60.2 MiB. the merged text and everything `--json` printed matched byte for byte at every size. kept.
+
+what is left still grows with the square of the datasets, at a much smaller cost: each new table looks for the dataset it goes before and shifts the places after it by walking every table once, which is most of the 0.33 s at 2,000, and choosing which side's layout to keep takes each side's datasets out one at a time. going further needs an index of names and places kept beside the document's tables.
 
 ## evidence limits
 
