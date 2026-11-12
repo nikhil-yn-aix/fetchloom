@@ -94,6 +94,54 @@ fn two_additions(base: bool) -> (Sides, Sides) {
     (manifest, locks)
 }
 
+/// the merge checks the data.toml it wrote before keeping it: one that lost or changed a dataset
+/// the merge decided on, as the sides agreed it (`check_merged`) or as a person chose it
+/// (`check_chosen`), is refused, with help to merge by hand.
+#[test]
+fn a_merged_data_toml_that_lost_or_changed_a_decided_dataset_is_refused() {
+    let ours = toml(&[("alpha", "zenodo:1")]);
+    let theirs = toml(&[("alpha", "zenodo:1"), ("beta", "zenodo:2")]);
+    let mut both = sides(ours.clone(), theirs.clone(), None);
+    both.whole = Some([ours, theirs]);
+    let manifests = read_manifests(&both).unwrap();
+    let takes = BTreeMap::from([("beta".to_owned(), Take::Side(Side::Theirs))]);
+    let choices = Choices::from([("beta".to_owned(), Side::Theirs)]);
+    let decided = Decided {
+        chosen: BTreeSet::from(["beta".to_owned()]),
+        ..Decided::default()
+    };
+    for (wrote, refused) in [
+        (toml(&[("alpha", "zenodo:1"), ("beta", "zenodo:2")]), false),
+        (toml(&[("alpha", "zenodo:1")]), true),
+        (toml(&[("alpha", "zenodo:1"), ("beta", "zenodo:9")]), true),
+    ] {
+        let merged = Manifest::parse(&wrote).unwrap();
+        for (check, result) in [
+            ("check_merged", check_merged(&manifests, &merged, &takes)),
+            (
+                "check_chosen",
+                check_chosen(&manifests, &merged, &choices, &decided),
+            ),
+        ] {
+            match (refused, result) {
+                (false, Ok(())) => {}
+                (true, Err(error)) => {
+                    assert_eq!(error.kind, Kind::ProjectInvalid);
+                    assert_eq!(
+                        error.message,
+                        "fetchloom could not write the merged data.toml in its layout"
+                    );
+                    assert_eq!(
+                        error.help.as_deref(),
+                        Some("merge data.toml by hand, then run `fetchloom lock`")
+                    );
+                }
+                (_, result) => panic!("{check} on {wrote:?}: {result:?}"),
+            }
+        }
+    }
+}
+
 #[test]
 fn independent_additions_are_kept() {
     let (manifest, locks) = two_additions(true);
