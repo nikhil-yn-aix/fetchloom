@@ -401,8 +401,8 @@ async fn one_link(
         (listing, files)
     } else {
         net.trust(parsed.reference.written_origin());
-        let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
-        let listing = engine::resolve(&context.output, &parsed.reference, net, folders.as_deref())
+        let select = crate::glob::patterns_of(&wanted_patterns(args, &parsed));
+        let listing = engine::resolve(&context.output, &parsed.reference, net, &select)
             .await
             .map_err(|error| unlisted_offline(context.offline, error))?;
         let files = told(context, args, &parsed, &listing)?;
@@ -629,12 +629,12 @@ async fn resolve_all(
             asked.push(parsed.reference.shown());
         }
         let net = net.clone();
-        let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
+        let select = crate::glob::patterns_of(&wanted_patterns(args, &parsed));
         let offline = context.offline;
         tasks.spawn(async move {
             let listing = parsed
                 .reference
-                .resolve_in(&*net, folders.as_deref())
+                .resolve_in(&*net, &select)
                 .await
                 .map_err(|error| unlisted_offline(offline, error));
             (index, listing.map(|listing| (parsed, listing)))

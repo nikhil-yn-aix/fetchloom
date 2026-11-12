@@ -1339,6 +1339,42 @@ fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
     Ok(())
 }
 
+/// a pattern with no folder in it is answered from the top folder alone, in one query, and the
+/// resolved line says what the listing covers.
+#[test]
+fn a_top_level_pattern_lists_openneuros_top_folder_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
+    let routes = openneuro(&key, ROWS)?;
+    let output = openneuro_command(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "openneuro:ds000001@1.0.0",
+            "--select",
+            "README",
+            "--as",
+            "bart",
+        ],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Resolved openneuro:ds000001@1.0.0 · Balloon Analog Risk-taking Task · 1 file in the top folder"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data/bart/README"))?, NOTES);
+    let queries: Vec<String> = routes
+        .targets()
+        .into_iter()
+        .filter(|target| target.starts_with(OPENNEURO))
+        .collect();
+    assert_eq!(queries, [openneuro_top()]);
+    Ok(())
+}
+
 /// a dataset openneuro shows to no one without an account is refused with what that means, and
 /// no data.toml is written.
 #[test]

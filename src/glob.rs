@@ -137,6 +137,67 @@ impl Glob {
             .collect();
         names.map(|names| names.join("/"))
     }
+
+    /// whether a path below `folder`, a `/`-separated path inside a dataset or empty for its
+    /// top, may match: `folder` is on the way to the folders [`Glob::scope`] names, one of them,
+    /// or below one when the pattern has a `**`. false only when nothing below it can match, so
+    /// a listing may skip the folder.
+    pub(crate) fn may_reach(&self, folder: &str) -> bool {
+        let (names, deep) = self.scoped();
+        let folders: Vec<&str> = folder.split('/').filter(|name| !name.is_empty()).collect();
+        (folders.len() <= names.len() || deep) && Glob::lead(&names, &folders)
+    }
+
+    /// whether the file at `path` lies in the folders [`Glob::scope`] names: directly in one,
+    /// or at any depth below one when the pattern has a `**`.
+    pub(crate) fn scope_holds(&self, path: &str) -> bool {
+        let (names, deep) = self.scoped();
+        let mut folders: Vec<&str> = path.split('/').collect();
+        folders.pop();
+        (folders.len() == names.len() || (deep && folders.len() > names.len()))
+            && Glob::lead(&names, &folders)
+    }
+
+    /// the folders every match lies in: the pattern's folder names before the file's, up to its
+    /// first `**`, each without escapes where it has no wildcard, such as `sub-*/anat` for
+    /// `sub-*/anat/*.nii.gz` and `data` for `data/**`. empty for a pattern that matches only
+    /// files at the top; none when a match may lie anywhere, as for `**/x.csv`.
+    pub(crate) fn scope(&self) -> Option<String> {
+        let (names, deep) = self.scoped();
+        if names.is_empty() && deep {
+            return None;
+        }
+        let written = self.text.trim_start_matches('/').split('/');
+        let names: Vec<String> = names
+            .iter()
+            .zip(written)
+            .map(|(tokens, written)| literal(tokens).unwrap_or_else(|| written.to_owned()))
+            .collect();
+        Some(names.join("/"))
+    }
+
+    /// the folder names before the file's, up to the first `**`, and whether a `**` follows
+    /// them, which lets a match lie at any depth below them.
+    fn scoped(&self) -> (Vec<&[Token]>, bool) {
+        let any = self.parts.iter().position(|part| matches!(part, Part::Any));
+        let end = any.unwrap_or(self.parts.len() - 1);
+        let names = self.parts[..end]
+            .iter()
+            .filter_map(|part| match part {
+                Part::Name(tokens) => Some(tokens.as_slice()),
+                Part::Any => None,
+            })
+            .collect();
+        (names, any.is_some())
+    }
+
+    /// whether each of `folders` matches the name the pattern gives it, as far as both go.
+    fn lead(names: &[&[Token]], folders: &[&str]) -> bool {
+        names
+            .iter()
+            .zip(folders)
+            .all(|(tokens, folder)| matches_name(tokens, folder))
+    }
 }
 
 /// patterns that match a path when any one of them does. a pattern without wildcards, as `drop`
@@ -224,15 +285,14 @@ pub(crate) fn folders(patterns: &[Glob]) -> Option<Vec<String>> {
     (kept.len() <= MOST_FOLDERS).then_some(kept)
 }
 
-/// [`folders`] for patterns still as text, none when one is not a valid pattern, so the error
-/// is told where patterns are checked.
-pub(crate) fn folders_of(texts: &[String]) -> Option<Vec<String>> {
-    let patterns: Vec<Glob> = texts
+/// the patterns `texts` hold, none when one is not a valid pattern, so the error is told where
+/// patterns are checked and the listing is not narrowed meanwhile.
+pub(crate) fn patterns_of(texts: &[String]) -> Vec<Glob> {
+    texts
         .iter()
         .map(|text| Glob::new(text))
         .collect::<Result<_, _>>()
-        .ok()?;
-    folders(&patterns)
+        .unwrap_or_default()
 }
 
 /// the one name `tokens` match, when they match only one: plain characters, and sets of one
@@ -471,6 +531,54 @@ mod tests {
         }
     }
 
+    /// a listing may skip the folders a pattern cannot reach: its top-level files need the top
+    /// alone, and a wildcard folder only the folders it matches.
+    #[test]
+    fn a_pattern_reaches_only_the_folders_its_matches_can_lie_in() {
+        let reach = |text: &str, folder: &str| Glob::new(text).unwrap().may_reach(folder);
+        for (text, folder, reached) in [
+            ("*.tsv", "", true),
+            ("*.tsv", "sub-01", false),
+            ("sub-*/anat/*", "sub-01", true),
+            ("sub-*/anat/*", "sub-01/anat", true),
+            ("sub-*/anat/*", "sub-01/func", false),
+            ("sub-*/anat/*", "sub-01/anat/old", false),
+            ("**/*.json", "a/b/c", true),
+            ("data/**", "data/x/y", true),
+            ("data/**", "other", false),
+        ] {
+            assert_eq!(reach(text, folder), reached, "{text} in {folder:?}");
+        }
+        let holds = |text: &str, path: &str| Glob::new(text).unwrap().scope_holds(path);
+        for (text, path, held) in [
+            ("*.tsv", "README", true),
+            ("*.tsv", "sub-01/x.tsv", false),
+            ("sub-*/anat/*.nii.gz", "sub-01/anat/x.json", true),
+            ("sub-*/anat/*.nii.gz", "sub-01/x.nii.gz", false),
+            ("sub-*/anat/*.nii.gz", "sub-01/anat/old/x.nii.gz", false),
+            ("data/**", "data/x/y.csv", true),
+            ("data/**", "data", false),
+        ] {
+            assert_eq!(holds(text, path), held, "{text} for {path}");
+        }
+    }
+
+    #[test]
+    fn a_pattern_writes_the_folders_its_matches_lie_in() {
+        let scope = |text: &str| Glob::new(text).unwrap().scope();
+        assert_eq!(scope("*.tsv").as_deref(), Some(""));
+        assert_eq!(scope("sub-*/anat/*.nii.gz").as_deref(), Some("sub-*/anat"));
+        assert_eq!(scope("/data/**").as_deref(), Some("data"));
+        assert_eq!(scope("a/**/z").as_deref(), Some("a"));
+        assert_eq!(
+            scope(&escape("odd [1]/a*b?.csv")).as_deref(),
+            Some("odd [1]")
+        );
+        for anywhere in ["**", "**/x.csv"] {
+            assert_eq!(scope(anywhere), None, "{anywhere}");
+        }
+    }
+
     /// a fixed-seed xorshift walk, so a failing case repeats.
     struct Walk(u64);
 
@@ -517,6 +625,45 @@ mod tests {
                 assert_eq!(patterns.matching(&path), first, "{path} by {globs:?}");
             }
         }
+    }
+
+    /// pruning is safe: whatever path a pattern matches, each folder on its way, the top
+    /// included, may reach it, and the pattern's scope holds it, unless a `**` matched no folder
+    /// at the end, as `data/**` matches a file named `data`.
+    #[test]
+    fn no_folder_holding_a_match_is_skipped() {
+        let names = ["a", "b", "ab", "a*b", "x[1]", "é.csv", "a.csv"];
+        let parts = [
+            "a", "b", "*", "?", "**", "a*", "[ab]", "[!a]", "[*]", "*.csv", "é.csv",
+        ];
+        let mut walk = Walk(0x2545_f491_4f6c_dd1d);
+        let mut matched = 0;
+        for _ in 0..2_000 {
+            let Ok(glob) = Glob::new(&walk.joined(&parts)) else {
+                continue;
+            };
+            for _ in 0..20 {
+                let path = walk.joined(&names);
+                if !glob.matches(&path) {
+                    continue;
+                }
+                matched += 1;
+                let mut folder = String::new();
+                for name in path.split('/') {
+                    assert!(glob.may_reach(&folder), "{path} by {glob:?} in {folder:?}");
+                    folder = if folder.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{folder}/{name}")
+                    };
+                }
+                let (names, deep) = glob.scoped();
+                if !deep || path.split('/').count() > names.len() {
+                    assert!(glob.scope_holds(&path), "{path} by {glob:?}");
+                }
+            }
+        }
+        assert!(matched > 1_000, "only {matched} matches were tried");
     }
 
     /// drop writes one escaped path per file it leaves out, so a set of ten thousand of them

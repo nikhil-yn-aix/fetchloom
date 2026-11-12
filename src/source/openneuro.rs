@@ -14,6 +14,7 @@ use url::Url;
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
+use crate::glob::Glob;
 use crate::net::Api;
 
 const API: &str = "https://openneuro.org/crn/graphql";
@@ -74,13 +75,9 @@ impl Dataset {
     }
 
     /// lists the snapshot's files: its top folder, then each folder in it, a request each, or
-    /// only the folders on the way to and inside `folders` when every file wanted lies in one of
-    /// them, as [`crate::glob::folders`] finds them.
-    pub(super) async fn resolve(
-        &self,
-        api: &impl Api,
-        folders: Option<&[String]>,
-    ) -> Result<Listing, Error> {
+    /// only the folders that may hold a file the `select` patterns match, when each pattern says
+    /// where its files lie, as [`Glob::scope`] does, and a file was found for each.
+    pub(super) async fn resolve(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
         let tag = match &self.tag {
             Some(tag) => tag.clone(),
             None => self.newest(api).await?,
@@ -113,23 +110,31 @@ impl Dataset {
                 },
             );
         }
-        let wanted = folders.filter(|folders| {
-            !folders.is_empty() && folders.iter().all(|folder| !folder.is_empty())
-        });
+        let scopes: Option<Vec<String>> = if select.is_empty() {
+            None
+        } else {
+            select.iter().map(Glob::scope).collect()
+        };
         let mut within = Vec::new();
         let mut found = None;
-        if let Some(wanted) = wanted {
+        if let Some(mut scopes) = scopes {
             let walked = pinned
-                .walk(api, &tag, snapshot.files.clone(), Some(wanted))
+                .walk(api, &tag, snapshot.files.clone(), select)
                 .await?;
-            if wanted.iter().all(|folder| walked.holds(folder)) {
-                within = wanted.to_vec();
+            // a pattern that matches nothing is told against all the snapshot holds
+            if select
+                .iter()
+                .all(|glob| walked.files.iter().any(|file| glob.matches(&file.path)))
+            {
+                scopes.sort();
+                scopes.dedup();
+                within = scopes;
                 found = Some(walked);
             }
         }
         let found = match found {
             Some(found) => found,
-            None => pinned.walk(api, &tag, snapshot.files, None).await?,
+            None => pinned.walk(api, &tag, snapshot.files, &[]).await?,
         };
         let description = snapshot.description.unwrap_or_default();
         Ok(Listing {
@@ -152,16 +157,16 @@ impl Dataset {
     }
 
     /// the snapshot's files, from the top folder's `entries` down, a request for each folder, or
-    /// only those on the way to and inside `wanted` when it names some.
+    /// only the folders that may hold a file the `select` patterns match, when there are some.
     async fn walk(
         &self,
         api: &impl Api,
         tag: &str,
         entries: Vec<Entry>,
-        wanted: Option<&[String]>,
+        select: &[Glob],
     ) -> Result<Found, Error> {
         let mut found = Found {
-            wanted: wanted.map(<[String]>::to_vec),
+            select: select.to_vec(),
             ..Found::default()
         };
         found.add(self, "", entries)?;
@@ -384,35 +389,25 @@ impl Key {
     }
 }
 
-/// the files listed so far, the folders still to list, by id and path, and the folders wanted,
-/// when only some are.
+/// the files listed so far, the folders still to list, by id and path, and the patterns whose
+/// files are wanted, none when every file is.
 #[derive(Default)]
 struct Found {
     files: Vec<Remote>,
     folders: VecDeque<(String, String)>,
-    wanted: Option<Vec<String>>,
+    select: Vec<Glob>,
 }
 
 impl Found {
-    /// whether the folder at `path` is wanted, inside one that is, or on the way to one.
+    /// whether the folder at `path` may hold a wanted file, at any depth.
     fn opens(&self, path: &str) -> bool {
-        self.wanted.as_ref().is_none_or(|wanted| {
-            wanted
-                .iter()
-                .any(|folder| path == folder || inside(path, folder) || inside(folder, path))
-        })
+        self.select.is_empty() || self.select.iter().any(|glob| glob.may_reach(path))
     }
 
-    /// whether the file at `path` lies in a wanted folder.
+    /// whether the file at `path` lies in the folders a pattern's scope names, so the listing
+    /// holds every file of the folders it names.
     fn keeps(&self, path: &str) -> bool {
-        self.wanted
-            .as_ref()
-            .is_none_or(|wanted| wanted.iter().any(|folder| inside(path, folder)))
-    }
-
-    /// whether a file was found in `folder`.
-    fn holds(&self, folder: &str) -> bool {
-        self.files.iter().any(|file| inside(&file.path, folder))
+        self.select.is_empty() || self.select.iter().any(|glob| glob.scope_holds(path))
     }
 
     /// adds the entries of the folder at `folder`, the top one for an empty path.
@@ -518,12 +513,6 @@ fn file(dataset: &Dataset, path: String, entry: &Entry) -> Result<Remote, Error>
         named_by_server: false,
         etag: None,
     })
-}
-
-/// whether `path` lies below the folder `folder`.
-fn inside(path: &str, folder: &str) -> bool {
-    path.strip_prefix(folder)
-        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// whether `text` is a git object's id: 40 hex digits.

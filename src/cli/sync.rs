@@ -940,9 +940,9 @@ impl<'a> Loop<'a> {
                 asked.push(parsed.reference.to_string());
             }
             let net = self.net.clone();
-            let folders = crate::glob::folders(select);
+            let select = select.to_vec();
             tasks.spawn(async move {
-                let listing = parsed.reference.resolve_in(&*net, folders.as_deref()).await;
+                let listing = parsed.reference.resolve_in(&*net, &select).await;
                 (name, listing)
             });
         }
@@ -1800,16 +1800,16 @@ fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> St
 pub(super) use draft::{filter, without_files};
 
 /// resolves a reference, with progress or plain lines while its source takes its time, listing
-/// only `folders` where they hold every file wanted.
+/// only the folders that may hold a file the `select` patterns match where the source can.
 pub(super) async fn resolve(
     output: &Output,
     reference: &Reference,
     net: &Net,
-    folders: Option<&[String]>,
+    select: &[crate::glob::Glob],
 ) -> Result<Listing, Error> {
     let _waiting =
         (!resolves_locally(reference)).then(|| output.wait("Resolving", reference.to_string()));
-    reference.resolve_in(net, folders).await
+    reference.resolve_in(net, select).await
 }
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may
@@ -1989,10 +1989,18 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     } else {
         listed
     };
-    facts.push(if listing.within.is_empty() {
+    let within: Vec<&str> = listing
+        .within
+        .iter()
+        .map(|folder| match folder.as_str() {
+            "" => "the top folder",
+            folder => folder,
+        })
+        .collect();
+    facts.push(if within.is_empty() {
         files
     } else {
-        format!("{files} in {}", listing.within.join(", "))
+        format!("{files} in {}", within.join(", "))
     });
     let size = kept
         .iter()

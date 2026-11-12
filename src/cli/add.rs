@@ -1440,10 +1440,10 @@ async fn resolve_lines(
             asked += 1;
         }
         let reference = parsed.reference.clone();
-        let folders = crate::glob::folders_of(&parsed.select());
+        let select = crate::glob::patterns_of(&parsed.select());
         let net = net.clone();
         tasks.spawn(async move {
-            let listing = reference.resolve_in(&*net, folders.as_deref()).await;
+            let listing = reference.resolve_in(&*net, &select).await;
             (index, listing)
         });
     }
@@ -1786,9 +1786,8 @@ async fn resolve_add(
     } else {
         args.filter.select.clone()
     };
-    let folders = crate::glob::folders_of(&select);
-    let listing =
-        engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
+    let patterns = crate::glob::patterns_of(&select);
+    let listing = engine::resolve(&context.output, &parsed.reference, net, &patterns).await?;
     let reference = stored_reference(link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them

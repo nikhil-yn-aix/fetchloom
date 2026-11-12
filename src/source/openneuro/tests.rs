@@ -375,13 +375,13 @@ fn live_openneuro() {
 /// listed instead, so a pattern that matches nothing is told against all it holds.
 #[test]
 fn selected_folders_are_listed_without_the_rest() {
-    let anat = ["sub-01/anat".to_owned()];
+    let anat = [crate::glob::Glob::new("sub-01/anat/**").unwrap()];
     let recorded = ds000001();
     let reference = Reference::parse("openneuro:ds000001@1.0.0")
         .unwrap()
         .reference;
-    let listing = block_on(reference.resolve_in(&recorded, Some(&anat))).unwrap();
-    assert_eq!(listing.within, anat);
+    let listing = block_on(reference.resolve_in(&recorded, &anat)).unwrap();
+    assert_eq!(listing.within, ["sub-01/anat"]);
     let paths: Vec<&str> = listing
         .files
         .iter()
@@ -395,9 +395,61 @@ fn selected_folders_are_listed_without_the_rest() {
         ]
     );
     assert_eq!(recorded.asked().len(), 3, "{:?}", recorded.asked());
-    let lacking = ["sub-99".to_owned()];
+    let lacking = [crate::glob::Glob::new("sub-99/**").unwrap()];
     let recorded = ds000001();
-    let listing = block_on(reference.resolve_in(&recorded, Some(&lacking))).unwrap();
+    let listing = block_on(reference.resolve_in(&recorded, &lacking)).unwrap();
     assert_eq!(listing.within, Vec::<String>::new());
     assert_eq!(listing.files.len(), 10);
+}
+
+/// the listing of snapshot 1.0.0 of ds000001 for the files `select` can match, and the queries
+/// it took.
+fn selecting(select: &[&str]) -> (Listing, Vec<String>) {
+    let select: Vec<crate::glob::Glob> = select
+        .iter()
+        .map(|text| crate::glob::Glob::new(text).unwrap())
+        .collect();
+    let recorded = ds000001();
+    let reference = Reference::parse("openneuro:ds000001@1.0.0")
+        .unwrap()
+        .reference;
+    let listing = block_on(reference.resolve_in(&recorded, &select)).unwrap();
+    (listing, recorded.asked())
+}
+
+fn paths(listing: &Listing) -> Vec<&str> {
+    listing
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect()
+}
+
+/// a pattern with no folder in it, as `*.json`, needs the top folder alone, and one whose
+/// folders hold wildcards, as `sub-*/anat/*`, only the folders they match: no other folder is
+/// asked for, and the listing names what it covers.
+#[test]
+fn a_selection_lists_only_the_folders_its_patterns_can_reach() {
+    let preflight = " apollo-require-preflight: true";
+    let (at_top, asked) = selecting(&["*.json"]);
+    assert_eq!(asked, [top("ds000001", "1.0.0") + preflight]);
+    assert_eq!(at_top.within, [""]);
+    assert_eq!(paths(&at_top), ["README", "dataset_description.json"]);
+    let (anat, asked) = selecting(&["sub-*/anat/*"]);
+    assert_eq!(
+        asked,
+        [
+            top("ds000001", "1.0.0") + preflight,
+            folder("ds000001", "1.0.0", SUB) + preflight,
+            folder("ds000001", "1.0.0", ANAT) + preflight,
+        ]
+    );
+    assert_eq!(anat.within, ["sub-*/anat"]);
+    assert_eq!(
+        paths(&anat),
+        [
+            "sub-01/anat/sub-01_T1w.nii.gz",
+            "sub-01/anat/sub-01_inplaneT2.nii.gz"
+        ]
+    );
 }

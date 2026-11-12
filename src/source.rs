@@ -43,6 +43,7 @@ pub(crate) use drive::DriveId;
 
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
+use crate::glob::Glob;
 use crate::name;
 use crate::net::{self, Api, Fetch, Response};
 
@@ -210,8 +211,10 @@ pub(crate) struct Listing {
     /// what a person should know about the listing, told as warnings once it resolves, such as
     /// files it leaves out.
     pub(crate) warnings: Vec<String>,
-    /// the folders listed when only those were, as they held every file wanted; empty when the
-    /// listing covers the whole dataset.
+    /// the folders listed when only those were, as they held every file wanted, written as
+    /// [`Glob::scope`] writes them, so `sub-*/anat` stands for each folder it matches and an
+    /// empty one for the files at the top alone; empty when the listing covers the whole
+    /// dataset.
     pub(crate) within: Vec<String>,
 }
 
@@ -388,27 +391,27 @@ impl Reference {
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        self.resolve_in(api, None).await
+        self.resolve_in(api, &[]).await
     }
 
-    /// [`Reference::resolve`], listing only `folders` where the source can and they hold every
-    /// file wanted, as [`crate::glob::folders`] finds them. the listing names the folders it
-    /// covers.
+    /// [`Reference::resolve`], listing only the folders that may hold a file the `select`
+    /// patterns match, where the source can and they hold a file for each pattern. the listing
+    /// names the folders it covers.
     pub(crate) async fn resolve_in(
         &self,
         api: &impl Api,
-        folders: Option<&[String]>,
+        select: &[Glob],
     ) -> Result<Listing, Error> {
         let span = tracing::debug_span!("resolve", reference = %self.shown());
         let listing = async {
             match self {
                 Reference::Doi(doi) => {
                     let target = doi.locate(api).await?;
-                    let mut listing = target.resolve_direct(api, folders).await?;
+                    let mut listing = target.resolve_direct(api, select).await?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
                 }
-                other => other.resolve_direct(api, folders).await,
+                other => other.resolve_direct(api, select).await,
             }
         }
         .instrument(span)
@@ -427,11 +430,7 @@ impl Reference {
         check(self, listing)
     }
 
-    async fn resolve_direct(
-        &self,
-        api: &impl Api,
-        folders: Option<&[String]>,
-    ) -> Result<Listing, Error> {
+    async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
         match self {
             Reference::Url(url) => Ok(single(url)),
             Reference::Doi(doi) => Err(Error::new(
@@ -447,11 +446,14 @@ impl Reference {
             Reference::Ena(accession) => accession.resolve(api).await,
             Reference::Geo(accession) => accession.resolve(api).await,
             Reference::Dandi(dandiset) => dandiset.resolve(api).await,
-            Reference::OpenNeuro(dataset) => dataset.resolve(api, folders).await,
+            Reference::OpenNeuro(dataset) => dataset.resolve(api, select).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
-            Reference::HuggingFace(repo) => repo.resolve(api, folders).await,
+            Reference::HuggingFace(repo) => {
+                repo.resolve(api, crate::glob::folders(select).as_deref())
+                    .await
+            }
             Reference::Kaggle(dataset) => dataset.resolve(api).await,
             Reference::KaggleCompetition(competition) => competition.resolve(api).await,
             Reference::Drive(item) => item.resolve(api).await,
