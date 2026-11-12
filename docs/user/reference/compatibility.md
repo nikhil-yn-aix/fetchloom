@@ -18,7 +18,7 @@ these hosted systems execute release-artifact journeys on every CI run. the runn
 
 ## compatibility targets
 
-the configured release targets below retain their intended lower bounds. the newer hosted systems above do **not** verify those minimum OS versions. static linkage and a macos deployment target check cannot establish kernel or old-OS behavior; minimum-version machines still need the same artifact journey before those floors can be called tested. source builds depend on their selected rust target and its runtime libraries.
+the configured release targets below retain their intended lower bounds. the newer hosted systems above do not check those minimum versions. static linkage and a macos deployment target check cannot establish kernel or old-OS behavior; minimum-version machines still need the same artifact journey before those floors can be called tested. source builds depend on their selected rust target and its runtime libraries.
 
 | system | cpu | target requirements |
 |---|---|---|
