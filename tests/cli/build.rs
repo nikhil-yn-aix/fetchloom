@@ -1539,38 +1539,33 @@ fn a_build_short_of_room_asks_first() -> Result {
     Ok(())
 }
 
-/// a step stops once the disk holding the cache has less free than `build_floor`, before it can
-/// fill the disk, and data.lock and the data folder stay as they were.
+/// a disk holding the cache with less free than `build_floor` would stop a step at its first
+/// look, so a build refuses before any step runs, with `--yes` too. it names what frees room and
+/// the floor itself, never `--yes`, and data.lock and the data folder stay as they were.
 #[test]
-fn the_floor_stops_the_step_and_keeps_pins() -> Result {
+fn a_build_below_the_floor_stops_before_any_step() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    let hold = sandbox.folder("hold")?;
-    let (marker, release) = (hold.join("started"), hold.join("release"));
-    with(
-        &sandbox,
-        &server,
-        &recipe(&[
-            "hold",
-            &marker.to_string_lossy().replace('\\', "\\\\"),
-            &release.to_string_lossy().replace('\\', "\\\\"),
-        ]),
-    )?;
+    with(&sandbox, &server, COPY)?;
     let pinned = pins(&sandbox.work())?;
     let data = files(&sandbox.work().join("data"))?;
-    let output = building_in(&sandbox, &sandbox.work(), &["--json", "--yes", "build"])?
-        .env("FETCHLOOM_TEST_FREE", "1000")
-        .env("FETCHLOOM_BUILD_FLOOR", "1M")
-        .output()?;
-    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
-    let document = json(&output)?;
-    let (kind, message, _, help, _) = error(&document);
-    assert_eq!(kind, "local.io");
-    assert_eq!(
-        message,
-        "stopped clean: the disk holding the cache has less than 1.0 MiB free; the step had written 0 B"
-    );
-    assert!(help.contains("lower build_floor"), "{help}");
+    for args in [&["--json", "build"][..], &["--json", "--yes", "build"]] {
+        let output = building_in(&sandbox, &sandbox.work(), args)?
+            .env("FETCHLOOM_TEST_FREE", "1000")
+            .env("FETCHLOOM_BUILD_FLOOR", "1M")
+            .output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        let (kind, message, _, help, _) = error(&document);
+        assert_eq!(kind, "local.io");
+        assert_eq!(
+            message,
+            "the disk holding the cache has 1000 B free, less than the 1.0 MiB build_floor keeps free, so no step can run"
+        );
+        assert!(help.contains("lower build_floor"), "{help}");
+        assert!(!help.contains("--yes"), "{help}");
+        assert_eq!(runs(&sandbox.work())?, 0, "{args:?}");
+    }
     assert_eq!(pins(&sandbox.work())?, pinned);
     assert_eq!(files(&sandbox.work().join("data"))?, data);
     Ok(())

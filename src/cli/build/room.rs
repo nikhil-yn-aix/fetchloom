@@ -1,7 +1,9 @@
 //! the room a build's steps may take on the disk holding the cache, said before any runs, with a
-//! question when that disk has less free above the `build_floor` setting.
+//! question when that disk has less free above the `build_floor` setting, and a refusal when it
+//! has less than the floor itself, which would stop the first step at once.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use super::{Building, Course, course, whole};
 use crate::build::Staging;
@@ -14,6 +16,7 @@ impl Building<'_> {
     /// says how much the steps a build, or with `check` a check, would run may take on the disk
     /// holding the cache, and asks first when that disk has less free above the floor: `--yes`
     /// answers yes, and with no one to ask the build stops with `unconfirmed` before anything runs.
+    /// with less than the floor free already, it stops with `local.io`, `--yes` or not.
     pub(super) fn room(&self, check: bool) -> Result<(), Error> {
         let running = self.running(check)?;
         if running.is_empty() {
@@ -47,8 +50,11 @@ impl Building<'_> {
             ),
         );
         let needed = peak.saturating_add(self.floor);
-        if self.context.yes || space::short(needed, free).is_none() {
-            return Ok(());
+        match fits(peak, self.floor, free) {
+            Fits::Yes => return Ok(()),
+            Fits::Maybe if self.context.yes => return Ok(()),
+            Fits::Maybe => {}
+            Fits::No => return Err(below(self.floor, free.unwrap_or(0), cache.root())),
         }
         crate::cli::ask_room(
             &self.context.output,
@@ -175,6 +181,44 @@ impl Building<'_> {
     }
 }
 
+/// how the room steps may take, `peak`, fits on a disk with `free` bytes free, above `floor`, the
+/// least a step may leave free.
+#[derive(Debug, PartialEq, Eq)]
+enum Fits {
+    /// it fits, or the system does not say what is free.
+    Yes,
+    /// it may not: a person decides, as `--yes` does, since the room errs on more and the floor
+    /// still stops a step that would pass it.
+    Maybe,
+    /// less than the floor is free already, so the floor would stop the first step at its first
+    /// look, whatever anyone answers.
+    No,
+}
+
+fn fits(peak: u64, floor: u64, free: Option<u64>) -> Fits {
+    match free {
+        Some(free) if free < floor => Fits::No,
+        free if space::short(peak.saturating_add(floor), free).is_some() => Fits::Maybe,
+        _ => Fits::Yes,
+    }
+}
+
+/// the error for a disk holding the cache at `cache` that has `free` bytes free, less than
+/// `floor`, so the floor would stop the first step at once: no answer gets past it, only room
+/// made on that disk or a floor someone lowers on purpose.
+fn below(floor: u64, free: u64, cache: &Path) -> Error {
+    Error::new(
+        Kind::LocalIo,
+        format!(
+            "the disk holding the cache has {} free, less than the {} build_floor keeps free, so no step can run",
+            units::size(free),
+            units::size(floor)
+        ),
+    )
+    .detail(format!("the cache is at {}", cache.display()))
+    .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR")
+}
+
 /// what the `Needs` line adds for the steps `unknown` whose result's size is not known yet.
 fn besides(unknown: &[&str]) -> String {
     match unknown {
@@ -186,7 +230,25 @@ fn besides(unknown: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::besides;
+    use super::{Fits, besides, fits};
+
+    /// steps that may take more than is free above the floor get a question a person may answer,
+    /// since the room errs on more and the floor still stops a step that would pass it. less than
+    /// the floor free already gets none: the floor would stop the first step at once. a disk
+    /// that does not say what is free is never short.
+    #[test]
+    fn no_answer_lets_a_step_run_below_the_floor() {
+        for (peak, free, fit) in [
+            (10, Some(110), Fits::Yes),
+            (10, Some(109), Fits::Maybe),
+            (10, Some(100), Fits::Maybe),
+            (10, Some(99), Fits::No),
+            (0, Some(99), Fits::No),
+            (10, None, Fits::Yes),
+        ] {
+            assert_eq!(fits(peak, 100, free), fit, "{peak} B of {free:?} free");
+        }
+    }
 
     /// the steps whose results are not known yet are named with a verb that agrees with them.
     #[test]
