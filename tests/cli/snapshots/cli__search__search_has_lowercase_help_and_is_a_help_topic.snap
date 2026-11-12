@@ -1,6 +1,6 @@
 ---
 source: tests/cli/search.rs
-expression: text(&output.stdout)?
+expression: help
 ---
 find datasets on hugging face, kaggle and zenodo
 
@@ -21,19 +21,7 @@ options:
                          zenodo]
       --limit <n>        keep up to this many matches from each site, 1 to 20
                          [default: 3]
-  -q, --quiet            print only the answer, warnings and errors
-  -v, --verbose...       say more: -v adds detail and counters, -vv adds debug
-                         logs
-      --json             print one JSON document on stdout, not the usual output
-      --progress         with --json, keep plain progress lines on stderr
-      --offline          use only what is already on this machine
-  -y, --yes              answer yes to questions, but never pick a dataset for
-                         you
-      --color <when>     when to use color: auto, the default, always or never
-  -C <dir>               run as if fetchloom started in <dir>
-      --mirror <url>     ask the mirror at this web address or folder for files
-                         before their sources. repeat it for more
-  -h, --help             print help
+  [global options]
 
 on disk: nothing. prints the exact reference of each match, such as
 zenodo:3608990, and downloads nothing

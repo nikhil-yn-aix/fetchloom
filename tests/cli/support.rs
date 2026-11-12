@@ -290,6 +290,17 @@ impl Sandbox {
     }
 }
 
+/// insta settings for one command's help: the options every command takes show as `[global
+/// options]`, so changing one of them changes `basics::help_lists_every_command` alone.
+pub(crate) fn command_help() -> insta::Settings {
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(
+        r"(?ms)^  -q, --quiet .*?^  -h, --help +print help$",
+        "  [global options]",
+    );
+    settings
+}
+
 /// what a person at a terminal sees from `inner`, run in `folder` through a pseudo terminal that
 /// `script` opens, after typing `keys` once the screen shows `after`, with its exit code. `stty`
 /// settings apply to that terminal first: `rows 30 cols 40` makes it 40 columns wide, and

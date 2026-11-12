@@ -1,7 +1,7 @@
 //! catalog discovery and safe unattended behavior against local catalog responses.
 #![cfg(debug_assertions)]
 
-use crate::support::{Result, Sandbox, Server, json, reply, text};
+use crate::support::{Result, Sandbox, Server, command_help, json, reply, text};
 use std::process::Command;
 
 const HF: &[u8] = include_bytes!("../fixtures/sources/search/hf.json");
@@ -443,7 +443,8 @@ fn search_has_lowercase_help_and_is_a_help_topic() -> Result {
     assert!(output.status.success());
     assert!(text(&output.stdout)?.contains("usage: fetchloom search [options] <words>..."));
     assert_eq!(output.stdout, sandbox.run(&["help", "search"])?.stdout);
-    insta::assert_snapshot!(text(&output.stdout)?);
+    let help = text(&output.stdout)?;
+    command_help().bind(|| insta::assert_snapshot!(help));
     Ok(())
 }
 

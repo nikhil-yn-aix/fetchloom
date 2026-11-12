@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, text};
+use crate::support::{Result, Sandbox, command_help, text};
 
 /// each shell, a line only its script has, and the text that completes `fl` the same way for
 /// every way the shell may load the script.
@@ -134,7 +134,7 @@ fn completions_have_their_own_help() -> Result {
         output.stdout,
         "help completions shows the same"
     );
-    insta::assert_snapshot!(help);
+    command_help().bind(|| insta::assert_snapshot!(help));
     Ok(())
 }
 

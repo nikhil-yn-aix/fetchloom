@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, text};
+use crate::support::{Result, Sandbox, command_help, text};
 
 #[test]
 fn version() -> Result {
@@ -234,7 +234,8 @@ fn json_errors_carry_the_command_that_fixes_them() -> Result {
 fn get_has_its_own_help() -> Result {
     let output = Sandbox::new()?.run(&["get", "--help"])?;
     assert!(output.status.success());
-    insta::assert_snapshot!(text(&output.stdout)?);
+    let help = text(&output.stdout)?;
+    command_help().bind(|| insta::assert_snapshot!(help));
     Ok(())
 }
 
