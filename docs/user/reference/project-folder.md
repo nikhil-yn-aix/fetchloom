@@ -1,10 +1,8 @@
 # project folder
 
-the project folder holds `data.toml`, and its `.fetchloom/` holds the project's local lock, owner record and placement state.
+the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` holds what this machine knows of the project: a lock, a record of which command holds it, and what sync placed. [project](../../dev/architecture/project.md) in the developer guide has the mechanics.
 
-`.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, owner, state or ignore file.
-
-a first `add` that adds nothing removes the `.fetchloom` it made, unless something other than its own records is in it. it removes the lock file last, while it still holds the lock; a command waiting for the lock checks, once it has it, that the lock file still has its name, and opens the name again when it does not.
+`.fetchloom` must be a real folder; a link or junction there is refused. a first `add` that adds nothing removes the `.fetchloom` it made.
 
 | path | contents |
 |---|---|
@@ -18,9 +16,7 @@ a first `add` that adds nothing removes the `.fetchloom` it made, unless somethi
 | `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
-on unix, metadata replacement flushes the new file before rename, then flushes the destination and staging directories. an error after rename says that the file was replaced but its directory changes could not be flushed. check the reported file before retrying; failure at this point does not mean the old contents remain.
-
-inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs its dataset first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
+inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs its dataset first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself.
 
 inside the data folder, a file being copied or cloned into place is first written to a hidden `.fetchloom-<16 hex digits>.copy` beside its destination and then renamed. a hard kill can leave one behind; `status` does not list it, and the next `sync` deletes it.
 
@@ -39,23 +35,7 @@ in a git repository with no `data.toml` of its own, project commands fail with e
 | `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
 | `command` | subcommand name, without arguments or credentials |
 
-a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``. at a terminal that line counts the seconds it has waited, from 2 s on, until the project is free.
-
-fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty, and a power cut leaves a whole record, which the next command takes over. the temporary name is removed after the attempt.
-
-when hardlinks fail for another reason, fetchloom falls back to exclusive creation, then renames the temporary file over it; only this fallback can expose an empty reservation.
-
-a command that cannot write the record, as on a full disk, goes on under the OS lock alone: the lock keeps out other commands, and the record only tells them who holds it. without a working OS lock the record is the only lock, so the command stops with the error instead.
-
-dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
-
-an existing owner is stale only when its `os` matches this process and this process holds the OS lock. without a working OS lock, a same-os record is not stale.
-
-before removing a stale record, fetchloom reads it again and requires the same bytes and modification time.
-
-any other record, including an empty reservation or invalid JSON, makes the command wait. an empty reservation can belong to a paused writer on another OS, so age cannot prove that it is abandoned. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. an `owner` that is a link, a special file or larger than 64 KiB is refused with an error rather than read. a `state` that is a link or a special file is never read and counts as no state.
-
-a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
+the record lets windows and WSL, which cannot see each other's locks, keep out of each other's way. a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``. a record a killed command on this system left is taken over once its lock is free. a record from another system, or one that cannot be read, makes the command wait, and the waiting line gives the exact `owner` path: delete it only once that process has ended.
 
 ## placement state
 
@@ -73,8 +53,6 @@ a record from another os is never reclaimed by its age or pid. delete it only af
 | `files[path].adopted` | `true` when the file was already at its place with the pinned bytes before sync took it as placed, so a removal says so; absent otherwise |
 | `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the settled-sync shortcut](../../dev/architecture/sync-loop.md#settled-sync-shortcut) uses it to skip planning |
 
-there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
+missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.
 
-a file whose `look.modified` is not older than the state file's own modification time is hashed before its look is trusted, since both times come from one filesystem clock and a coarse clock hides an edit made in the same tick. when the data folder sits on another device than `.fetchloom/`, its clock may keep a coarser step, as fat's two seconds, so there a file must be more than two seconds older than the state to skip hashing. a hash that differs counts as an edit. a sync that finds such files unchanged writes the state again, which settles them.
-
-recovery files are written and flushed before add changes existing metadata. errors name complete recovery files rather than printing their contents. on unix they start with mode `0600`; windows uses the metadata folder's permissions, so keep that folder private. successful adds and complete rollbacks remove their copies. a hard kill can leave unannounced or incomplete recovery files from preparation; compare them with the current metadata before using them.
+recovery files hold `data.toml` and `data.lock` as they were before an add changed them, readable by you only on unix, and go once the add succeeds or is undone. errors name them without printing them. a killed add can leave one; compare it with the current files before using it.
