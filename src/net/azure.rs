@@ -1,44 +1,39 @@
-//! which requests to azure's blob hosts carry a SAS: those for a container the `azure_containers`
-//! setting lists, once azure refused one without a SAS this run, and only to the container's own
-//! blob host over https, before any redirect. the SAS is the one the container's entry gives,
-//! else `AZURE_STORAGE_SAS_TOKEN`, kept to the account `AZURE_STORAGE_ACCOUNT` names, as the az
-//! cli reads them, or without that variable to the one account the listed containers are in.
-//! every first request to a blob host asks for the version of azure's API that listings are
-//! read in.
+//! which requests to azure's blob hosts carry a credential: those for a container the
+//! `azure_containers` setting lists, once azure refused one without a credential this run, and
+//! only to the container's own blob host over https, before any redirect. the credential is the
+//! SAS the container's entry gives, else what the environment gives as the az cli reads it: the
+//! SAS in `AZURE_STORAGE_SAS_TOKEN`, or the key in `AZURE_STORAGE_KEY`, kept to the account
+//! `AZURE_STORAGE_ACCOUNT` names, as [`crate::auth::azure`] finds them. a key signs the request,
+//! as [`shared_key`] does, and is never sent. every first request to a blob host asks for the
+//! version of azure's API that listings are read in.
+
+mod shared_key;
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::SystemTime;
 
 use reqwest::StatusCode;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use url::Url;
 
 use super::failure::Failure;
 use super::google::Environment;
 use super::{Authorized, Net, Shown, host};
+use crate::auth::azure::{AccountKey, Storage};
 use crate::error::{Error, Kind};
-use crate::source::{
-    AZURE_VERSION, AzureContainer, Sas, azure_account, is_azure_account, is_azure_container,
-};
+use crate::source::{AZURE_VERSION, AzureContainer, Sas, azure_account, is_azure_container};
 
-/// what one run knows about azure access: the containers listed, the environment's SAS, read
-/// when first needed, and which containers refused a request without one.
+/// what one run knows about azure access: the containers listed, what the environment gives,
+/// read when first needed, and which containers refused a request without a credential.
 pub(crate) struct Azure {
     listed: Vec<AzureContainer>,
     environment: Environment,
-    shared: OnceLock<Result<Option<Shared>, Error>>,
-    /// containers azure refused without a SAS this run, as `account/container`, asked with one
-    /// from then on.
+    storage: OnceLock<Result<Storage, Error>>,
+    /// containers azure refused without a credential this run, as `account/container`, asked
+    /// with one from then on.
     refused: Mutex<HashSet<String>>,
-}
-
-/// the SAS `AZURE_STORAGE_SAS_TOKEN` gives, and the one account `AZURE_STORAGE_ACCOUNT` keeps it
-/// to, when it names one.
-#[derive(Clone)]
-struct Shared {
-    sas: Sas,
-    account: Option<String>,
 }
 
 /// where a SAS was given, as messages name it.
@@ -59,14 +54,25 @@ impl Given {
     }
 }
 
+/// what a request for a listed container carries.
+#[derive(Clone)]
+enum Credential {
+    /// a SAS after the link's query, from where `Given` says.
+    Sas(Sas, Given),
+    /// a key of the container's account, which signs the request.
+    Key(AccountKey),
+}
+
 /// the azure container a request is for, as its link names it.
 pub(crate) struct Located {
     account: String,
     container: String,
     listed: bool,
-    /// the link carries a secret of its own, such as a SAS pasted for one `get`, which no SAS of
-    /// the settings joins.
+    /// the link carries a secret of its own, such as a SAS pasted for one `get`, which no
+    /// credential of the settings joins.
     signed: bool,
+    /// the link as written, whose path and query a key signs.
+    url: Url,
 }
 
 impl Located {
@@ -82,8 +88,8 @@ impl Located {
 /// how a request for an azure container went out, kept on its answer so a refusal can say why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Sent {
-    /// without a SAS: `azure_containers` does not list the container, or lists it and no SAS
-    /// was found for it.
+    /// without a credential: `azure_containers` does not list the container, or lists it and
+    /// none was found for it.
     Anonymous { container: String, listed: bool },
     /// with the SAS `given` there, which says it works until `expiry`.
     Sas {
@@ -91,6 +97,8 @@ pub(crate) enum Sent {
         given: Given,
         expiry: Option<String>,
     },
+    /// signed with the key in `AZURE_STORAGE_KEY` of the container's account, `account`.
+    Key { container: String, account: String },
 }
 
 impl Default for Azure {
@@ -100,13 +108,13 @@ impl Default for Azure {
 }
 
 impl Azure {
-    /// sends a SAS for the `listed` containers, their own or the one the settings `environment`
-    /// gives.
+    /// sends a credential for the `listed` containers: their own SAS, or what the settings
+    /// `environment` gives.
     pub(crate) fn new(listed: Vec<AzureContainer>, environment: Environment) -> Azure {
         Azure {
             listed,
             environment,
-            shared: OnceLock::new(),
+            storage: OnceLock::new(),
             refused: Mutex::default(),
         }
     }
@@ -126,6 +134,7 @@ impl Azure {
             account: account.to_owned(),
             container: container.to_owned(),
             signed: super::secret(url).is_some(),
+            url: url.clone(),
         })
     }
 
@@ -135,13 +144,14 @@ impl Azure {
             .find(|entry| entry.account() == account && entry.name() == container)
     }
 
-    /// the SAS for `located`: its entry's own, else the environment's, unless that is kept to
-    /// another account. none for a container nobody listed, or a link with a secret of its own.
+    /// the credential for `located`: its entry's own SAS, else the environment's SAS, unless
+    /// that is kept to another account, else the key of its account. none for a container
+    /// nobody listed, or a link with a secret of its own.
     ///
     /// # Errors
     ///
-    /// an `AZURE_STORAGE_SAS_TOKEN` or `AZURE_STORAGE_ACCOUNT` that holds something else.
-    fn sas(&self, located: &Located) -> Result<Option<(Sas, Given)>, Error> {
+    /// what [`crate::auth::azure::find`] finds wrong with the environment.
+    fn credential(&self, located: &Located) -> Result<Option<Credential>, Error> {
         if located.signed {
             return Ok(None);
         }
@@ -149,20 +159,24 @@ impl Azure {
             return Ok(None);
         };
         if let Some(own) = entry.sas() {
-            return Ok(Some((own.clone(), Given::Setting)));
+            return Ok(Some(Credential::Sas(own.clone(), Given::Setting)));
         }
-        let shared = self
-            .shared
-            .get_or_init(|| shared(&*self.environment, &self.listed))
-            .clone()?;
-        Ok(shared
-            .filter(|shared| {
-                shared
-                    .account
-                    .as_deref()
-                    .is_none_or(|account| account == located.account)
-            })
-            .map(|shared| (shared.sas, Given::Environment)))
+        let storage = self
+            .storage
+            .get_or_init(|| crate::auth::azure::find(&*self.environment, &self.listed))
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let account = storage.account.as_deref();
+        if let Some(sas) = &storage.sas
+            && account.is_none_or(|account| account == located.account)
+        {
+            return Ok(Some(Credential::Sas(sas.clone(), Given::Environment)));
+        }
+        Ok(storage
+            .key
+            .clone()
+            .filter(|_| account == Some(located.account.as_str()))
+            .map(Credential::Key))
     }
 
     fn refused_containers(&self) -> MutexGuard<'_, HashSet<String>> {
@@ -170,64 +184,18 @@ impl Azure {
     }
 }
 
-/// the SAS `AZURE_STORAGE_SAS_TOKEN` gives, kept to the account `AZURE_STORAGE_ACCOUNT` names.
-/// without that variable, the `listed` containers it may go to must be in one account, since a
-/// SAS is one account's.
-fn shared(
-    environment: &(dyn Fn(&str) -> Option<std::ffi::OsString> + Send + Sync),
-    listed: &[AzureContainer],
-) -> Result<Option<Shared>, Error> {
-    let set = |name| environment(name).filter(|value| !value.is_empty());
-    let Some(text) = set("AZURE_STORAGE_SAS_TOKEN") else {
-        return Ok(None);
-    };
-    let sas = text.to_str().and_then(Sas::parse).ok_or_else(|| {
-        Error::new(
-            Kind::AuthRequired,
-            "AZURE_STORAGE_SAS_TOKEN holds no SAS fetchloom can read",
-        )
-        .help("set it to the SAS the azure portal or `az storage container generate-sas` gives, a query such as sv=...&sp=rl&se=...&sig=...")
-    })?;
-    let account = match set("AZURE_STORAGE_ACCOUNT") {
-        None => None,
-        Some(account) => Some(
-            account
-                .to_str()
-                .map(str::to_ascii_lowercase)
-                .filter(|account| is_azure_account(account))
-                .ok_or_else(|| {
-                    Error::new(
-                        Kind::AuthRequired,
-                        "AZURE_STORAGE_ACCOUNT holds no storage account's name",
-                    )
-                    .help("set it to the account the SAS is for, 3 to 24 lowercase letters and digits, or unset it")
-                })?,
-        ),
-    };
-    if account.is_none() {
-        let mut accounts: Vec<&str> = listed
-            .iter()
-            .filter(|entry| entry.sas().is_none())
-            .map(AzureContainer::account)
-            .collect();
-        accounts.sort_unstable();
-        accounts.dedup();
-        if accounts.len() > 1 {
-            return Err(Error::new(
-                Kind::AuthRequired,
-                format!(
-                    "AZURE_STORAGE_SAS_TOKEN names no account, and azure_containers lists containers in {} accounts: {}",
-                    accounts.len(),
-                    crate::units::some_of(&accounts, 3)
-                ),
-            )
-            .help("set AZURE_STORAGE_ACCOUNT to the account the SAS is for, or give each container its own SAS link in azure_containers"));
+impl Sent {
+    /// the bytes of text this holds, which a kept answer counts.
+    pub(crate) fn bytes(&self) -> usize {
+        match self {
+            Sent::Anonymous { container, .. } => container.len(),
+            Sent::Sas {
+                container, expiry, ..
+            } => container.len() + expiry.as_ref().map_or(0, String::len),
+            Sent::Key { container, account } => container.len() + account.len(),
         }
     }
-    Ok(Some(Shared { sas, account }))
-}
 
-impl Sent {
     /// the error for a download azure refused, as this says the request went.
     pub(crate) fn refusal(&self, url: &Url) -> Error {
         let shown = Shown(url).to_string();
@@ -237,19 +205,20 @@ impl Sent {
                 given,
                 expiry,
             } => sas_refused(container, *given, expiry.as_deref(), &shown),
+            Sent::Key { container, account } => key_refused(container, account, &shown),
             Sent::Anonymous {
                 container,
                 listed: true,
             } => Error::new(
                 Kind::AuthRequired,
                 format!(
-                    "azure refused {shown} without a SAS, and no SAS was found for {container}"
+                    "azure refused {shown} without credentials, and none were found for {container}"
                 ),
             )
             .help(missing(container)),
             Sent::Anonymous { container, .. } => Error::new(
                 Kind::AuthRequired,
-                format!("azure refused {shown} without a SAS"),
+                format!("azure refused {shown} without credentials"),
             )
             .help(trust(container)),
         }
@@ -264,20 +233,21 @@ impl Sent {
                 given,
                 expiry,
             } => sas_refused(container, *given, expiry.as_deref(), prefix),
+            Sent::Key { container, account } => key_refused(container, account, prefix),
             Sent::Anonymous {
                 container,
                 listed: true,
             } => Error::new(
                 Kind::AuthRequired,
                 format!(
-                    "{prefix} is private, or does not exist: azure refused to list it without a SAS, and no SAS was found for {container}"
+                    "{prefix} is private, or does not exist: azure refused to list it without credentials, and none were found for {container}"
                 ),
             )
             .help(missing(container)),
             Sent::Anonymous { container, .. } => Error::new(
                 Kind::AuthRequired,
                 format!(
-                    "{prefix} is private, or does not exist: azure refused to list it without a SAS"
+                    "{prefix} is private, or does not exist: azure refused to list it without credentials"
                 ),
             )
             .help(trust(container)),
@@ -299,37 +269,52 @@ fn sas_refused(container: &str, given: Given, expiry: Option<&str>, what: &str) 
     }
 }
 
-/// how to let fetchloom send a SAS for `container`.
+fn key_refused(container: &str, account: &str, what: &str) -> Error {
+    Error::new(
+        Kind::AuthRequired,
+        format!("azure refused the key in AZURE_STORAGE_KEY for {what}"),
+    )
+    .help(format!(
+        "the key must be one of the access keys of the account {account}, as the azure portal shows them, and the account must let keys in. otherwise ask the owner of {container} for a SAS"
+    ))
+}
+
+/// how to let fetchloom send credentials for `container`.
 fn trust(container: &str) -> String {
     format!(
-        "if you trust {container} with a SAS, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN"
+        "if you trust {container} with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN, or AZURE_STORAGE_KEY with AZURE_STORAGE_ACCOUNT"
     )
 }
 
-/// how to give fetchloom a SAS for `container`, which the settings list.
+/// how to give fetchloom credentials for `container`, which the settings list.
 fn missing(container: &str) -> String {
     format!(
-        "set AZURE_STORAGE_SAS_TOKEN to a SAS for {container}, or give its SAS link as its entry in azure_containers in the settings file"
+        "set AZURE_STORAGE_SAS_TOKEN to a SAS for {container}, or AZURE_STORAGE_KEY and AZURE_STORAGE_ACCOUNT to a key of its account, or give its SAS link as its entry in azure_containers in the settings file"
     )
 }
 
-/// one hop of a request for an azure container, and the SAS it carries.
+/// one hop of a request for an azure container, and the credential it carries.
 pub(super) struct Blobbed<'r> {
     located: Option<&'r Located>,
-    sas: Option<(Sas, Given)>,
+    credential: Option<Credential>,
 }
 
 impl Blobbed<'_> {
     pub(super) fn authorized(&self) -> Option<Authorized> {
         let located = self.located.filter(|located| !located.signed)?;
-        let sent = match &self.sas {
-            Some((sas, given)) => Sent::Sas {
-                container: located.named(),
+        let container = located.named();
+        let sent = match &self.credential {
+            Some(Credential::Sas(sas, given)) => Sent::Sas {
+                container,
                 given: *given,
                 expiry: sas.expiry(),
             },
+            Some(Credential::Key(_)) => Sent::Key {
+                container,
+                account: located.account.clone(),
+            },
             None => Sent::Anonymous {
-                container: located.named(),
+                container,
                 listed: located.listed,
             },
         };
@@ -338,7 +323,7 @@ impl Blobbed<'_> {
 
     /// the link the hop asks: `hop`, with the SAS after its query when it carries one.
     pub(super) fn url<'h>(&self, hop: &'h Url) -> Cow<'h, Url> {
-        let Some((sas, _)) = &self.sas else {
+        let Some(Credential::Sas(sas, _)) = &self.credential else {
             return Cow::Borrowed(hop);
         };
         let query = match hop.query().filter(|query| !query.is_empty()) {
@@ -361,39 +346,87 @@ impl Blobbed<'_> {
         }
         headers
     }
+
+    /// `request`, made last, signed with the key the hop carries at `now`: the time in
+    /// `x-ms-date`, then the signature of all it holds by then, the headers its shape added
+    /// among them. any other request goes as it is.
+    ///
+    /// # Errors
+    ///
+    /// a request that cannot be made, which no signature can then hold.
+    pub(super) fn signed(
+        &self,
+        request: reqwest::RequestBuilder,
+        now: SystemTime,
+    ) -> Result<reqwest::RequestBuilder, Error> {
+        let (Some(located), Some(Credential::Key(key))) = (self.located, &self.credential) else {
+            return Ok(request);
+        };
+        let request = request.header(
+            HeaderName::from_static("x-ms-date"),
+            httpdate::fmt_http_date(now),
+        );
+        let (client, built) = request.build_split();
+        let unsigned = |err: &dyn std::fmt::Display| {
+            Error::new(
+                Kind::AuthRequired,
+                format!("could not sign a request for {}: {err}", located.named()),
+            )
+        };
+        let mut built = built.map_err(|err| unsigned(&err))?;
+        let authorization = shared_key::authorization(
+            &located.account,
+            key,
+            built.method().as_str(),
+            built.headers(),
+            &located.url,
+        );
+        let mut value = HeaderValue::from_str(&authorization).map_err(|err| unsigned(&err))?;
+        value.set_sensitive(true);
+        built.headers_mut().insert(header::AUTHORIZATION, value);
+        Ok(reqwest::RequestBuilder::from_parts(client, built))
+    }
 }
 
 impl Net {
     /// the hop after `redirects` redirects of a request for `located`: only the first asks for
-    /// azure's version and, once its container refused a request without one, carries the SAS.
+    /// azure's version and, once its container refused a request without one, carries a
+    /// credential.
     pub(super) fn azure_hop<'r>(
         &self,
         located: Option<&'r Located>,
         redirects: usize,
     ) -> Result<Blobbed<'r>, Failure> {
         let located = located.filter(|_| redirects == 0);
-        let sas = match located {
+        let credential = match located {
             Some(located) if self.azure.refused_containers().contains(&located.key()) => {
-                self.azure.sas(located).map_err(Failure::Final)?
+                self.azure.credential(located).map_err(Failure::Final)?
             }
             _ => None,
         };
-        if let (Some(located), Some(_)) = (located, &sas) {
-            tracing::debug!(
-                host = format!("{}.blob.core.windows.net", located.account),
-                "sending a SAS"
-            );
+        if let Some(located) = located {
+            let host = format!("{}.blob.core.windows.net", located.account);
+            match &credential {
+                Some(Credential::Sas(..)) => tracing::debug!(host, "sending a SAS"),
+                Some(Credential::Key(_)) => {
+                    tracing::debug!(host, "signing the request with an azure account key");
+                }
+                None => {}
+            }
         }
-        Ok(Blobbed { located, sas })
+        Ok(Blobbed {
+            located,
+            credential,
+        })
     }
 
-    /// whether the request goes again after `response`: once, with the SAS, when azure refused
-    /// it without one for a listed container a SAS was found for. otherwise the response is told
-    /// how the request went.
+    /// whether the request goes again after `response`: once, with a credential, when azure
+    /// refused it without one for a listed container one was found for. otherwise the response
+    /// is told how the request went.
     ///
     /// # Errors
     ///
-    /// an environment that holds no SAS fetchloom can read.
+    /// an environment that holds no credential fetchloom can read.
     pub(super) fn azure_again(
         &self,
         hop: &Blobbed<'_>,
@@ -402,14 +435,18 @@ impl Net {
         let Some(located) = hop.located.filter(|located| !located.signed) else {
             return Ok(false);
         };
-        if hop.sas.is_none()
+        if hop.credential.is_none()
             && refused(response)
-            && self.azure.sas(located).map_err(Failure::Final)?.is_some()
+            && self
+                .azure
+                .credential(located)
+                .map_err(Failure::Final)?
+                .is_some()
         {
             self.azure.refused_containers().insert(located.key());
             tracing::debug!(
                 host = host(response.url()),
-                "azure refused the request without a SAS, so it goes again with one"
+                "azure refused the request without credentials, so it goes again with them"
             );
             return Ok(true);
         }

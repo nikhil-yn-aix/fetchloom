@@ -169,7 +169,7 @@ pub(crate) fn amz_date(now: SystemTime) -> String {
     crate::project::lock::timestamp(now).replace(['-', ':'], "")
 }
 
-fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+pub(crate) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     // hmac takes a key of any length, so making one cannot fail
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
         .unwrap_or_else(|_| unreachable!("hmac takes a key of any length"));

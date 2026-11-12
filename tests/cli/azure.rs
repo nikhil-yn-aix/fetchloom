@@ -7,7 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::support::{Part, Result, Routes, Sandbox, reply, text};
+use hmac::{Hmac, KeyInit as _, Mac as _};
+use sha2::Sha256;
+
+use crate::support::{Part, Result, Routes, Sandbox, Server, reply, text};
 
 const A_CSV: &[u8] = b"site,value\nlab,1\n";
 const A_MD5: &str = "7IgFjUFwc9UPsxF0OL2kYw==";
@@ -244,6 +247,104 @@ fn a_listed_private_container_is_read_with_its_sas_after_a_refusal() -> Result {
     kept_files(&clone, &mut surfaces)?;
     kept_files(&sandbox.folder("teammate-cache")?, &mut surfaces)?;
     assert_no_sas(&surfaces);
+    Ok(())
+}
+
+/// an account key as the azure portal gives one, the base64 of `KEY_BYTES`.
+const KEY: &str = "c2VjcmV0LWtleQ==";
+const KEY_BYTES: &[u8] = b"secret-key";
+
+/// base64 with the standard alphabet and padding.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::new();
+    for chunk in bytes.chunks(3) {
+        let joined = chunk.iter().enumerate().fold(0_u32, |joined, (at, byte)| {
+            joined | (u32::from(*byte) << (16 - 8 * at))
+        });
+        for at in 0..4 {
+            text.push(if at <= chunk.len() {
+                char::from(ALPHABET[((joined >> (18 - 6 * at)) & 63) as usize])
+            } else {
+                '='
+            });
+        }
+    }
+    text
+}
+
+/// checks a request head's shared key as azure does, for `resource`: the account, the path at
+/// azure and the query, decoded and sorted. the test server keeps heads in lowercase, so the date
+/// is read back as `x-ms-date` writes it, and the signature compared without its case.
+fn signed_for(head: &str, resource: &str) -> Result {
+    let header = |name: &str| {
+        head.lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}: ")))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let date: Vec<String> = header("x-ms-date")
+        .split(' ')
+        .map(|word| match word {
+            "gmt" => "GMT".to_owned(),
+            word if word.starts_with(|c: char| c.is_ascii_alphabetic()) => {
+                word[..1].to_ascii_uppercase() + &word[1..]
+            }
+            word => word.to_owned(),
+        })
+        .collect();
+    let signed = format!(
+        "GET\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:{}\nx-ms-version:{}\n{resource}",
+        date.join(" "),
+        header("x-ms-version")
+    );
+    let mut mac = Hmac::<Sha256>::new_from_slice(KEY_BYTES).map_err(|_| "no key")?;
+    mac.update(signed.as_bytes());
+    let expected = format!("sharedkey lab:{}", base64(&mac.finalize().into_bytes()));
+    if header("authorization") != expected.to_ascii_lowercase() {
+        return Err(format!("the shared key does not match:\n{signed}\n{head}").into());
+    }
+    Ok(())
+}
+
+/// a private container the person lists, with a key of its account in the environment as the az
+/// cli reads it: the listing goes without a credential, is refused, and goes again signed with
+/// the key for its path at azure; the blob is signed from the start. the key itself is never
+/// sent, and never shows.
+#[test]
+fn a_listed_private_container_is_read_with_its_account_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            unauthenticated(),
+            page("raw", &[("scans/a.csv", A_CSV.len(), A_MD5)], None),
+            bytes(A_CSV),
+        ],
+    )?;
+    let output = sandbox
+        .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
+        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
+        .env("AZURE_STORAGE_KEY", KEY)
+        .env("AZURE_STORAGE_ACCOUNT", "lab")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    signed_for(
+        &heads[1],
+        "/lab/raw\ncomp:list\nprefix:scans/\nrestype:container",
+    )?;
+    signed_for(&heads[2], "/lab/raw/scans/a.csv")?;
+    assert_eq!(fs::read(sandbox.work().join("data/scans/a.csv"))?, A_CSV);
+    let key = KEY.to_ascii_lowercase();
+    for said in heads.iter().chain([&stderr, &text(&output.stdout)?]) {
+        assert!(!said.contains(&key) && !said.contains(KEY), "{said}");
+    }
     Ok(())
 }
 

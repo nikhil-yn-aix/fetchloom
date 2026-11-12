@@ -44,7 +44,7 @@ azure_containers = ["azure:lab/raw"]
 | S3 and services that speak its API | `s3_buckets` | AWS keys: `aws configure`, `aws sso login`, a profile's `credential_process`, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` |
 | google cloud storage | `gcs_buckets` | `gcloud auth application-default login`, or a service account's key in `GOOGLE_APPLICATION_CREDENTIALS` |
 | google drive, shared with some people | `drive_folders` | the same google credentials, with drive's scope: a service account the folder is shared with, or your own login through an oauth client you make |
-| azure blob storage | `azure_containers` | a SAS, in `AZURE_STORAGE_SAS_TOKEN` or in the container's entry |
+| azure blob storage | `azure_containers` | a SAS, in `AZURE_STORAGE_SAS_TOKEN` or in the container's entry, or an account key in `AZURE_STORAGE_KEY` with `AZURE_STORAGE_ACCOUNT` |
 
 each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys and google credentials it would use, without running a program or asking a server. each store's page has the rest: [private S3 buckets](sources/buckets.md#private-s3-buckets), [private cloud storage buckets](sources/buckets.md#private-cloud-storage-buckets), [private drive files and folders](sources/google-drive.md#private-files-and-folders) and [private azure containers](sources/azure.md#private-containers).
 

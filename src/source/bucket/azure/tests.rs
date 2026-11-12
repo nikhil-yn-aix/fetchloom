@@ -129,9 +129,9 @@ fn a_marker_sent_twice_is_refused() {
     assert!(error.message.contains("repeated"), "{}", error.message);
 }
 
-/// azure refuses a container without a SAS as it refuses one that does not exist. the error
-/// says how to send one, as the request went: for a container nobody listed, for a listed one
-/// with no SAS found, and for a SAS azure refused. what azure's error repeats of the SAS never
+/// azure refuses a container without credentials as it refuses one that does not exist. the
+/// error says how to send them, as the request went: for a container nobody listed, for a listed
+/// one with none found, and for a SAS azure refused. what azure's error repeats of the SAS never
 /// shows.
 #[test]
 fn a_refused_listing_says_how_to_send_a_sas() {
@@ -141,12 +141,12 @@ fn a_refused_listing_says_how_to_send_a_sas() {
     assert_eq!(unlisted.kind, Kind::AuthRequired);
     assert_eq!(
         unlisted.message,
-        "azure:lab/raw/scans/ is private, or does not exist: azure refused to list it without a SAS"
+        "azure:lab/raw/scans/ is private, or does not exist: azure refused to list it without credentials"
     );
     assert_eq!(
         unlisted.help.as_deref(),
         Some(
-            "if you trust azure:lab/raw with a SAS, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN"
+            "if you trust azure:lab/raw with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN, or AZURE_STORAGE_KEY with AZURE_STORAGE_ACCOUNT"
         )
     );
     let listed_without = refused(
@@ -163,7 +163,7 @@ fn a_refused_listing_says_how_to_send_a_sas() {
     assert!(
         listed_without
             .message
-            .ends_with("and no SAS was found for azure:lab/raw"),
+            .ends_with("and none were found for azure:lab/raw"),
         "{}",
         listed_without.message
     );

@@ -113,10 +113,7 @@ fn authorized_bytes(authorized: Option<&Authorized>) -> usize {
             bucket, identity, ..
         }) => bucket.len() + identity.len(),
         Some(Authorized::Anonymous { bucket, .. }) => bucket.len(),
-        Some(Authorized::Azure(crate::net::Sent::Anonymous { container, .. })) => container.len(),
-        Some(Authorized::Azure(crate::net::Sent::Sas {
-            container, expiry, ..
-        })) => container.len() + expiry.as_ref().map_or(0, String::len),
+        Some(Authorized::Azure(sent)) => sent.bytes(),
         None => 0,
     }
 }

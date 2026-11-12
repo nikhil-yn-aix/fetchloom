@@ -1,6 +1,6 @@
 # azure blob storage
 
-fetchloom lists and downloads azure blob containers over HTTPS, without an azure SDK. a public container needs no account. a private container you list in the `azure_containers` setting is read with a SAS, a shared access signature, that you keep in `AZURE_STORAGE_SAS_TOKEN` or in the settings file, never in `data.toml` or `data.lock`.
+fetchloom lists and downloads azure blob containers over HTTPS, without an azure SDK. a public container needs no account. a private container you list in the `azure_containers` setting is read with a SAS, a shared access signature, that you keep in `AZURE_STORAGE_SAS_TOKEN` or in the settings file, or with a key of its storage account in `AZURE_STORAGE_KEY`, never in `data.toml` or `data.lock`.
 
 ```sh
 fetchloom add azure:azureopendatastorage/mnist/
@@ -38,7 +38,7 @@ an empty blob named like a folder that other blobs are in is a mark some tools l
 
 ## private containers
 
-the `azure_containers` setting lists the containers fetchloom may send a SAS for, in the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_AZURE_CONTAINERS`, as `azure:<account>/<container>` or the container's link:
+the `azure_containers` setting lists the containers fetchloom may send credentials to, in the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_AZURE_CONTAINERS`, as `azure:<account>/<container>` or the container's link:
 
 ```toml
 azure_containers = [
@@ -47,20 +47,30 @@ azure_containers = [
 ]
 ```
 
-a request for a listed container goes without a SAS first, as for any container. once azure refuses it, the request goes again with the SAS, and the container's later requests carry it from the start. a container not listed never gets a SAS, whatever `data.toml` names. the SAS goes only to the container's own blob host over HTTPS, never on to where a redirect sends a request.
+a request for a listed container goes without credentials first, as for any container. once azure refuses it, the request goes again with them, and the container's later requests carry them from the start. a container not listed never gets any, whatever `data.toml` names. credentials go only to the container's own blob host over HTTPS, never on to where a redirect sends a request.
 
-each container gets the SAS its own entry carries, as in the second line above, which is the SAS link the azure portal gives for a container, else `AZURE_STORAGE_SAS_TOKEN`, as the az cli reads it. a SAS is one account's, so when `AZURE_STORAGE_ACCOUNT` names an account, that SAS goes only to listed containers in that account, and when it names none, the listed containers without a SAS of their own must all be in one account. listed containers in two accounts, with `AZURE_STORAGE_ACCOUNT` unset, fail the first request that needs the SAS with `auth.required`, exit 40, asking for `AZURE_STORAGE_ACCOUNT`, before the SAS goes to either. a SAS needs read and list permission, `sp=rl`, for a container's listing.
+each listed container takes the first of these it has:
+
+| credential | where it comes from | which containers it goes to |
+|---|---|---|
+| its own SAS | its entry, as in the second line above, the SAS link the azure portal gives for a container | that one |
+| a SAS | `AZURE_STORAGE_SAS_TOKEN`, as the az cli reads it | those in the account `AZURE_STORAGE_ACCOUNT` names |
+| an account key | `AZURE_STORAGE_KEY`, with the account it is for in `AZURE_STORAGE_ACCOUNT` | those in that account |
+
+a SAS is one account's, so when `AZURE_STORAGE_ACCOUNT` names none, the listed containers without a SAS of their own must all be in one account. listed containers in two accounts, with `AZURE_STORAGE_ACCOUNT` unset, fail the first request that needs the SAS with `auth.required`, exit 40, asking for `AZURE_STORAGE_ACCOUNT`, before the SAS goes to either. a SAS needs read and list permission, `sp=rl`, for a container's listing.
+
+a key signs each request as azure's shared key defines it: the request's time in `x-ms-date`, and an `Authorization: SharedKey <account>:<signature>` header worked out from the key. the key itself never leaves this machine. a key reads every container of its account, and an account whose owner turned off access with keys refuses it.
 
 ```console
 $ fetchloom add https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/01/C/CV/ --dry-run
   Resolving azure:sentinel2l2a01/sentinel2-l2/01/C/CV/
-error: azure:sentinel2l2a01/sentinel2-l2/01/C/CV/ is private, or does not exist: azure refused to list it without a SAS
+error: azure:sentinel2l2a01/sentinel2-l2/01/C/CV/ is private, or does not exist: azure refused to list it without credentials
   sentinel2l2a01.blob.core.windows.net said NoAuthenticationInformation: Server failed to authenticate the request. Please refer to the information in the www-authenticate header.
-  help: if you trust azure:sentinel2l2a01/sentinel2-l2 with a SAS, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN
+  help: if you trust azure:sentinel2l2a01/sentinel2-l2 with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN, or AZURE_STORAGE_KEY with AZURE_STORAGE_ACCOUNT
 ```
 
-azure refuses a container that does not exist as it refuses a private one, so the error says both. a SAS azure refuses, as an expired one or one for another container, fails with `auth.required`, exit 40, naming where the SAS came from and the expiry it states. `add` refuses a link that carries a SAS, and `sig`, `se` and `sp` are masked wherever a link is shown; `fetchloom get` downloads a SAS link once without keeping it.
+azure refuses a container that does not exist as it refuses a private one, so the error says both. a SAS azure refuses, as an expired one or one for another container, fails with `auth.required`, exit 40, naming where the SAS came from and the expiry it states; a key azure refuses fails the same way, naming `AZURE_STORAGE_KEY` and its account. `add` refuses a link that carries a SAS, and `sig`, `se` and `sp` are masked wherever a link is shown; `fetchloom get` downloads a SAS link once without keeping it.
 
 ## access and limits
 
-azure containers record no `access`. only azure's public cloud, `*.blob.core.windows.net`, is read: other clouds, data lake (`dfs`) endpoints, static website hosts and the `$root` and `$web` containers are not. a blob in the archive tier fails to download until its owner rehydrates it. credentials from the az cli, a managed identity or an account key are not read, and the planetary computer's own SAS service is not asked: give such a container a SAS from `planetarycomputer.microsoft.com/api/sas/v1/token/<account>/<container>` yourself.
+azure containers record no `access`. only azure's public cloud, `*.blob.core.windows.net`, is read: other clouds, data lake (`dfs`) endpoints, static website hosts and the `$root` and `$web` containers are not. a blob in the archive tier fails to download until its owner rehydrates it. credentials from the az cli or a managed identity are not read, and the planetary computer's own SAS service is not asked: give such a container a SAS from `planetarycomputer.microsoft.com/api/sas/v1/token/<account>/<container>` yourself.

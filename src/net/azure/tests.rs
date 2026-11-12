@@ -10,16 +10,20 @@ use crate::source::recorded::block_on;
 
 const SAS: &str = "sv=2022-11-02&sr=c&sp=rl&se=2099-01-01T00%3A00%3A00Z&sig=shared%3D";
 const OWN: &str = "sv=2022-11-02&sr=c&sp=rl&sig=own%3D";
+/// an account key, the base64 of `secret-key`.
+const KEY: &str = "c2VjcmV0LWtleQ==";
 
-/// one request a test server took: its request line, and whether it asked for azure's version.
+/// one request a test server took: its request line, whether it asked for azure's version, and
+/// its whole head, lowercase.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Asked {
     line: String,
     versioned: bool,
+    head: String,
 }
 
-/// a server on this machine that answers each request with what `answer` makes of its request
-/// line and of how many came before it, and keeps every request it took.
+/// a server on this machine that answers each request with what `answer` makes of its head,
+/// lowercase, and of how many came before it, and keeps every request it took.
 fn server(
     answer: impl Fn(&str, usize) -> Vec<u8> + Send + 'static,
 ) -> (Url, Arc<Mutex<Vec<Asked>>>) {
@@ -42,12 +46,13 @@ fn server(
             let count = {
                 let mut seen = seen.lock().unwrap();
                 seen.push(Asked {
-                    line: line.clone(),
+                    line,
                     versioned: head.contains("x-ms-version: 2020-10-02"),
+                    head: head.clone(),
                 });
                 seen.len() - 1
             };
-            let _ = stream.write_all(&answer(&line, count));
+            let _ = stream.write_all(&answer(&head, count));
         }
     });
     (url, asked)
@@ -56,10 +61,10 @@ fn server(
 /// azure's answers: 401 to a request without a signature, 200 to one with the signature
 /// `signature`, 403 to one with another.
 fn blob_host(signature: &'static str) -> (Url, Arc<Mutex<Vec<Asked>>>) {
-    server(move |line, _| {
-        if !line.contains("sig=") {
+    server(move |head, _| {
+        if !head.contains("sig=") {
             reply("401 Unauthorized", &[], b"")
-        } else if line.contains(signature) {
+        } else if head.contains(signature) {
             reply("200 OK", &[], b"blob")
         } else {
             reply("403 Forbidden", &[], b"")
@@ -333,11 +338,8 @@ fn a_sas_never_follows_a_redirect() {
     assert_eq!(asked.len(), 3);
     assert!(asked[1].line.contains("sig="), "{asked:?}");
     assert_eq!(
-        asked[2],
-        Asked {
-            line: "get /raw/a.csv http/1.1".to_owned(),
-            versioned: false,
-        }
+        (asked[2].line.as_str(), asked[2].versioned),
+        ("get /raw/a.csv http/1.1", false)
     );
 }
 
@@ -358,4 +360,58 @@ fn an_unreadable_sas_fails_without_repeating_it() {
     );
     assert!(!format!("{error:?}").contains("leaked-value"));
     assert_eq!(lines(&asked), ["get /raw/a.csv http/1.1"]);
+}
+
+/// a key of the account `AZURE_STORAGE_ACCOUNT` names signs a listed container's requests in that
+/// account once azure refused one without a credential: a `SharedKey` authorization of the
+/// account, with the time in `x-ms-date`. the key itself is never sent, and a container in
+/// another account gets no signature.
+#[test]
+fn an_account_key_signs_requests_to_its_own_account_alone() {
+    let (local, asked) = server(|head, _| {
+        if head.contains("authorization: sharedkey lab:") {
+            reply("200 OK", &[], b"blob")
+        } else {
+            reply("401 Unauthorized", &[], b"")
+        }
+    });
+    let net = azure_net(
+        &["azure:lab/raw", "azure:other/data"],
+        &[("AZURE_STORAGE_KEY", KEY), ("AZURE_STORAGE_ACCOUNT", "lab")],
+    );
+    let answer = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap();
+    assert_eq!(answer.status(), 200);
+    assert_eq!(
+        sent(&answer),
+        Some(&Sent::Key {
+            container: "azure:lab/raw".to_owned(),
+            account: "lab".to_owned(),
+        })
+    );
+    let elsewhere = through(
+        &net,
+        &local,
+        "https://other.blob.core.windows.net/data/a.csv",
+    )
+    .unwrap();
+    assert_eq!(elsewhere.status(), 401);
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    assert!(
+        !asked[0].head.contains("authorization"),
+        "{}",
+        asked[0].head
+    );
+    assert!(
+        asked[1].head.contains("\r\nx-ms-date: "),
+        "{}",
+        asked[1].head
+    );
+    assert!(
+        !asked[2].head.contains("authorization"),
+        "{}",
+        asked[2].head
+    );
+    let key = KEY.to_ascii_lowercase();
+    assert!(asked.iter().all(|asked| !asked.head.contains(&key)));
 }

@@ -3,6 +3,7 @@
 //! works in fetchloom and in them, and a person never makes a second.
 
 pub(crate) mod aws;
+pub(crate) mod azure;
 pub(crate) mod google;
 pub(crate) mod lease;
 pub(crate) mod netrc;

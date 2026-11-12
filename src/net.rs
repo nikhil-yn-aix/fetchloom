@@ -642,19 +642,8 @@ impl Net {
                 .pace_holding(&hop, holding.as_mut())
                 .await
                 .map_err(Failure::Final)?;
-            let request = match &signer {
-                Some(signer) => {
-                    tracing::debug!(host = host(&hop), "signing the request with an AWS key");
-                    signed(
-                        shape(client.get(hop.clone())),
-                        signer.headers(&hop, SystemTime::now()),
-                    )
-                    .map_err(Failure::Final)?
-                }
-                None => shape(self.request(client, &blobbed.url(&hop), first_origin))
-                    .headers(tokened.headers())
-                    .headers(blobbed.headers()),
-            };
+            let credentials = (signer.as_ref(), &tokened, &blobbed);
+            let request = self.hop_request(client, &hop, &shape, first_origin, credentials)?;
             // counted as it goes: one refused before is no request, and a redirect's hop is part
             // of the request it follows
             if redirects == 0 {
@@ -782,6 +771,37 @@ impl Net {
             response.extensions_mut().insert(sent);
         }
         Ok(response)
+    }
+
+    /// the request for `hop`, as `shape` makes it, with what it may carry: an S3 signature from
+    /// `signer`, or else the stored credential of its host while it is on the `first_origin`,
+    /// a google token and an azure credential, each as its own hop allows.
+    fn hop_request(
+        &self,
+        client: &reqwest::Client,
+        hop: &Url,
+        shape: &impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        first_origin: bool,
+        (signer, tokened, blobbed): (
+            Option<&crate::source::Signer>,
+            &google::Tokened<'_>,
+            &azure::Blobbed<'_>,
+        ),
+    ) -> Result<reqwest::RequestBuilder, Failure> {
+        if let Some(signer) = signer {
+            tracing::debug!(host = host(hop), "signing the request with an AWS key");
+            return signed(
+                shape(client.get(hop.clone())),
+                signer.headers(hop, SystemTime::now()),
+            )
+            .map_err(Failure::Final);
+        }
+        let request = shape(self.request(client, &blobbed.url(hop), first_origin))
+            .headers(tokened.headers())
+            .headers(blobbed.headers());
+        blobbed
+            .signed(request, SystemTime::now())
+            .map_err(Failure::Final)
     }
 
     /// whether S3 refused `response`, the answer to `hop`, because the keys a program gave for
