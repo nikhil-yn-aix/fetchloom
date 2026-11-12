@@ -633,10 +633,7 @@ impl Net {
                     )));
                 }
                 Ok(Err(err)) => {
-                    return Err(broke(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
+                    return Err(Ended::Failed(failure::broke(url, "the file", &err)));
                 }
                 Ok(Ok(None)) => {
                     return Err(broke(format!(

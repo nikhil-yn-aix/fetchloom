@@ -143,7 +143,7 @@ prepare the project online and keep `data.toml` and `data.lock` unchanged before
 
 ## recovery
 
-a [mirror](mirrors.md) you name is asked for a pinned file before its source, so a file whose source is gone can still come from a lab's copy. if a locked download returns 404 or 410, fetchloom asks the recorded source for a new link and checks the new download against the pinned size and hashes, without rewriting the lock.
+a [mirror](mirrors.md) you name is asked for a pinned file before its source, so a file whose source is gone can still come from a lab's copy. if a locked download returns 404 or 410, fetchloom asks the recorded source for a new link and checks the new download against the pinned size and hashes, without rewriting the lock. when no source can give the file again, as for a plain link that died, the error's help says how to get the pinned bytes from someone who has them: they run `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`.
 
 when one file fails, the files that downloaded stay cached. a retry continues from the bytes it kept when hashes or server validators show they belong to the same file; otherwise it starts the file over.
 

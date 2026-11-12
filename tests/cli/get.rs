@@ -982,6 +982,31 @@ fn a_busy_server_is_tried_again() -> Result {
     Ok(())
 }
 
+/// a connection that breaks partway through a file is tried again, and the warning says what
+/// happened in plain words, never the http library's.
+#[test]
+fn a_connection_that_breaks_partway_through_a_file_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let length = IRIS.len().to_string();
+    let cut = reply(
+        "200 OK",
+        &[("Content-Length", length.as_str())],
+        &IRIS[..IRIS.len() / 2],
+    );
+    let server = Server::start(PATH, vec![cut, file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "warning: the connection to 127.0.0.1 broke partway through the file. trying again in "
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("decoding"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn fetchloom_retries_sets_how_often_a_request_is_tried_again() -> Result {
     let sandbox = Sandbox::new()?;

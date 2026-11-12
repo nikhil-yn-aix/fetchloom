@@ -1100,12 +1100,7 @@ impl Net {
                 () = &mut stopped => break Err(Failure::Final(failure::interrupted(url))),
             };
             match next {
-                Err(err) => {
-                    break Err(failure::transient(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
-                }
+                Err(err) => break Err(failure::broke(url, "the file", &err)),
                 Ok(None) => break Ok(None),
                 Ok(Some(chunk)) => {
                     if let Err(err) = self.throttle(url, chunk.len()).await {
@@ -1181,12 +1176,7 @@ impl Net {
                         self.idle.as_secs()
                     )));
                 }
-                Ok(Err(err)) => {
-                    return Err(failure::transient(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
-                }
+                Ok(Err(err)) => return Err(failure::broke(url, "the page", &err)),
                 Ok(Ok(None)) => return Ok(String::from_utf8_lossy(&page).into_owned()),
                 Ok(Ok(Some(chunk))) => {
                     self.throttle(url, chunk.len()).await?;

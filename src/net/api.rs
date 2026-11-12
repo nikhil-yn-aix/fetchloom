@@ -424,12 +424,7 @@ impl Net {
                         self.idle.as_secs()
                     )));
                 }
-                Ok(Err(err)) => {
-                    return Err(failure::transient(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
-                }
+                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
                 Ok(Ok(None)) => break,
                 Ok(Ok(Some(chunk))) => {
                     self.throttle(url, chunk.len()).await?;

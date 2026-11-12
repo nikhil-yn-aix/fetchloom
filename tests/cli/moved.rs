@@ -136,6 +136,10 @@ fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
         !stderr.contains("still lists"),
         "a link is its own source: {stderr}"
     );
+    assert!(
+        stderr.contains("help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`"),
+        "{stderr}"
+    );
     Ok(())
 }
 

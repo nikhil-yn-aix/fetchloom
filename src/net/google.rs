@@ -626,12 +626,7 @@ impl Net {
                         self.idle.as_secs()
                     )));
                 }
-                Ok(Err(err)) => {
-                    return Err(failure::transient(format!(
-                        "the connection to {} broke: {err}",
-                        host(url)
-                    )));
-                }
+                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
                 Ok(Ok(None)) => return Ok((status.as_u16(), body)),
                 Ok(Ok(Some(chunk))) => {
                     Work::add(&self.work.bytes_down, chunk.len() as u64);

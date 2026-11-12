@@ -1372,8 +1372,8 @@ fn a_new_link_with_nothing_at_it_is_fixed_on_the_command_line() -> Result {
     Ok(())
 }
 
-/// a link data.toml has is fixed there should it have moved, whether the add names it again or
-/// syncs it beside a new link.
+/// a link data.toml has and data.lock pins is fixed there should it have moved, or its pinned
+/// bytes come from a folder mirror, whether the add names it again or syncs it beside a new link.
 #[test]
 fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1397,7 +1397,7 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
         assert_eq!(output.status.code(), Some(10), "{document}");
         assert_eq!(
             document["errors"][0]["help"],
-            "check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml",
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml",
             "{link}"
         );
     }

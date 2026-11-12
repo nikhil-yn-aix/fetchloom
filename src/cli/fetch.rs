@@ -1195,8 +1195,12 @@ fn cause(message: &str, label: &str) -> String {
 
 /// says which file a failure concerns, and for bytes that changed upstream, the two ways on: the
 /// pinned bytes from a folder mirror someone pushed them to, or the new bytes by an upgrade,
-/// which only a person may choose, so the help offers it in words no fix takes.
+/// which only a person may choose, so the help offers it in words no fix takes. a pinned file
+/// whose link has nothing at it now may still be on such a mirror too.
 fn explain(error: Error, job: &Job) -> Error {
+    if job.again.is_some() && error.help.as_deref() == Some(crate::net::MOVED_HELP) {
+        return error.help(GONE_HELP);
+    }
     // an MD5 mismatch comes with its own help, since the source contradicts itself
     let dataset = job.dataset.as_ref().filter(|_| {
         error.kind == Kind::IntegrityMismatch
@@ -1216,6 +1220,9 @@ fn explain(error: Error, job: &Job) -> Error {
         ..error
     }
 }
+
+/// what to do about a file data.lock pins whose link has nothing at it now.
+const GONE_HELP: &str = "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml";
 
 /// what to do about pinned bytes of `dataset` that its source no longer serves.
 fn changed_upstream(dataset: &str) -> String {
@@ -1851,6 +1858,37 @@ mod tests {
         );
         assert_eq!(error.message, "the file differs");
         assert!(error.help.unwrap().contains("published size or SHA-256"));
+    }
+
+    /// a file data.lock pins whose link has nothing at it now can still come from a folder
+    /// mirror, so its help names that way first. a new link keeps the help its command words.
+    #[test]
+    fn a_pinned_file_with_nothing_at_its_link_names_the_mirror_route() {
+        let gone = || {
+            Error::new(Kind::ReferenceUnresolved, "127.0.0.1 has nothing at it")
+                .help(crate::net::MOVED_HELP)
+        };
+        let mut job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/data.csv").unwrap()),
+            label: "iris/data.csv".to_owned(),
+            dataset: Some("iris".to_owned()),
+            again: None,
+        };
+        assert_eq!(
+            explain(gone(), &job).help.as_deref(),
+            Some(crate::net::MOVED_HELP)
+        );
+        job.again = Some(Again {
+            resolved: "https://example.org/data.csv".to_owned(),
+            path: "data.csv".to_owned(),
+            alone: true,
+        });
+        assert_eq!(
+            explain(gone(), &job).help.as_deref(),
+            Some(
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml"
+            )
+        );
     }
 
     /// a stop promises the next run goes on only from bytes their server lets a later run go on

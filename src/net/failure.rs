@@ -73,10 +73,10 @@ impl<'a> Retry<'a> {
     }
 
     /// which try comes next, of how many it may get while none makes progress: the retries
-    /// left, and once the host limited its rate, the waits for its limit left too.
-    fn numbered(&self) -> (u32, u32) {
+    /// left, and while it is `waiting` for the host's rate limit, the waits for it left too.
+    fn numbered(&self, waiting: bool) -> (u32, u32) {
         let retries = (self.net.retries + 1).saturating_sub(self.attempt);
-        let waits = if self.limited > 0 {
+        let waits = if waiting {
             LIMITED.saturating_sub(self.limited)
         } else {
             0
@@ -89,7 +89,7 @@ impl<'a> Retry<'a> {
     /// host when it names one.
     fn tell(&self, wait: Duration, limit: Option<String>) {
         if let Some(on) = self.on {
-            let (next, of) = self.numbered();
+            let (next, of) = self.numbered(limit.is_some());
             let _ = on(Event::Retrying {
                 next,
                 of,
@@ -171,7 +171,7 @@ impl<'a> Retry<'a> {
         self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
         Work::add(&self.net.work.retries, 1);
-        let (next, of) = self.numbered();
+        let (next, of) = self.numbered(false);
         (self.net.notify)(Notice::Retrying {
             host: host(self.url).to_owned(),
             reason,
@@ -229,6 +229,16 @@ pub(super) fn transient(reason: String) -> Failure {
         reason,
         retry_after: None,
     }
+}
+
+/// a body from `url` that stopped short of `what` it held. reqwest calls every such break "error
+/// decoding response body", which reads as a fault in the bytes, so the log alone keeps its words.
+pub(super) fn broke(url: &Url, what: &str, err: &reqwest::Error) -> Failure {
+    tracing::debug!(error = %super::with_causes(err), "the body stopped short");
+    transient(format!(
+        "the connection to {} broke partway through {what}",
+        host(url)
+    ))
 }
 
 /// a status that ends the download: a missing file, a refusal, or a transient failure to retry.
@@ -1239,5 +1249,39 @@ mod tests {
                 .collect();
             assert_eq!(*heard, expected);
         }
+    }
+
+    /// a try that broke after one wait for the host's rate limit is numbered among the tries its
+    /// retries allow, not among waits for a limit the host may never set again.
+    #[tokio::test(start_paused = true)]
+    async fn a_broken_try_is_numbered_by_the_retries_left() {
+        use crate::net::{Notice, Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let kept = heard.clone();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(move |notice| {
+                if let Notice::Retrying { next, of, .. } = notice {
+                    kept.lock().unwrap().push((next, of));
+                }
+            }),
+        );
+        let mut retry = Retry::new(&net, &url);
+        retry
+            .limited("limited".to_owned(), Duration::from_secs(1), false)
+            .await
+            .unwrap();
+        retry.wait("broke".to_owned(), None, false).await.unwrap();
+        assert_eq!(*heard.lock().unwrap(), [(3, RETRIES + 2)]);
     }
 }
