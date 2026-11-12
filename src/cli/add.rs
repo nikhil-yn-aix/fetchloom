@@ -425,7 +425,16 @@ async fn add_held(
     } else {
         open_cache()?
     };
-    let mut addition = resolve_add(context, &net, &args, link, &parsed).await?;
+    // a link data.toml has already is fixed there, should it have moved
+    let reference = stored_reference(link, &parsed);
+    let known = manifest
+        .datasets
+        .values()
+        .filter_map(manifest::Entry::source)
+        .any(|source| source.reference == reference);
+    let mut addition = resolve_add(context, &net, &args, link, &parsed)
+        .await
+        .map_err(|error| if known { error } else { typed(error) })?;
     if args.name.is_none()
         && let Some(name) =
             Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing)
@@ -449,7 +458,8 @@ async fn add_held(
             vec![&mut addition.listing],
             !args.no_extract,
         )
-        .await?;
+        .await
+        .map_err(typed)?;
     }
     let name = match args.name.take() {
         Some(asked) => asked,
@@ -469,6 +479,11 @@ async fn add_held(
         return preview_add(&work, &new_manifest, old, (vec![name], given), here, None).await;
     }
     let names = [name];
+    let typed_line = FromLine {
+        at: None,
+        shown: parsed.reference.shown(),
+        dataset: Some(names[0].clone()),
+    };
     let outcome = sync_add(
         &work,
         adding,
@@ -481,7 +496,8 @@ async fn add_held(
         ),
         &[],
     )
-    .await?;
+    .await
+    .map_err(|error| on_lines(error, None, std::slice::from_ref(&typed_line)))?;
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
     render_add(&work, &new_manifest, &name, here, starting, &private)?;
@@ -1009,7 +1025,7 @@ async fn add_list_held(
             extract,
         )
         .await
-        .map_err(|error| on_lines(error, &list.name, &lines))?;
+        .map_err(|error| on_lines(error, Some(&list.name), &lines))?;
     }
     let found = listings.into_iter().zip(entries).collect();
     let NewDatasets {
@@ -1044,7 +1060,7 @@ async fn add_list_held(
         &promised,
     )
     .await
-    .map_err(|error| on_lines(error, &list.name, &lines))?;
+    .map_err(|error| on_lines(error, Some(&list.name), &lines))?;
     tell_started(&work, starting);
     ignore_data(&work, &manifest)?;
     let private = private_origins(
@@ -1299,15 +1315,16 @@ async fn resolve_lines(
     }
     if let Some((index, error)) = failed {
         let at = list.lines[index].0.named(&list.name);
-        return Err(on_line(error, &at));
+        return Err(on_line(error, Some(&at)));
     }
     Ok(listings.into_iter().flatten().collect())
 }
 
-/// a line of a list as messages name it, such as `line 2 of links.txt`, the link it holds as
-/// messages show it, and the dataset it became, so a failure met later says which line to fix.
+/// a line of a list as messages name it, such as `line 2 of links.txt`, or none for a link typed
+/// on the command line, which messages name by the link itself, the link as messages show it, and
+/// the dataset it became, so a failure met later says which line or link to fix.
 struct FromLine {
-    at: String,
+    at: Option<String>,
     shown: String,
     dataset: Option<String>,
 }
@@ -1318,7 +1335,7 @@ impl FromLine {
         list.lines
             .iter()
             .map(|(line, parsed)| FromLine {
-                at: line.named(&list.name),
+                at: Some(line.named(&list.name)),
                 shown: parsed.reference.shown(),
                 dataset: None,
             })
@@ -1327,8 +1344,11 @@ impl FromLine {
 }
 
 /// `error`, about the link on `at`, saying so. a link with nothing at it is fixed on that line,
-/// since data.toml has no entry for it yet.
-fn on_line(error: Error, at: &str) -> Error {
+/// since data.toml has no entry for it yet, or on the command line for a link typed there.
+fn on_line(error: Error, at: Option<&str>) -> Error {
+    let Some(at) = at else {
+        return typed(error);
+    };
     let moved = error.help.as_deref() == Some(crate::net::MOVED_HELP);
     let error = links::on_line(error, at);
     if moved {
@@ -1349,24 +1369,63 @@ fn moved_in(list_name: &str) -> String {
     )
 }
 
+/// `error`, about a link or id typed on the command line for a new dataset, with the help for one
+/// that has nothing at it in the words of an add: data.toml has no entry to fix, so the add runs
+/// again with the right one.
+fn typed(mut error: Error) -> Error {
+    if let Some(help) = error.help.as_deref().and_then(typed_help) {
+        error = error.help(help);
+    }
+    for failure in &mut error.failures {
+        if let Some(help) = failure.help.as_deref().and_then(typed_help) {
+            failure.help = Some(help);
+        }
+    }
+    error
+}
+
+/// `help`, which a source or a server's answer gives a link or an id with nothing at it, for one
+/// typed on the command line of an add. none for any other help.
+fn typed_help(help: &str) -> Option<String> {
+    if help == crate::net::MOVED_HELP {
+        Some(format!(
+            "check the link in a browser. if it moved, run `{}`",
+            super::project::command("add <new link>")
+        ))
+    } else if help == crate::source::UNKNOWN_HELP {
+        Some(format!(
+            "check the id in a browser, then run `{}` with the right one. a dataset that was removed cannot be fetched",
+            super::project::command("add <id>")
+        ))
+    } else {
+        None
+    }
+}
+
 /// `error` from downloading what the lines of the list `list_name` name, each failed file with
 /// the line it came from: the line whose link its message names, or whose dataset holds the file.
-fn on_lines(mut error: Error, list_name: &str, lines: &[FromLine]) -> Error {
+/// a failure of a link typed on the command line, for which `list_name` is none, keeps its
+/// message and gets the help of [`typed`]; one of no line, as of a dataset data.toml has, stays as
+/// it is.
+fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Error {
     let from = |file: &str, message: &str| {
-        lines
-            .iter()
-            .find(|line| {
-                message.contains(&line.shown)
-                    || line.dataset.as_deref().is_some_and(|name| {
-                        file.strip_prefix(name)
-                            .is_some_and(|rest| rest.starts_with('/'))
-                    })
-            })
-            .map(|line| line.at.as_str())
+        lines.iter().find(|line| {
+            message.contains(&line.shown)
+                || line.dataset.as_deref().is_some_and(|name| {
+                    file.strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+        })
     };
     let mut ats: Vec<&str> = Vec::new();
     for failure in &mut error.failures {
-        let Some(at) = from(&failure.file, &failure.message) else {
+        let Some(line) = from(&failure.file, &failure.message) else {
+            continue;
+        };
+        let Some(at) = line.at.as_deref() else {
+            if let Some(help) = failure.help.as_deref().and_then(typed_help) {
+                failure.help = Some(help);
+            }
             continue;
         };
         failure.message = format!("{at}: {}", failure.message);
@@ -1385,10 +1444,15 @@ fn on_lines(mut error: Error, list_name: &str, lines: &[FromLine]) -> Error {
             error
         }
         [] => match from("", &error.message) {
-            Some(at) => on_line(error, at),
+            Some(line) => on_line(error, line.at.as_deref()),
             None => error,
         },
         _ => {
+            // failures of typed links and of datasets data.toml has may share a help, which then
+            // stays as it is
+            let Some(list_name) = list_name else {
+                return error;
+            };
             let moved = format!("help: {}", crate::net::MOVED_HELP);
             for detail in &mut error.details {
                 if *detail == moved {

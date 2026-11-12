@@ -63,6 +63,15 @@ warning: a later run downloads from http://127.0.0.1:19450, a private address, o
   next: commit data.toml, data.lock and .gitignore; anyone who clones adds `allowed_origins = ["http://127.0.0.1:19450"]` to their settings file, then runs `fetchloom sync`
 ```
 
+a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet, so the help runs the add again, from a real run in an empty folder:
+
+```text
+error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
+  help: check the link in a browser. if it moved, run `fetchloom add <new link>`
+```
+
+a link data.toml has already keeps the help that names its `ref` there, whether you add it again or another add syncs it.
+
 adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. a resolved reference from an old lock identifies that entry only while its manifest reference is unchanged; editing `ref` does not make the old source count as already added. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads stay, so running the add again reuses them, while the files it placed for the new dataset are removed with it.

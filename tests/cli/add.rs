@@ -8,7 +8,9 @@ use crate::project::{Background, IRIS, PATH, added};
 use crate::project::{partial_bytes, told_a_stop};
 #[cfg(unix)]
 use crate::support::wait_until;
-use crate::support::{Part, Result, Routes, Sandbox, Server, file, json, reply, text};
+use crate::support::{
+    Part, Result, Routes, Sandbox, Server, delete_folder, file, json, reply, text,
+};
 
 #[test]
 fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
@@ -1161,6 +1163,95 @@ fn a_private_link_is_told_before_the_closing_line() -> Result {
         warned.zip(next).is_some_and(|(warned, next)| warned < next),
         "{screen}"
     );
+    Ok(())
+}
+
+/// a new link or id with nothing at it is fixed on the command line, since data.toml has no entry
+/// for it: the help runs the add again and names no data.toml, whether naming the dataset or
+/// syncing the project met it.
+#[test]
+fn a_new_link_with_nothing_at_it_is_fixed_on_the_command_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(Vec::new())?;
+    let link = format!("{}/files/missing.csv", server.url);
+    let help = "check the link in a browser. if it moved, run `fetchloom add <new link>`";
+    for args in [
+        vec!["--json", "add", link.as_str()],
+        vec!["--json", "add", link.as_str(), "--as", "missing"],
+    ] {
+        let output = sandbox.run(&args)?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(10), "{document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["help"], help, "{args:?}");
+        for failure in error["failures"].as_array().into_iter().flatten() {
+            assert_eq!(failure["help"], help, "{args:?}");
+        }
+    }
+    assert!(!sandbox.work().join("data.toml").exists());
+    // a catalog on this machine stands in for zenodo, which debug builds alone allow
+    #[cfg(debug_assertions)]
+    {
+        let nobody = Routes::start(Vec::new())?;
+        let output = sandbox
+            .command(&["--json", "add", "zenodo:1"])
+            .env("FETCHLOOM_TEST_ZENODO_API", &nobody.url)
+            .output()?;
+        assert_eq!(
+            json(&output)?["errors"][0]["help"],
+            "check the id in a browser, then run `fetchloom add <id>` with the right one. a dataset that was removed cannot be fetched"
+        );
+    }
+    Ok(())
+}
+
+/// a link data.toml has is fixed there should it have moved, whether the add names it again or
+/// syncs it beside a new link.
+#[test]
+fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+    ])?;
+    let iris = format!("{}{PATH}", server.url);
+    let wine = format!("{}/files/wine.csv", server.url);
+    let first = sandbox.run(&["add", &iris])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    server.change(vec![(
+        PATH.to_owned(),
+        reply("404 Not Found", &[("Content-Length", "0")], b""),
+    )]);
+    delete_folder(&sandbox.cache())?;
+    delete_folder(&sandbox.work().join("data"))?;
+    for link in [&iris, &wine] {
+        let output = sandbox.run(&["--json", "add", link])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(10), "{document}");
+        assert_eq!(
+            document["errors"][0]["help"],
+            "check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml",
+            "{link}"
+        );
+    }
+    // a catalog on this machine stands in for zenodo, which debug builds alone allow
+    #[cfg(debug_assertions)]
+    {
+        let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+        fs::write(
+            sandbox.work().join("data.toml"),
+            format!("{manifest}\n[datasets.record]\nref = \"zenodo:1\"\n"),
+        )?;
+        let nobody = Routes::start(Vec::new())?;
+        let output = sandbox
+            .command(&["--json", "add", "zenodo:1"])
+            .env("FETCHLOOM_TEST_ZENODO_API", &nobody.url)
+            .output()?;
+        assert_eq!(
+            json(&output)?["errors"][0]["help"],
+            "check the id in a browser, then fix it on the command line or as ref in data.toml. a dataset that was removed cannot be fetched"
+        );
+    }
     Ok(())
 }
 
