@@ -50,7 +50,28 @@ most_files        2,097,152                this machine      FETCHLOOM_MOST_FILE
 threads           2                        resources = lean  FETCHLOOM_THREADS
 ```
 
-`fetchloom settings --json` gives those values the origin `resources`. a level that is none of the three words stops every named command with kind `usage`, exit 2:
+`fetchloom settings --json` gives those values the origin `resources`.
+
+`-v` starts each command that downloads, hashes or places files, `add`, `remove`, `drop`, `sync`, `lock`, `build`, `status`, `path`, `push`, `get` and `cache verify`, with what that run spends: downloads at once and to one host, the local workers one step runs at most, the memory budget for buffers, and hash lanes, which is two when a download that needs an MD5 beside its SHA-256 may hash it on a second worker. a line below names what holds each number that is not fetchloom's own default: a level, a variable or the settings file, the processors this process may use, or the memory the system or a cgroup leaves. stderr from a run in a cgroup limited to 512 MiB and two processors' time, on a machine of 24:
+
+```text
+  Resources default: 8 downloads at once, 4 to one host, 2 local workers, 254.8 MiB for buffers, 2 hash lanes
+            local workers: this run may use 2 of the 24 processors
+            buffers: half of the 509.6 MiB this cgroup leaves
+```
+
+and from the same run at lean:
+
+```text
+  Resources lean: 2 downloads at once, 2 to one host, 2 local workers, 128.0 MiB for buffers, 1 hash lane
+            downloads: resources = lean
+            to one host: resources = lean
+            local workers: this run may use 2 of the 24 processors
+            buffers: resources = lean
+            hash lanes: resources = lean
+```
+
+a level that is none of the three words stops every named command with kind `usage`, exit 2:
 
 ```text
 error: FETCHLOOM_RESOURCES is "fast", which is not lean, default or max

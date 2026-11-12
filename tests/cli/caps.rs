@@ -139,6 +139,48 @@ fn settings_show_what_a_resources_level_derives() -> Result {
     Ok(())
 }
 
+/// `-v` starts a run with what it spends, downloads at once, to one host, local workers, buffers
+/// and hash lanes, and what set each that is not fetchloom's own default. without `-v` the line
+/// stays out.
+#[test]
+fn a_verbose_run_says_what_it_spends_and_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(sandbox.work().join("data.toml"), "")?;
+    let named = [
+        ("FETCHLOOM_JOBS", "3"),
+        ("FETCHLOOM_HOST_JOBS", "5"),
+        ("FETCHLOOM_THREADS", "1"),
+        ("FETCHLOOM_MEMORY", "64M"),
+    ];
+    let output = sandbox.command(&["-v", "sync"]).envs(named).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    // one worker is what FETCHLOOM_THREADS holds it to on a machine of more processors
+    let processors = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let held = if processors > 1 {
+        [
+            "local workers: FETCHLOOM_THREADS\n",
+            "hash lanes: FETCHLOOM_THREADS\n",
+        ]
+    } else {
+        ["", "hash lanes: one processor\n"]
+    };
+    for line in [
+        "Resources default: 3 downloads at once, 3 to one host, 1 local worker, 64.0 MiB for buffers, 1 hash lane\n",
+        "downloads: FETCHLOOM_JOBS\n",
+        "to one host: no more than the downloads at once\n",
+        "buffers: FETCHLOOM_MEMORY\n",
+    ]
+    .into_iter()
+    .chain(held)
+    {
+        assert!(stderr.contains(line), "{line}{stderr}");
+    }
+    let quiet = sandbox.command(&["sync"]).envs(named).output()?;
+    assert!(!text(&quiet.stderr)?.contains("Resources"));
+    Ok(())
+}
+
 /// `--no-config`, or `FETCHLOOM_NO_CONFIG`, runs a command on the defaults past a settings file
 /// that would stop it, and `settings` says the file was bypassed. without it the file still
 /// stops the run, and data.toml is read either way.

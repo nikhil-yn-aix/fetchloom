@@ -839,10 +839,33 @@ fn reminds(command: &args::Command) -> bool {
     }
 }
 
+/// whether `command` moves, hashes or places data, so `-v` starts it with what it spends.
+fn spends(command: &args::Command) -> bool {
+    matches!(
+        command,
+        args::Command::Add(_)
+            | args::Command::Remove(_)
+            | args::Command::Drop(_)
+            | args::Command::Sync(_)
+            | args::Command::Lock(_)
+            | args::Command::Build(_)
+            | args::Command::Status(_)
+            | args::Command::Path(_)
+            | args::Command::Push(_)
+            | args::Command::Get(_)
+            | args::Command::Cache(args::Cache {
+                action: Some(args::CacheAction::Verify),
+            })
+    )
+}
+
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     if command.locked() {
         context.output.leave_lock();
+    }
+    if spends(&command) {
+        settings::tell_spending(context);
     }
     match command {
         args::Command::Add(args) => {

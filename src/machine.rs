@@ -23,6 +23,8 @@ pub(crate) struct Machine {
     /// bytes of memory a run may use: on linux what the system has available, or what is left
     /// under a container's memory limit when that is less. none elsewhere.
     pub(crate) memory: Option<u64>,
+    /// whether `memory` is what a cgroup's limit leaves, less than the system has available.
+    pub(crate) memory_in_cgroup: bool,
     /// files the process may hold open, after raising its soft limit as far as the system lets
     /// it. none where the system sets no such limit.
     pub(crate) open_files: Option<u64>,
@@ -31,35 +33,71 @@ pub(crate) struct Machine {
 impl Machine {
     /// reads this machine, raising the process's open-file limit on the way.
     pub(crate) fn read() -> Machine {
+        let memory = memory();
         Machine {
             processors: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
-            memory: memory(),
+            memory: memory.map(|room| room.bytes),
+            memory_in_cgroup: memory.is_some_and(|room| room.in_cgroup),
             open_files: raise_open_files(),
         }
     }
 }
 
+/// the memory a process may use, and whether a cgroup's limit is what holds it there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Room {
+    bytes: u64,
+    in_cgroup: bool,
+}
+
 #[cfg(target_os = "linux")]
-fn memory() -> Option<u64> {
+fn memory() -> Option<Room> {
     memory_under(Path::new("/"))
 }
 
 /// other systems tell their free memory only through calls this crate keeps out, as it holds
 /// no unsafe code, so a run there uses `FETCHLOOM_MEMORY` or the smallest budget.
 #[cfg(not(target_os = "linux"))]
-fn memory() -> Option<u64> {
+fn memory() -> Option<Room> {
     None
 }
 
 /// the memory a process may use, from `/proc` and `/sys` below `root`: what the kernel reports
 /// available, or less when the process's cgroups leave less room under their limits.
 #[cfg(any(target_os = "linux", test))]
-fn memory_under(root: &Path) -> Option<u64> {
+fn memory_under(root: &Path) -> Option<Room> {
     let free = available(&root.join("proc/meminfo"));
-    match (free, cgroup_room(root)) {
-        (Some(free), Some(limit)) => Some(free.min(limit)),
-        (free, limit) => free.or(limit),
+    let (bytes, in_cgroup) = match (free, cgroup_room(root)) {
+        (Some(free), Some(limit)) => (free.min(limit), limit < free),
+        (Some(free), None) => (free, false),
+        (None, limit) => (limit?, true),
+    };
+    Some(Room { bytes, in_cgroup })
+}
+
+/// how many processors the system has online, whatever this process may use of them: none where
+/// it does not say.
+pub(crate) fn processors_online() -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        fs::read_to_string("/sys/devices/system/cpu/online")
+            .ok()
+            .and_then(|list| listed_processors(&list))
     }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// how many processors a list such as `0-3,8,10-11` names.
+#[cfg(any(target_os = "linux", test))]
+fn listed_processors(text: &str) -> Option<usize> {
+    text.trim().split(',').try_fold(0, |count, range| {
+        let (low, high) = range.split_once('-').unwrap_or((range, range));
+        let (low, high): (usize, usize) = (low.parse().ok()?, high.parse().ok()?);
+        Some(count + high.checked_sub(low)? + 1)
+    })
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -208,13 +246,19 @@ mod tests {
         root
     }
 
+    /// the memory `memory_under` finds below `root`, without where it came from.
+    fn bytes(root: &Path) -> Option<u64> {
+        memory_under(root).map(|room| room.bytes)
+    }
+
     const MEMINFO: &str =
         "MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:    8000000 kB\n";
 
     #[test]
     fn without_cgroups_memory_is_what_the_kernel_reports_available() {
         let root = root(&[("proc/meminfo", MEMINFO)]);
-        assert_eq!(memory_under(root.path()), Some(8_000_000 * 1024));
+        assert_eq!(bytes(root.path()), Some(8_000_000 * 1024));
+        assert!(!memory_under(root.path()).unwrap().in_cgroup);
     }
 
     #[test]
@@ -229,7 +273,8 @@ mod tests {
             ("sys/fs/cgroup/kubepods/pod1/memory.max", "2147483648\n"),
             ("sys/fs/cgroup/kubepods/pod1/memory.current", "536870912\n"),
         ]);
-        assert_eq!(memory_under(root.path()), Some(2_147_483_648 - 536_870_912));
+        assert_eq!(bytes(root.path()), Some(2_147_483_648 - 536_870_912));
+        assert!(memory_under(root.path()).unwrap().in_cgroup);
     }
 
     #[test]
@@ -243,24 +288,48 @@ mod tests {
             ("sys/fs/cgroup/outer/inner/memory.high", "3221225472\n"),
             ("sys/fs/cgroup/outer/inner/memory.current", "100\n"),
         ]);
-        assert_eq!(
-            memory_under(root.path()),
-            Some(1_073_741_824 - 1_000_000_000)
-        );
+        assert_eq!(bytes(root.path()), Some(1_073_741_824 - 1_000_000_000));
         let root = self::root(&[
             ("proc/self/cgroup", "0::/one\n"),
             ("sys/fs/cgroup/one/memory.max", "4294967296\n"),
             ("sys/fs/cgroup/one/memory.high", "1073741824\n"),
             ("sys/fs/cgroup/one/memory.current", "73741824\n"),
         ]);
-        assert_eq!(memory_under(root.path()), Some(1_000_000_000));
+        assert_eq!(bytes(root.path()), Some(1_000_000_000));
         let root = self::root(&[
             ("proc/self/cgroup", "0::/one\n"),
             ("sys/fs/cgroup/one/memory.max", "max\n"),
             ("sys/fs/cgroup/one/memory.high", "1073741824\n"),
             ("sys/fs/cgroup/one/memory.current", "73741824\n"),
         ]);
-        assert_eq!(memory_under(root.path()), Some(1_000_000_000));
+        assert_eq!(bytes(root.path()), Some(1_000_000_000));
+    }
+
+    /// a cgroup with more room than the system has available does not hold the run's memory.
+    #[test]
+    fn a_roomy_cgroup_leaves_the_available_memory_in_charge() {
+        let root = root(&[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "0::/roomy\n"),
+            ("sys/fs/cgroup/roomy/memory.max", "68719476736\n"),
+            ("sys/fs/cgroup/roomy/memory.current", "1048576\n"),
+        ]);
+        let found = memory_under(root.path()).unwrap();
+        assert_eq!((found.bytes, found.in_cgroup), (8_000_000 * 1024, false));
+    }
+
+    #[test]
+    fn a_processor_list_counts_each_range_and_single() {
+        for (list, count) in [
+            ("0-23\n", Some(24)),
+            ("0\n", Some(1)),
+            ("0-3,8,10-11", Some(7)),
+            ("", None),
+            ("3-1", None),
+            ("0-x", None),
+        ] {
+            assert_eq!(listed_processors(list), count, "{list:?}");
+        }
     }
 
     /// a container with its own cgroup namespace mounts its group at the root, while one without
@@ -273,7 +342,7 @@ mod tests {
             ("sys/fs/cgroup/memory.max", "536870912\n"),
             ("sys/fs/cgroup/memory.current", "36870912\n"),
         ]);
-        assert_eq!(memory_under(root.path()), Some(500_000_000));
+        assert_eq!(bytes(root.path()), Some(500_000_000));
     }
 
     #[test]
@@ -298,19 +367,19 @@ mod tests {
                 "1000000000\n",
             ),
         ]);
-        assert_eq!(memory_under(root.path()), Some(2_000_000_000));
+        assert_eq!(bytes(root.path()), Some(2_000_000_000));
     }
 
     #[test]
     fn unreadable_files_leave_what_can_be_read() {
-        assert_eq!(memory_under(root(&[]).path()), None);
+        assert_eq!(bytes(root(&[]).path()), None);
         let root = root(&[
             ("proc/meminfo", "MemTotal: 100 kB\n"),
             ("proc/self/cgroup", "0::/\n"),
             ("sys/fs/cgroup/memory.max", "4096\n"),
             ("sys/fs/cgroup/memory.current", "1024\n"),
         ]);
-        assert_eq!(memory_under(root.path()), Some(3072));
+        assert_eq!(bytes(root.path()), Some(3072));
     }
 
     #[cfg(unix)]

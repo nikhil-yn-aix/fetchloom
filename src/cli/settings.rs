@@ -95,6 +95,34 @@ pub(super) fn run(context: &Context) -> Report {
     }
 }
 
+/// tells, at `-v`, what a run spends as it starts: downloads at once and to one host, local
+/// workers, the memory budget and hash lanes, each with what holds it where it is when that is
+/// not fetchloom's own default.
+pub(super) fn tell_spending(context: &Context) {
+    let output = &context.output;
+    if !output.shows_details() {
+        return;
+    }
+    let spending = context
+        .settings
+        .spending(context.threads, crate::machine::processors_online());
+    output.step(
+        "Resources",
+        &format!(
+            "{}: {} at once, {} to one host, {}, {} for buffers, {}",
+            spending.level,
+            units::count(spending.jobs as u64, "download", "downloads"),
+            spending.host_jobs,
+            units::count(spending.workers as u64, "local worker", "local workers"),
+            units::size(spending.memory),
+            units::count(spending.lanes as u64, "hash lane", "hash lanes"),
+        ),
+    );
+    for reason in &spending.reasons {
+        output.detail(reason);
+    }
+}
+
 /// warns about each of `names` that is one typo from a variable fetchloom reads, naming that
 /// variable and never the value, which may be a secret.
 pub(super) fn warn_misnamed(output: &Output, names: impl IntoIterator<Item = std::ffi::OsString>) {

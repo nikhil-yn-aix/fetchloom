@@ -1,9 +1,13 @@
 //! `resources`, one word that trades speed against memory: what a level sets on the knobs it
-//! derives from the machine, which a knob set by name always overrides.
+//! derives from the machine, which a knob set by name always overrides, and what a run spends
+//! once every knob is set, which `-v` tells as a run starts.
 
 use std::fmt;
 
+use super::{LEAST_MEMORY, MOST_MEMORY, Origin, Settings};
 use crate::machine::Machine;
+use crate::threads::Threads;
+use crate::units;
 
 /// the memory lean gives a run's buffers at most. no measure found a run slower within it.
 const LEAN_MEMORY: u64 = 128 << 20;
@@ -84,13 +88,138 @@ impl fmt::Display for Level {
     }
 }
 
+/// what a run spends, as `-v` tells it when the run starts: the numbers its settings come to on
+/// this machine, and what holds each that fetchloom's own defaults do not.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Spending {
+    pub(crate) level: Level,
+    /// downloads at once.
+    pub(crate) jobs: usize,
+    /// downloads at once to one host, never more than `jobs`.
+    pub(crate) host_jobs: usize,
+    /// the most workers one local step runs.
+    pub(crate) workers: usize,
+    /// the budget download buffers aim to stay within.
+    pub(crate) memory: u64,
+    /// workers a download hashes on: a second one takes a required MD5 beside the SHA-256.
+    pub(crate) lanes: usize,
+    /// a line for each of these that a level, a setting or the machine holds where it is,
+    /// saying what does, as `buffers: a quarter of the 2.0 GiB available`.
+    pub(crate) reasons: Vec<String>,
+}
+
+impl Settings {
+    /// what a run on these settings spends, with `threads` its cap on local workers and `online`
+    /// the processors the system has, whether or not this process may use them all.
+    pub(crate) fn spending(&self, threads: Threads, online: Option<usize>) -> Spending {
+        let processors = self.machine.processors.max(1);
+        let jobs = self.jobs.value;
+        let workers = threads.limit(processors);
+        let hashers = threads.limit(self.hash_workers());
+        let lanes = hashers.clamp(1, 2);
+        let level = || self.threads.map(|set| set.origin.to_string());
+        let mut reasons = Vec::new();
+        let mut why = |what: &str, reason: Option<String>| {
+            if let Some(reason) = reason {
+                reasons.push(format!("{what}: {reason}"));
+            }
+        };
+        why("downloads", named(self.jobs.origin, "jobs"));
+        why(
+            "to one host",
+            if self.host_jobs.value > jobs {
+                Some("no more than the downloads at once".to_owned())
+            } else {
+                named(self.host_jobs.origin, "host_jobs")
+            },
+        );
+        why(
+            "local workers",
+            if workers < processors {
+                Some(level().unwrap_or_else(|| "FETCHLOOM_THREADS".to_owned()))
+            } else {
+                online.filter(|&online| processors < online).map(|online| {
+                    format!("this run may use {processors} of the {online} processors")
+                })
+            },
+        );
+        why("buffers", self.buffers());
+        why(
+            "hash lanes",
+            (lanes < 2).then(|| match level() {
+                Some(level) if self.hash_workers() < processors => level,
+                _ if processors > 1 => "FETCHLOOM_THREADS".to_owned(),
+                _ => "one processor".to_owned(),
+            }),
+        );
+        Spending {
+            level: self.resources.value,
+            jobs,
+            host_jobs: self.host_jobs.value.min(jobs),
+            workers,
+            memory: self.memory.value,
+            lanes,
+            reasons,
+        }
+    }
+
+    /// what holds the memory budget where it is.
+    fn buffers(&self) -> Option<String> {
+        let budget = self.memory.value;
+        match (self.memory.origin, self.machine.memory) {
+            (Origin::Machine, Some(room)) => {
+                let place = if self.machine.memory_in_cgroup {
+                    "this cgroup leaves"
+                } else {
+                    "available"
+                };
+                let room_text = format!("the {} {place}", units::size(room));
+                let quarter = room / 4;
+                Some(if quarter > MOST_MEMORY {
+                    format!(
+                        "{} at most, less than a quarter of {room_text}",
+                        units::size(budget)
+                    )
+                } else if budget == room / 2 && quarter < budget {
+                    format!("half of {room_text}")
+                } else if quarter < budget {
+                    format!(
+                        "{} at least, more than a quarter of {room_text}",
+                        units::size(LEAST_MEMORY)
+                    )
+                } else {
+                    format!("a quarter of {room_text}")
+                })
+            }
+            (Origin::Default, None) => {
+                Some("this system does not say how much memory it has".to_owned())
+            }
+            (origin, _) => named(origin, "memory"),
+        }
+    }
+}
+
+/// what set `key` when neither fetchloom's default nor the machine did: a level, its variable,
+/// the settings file or the command line.
+fn named(origin: Origin, key: &str) -> Option<String> {
+    match origin {
+        Origin::Default | Origin::Machine => None,
+        Origin::Environment => Some(super::variable(key).to_owned()),
+        Origin::File => Some(format!("{key} in the settings file")),
+        Origin::Flag => Some("the command line".to_owned()),
+        Origin::Resources(level) => Some(format!("resources = {level}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
     use super::super::{File, Settings, parse};
+    use super::{Level, Spending};
     use crate::machine::Machine;
+    use crate::threads::Threads;
 
     const MIB: u64 = 1 << 20;
     const GIB: u64 = 1 << 30;
@@ -128,6 +257,7 @@ mod tests {
             processors,
             memory,
             open_files: Some(1024),
+            ..Machine::default()
         }
     }
 
@@ -399,5 +529,228 @@ mod tests {
         assert!(lean.memory.value < default.memory.value);
         assert_eq!(lean.most_files, default.most_files);
         assert_eq!(lean.archive_limits(), default.archive_limits());
+    }
+
+    /// what a run on `pairs` and the settings file `text` spends on `machine`, its local worker
+    /// cap set as a run sets it: from `FETCHLOOM_THREADS`, then at most the level's.
+    fn spent(pairs: &[(&str, &str)], text: &str, machine: Machine, online: usize) -> Spending {
+        let settings = read(pairs, text, machine);
+        let mut threads = Threads::read(&env(pairs)).unwrap();
+        if let Some(cap) = settings.threads {
+            threads = threads.at_most(cap.value);
+        }
+        settings.spending(threads, Some(online))
+    }
+
+    /// what a run spends at `level`: downloads at once and to one host, local workers and hash
+    /// lanes, the memory budget, and what holds each number fetchloom's defaults do not.
+    fn spends(level: Level, counts: [usize; 4], memory: u64, reasons: &[&str]) -> Spending {
+        let [jobs, host_jobs, workers, lanes] = counts;
+        Spending {
+            level,
+            jobs,
+            host_jobs,
+            workers,
+            memory,
+            lanes,
+            reasons: reasons.iter().map(|&reason| reason.to_owned()).collect(),
+        }
+    }
+
+    /// variables, the settings file and a level, with the processors and memory they take.
+    type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, Machine, usize, Spending);
+
+    fn check(cases: Vec<Case<'_>>) {
+        for (pairs, text, machine, online, expected) in cases {
+            assert_eq!(
+                spent(pairs, text, machine, online),
+                expected,
+                "{pairs:?} {text:?}"
+            );
+        }
+    }
+
+    /// a level, a variable or the settings file is named as what holds each number it set, and
+    /// downloads to one host never pass downloads at once.
+    #[test]
+    fn a_run_names_the_level_or_setting_behind_each_number() {
+        let roomy = machine(8, Some(8 * GIB));
+        let quarter = "buffers: a quarter of the 8.0 GiB available";
+        check(vec![
+            (
+                &[],
+                "",
+                roomy,
+                8,
+                spends(Level::Default, [8, 4, 8, 2], 2 * GIB, &[quarter]),
+            ),
+            (
+                &[("FETCHLOOM_RESOURCES", "max")],
+                "",
+                roomy,
+                8,
+                spends(
+                    Level::Max,
+                    [32, 16, 8, 2],
+                    2 * GIB,
+                    &[
+                        "downloads: resources = max",
+                        "to one host: resources = max",
+                        quarter,
+                    ],
+                ),
+            ),
+            (
+                &[("FETCHLOOM_RESOURCES", "lean")],
+                "",
+                roomy,
+                8,
+                spends(
+                    Level::Lean,
+                    [2, 2, 2, 1],
+                    128 * MIB,
+                    &[
+                        "downloads: resources = lean",
+                        "to one host: resources = lean",
+                        "local workers: resources = lean",
+                        "buffers: resources = lean",
+                        "hash lanes: resources = lean",
+                    ],
+                ),
+            ),
+            (
+                &[
+                    ("FETCHLOOM_JOBS", "3"),
+                    ("FETCHLOOM_HOST_JOBS", "5"),
+                    ("FETCHLOOM_THREADS", "1"),
+                    ("FETCHLOOM_MEMORY", "64M"),
+                ],
+                "",
+                roomy,
+                8,
+                spends(
+                    Level::Default,
+                    [3, 3, 1, 1],
+                    64 * MIB,
+                    &[
+                        "downloads: FETCHLOOM_JOBS",
+                        "to one host: no more than the downloads at once",
+                        "local workers: FETCHLOOM_THREADS",
+                        "buffers: FETCHLOOM_MEMORY",
+                        "hash lanes: FETCHLOOM_THREADS",
+                    ],
+                ),
+            ),
+            (
+                &[],
+                "host_jobs = 2\n",
+                roomy,
+                8,
+                spends(
+                    Level::Default,
+                    [8, 2, 8, 2],
+                    2 * GIB,
+                    &["to one host: host_jobs in the settings file", quarter],
+                ),
+            ),
+        ]);
+    }
+
+    /// the processors this process may use and the memory the system or a cgroup leaves are
+    /// named as what holds the numbers they bound.
+    #[test]
+    fn a_run_names_the_machine_limits_behind_each_number() {
+        let in_cgroup = |processors, memory| Machine {
+            memory_in_cgroup: true,
+            ..machine(processors, Some(memory))
+        };
+        check(vec![
+            (
+                &[],
+                "",
+                machine(12, Some(64 * GIB)),
+                32,
+                spends(
+                    Level::Default,
+                    [8, 4, 12, 2],
+                    4 * GIB,
+                    &[
+                        "local workers: this run may use 12 of the 32 processors",
+                        "buffers: 4.0 GiB at most, less than a quarter of the 64.0 GiB available",
+                    ],
+                ),
+            ),
+            (
+                &[("FETCHLOOM_RESOURCES", "lean")],
+                "",
+                in_cgroup(2, GIB),
+                24,
+                spends(
+                    Level::Lean,
+                    [2, 2, 2, 1],
+                    128 * MIB,
+                    &[
+                        "downloads: resources = lean",
+                        "to one host: resources = lean",
+                        "local workers: this run may use 2 of the 24 processors",
+                        "buffers: resources = lean",
+                        "hash lanes: resources = lean",
+                    ],
+                ),
+            ),
+            (
+                &[],
+                "",
+                in_cgroup(4, 300 * MIB),
+                4,
+                spends(
+                    Level::Default,
+                    [8, 4, 4, 2],
+                    150 * MIB,
+                    &["buffers: half of the 300.0 MiB this cgroup leaves"],
+                ),
+            ),
+            (
+                &[],
+                "",
+                machine(4, Some(800 * MIB)),
+                4,
+                spends(
+                    Level::Default,
+                    [8, 4, 4, 2],
+                    256 * MIB,
+                    &[
+                        "buffers: 256.0 MiB at least, more than a quarter of the 800.0 MiB available",
+                    ],
+                ),
+            ),
+            (
+                &[],
+                "",
+                machine(4, None),
+                4,
+                spends(
+                    Level::Default,
+                    [8, 4, 4, 2],
+                    256 * MIB,
+                    &["buffers: this system does not say how much memory it has"],
+                ),
+            ),
+            (
+                &[],
+                "",
+                in_cgroup(1, 2 * GIB),
+                1,
+                spends(
+                    Level::Default,
+                    [8, 4, 1, 1],
+                    512 * MIB,
+                    &[
+                        "buffers: a quarter of the 2.0 GiB this cgroup leaves",
+                        "hash lanes: one processor",
+                    ],
+                ),
+            ),
+        ]);
     }
 }

@@ -38,7 +38,7 @@ every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | option | effect |
 |---|---|
 | `-q`, `--quiet` | keep stdout answers, warnings and errors; hide other normal output; questions still apply |
-| `-v`, `--verbose` | add details, error kinds and work counters |
+| `-v`, `--verbose` | add details, error kinds and work counters, and start a command that downloads, hashes or places files with [what it spends](../resources.md#see-what-a-run-uses) |
 | `-vv` | also enable debug logs, which name local paths, dataset references and the queries sent to sources; read them before you share them, as [what leaves your machine](../concepts.md#what-leaves-your-machine) says |
 | `--json` | print one result document on stdout, including failures; never prompt |
 | `--progress` | with `--json`, keep the plain progress lines a long run prints on stderr where no bar shows: what it does, at once for a download or a lookup and after 2 s for other work, then how far it got every 10 s. stdout still holds the one document; `-q` hides the lines |

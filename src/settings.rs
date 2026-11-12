@@ -1166,6 +1166,7 @@ mod tests {
             processors: 4,
             memory,
             open_files: Some(1024),
+            ..Machine::default()
         }
     }
 
