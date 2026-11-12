@@ -309,7 +309,31 @@ pub(super) fn is_commit(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::recorded::fixture_bytes;
+    use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+
+    /// an answer whose id or commit fetchloom cannot read is refused before its commit becomes a
+    /// pin in data.lock, with both values shown as the hub sent them.
+    #[test]
+    fn an_answer_with_an_unreadable_id_or_commit_is_refused() {
+        let commit = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
+        for (id, sha) in [("stanfordnlp/imdb", "not-a-commit"), ("../imdb", commit)] {
+            let recorded = Recorded::default().on(
+                "https://huggingface.co/api/datasets/stanfordnlp/imdb/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData",
+                200,
+                format!(r#"{{"id":"{id}","sha":"{sha}"}}"#),
+            );
+            let repo = Repo::parse("datasets/stanfordnlp/imdb").unwrap();
+            let Err(error) = block_on(repo.revision(&recorded)) else {
+                panic!("the hub's {id} at {sha} was taken");
+            };
+            assert_eq!(error.kind, Kind::SourceInvalid, "{id} {sha}");
+            assert_eq!(
+                error.message,
+                "huggingface.co answered hf:datasets/stanfordnlp/imdb with an id or commit fetchloom cannot read"
+            );
+            assert_eq!(error.details, [format!("id \"{id}\", commit \"{sha}\"")]);
+        }
+    }
 
     /// a refused key is named by where it comes from, never by its value: a variable, whose
     /// replacement the help names, or the file a sign-in saved it to, which `fetchloom auth`
