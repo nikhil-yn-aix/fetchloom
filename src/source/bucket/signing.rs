@@ -170,6 +170,28 @@ impl Signing {
         }))
     }
 
+    /// learns from `answer`, S3's to an unsigned request for `located`, when it refused it with
+    /// 401 or 403, in the region its `x-amz-bucket-region` names, as [`Signing::refused`] does.
+    /// says whether keys were found to ask with.
+    ///
+    /// # Errors
+    ///
+    /// what reading the AWS settings found wrong.
+    pub(crate) fn refused_by(
+        &self,
+        located: &Located,
+        answer: &reqwest::Response,
+    ) -> Result<bool, Error> {
+        if !matches!(answer.status().as_u16(), 401 | 403) {
+            return Ok(false);
+        }
+        let region = answer
+            .headers()
+            .get("x-amz-bucket-region")
+            .and_then(|value| value.to_str().ok());
+        self.refused(located, region)
+    }
+
     /// learns from S3 refusing an unsigned request for `located`: a listed bucket is asked with
     /// a key from now on, in the `region` the refusal named, if it named one. says whether keys
     /// were found to ask with.
@@ -222,6 +244,33 @@ impl Located {
 }
 
 impl Signer {
+    /// whether the keys come from a program, a `credential_process` or the AWS CLI, which may
+    /// give new ones when S3 says these expired.
+    pub(crate) fn renews(&self) -> bool {
+        self.identity.renews()
+    }
+
+    /// forgets these keys, which S3 said expired, so the bucket's next request asks the program
+    /// for new ones.
+    pub(crate) async fn expired(&self) {
+        self.identity.forget(&self.keys).await;
+    }
+
+    /// whether S3's answer, of `status` with `body`, refused the request because its keys
+    /// expired: `ExpiredToken`, or `TokenRefreshRequired`, in its error document.
+    pub(crate) fn says_expired(status: u16, body: &[u8]) -> bool {
+        let code = std::str::from_utf8(body)
+            .ok()
+            .and_then(|text| super::xml::parse(text).ok())
+            .filter(|said| said.name == "Error")
+            .and_then(|said| said.text_of("Code").map(str::to_owned));
+        matches!(status, 400 | 403)
+            && matches!(
+                code.as_deref(),
+                Some("ExpiredToken" | "TokenRefreshRequired")
+            )
+    }
+
     /// the headers that sign a GET of `url` made at `now`: the date, the hash of the empty body,
     /// the session of temporary keys, and the authorization, which holds the signature.
     pub(crate) fn headers(&self, url: &Url, now: SystemTime) -> Vec<(&'static str, String)> {
@@ -480,5 +529,36 @@ mod tests {
                 .iter()
                 .all(|(_, value)| !value.contains("do-not-send"))
         );
+    }
+
+    /// only S3's word that a request's keys expired asks a program for new ones: not another
+    /// refusal, nor those words in another status or outside an error document.
+    #[test]
+    fn only_an_expired_token_asks_for_new_keys() {
+        let error = |code: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>{code}</Code><Message>m</Message></Error>"
+            )
+        };
+        for (status, body, expired) in [
+            (400, error("ExpiredToken"), true),
+            (403, error("ExpiredToken"), true),
+            (400, error("TokenRefreshRequired"), true),
+            (403, error("AccessDenied"), false),
+            (400, error("InvalidToken"), false),
+            (500, error("ExpiredToken"), false),
+            (400, "ExpiredToken".to_owned(), false),
+            (
+                400,
+                "<Other><Code>ExpiredToken</Code></Other>".to_owned(),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                Signer::says_expired(status, body.as_bytes()),
+                expired,
+                "{status} {body}"
+            );
+        }
     }
 }

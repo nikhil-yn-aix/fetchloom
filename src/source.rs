@@ -35,7 +35,7 @@ use tracing::Instrument as _;
 use url::Url;
 
 pub(crate) use bucket::{
-    AzureContainer, Bucket, GcsBucket, Keyed, Sas, Signing, VERSION as AZURE_VERSION,
+    AzureContainer, Bucket, GcsBucket, Keyed, Sas, Signer, Signing, VERSION as AZURE_VERSION,
     account_of as azure_account, is_account as is_azure_account,
     is_container as is_azure_container, unversioned, with_version,
 };

@@ -47,6 +47,9 @@ use crate::work::Work;
 /// how long a connection may take to open, unless `FETCHLOOM_TIMEOUT` asks for longer.
 const CONNECT: Duration = Duration::from_secs(45);
 const REDIRECTS: usize = 10;
+/// the most of a refusal's body read to learn why it refused: S3's error documents take a few
+/// hundred bytes.
+const LARGEST_REFUSAL: usize = 64 << 10;
 /// an error's text with the causes beneath it, which some errors, such as reqwest's builder
 /// error, leave out of their own.
 fn with_causes(err: &dyn std::error::Error) -> String {
@@ -621,6 +624,7 @@ impl Net {
         let mut name = None;
         let mut first_origin = true;
         let mut asked_signed = false;
+        let mut renewed = false;
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
@@ -667,27 +671,25 @@ impl Net {
                 .await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, tokio::time::Instant::now().into_std());
+            if !renewed
+                && self
+                    .keys_expired(signer.as_ref(), &hop, &mut response)
+                    .await?
+            {
+                renewed = true;
+                continue;
+            }
             if let Some(located) = located
                 && signer.is_none()
                 && !asked_signed
-                && matches!(
-                    response.status(),
-                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-                )
-            {
-                let region = response
-                    .headers()
-                    .get("x-amz-bucket-region")
-                    .and_then(|value| value.to_str().ok());
-                if self
+                && self
                     .signing
-                    .refused(located, region)
+                    .refused_by(located, &response)
                     .map_err(Failure::Final)?
-                {
-                    tracing::debug!(url = %Shown(&hop), "S3 refused the request without a key, so it goes again signed");
-                    asked_signed = true;
-                    continue;
-                }
+            {
+                tracing::debug!(url = %Shown(&hop), "S3 refused the request without a key, so it goes again signed");
+                asked_signed = true;
+                continue;
             }
             if let Some(located) = located {
                 response
@@ -780,6 +782,82 @@ impl Net {
             response.extensions_mut().insert(sent);
         }
         Ok(response)
+    }
+
+    /// whether S3 refused `response`, the answer to `hop`, because the keys a program gave for
+    /// `signer` expired, which are then forgotten so the request goes again with new ones. the
+    /// refusal's body is read to learn why, and put back for whoever reads the answer.
+    async fn keys_expired(
+        &self,
+        signer: Option<&crate::source::Signer>,
+        hop: &Url,
+        response: &mut reqwest::Response,
+    ) -> Result<bool, Failure> {
+        let Some(signer) = signer.filter(|signer| signer.renews()) else {
+            return Ok(false);
+        };
+        if !matches!(
+            response.status(),
+            StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN
+        ) {
+            return Ok(false);
+        }
+        let taken = std::mem::replace(response, http::Response::new(Vec::new()).into());
+        let body;
+        (*response, body) = self.read_back(taken, LARGEST_REFUSAL).await?;
+        if !crate::source::Signer::says_expired(response.status().as_u16(), &body) {
+            return Ok(false);
+        }
+        tracing::debug!(url = %Shown(hop), "S3 said the keys expired, so the request goes again with new ones");
+        signer.expired().await;
+        Ok(true)
+    }
+
+    /// the body of `response`, up to `most` bytes, and `response` made again around them, with
+    /// its status, headers and extensions, so whoever reads it next reads the same answer. a
+    /// longer body is cut at `most`.
+    async fn read_back(
+        &self,
+        mut response: reqwest::Response,
+        most: usize,
+    ) -> Result<(reqwest::Response, Vec<u8>), Failure> {
+        use reqwest::ResponseBuilderExt as _;
+        let url = response.url().clone();
+        let mut body = Vec::new();
+        while body.len() < most {
+            let chunk = tokio::select! {
+                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
+                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(&url))),
+            };
+            match chunk {
+                Err(_) => {
+                    return Err(failure::transient(format!(
+                        "{} sent nothing for {} s",
+                        host(&url),
+                        self.idle.as_secs()
+                    )));
+                }
+                Ok(Err(err)) => {
+                    return Err(failure::transient(format!(
+                        "the connection to {} broke: {err}",
+                        host(&url)
+                    )));
+                }
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(chunk))) => body.extend_from_slice(&chunk),
+            }
+        }
+        body.truncate(most);
+        let (mut parts, _) = http::Response::from(response).into_parts();
+        let marked = http::Response::builder().url(url).body(()).map_err(|err| {
+            Failure::Final(Error::new(
+                Kind::LocalIo,
+                format!("could not keep an answer to read again: {err}"),
+            ))
+        })?;
+        parts.extensions.extend(marked.into_parts().0.extensions);
+        let again = http::Response::from_parts(parts, body.clone());
+        Ok((reqwest::Response::from(again), body))
     }
 
     /// a GET with the user agent and, when `credentials` allows, the credential for this exact

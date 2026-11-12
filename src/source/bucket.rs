@@ -18,7 +18,7 @@ pub(crate) use self::azure::{
     AzureContainer, BLOB_HOST, Sas, VERSION, account_of, is_account, is_container,
 };
 pub(crate) use self::gcs::GcsBucket;
-pub(crate) use self::signing::{Keyed, Signing};
+pub(crate) use self::signing::{Keyed, Signer, Signing};
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};

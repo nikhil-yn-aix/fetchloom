@@ -1168,6 +1168,70 @@ fn expired_keys_from_a_credential_process_stop_the_request() -> Result {
     Ok(())
 }
 
+/// keys S3 says expired mid-run, as after a jump in this machine's clock, are asked of their
+/// `credential_process` again, once, and the request goes again with the new ones. S3's refusal
+/// repeats the expired session, which no output shows.
+#[cfg(unix)]
+#[test]
+fn keys_s3_says_expired_come_again_from_their_program_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let expired = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message><Token-0>printed-session-1</Token-0></Error>";
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            reply(
+                "400 Bad Request",
+                &[
+                    ("Content-Type", "application/xml"),
+                    ("Content-Length", &expired.len().to_string()),
+                ],
+                expired,
+            ),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            versioned(),
+        ],
+    )?;
+    let folder = sandbox.folder("aws")?;
+    let runs = folder.join("runs");
+    let keys = folder.join("keys");
+    program(
+        &keys,
+        &format!(
+            "printf 'ran\\n' >> '{runs}'\nrun=$(wc -l < '{runs}')\nprintf '{{\"Version\": 1, \"AccessKeyId\": \"akiaprintedkey\", \"SecretAccessKey\": \"{PRINTED_SECRET}\", \"SessionToken\": \"printed-session-%s\", \"Expiration\": \"2999-01-01T00:00:00Z\"}}' $run",
+            runs = runs.display()
+        ),
+    )?;
+    let config = folder.join("config");
+    fs::write(
+        &config,
+        format!("[profile lab]\ncredential_process = {}\n", keys.display()),
+    )?;
+    let args = ["-vv", "add", "s3://private-lab/raw/", "--as", "raw"];
+    let output = profile_command(&sandbox, &server.url, &config, &args).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read_to_string(&runs)?, "ran\nran\n");
+    let heads = server.requests();
+    assert_eq!(heads.len(), 4, "{heads:?}");
+    for (head, session) in heads[1..].iter().zip([1, 2, 2]) {
+        assert!(
+            head.contains(&format!(
+                "x-amz-security-token: printed-session-{session}\r\n"
+            )),
+            "{head}"
+        );
+    }
+    assert_eq!(
+        fs::read(sandbox.work().join("data/raw/a.csv"))?,
+        PARTICIPANTS
+    );
+    for said in [&stderr, &text(&output.stdout)?] {
+        assert!(!said.contains("printed-session"), "{said}");
+    }
+    Ok(())
+}
+
 /// a `credential_process` that fails, or prints no keys fetchloom can read, fails the bucket's
 /// request with what went wrong, and nothing it printed shows.
 #[cfg(unix)]

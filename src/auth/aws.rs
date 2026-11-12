@@ -64,6 +64,19 @@ impl Identity {
             }
         }
     }
+
+    /// whether a program gives the keys, so it can give new ones when S3 says these expired.
+    pub(crate) fn renews(&self) -> bool {
+        matches!(self.source, Source::Program { .. })
+    }
+
+    /// forgets `stale`, keys S3 said expired, so the next request runs the program again. keys
+    /// written in the environment or a profile stay, since nothing gives new ones.
+    pub(crate) async fn forget(&self, stale: &Arc<Keys>) {
+        if let Source::Program { lease, .. } = &self.source {
+            lease.forget(stale).await;
+        }
+    }
 }
 
 impl std::fmt::Debug for Identity {
