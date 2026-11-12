@@ -445,6 +445,32 @@ fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Re
     Ok(())
 }
 
+/// a typo in the last name of a path is answered with the one name near it in that folder, as
+/// the command typed with that name, its options kept and quoted for a shell, and nothing is
+/// searched for.
+#[test]
+fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.work().join("my flowers");
+    fs::create_dir_all(&folder)?;
+    fs::write(folder.join("sepals.csv"), b"length\n5.1\n")?;
+    let output = sandbox.run(&["--json", "add", "./my flowrs", "--as", "sepals"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["message"],
+        "could not find ./my flowrs: it does not exist"
+    );
+    assert_eq!(
+        error["help"],
+        "did you mean `fetchloom --json add \"./my flowers\" --as sepals`?"
+    );
+    assert_eq!(document["work"]["requests"], 0);
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
 #[test]
 fn one_file_is_imported_under_its_own_name_and_a_dry_run_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;

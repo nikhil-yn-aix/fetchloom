@@ -32,8 +32,8 @@ const LONGEST_PATH: usize = 4096;
 ///
 /// # Errors
 ///
-/// nothing is there, `~` names another user's home folder, or a `file:` link names a file on
-/// another machine.
+/// nothing is there, with help naming the one name a typo away in its folder when there is one,
+/// `~` names another user's home folder, or a `file:` link names a file on another machine.
 pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<PathBuf, Error> {
     let typed = typed.trim();
     let path = if typed
@@ -73,8 +73,57 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
     } else {
         here.join(typed)
     };
-    std::fs::canonicalize(&path)
-        .map_err(|err| Error::io(format_args!("could not find {typed}"), &err))
+    std::fs::canonicalize(&path).map_err(|err| {
+        let error = Error::io(format_args!("could not find {typed}"), &err);
+        let guess = (err.kind() == std::io::ErrorKind::NotFound)
+            .then(|| near(typed, &path))
+            .flatten();
+        match guess {
+            Some(guess) => {
+                let shown = super::meant(
+                    &[typed],
+                    &[&guess],
+                    format!("fetchloom add {}", super::shell_word(&guess)),
+                );
+                error.help(format!("did you mean `{shown}`?"))
+            }
+            None => error,
+        }
+    })
+}
+
+/// the most names [`near`] reads in one folder. a folder holding more gets no guess, rather than
+/// a slow one.
+const MOST_NAMES: usize = 10_000;
+
+/// `typed` with its last name changed to the one name in its folder a typo away from it, when
+/// exactly one is. `path` is where `typed` leads, and only its folder is read.
+fn near(typed: &str, path: &Path) -> Option<String> {
+    if typed
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+    {
+        return None;
+    }
+    let kept = typed.trim_end_matches(['/', '\\']);
+    let (folder, last) = kept.split_at(kept.rfind(['/', '\\'])? + 1);
+    if matches!(last, "" | "." | "..") {
+        return None;
+    }
+    let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(path.parent()?)
+        .ok()?
+        .take(MOST_NAMES + 1)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if entries.len() > MOST_NAMES {
+        return None;
+    }
+    let names: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    let meant = name::sole_closest(last, names.iter().map(String::as_str))?;
+    Some(format!("{folder}{meant}{}", &typed[kept.len()..]))
 }
 
 /// refuses to import `start`, a path with no link in it, where it overlaps what fetchloom keeps:
@@ -723,6 +772,54 @@ mod tests {
             .source()
             .unwrap()
             .clone()
+    }
+
+    /// a path whose last name is one typo from a single name in its folder is told with that
+    /// name, as a command to paste, quoted for a shell. a name two others are as near to, a
+    /// folder that cannot be read, or a name the folder holds as a broken link gets no guess,
+    /// and only that one folder is read.
+    #[test]
+    fn a_missing_path_names_the_one_near_name_in_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let here = dir.path();
+        std::fs::create_dir_all(here.join("my data/deeper")).unwrap();
+        for file in ["my data/flowers.csv", "iris-a.csv", "iris-b.csv"] {
+            std::fs::write(here.join(file), b"x").unwrap();
+        }
+        let help = |typed: &str| {
+            let error = located(typed, here, Some(here)).unwrap_err();
+            assert_eq!(error.kind, Kind::LocalIo, "{typed}");
+            assert_eq!(
+                error.message,
+                format!("could not find {typed}: it does not exist")
+            );
+            error.help
+        };
+        assert_eq!(
+            help("./my data/flower.csv").as_deref(),
+            Some("did you mean `fetchloom add \"./my data/flowers.csv\"`?")
+        );
+        assert_eq!(
+            help("~/my dta/").as_deref(),
+            Some("did you mean `fetchloom add \"~/my data/\"`?")
+        );
+        assert_eq!(help("./iris-c.csv"), None, "two names are as near");
+        assert_eq!(help("./nowhere/flowers.csv"), None, "its folder is missing");
+        assert_eq!(
+            help("./my data/deeper/flowers.csv"),
+            None,
+            "no folder above is read"
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(here.join("gone"), here.join("notes.txt")).unwrap();
+            std::fs::write(here.join("notes.tx"), b"x").unwrap();
+            assert_eq!(
+                help("./notes.txt"),
+                None,
+                "the name is there, as a broken link"
+            );
+        }
     }
 
     fn paths(walked: &Walked) -> Vec<&str> {

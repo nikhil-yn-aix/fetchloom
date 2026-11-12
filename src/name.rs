@@ -245,6 +245,33 @@ pub(crate) fn closest<'a>(
         .map(|(_, candidate)| candidate)
 }
 
+/// the candidate closest to `word` when it is close enough to be a likely typo and no other is
+/// as close. a candidate equal to `word` means `word` is no typo, so none is.
+pub(crate) fn sole_closest<'a>(
+    word: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let limit = (word.chars().count() / 3).max(1);
+    let mut best: Option<(usize, &str)> = None;
+    let mut tied = false;
+    for candidate in candidates {
+        let edits = distance(word, candidate);
+        if edits == 0 {
+            return None;
+        }
+        match best {
+            _ if edits > limit => {}
+            Some((nearest, _)) if edits > nearest => {}
+            Some((nearest, _)) if edits == nearest => tied = true,
+            _ => {
+                best = Some((edits, candidate));
+                tied = false;
+            }
+        }
+    }
+    best.filter(|_| !tied).map(|(_, candidate)| candidate)
+}
+
 /// the `most` candidates nearest to `word`, nearest first, however far that is.
 pub(crate) fn nearest<'a>(
     word: &str,

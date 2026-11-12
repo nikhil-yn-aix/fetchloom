@@ -161,6 +161,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
+| `could not find ./flower.csv: it does not exist` | the path has a typo, or the file is somewhere else | when one name in that folder is a typo away, the help line gives the command with it, as ``did you mean `fetchloom add ./flowers.csv`?``, keeping your other options; only that folder is read, and nothing is searched for |
 | `"iris" is a folder here, so fetchloom did not search for it` | a plain word names a file or folder in the current folder | write it as a path, `fetchloom add ./iris`, to import it, or run `fetchloom search iris` |
 | `... was imported from files, and this machine's cache does not hold them` | a clone has the pins of an import but not its files | copy them to the dataset's folder and sync, or run `fetchloom add <folder> --as <name>` where they are |
 | `... was imported from files, and neither this machine's cache nor a mirror holds them` | the mirrors asked lack the files named, or hold damaged copies | ask whoever keeps the mirror to push them again, or copy them to the dataset's folder and sync |
