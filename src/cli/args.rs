@@ -641,6 +641,46 @@ impl Command {
             _ => false,
         }
     }
+
+    /// whether a script may run the command as the next step a help names, with no person to
+    /// ask: it adds, reads, checks, fetches or signs in. one that deletes, overwrites or repins
+    /// what a person keeps, or runs the project's code, is a choice only a person makes, unless
+    /// `--dry-run` only shows it.
+    pub(crate) fn harmless(&self) -> bool {
+        match self {
+            Command::Add(_)
+            | Command::Status(_)
+            | Command::List(_)
+            | Command::Path(_)
+            | Command::Push(_)
+            | Command::Settings(_)
+            | Command::Search(_)
+            | Command::Completions(_)
+            | Command::Help(_)
+            | Command::Cache(Cache {
+                action: None | Some(CacheAction::Verify),
+            })
+            | Command::Auth(Auth {
+                action: None | Some(AuthAction::Login(_)),
+            }) => true,
+            Command::Sync(sync) => (!sync.force && !sync.verify) || sync.dry.dry_run,
+            Command::Lock(lock) => {
+                (lock.upgrade.is_none() && lock.ours.is_empty() && lock.theirs.is_empty())
+                    || lock.dry.dry_run
+            }
+            Command::Export(export) => !export.force,
+            Command::Get(get) => !get.force,
+            Command::Remove(Remove { dry, .. })
+            | Command::Drop(Drop { dry, .. })
+            | Command::Build(Build { dry, .. })
+            | Command::Cache(Cache {
+                action: Some(CacheAction::Gc(Gc { dry, .. })),
+            }) => dry.dry_run,
+            Command::Auth(Auth {
+                action: Some(AuthAction::Logout(_)),
+            }) => false,
+        }
+    }
 }
 
 /// show the cache, free what no project needs, or verify it

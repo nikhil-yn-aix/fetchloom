@@ -211,12 +211,12 @@ struct Problem<'a> {
 /// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
 /// running it would act on a dataset nobody named or ask the same question again. a command
 /// that first needs a broken file deleted, a file edited by hand or the errors listed above fixed
-/// is not ready to run either, and a build runs the project's code, which only a person may agree
-/// to. neither is taking other bytes than data.lock pins, which a help offers only "if the new
-/// bytes are intended". in a run that is `locked`, a command that may write data.lock is no fix
-/// either, since a script running it would undo `--locked`.
+/// is not ready to run either. one that deletes, overwrites or repins what a person keeps, or
+/// runs the project's code, is a choice only a person makes, and so is what a help names after
+/// it, often the step that follows it. in a run that is `locked`, a command that may write
+/// data.lock is no fix either, since a script running it would undo `--locked`.
 fn fix(help: &str, locked: bool) -> Option<&str> {
-    const NOT_A_FIX: [&str; 10] = [
+    const NOT_A_FIX: [&str; 9] = [
         "as in",
         "such as",
         "for example",
@@ -226,7 +226,6 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
         "delete it and run",
         "by hand, then run",
         "errors above, then run",
-        "intended, run",
     ];
     let mut before = String::new();
     for (at, part) in help.split('`').enumerate() {
@@ -242,10 +241,13 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
             && part.starts_with("fetchloom ")
             && !part.contains(['<', '>'])
             && crate::cli::runs(part)
-            && !crate::cli::runs_code(part)
-            && (!locked || !crate::cli::changes_lock(part))
         {
-            return Some(part);
+            if !crate::cli::harmless(part) {
+                return None;
+            }
+            if !locked || !crate::cli::changes_lock(part) {
+                return Some(part);
+            }
         }
         before.push_str(part);
     }
@@ -2184,6 +2186,162 @@ mod tests {
             super::fix("run `fetchloom lock` and commit data.lock", false),
             Some("fetchloom lock")
         );
+    }
+
+    /// a command that deletes, overwrites or repins what a person keeps, runs the project's code
+    /// or says yes for them is never a fix, and a help that names one first has none: an agent
+    /// ran the fix of an add whose name data.toml had, and the dataset was gone. a dry run of one
+    /// only shows.
+    #[test]
+    fn a_fix_never_deletes_overwrites_repins_or_runs_code() {
+        for help in [
+            "give this one another name with --as <name>, or run `fetchloom remove notes` first",
+            "to sign them out as well, run `fetchloom auth logout hf --yes`",
+            "restore data.lock from git, or run `fetchloom lock --upgrade iris`, which resolves it again and may pin newer data",
+            "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`",
+            "run `fetchloom push --yes` once everyone who reads the mirror may have the files",
+        ] {
+            assert_eq!(super::fix(help, false), None, "{help}");
+        }
+        assert_eq!(
+            super::fix(
+                "run `fetchloom remove notes --dry-run` to see what it takes out",
+                false
+            ),
+            Some("fetchloom remove notes --dry-run")
+        );
+    }
+
+    /// every command, alone and with each option of its own, is a fix exactly when this table
+    /// says so, so a command or an option added later is no fix until someone decides here that
+    /// a script may run it without asking a person.
+    #[test]
+    fn a_fix_is_only_a_command_the_table_allows() {
+        // each command, whether it is a fix alone, and the options it stays one with
+        let table: &[(&str, bool, &[&str])] = &[
+            (
+                "add",
+                true,
+                &[
+                    "--as",
+                    "--input-file",
+                    "--select",
+                    "--exclude",
+                    "--no-extract",
+                    "--dry-run",
+                ],
+            ),
+            ("remove", false, &["--dry-run"]),
+            ("drop", false, &["--dry-run"]),
+            ("sync", true, &["--locked", "--dry-run"]),
+            ("lock", true, &["--check", "--dry-run"]),
+            ("build", false, &["--dry-run"]),
+            ("status", true, &["--verify"]),
+            ("list", true, &[]),
+            ("export", true, &["--format", "--output"]),
+            ("push", true, &["--to", "--inputs", "--dry-run"]),
+            ("path", true, &["--locked"]),
+            ("cache", true, &[]),
+            ("cache gc", false, &["--dry-run"]),
+            ("cache verify", true, &[]),
+            ("settings", true, &[]),
+            (
+                "get",
+                true,
+                &[
+                    "--output",
+                    "--dir",
+                    "--input-file",
+                    "--sha256",
+                    "--select",
+                    "--exclude",
+                    "--no-extract",
+                ],
+            ),
+            ("search", true, &["--source", "--limit"]),
+            ("auth", true, &[]),
+            ("auth login", true, &["--host", "--with-token"]),
+            ("auth logout", false, &[]),
+            ("completions", true, &[]),
+            ("help", true, &[]),
+        ];
+        let mut walked = Vec::new();
+        commands(&crate::cli::definition(), "", &mut walked);
+        let named: Vec<&str> = table.iter().map(|(name, _, _)| *name).collect();
+        let found: Vec<&str> = walked.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(found, named, "the table names every command, in order");
+        for ((name, command), (_, alone, options)) in walked.iter().zip(table) {
+            for (line, option) in lines(name, command) {
+                let fixed = super::fix(&format!("run `{line}`"), false).is_some();
+                let allowed = option.map_or(*alone, |option| options.contains(&option.as_str()));
+                assert_eq!(fixed, allowed, "{line}");
+            }
+        }
+    }
+
+    /// every command under `parent`, named by its words, in the order help lists them.
+    fn commands(parent: &clap::Command, path: &str, found: &mut Vec<(String, clap::Command)>) {
+        for command in parent.get_subcommands() {
+            let name = format!("{path} {}", command.get_name()).trim().to_owned();
+            found.push((name.clone(), command.clone()));
+            commands(command, &name, found);
+        }
+    }
+
+    /// command lines fetchloom takes for the command `name`: alone, then with each option of its
+    /// own, beside the option each adds. an option gets a value where it takes one, and another
+    /// option where it needs one, as `export --force` needs `--output`.
+    fn lines(name: &str, command: &clap::Command) -> Vec<(String, Option<String>)> {
+        let values = |arg: &clap::Arg| -> Vec<String> {
+            if !arg.get_action().takes_values() {
+                return vec![String::new()];
+            }
+            match arg.get_possible_values().first() {
+                Some(value) => vec![value.get_name().to_owned()],
+                // a word, a number or a SHA-256, whichever the option reads
+                None => vec!["x".to_owned(), "1".to_owned(), "0".repeat(64)],
+            }
+        };
+        let options: Vec<&clap::Arg> = command
+            .get_arguments()
+            .filter(|arg| !arg.is_global_set())
+            .filter(|arg| arg.get_long().is_some_and(|long| long != "help"))
+            .collect();
+        let flag = |arg: &clap::Arg| format!("--{}", arg.get_long().unwrap_or_default());
+        let positionals: Vec<String> = command
+            .get_positionals()
+            .map(|arg| values(arg).swap_remove(0))
+            .collect();
+        let mut companions = vec![String::new()];
+        companions.extend(
+            options
+                .iter()
+                .map(|other| format!("{} {}", flag(other), values(other).swap_remove(0))),
+        );
+        let mut tried = vec![(None, vec![String::new()])];
+        tried.extend(options.iter().map(|arg| (Some(flag(arg)), values(arg))));
+        tried
+            .into_iter()
+            .map(|(option, given)| {
+                let mut candidates = Vec::new();
+                for value in &given {
+                    for words in [positionals.join(" "), String::new()] {
+                        for companion in &companions {
+                            let option = option.clone().unwrap_or_default();
+                            let line =
+                                format!("fetchloom {name} {words} {option} {value} {companion}");
+                            candidates.push(line.split_whitespace().collect::<Vec<_>>().join(" "));
+                        }
+                    }
+                }
+                let line = candidates
+                    .iter()
+                    .find(|line| crate::cli::runs(line))
+                    .unwrap_or_else(|| panic!("no line of {candidates:?} runs"))
+                    .clone();
+                (line, option)
+            })
+            .collect()
     }
 
     /// a report row is a verb line for stdout, colored as stdout decides apart from stderr, and

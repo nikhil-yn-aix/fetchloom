@@ -707,15 +707,22 @@ pub(crate) fn runs(command: &str) -> bool {
         .is_some_and(|words| args::Args::try_parse_from(words).is_ok())
 }
 
-/// whether `command`, as help quotes it, runs the project's code: `fetchloom build` without
-/// `--dry-run`. only a person may agree to that, so no script is handed it as the next step.
-pub(crate) fn runs_code(command: &str) -> bool {
+/// fetchloom's commands and options as clap defines them, for tests that walk every one.
+#[cfg(test)]
+pub(crate) fn definition() -> clap::Command {
+    <args::Args as clap::CommandFactory>::command()
+}
+
+/// whether `command`, as help quotes it, is one a script may run as the next step with no
+/// person to ask, as [`args::Command::harmless`] says. `--yes` answers a question meant for a
+/// person, so no command with it is.
+pub(crate) fn harmless(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
         .and_then(|words| args::Args::try_parse_from(words).ok())
-        .is_some_and(
-            |args| matches!(args.command, Some(args::Command::Build(build)) if !build.dry.dry_run),
-        )
+        .is_some_and(|args| {
+            !args.global.yes && args.command.is_some_and(|command| command.harmless())
+        })
 }
 
 /// whether `command`, as help quotes it, may write data.lock, which a run asked to leave it as it

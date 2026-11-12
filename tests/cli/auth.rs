@@ -125,12 +125,17 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     assert_eq!(hf["signed_in"], true);
     assert_eq!(hf["from"], token.display().to_string());
 
-    // the hf tools read the same file, so nobody at a terminal means it stays without --yes
+    // the hf tools read the same file, so nobody at a terminal means it stays without --yes,
+    // and signing them out too is a choice no script is handed
     let refused = sandbox.run(&["auth", "logout", "hf", "--json"])?;
     assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
-    assert_eq!(
-        json(&refused)?["errors"][0]["fix"],
-        "fetchloom auth logout hf --yes"
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("`fetchloom auth logout hf --yes`")),
+        "{error}"
     );
     assert!(token.exists());
     let logout = sandbox.run(&["auth", "logout", "hf", "--json", "--yes"])?;

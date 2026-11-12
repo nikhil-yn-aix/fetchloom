@@ -33,7 +33,7 @@ project commands look for `data.toml` from the current folder up to the top of i
 
 ## reading the JSON
 
-every document has `schema` (1), `command`, `status` (`ok` or `error`), `result`, `warnings` (strings), `errors` and `work` (counters). on failure, `errors[0]` has `kind`, `message`, `details`, `help` and `fix`: a runnable `fetchloom` command, or null when the next step is the user's call. check that a `fix` fits what the user wants before running it.
+every document has `schema` (1), `command`, `status` (`ok` or `error`), `result`, `warnings` (strings), `errors` and `work` (counters). on failure, `errors[0]` has `kind`, `message`, `details`, `help` and `fix`: a runnable `fetchloom` command, or null when the next step is the user's call. a `fix` never deletes, overwrites or repins data, runs a build or says yes with `--yes`; when the next step would, `fix` is null and `help` names the choices for the user. check that a `fix` fits what the user wants before running it.
 
 never parse stderr. `-q`, `-v`, `--color` and `--progress` change only what a person reads there; `--progress` prints a plain line as a download or a lookup starts, then now and then during a long one. `fetchloom help --json` lists every command and option.
 
