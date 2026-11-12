@@ -22,7 +22,7 @@ fetchloom auth logout [options] <account>
 
 ## signing in
 
-`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, and what to pick there, and for a gated dataset or a competition, accept its terms on its own page with the same account. paste the key; it stays hidden, then only its first and last four characters and its length show, so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
+`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, and what to pick there, and for a gated dataset or a competition, accept its terms on its own page with the same account. paste the key; it stays hidden, then only its first and last four characters and its length show, so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it. a file below your home folder reads as `~/…`, here and in `fetchloom auth`. stderr excerpt from a loopback check with a synthetic key:
 
 ```text
     Sign in hugging face
@@ -32,8 +32,8 @@ fetchloom auth logout [options] <account>
          4. a gated dataset also needs its terms accepted on its own page, with the same account
         key hf_A...x9Qz · 37 characters
     Checked the key works for ada
-save it to /home/ada/.cache/huggingface/token? [Y/n] yes
-  Signed in to hf as ada · saved to /home/ada/.cache/huggingface/token
+save it to ~/.cache/huggingface/token? [Y/n] yes
+  Signed in to hf as ada · saved to ~/.cache/huggingface/token
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
@@ -101,7 +101,7 @@ fetchloom auth
 it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
 
 ```text
-  Signed in to hf as ada · /home/ada/.cache/huggingface/token
+  Signed in to hf as ada · ~/.cache/huggingface/token
   Signed in to none of kaggle, zenodo, figshare, osf, earthdata, physionet
 ```
 

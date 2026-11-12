@@ -11,6 +11,7 @@ use super::args::{Auth, AuthAction, Login, Logout};
 use crate::auth::{self, Account, Found, Home, Need, Origin, Secret, Step, store};
 use crate::error::{Error, Kind};
 use crate::net::Api;
+use crate::units;
 
 /// what `auth` reports.
 #[derive(Serialize)]
@@ -106,7 +107,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 let who = user
                     .as_ref()
                     .map_or_else(String::new, |user| format!(" as {user}"));
-                let text = format!("to {name}{who} \u{b7} {}", found.origin);
+                let text = format!("to {name}{who} \u{b7} {}", shown(&found.origin));
                 if valid == Some(false) {
                     output.mark(
                         "Refused",
@@ -224,7 +225,7 @@ async fn sign_in(
     }
     let place = saved_to.as_ref().map_or_else(
         || "not saved, so it ends with this command".to_owned(),
-        |to| format!("saved to {to}"),
+        |to| format!("saved to {}", units::path(std::path::Path::new(to))),
     );
     let who = user
         .as_ref()
@@ -485,7 +486,7 @@ fn save(
 /// yes for a file the source's own tools read, no for the file a machine with no credential store
 /// keeps keys in. the tools are named once the key is saved, so the question fits a terminal.
 fn save_question(account: &Account, path: &std::path::Path) -> (String, bool) {
-    let save = format!("save it to {}?", path.display());
+    let save = format!("save it to {}?", units::path(path));
     if account.shared_with().is_some() {
         (save, true)
     } else {
@@ -500,7 +501,7 @@ fn save_question(account: &Account, path: &std::path::Path) -> (String, bool) {
 fn remove_question(tools: &str, path: &std::path::Path) -> String {
     format!(
         "{tools} use this key too\nremove it from {}?",
-        path.display()
+        units::path(path)
     )
 }
 
@@ -612,7 +613,11 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     };
     output.done(
         "Signed out",
-        &format!("of {} \u{b7} removed from {removed}", login_name(&account)),
+        &format!(
+            "of {} \u{b7} removed from {}",
+            login_name(&account),
+            units::path(std::path::Path::new(&removed))
+        ),
     );
     // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
@@ -734,6 +739,14 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
         ),
         &fix,
     );
+}
+
+/// where a key comes from as a line names it, a file below the home folder as `~/…`.
+fn shown(origin: &Origin) -> String {
+    match origin {
+        Origin::File(path) => units::path(path),
+        origin => origin.to_string(),
+    }
 }
 
 /// the account as `fetchloom auth login` takes it, such as hf or earthdata, so the listing names

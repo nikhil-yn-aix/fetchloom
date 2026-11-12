@@ -94,6 +94,8 @@ fn logout_names_another_configured_key_that_remains() -> Result {
     Ok(())
 }
 
+/// a hugging face key goes to the file the hf tools read and back out of it, and the lines that
+/// name the file show it below the home folder as `~/…`, while `--json` gives it whole.
 #[test]
 fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     let sandbox = Sandbox::new()?;
@@ -139,16 +141,27 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
         "hf_example\n",
     )?;
     assert!(again.status.success());
+    let shown = std::path::Path::new("~")
+        .join(".cache")
+        .join("huggingface")
+        .join("token");
     let told = text(&again.stderr)?;
-    assert!(told.contains("Signed in to hf · saved to"), "{told}");
     assert!(
-        told.contains(&format!("saved to {}", token.display())),
+        told.contains(&format!("Signed in to hf · saved to {}\n", shown.display())),
         "{told}"
     );
     assert!(!told.contains("hf_example"), "{told}");
+    let status = text(&sandbox.run(&["auth", "--offline"])?.stderr)?;
+    assert!(
+        status.contains(&format!("Signed in to hf · {}\n", shown.display())),
+        "{status}"
+    );
     let quiet_logout = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
     assert!(
-        text(&quiet_logout.stderr)?.contains("Signed out of hf · removed from"),
+        text(&quiet_logout.stderr)?.contains(&format!(
+            "Signed out of hf · removed from {}\n",
+            shown.display()
+        )),
         "{}",
         text(&quiet_logout.stderr)?
     );
@@ -350,6 +363,10 @@ fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
     };
     assert_eq!(code, Some(1), "{screen}");
     assert!(screen.contains(signing), "{screen}");
+    assert!(
+        screen.contains("save it to ~/.cache/huggingface/token? [Y/n]"),
+        "{screen}"
+    );
     assert!(!token.exists(), "{screen}");
     std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
     std::fs::write(&token, "hf_old\n")?;
@@ -367,6 +384,10 @@ fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
         return Ok(());
     };
     assert_eq!(code, Some(1), "{screen}");
+    assert!(
+        screen.contains("remove it from ~/.cache/huggingface/token? [y/N]"),
+        "{screen}"
+    );
     assert!(
         screen.contains("  Cancelled removing the hugging face key, so nothing changed\n"),
         "{screen}"
