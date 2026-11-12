@@ -758,7 +758,9 @@ impl<'a> Loop<'a> {
                 continue;
             }
             let object = self.cache.object_path(&placed.sha256);
-            let actual = crate::cache::read_unfollowed(&object).and_then(Sha256::of_reader);
+            let block = crate::digest::Block::sized(placed.look.size.saturating_add(1));
+            let actual = crate::cache::read_unfollowed(&object)
+                .and_then(|file| Sha256::of_reader(file, block));
             match actual {
                 Ok(actual) if actual == placed.sha256 => {}
                 Ok(_) => {

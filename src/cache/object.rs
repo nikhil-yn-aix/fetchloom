@@ -11,12 +11,9 @@ use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
 use super::{Cache, Staging, Stored, partial};
-use crate::digest::{Hasher, Sha256};
+use crate::digest::{Block, Hasher, Sha256};
 use crate::stop::Stop;
 use crate::volume::{Volume, is_plain};
-
-/// how much a copy reads before it looks for a stop again.
-const BLOCK: usize = 1 << 20;
 
 /// a new object being written into `tmp/`. dropped before it is sealed, it leaves nothing.
 pub(crate) struct NewObject {
@@ -115,7 +112,7 @@ impl Cache {
         let most = size.saturating_add(1);
         let mut object = self.new_object()?;
         #[cfg(target_os = "linux")]
-        let cloned = object.clone_from(&input, most, stop)?;
+        let cloned = object.clone_from(&input, most, most, stop)?;
         #[cfg(not(target_os = "linux"))]
         let cloned = false;
         if !cloned {
@@ -208,7 +205,8 @@ pub(crate) fn holds_pinned(
         return Ok(false);
     };
     let (mut hasher, mut read) = (Hasher::default(), 0_u64);
-    let ended = each_block(&mut input, size.saturating_add(1), stop, |block| {
+    let most = size.saturating_add(1);
+    let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
         hasher.update(block);
         read += block.len() as u64;
         Ok(())
@@ -349,21 +347,29 @@ impl NewObject {
         most: u64,
         stop: &Stop,
     ) -> Result<(), Fault> {
-        each_block(input, most, stop, |block| self.write_all(block))
+        each_block(input, most, Block::sized(most), stop, |block| {
+            self.write_all(block)
+        })
     }
 
     /// makes the object a clone of `source`, sharing its blocks, and hashes the clone itself, at
-    /// most `most` bytes of it. says whether the disk made the clone; one that makes none leaves
-    /// the object empty.
+    /// most `most` bytes of it, through a buffer for about `expected` bytes. says whether the disk
+    /// made the clone; one that makes none leaves the object empty.
     #[cfg(target_os = "linux")]
-    pub(super) fn clone_from(&mut self, source: &File, most: u64, stop: &Stop) -> io::Result<bool> {
+    pub(super) fn clone_from(
+        &mut self,
+        source: &File,
+        most: u64,
+        expected: u64,
+        stop: &Stop,
+    ) -> io::Result<bool> {
         if let Err(err) = rustix::fs::ioctl_ficlone(&self.file, source) {
             tracing::debug!(%err, "no reflink, so the bytes are copied");
             return Ok(false);
         }
         let mut clone = partial::read_unfollowed(&self.temp.path)?;
         let (hasher, written) = (&mut self.hasher, &mut self.written);
-        each_block(&mut clone, most, stop, |block| {
+        each_block(&mut clone, most, Block::sized(expected), stop, |block| {
             hasher.update(block);
             *written += block.len() as u64;
             Ok(())
@@ -442,15 +448,16 @@ impl Write for NewObject {
     }
 }
 
-/// hands `each` what `input` holds a block at a time, at most `most` bytes in all, and stops
-/// between blocks when `stop` asks, which is the cache's side's `Interrupted`.
+/// hands `each` what `input` holds a block at a time, read through `block`, at most `most` bytes
+/// in all, and stops between blocks when `stop` asks, which is the cache's side's `Interrupted`.
 fn each_block(
     input: &mut impl Read,
     most: u64,
+    mut block: Block,
     stop: &Stop,
     mut each: impl FnMut(&[u8]) -> io::Result<()>,
 ) -> Result<(), Fault> {
-    let mut block = vec![0; BLOCK];
+    let block = block.get();
     let mut left = most;
     while left > 0 {
         if stop.is_asked() {
@@ -459,7 +466,7 @@ fn each_block(
                 "stopped at your request",
             )));
         }
-        let want = usize::try_from(left).map_or(BLOCK, |left| left.min(BLOCK));
+        let want = usize::try_from(left).map_or(block.len(), |left| left.min(block.len()));
         let read = match input.read(&mut block[..want]) {
             Ok(0) => return Ok(()),
             Ok(read) => read,

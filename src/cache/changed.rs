@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::Cache;
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::Error;
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::is_plain;
@@ -56,7 +56,8 @@ impl Cache {
         } else {
             super::partial::open_to_redate(&path)
         };
-        let hashed = opened.and_then(|file| Ok((Sha256::of_reader(&file)?, file)));
+        let block = || Block::sized(metadata.len().saturating_add(1));
+        let hashed = opened.and_then(|file| Ok((Sha256::of_reader(&file, block())?, file)));
         match hashed {
             Ok((actual, file)) if actual == *digest => {
                 if writable {
@@ -419,7 +420,7 @@ fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
 /// the next use need not hash it.
 pub(super) fn vouch(path: &Path, seen: &fs::Metadata, digest: &Sha256) -> io::Result<bool> {
     let file = super::partial::open_to_redate(path)?;
-    let intact = Sha256::of_reader(&file)? == *digest;
+    let intact = Sha256::of_reader(&file, Block::sized(seen.len().saturating_add(1)))? == *digest;
     if intact && super::object::rewritten(path, seen) {
         super::object::redate(&file, seen);
     }

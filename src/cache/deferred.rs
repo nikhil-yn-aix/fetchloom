@@ -292,7 +292,12 @@ impl Cache {
         let path = self.object_path(digest);
         let found = fs::symlink_metadata(&path);
         matches!(
-            super::existing(&found, size, || super::hash_object(&path), digest),
+            super::existing(
+                &found,
+                size,
+                || super::hash_object(&path, Some(size)),
+                digest
+            ),
             super::Existing::Keep
         )
     }

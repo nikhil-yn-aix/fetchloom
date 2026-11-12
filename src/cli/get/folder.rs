@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::super::Context;
 use crate::cache::Cache;
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
 use crate::place::{Method, Order, Placer, Unlinked};
 use crate::plan::Target;
@@ -247,14 +247,16 @@ fn holds(path: &Path, object: Option<&Path>, target: &Target) -> Result<bool, Er
     if object.is_some_and(|object| same_file::is_same_file(object, path).unwrap_or(false)) {
         return Ok(true);
     }
-    Ok(Sha256::of_file(path).map_err(|err| local(path, &err))? == target.sha256)
+    let block = Block::sized(target.size.saturating_add(1));
+    Ok(Sha256::of_file(path, block).map_err(|err| local(path, &err))? == target.sha256)
 }
 
 /// whether the file at `path` may be replaced: only when the cache holds its bytes, so nothing
 /// is ever lost.
 fn replaceable(path: &Path, cache: &Cache) -> Result<bool, Error> {
     let size = fs::metadata(path).map_err(|err| local(path, &err))?.len();
-    let digest = Sha256::of_file(path).map_err(|err| local(path, &err))?;
+    let block = Block::sized(size.saturating_add(1));
+    let digest = Sha256::of_file(path, block).map_err(|err| local(path, &err))?;
     Ok(cache.find(&digest, Some(size)).is_some())
 }
 

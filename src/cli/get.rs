@@ -26,7 +26,7 @@ use super::sync::unpack::{self as unpacking, Unpack};
 use super::{Context, links, open_cache};
 use crate::archive::{self, Packed, System};
 use crate::cache::{Cache, UrlRecord};
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::{Error, FileFailure, Kind};
 use crate::name;
 use crate::net::{self, Fetched, Net, Origin};
@@ -711,7 +711,8 @@ fn held(cache: &Cache, job: &Job, placed: Option<&Path>) -> Option<Sha256> {
     let there = || {
         placed.is_some_and(|path| {
             std::fs::metadata(path).is_ok_and(|found| found.is_file() && found.len() == record.size)
-                && Sha256::of_file(path).is_ok_and(|digest| digest == record.sha256)
+                && Sha256::of_file(path, Block::sized(record.size.saturating_add(1)))
+                    .is_ok_and(|digest| digest == record.sha256)
         })
     };
     (job.fetch.remembered(cache).is_some() || there()).then_some(record.sha256)

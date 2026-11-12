@@ -20,7 +20,7 @@ pub(crate) use self::tell::tell_preview;
 use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::place::{self, Method, Placer};
@@ -1617,8 +1617,9 @@ fn decide(
             })
         }
         None => {
+            let block = Block::sized(target.size.saturating_add(1));
             let same = look.size == target.size
-                && Sha256::of_file(destination).map_err(|err| local(destination, &err))?
+                && Sha256::of_file(destination, block).map_err(|err| local(destination, &err))?
                     == target.sha256;
             Ok(if same && (!target.copy || now_writable(destination)) {
                 Action::Adopt(*look)
@@ -1847,7 +1848,8 @@ fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed
     move |path, placed, look| {
         let file = root.join(survey.listed.get(path).map_or(path, String::as_str));
         look.size == placed.look.size
-            && Sha256::of_file(&file).is_ok_and(|digest| digest == placed.sha256)
+            && Sha256::of_file(&file, Block::sized(look.size.saturating_add(1)))
+                .is_ok_and(|digest| digest == placed.sha256)
     }
 }
 
@@ -1886,7 +1888,9 @@ fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u6
 /// whether the file at `path`, seen as `look`, holds the target's bytes. only a file of the
 /// target's size is hashed, and one that cannot be read does not.
 pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
-    look.size == target.size && Sha256::of_file(path).is_ok_and(|digest| digest == target.sha256)
+    look.size == target.size
+        && Sha256::of_file(path, Block::sized(look.size.saturating_add(1)))
+            .is_ok_and(|digest| digest == target.sha256)
 }
 
 pub(crate) fn now_writable(path: &Path) -> bool {
@@ -1916,7 +1920,8 @@ pub(crate) fn placed_other_size(
     (placed.sha256 == *sha256
         && placed.look.size != size
         && now(path) == Some(placed.look)
-        && Sha256::of_file(path).is_ok_and(|digest| digest == *sha256))
+        && Sha256::of_file(path, Block::sized(placed.look.size.saturating_add(1)))
+            .is_ok_and(|digest| digest == *sha256))
     .then_some(placed.look.size)
 }
 
@@ -1925,7 +1930,10 @@ pub(crate) fn placed_other_size(
 pub(crate) fn cached_other_size(cache: &Cache, sha256: &Sha256, size: u64) -> Option<u64> {
     let path = cache.find(sha256, None)?;
     let found = fs::symlink_metadata(&path).ok()?.len();
-    (found != size && Sha256::of_file(&path).is_ok_and(|digest| digest == *sha256)).then_some(found)
+    (found != size
+        && Sha256::of_file(&path, Block::sized(found.saturating_add(1)))
+            .is_ok_and(|digest| digest == *sha256))
+    .then_some(found)
 }
 
 /// the error for `label`, which data.lock pins at `size` bytes though the bytes its SHA-256

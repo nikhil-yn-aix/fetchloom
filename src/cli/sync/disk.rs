@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use super::Scope;
 use super::place::local;
 use crate::cache::{self, Cache};
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::Error;
 use crate::output::Output;
 use crate::place::{self, Method};
@@ -336,7 +336,7 @@ impl Survey {
             match self.disk.get(path) {
                 None => missing.push(path),
                 Some(seen) if placed.look.modified >= written && *seen == placed.look => {
-                    racy.push((path, &placed.sha256));
+                    racy.push((path, placed));
                 }
                 Some(_) => {}
             }
@@ -354,7 +354,7 @@ impl Survey {
                 && placed.look.modified >= written
                 && look == placed.look
             {
-                racy.push((path, &placed.sha256));
+                racy.push((path, placed));
             }
         }
         if racy.is_empty() {
@@ -366,8 +366,9 @@ impl Survey {
             files = racy.len(),
             "hashing files placed too recently to trust their time"
         );
-        let unchanged = place::run_all(&racy, self.threads, |(path, sha256)| {
-            Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == **sha256)
+        let unchanged = place::run_all(&racy, self.threads, |(path, placed)| {
+            let block = Block::sized(placed.look.size.saturating_add(1));
+            Sha256::of_file(&root.join(path), block).is_ok_and(|digest| digest == placed.sha256)
         });
         for ((path, _), unchanged) in racy.into_iter().zip(unchanged) {
             if unchanged {
@@ -597,7 +598,8 @@ impl Survey {
         );
         let files = &self.state.files;
         let intact = place::run_all(&doubted, self.threads, |path| {
-            Sha256::of_file(&root.join(path)).map(|digest| digest == files[path].sha256)
+            let block = Block::sized(files[path].look.size.saturating_add(1));
+            Sha256::of_file(&root.join(path), block).map(|digest| digest == files[path].sha256)
         });
         let marks = cache.marks()?;
         for (path, intact) in doubted.into_iter().zip(intact) {
@@ -670,7 +672,8 @@ impl Survey {
         };
         let intact = place::run_all(&files, self.threads, |(path, placed)| {
             let file = fs::File::open(root.join(path.as_str()))?;
-            Sha256::of_reader_telling(file, &read).map(|digest| digest == placed.sha256)
+            let block = Block::sized(placed.look.size.saturating_add(1));
+            Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)
         });
         drop(shown);
         let mut changed = Vec::new();

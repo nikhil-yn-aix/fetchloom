@@ -289,7 +289,13 @@ impl Cache {
             return Ok(false);
         }
         let intact = !super::changed::doubted(&path, &metadata, self.changed_at(digest)?)
-            || hash(&path, stop, &|_| {}).is_ok_and(|actual| actual == *digest);
+            || hash(
+                &path,
+                digest::Block::sized(size.saturating_add(1)),
+                stop,
+                &|_| {},
+            )
+            .is_ok_and(|actual| actual == *digest);
         stop.check()?;
         Ok(intact)
     }
@@ -601,7 +607,8 @@ impl Cache {
                     break;
                 }
                 let left = Cell::new(object.size);
-                let actual = hash(&object.path, stop, &|read| {
+                let block = digest::Block::sized(object.size.saturating_add(1));
+                let actual = hash(&object.path, block, stop, &|read| {
                     let counted = read.min(left.get());
                     left.set(left.get() - counted);
                     progress(counted);
@@ -721,16 +728,22 @@ pub(super) fn on_disk(metadata: &fs::Metadata) -> u64 {
     }
 }
 
-/// hashes the object at `path`, telling `progress` the bytes of each block as it reads them.
-fn hash(path: &Path, stop: &Stop, progress: &dyn Fn(u64)) -> io::Result<Sha256> {
+/// hashes the object at `path` through `block`, telling `progress` the bytes of each block as it
+/// reads them.
+fn hash(
+    path: &Path,
+    mut block: digest::Block,
+    stop: &Stop,
+    progress: &dyn Fn(u64),
+) -> io::Result<Sha256> {
     let mut file = super::read_unfollowed(path)?;
     let mut hasher = digest::Hasher::default();
-    let mut buffer = vec![0; 1024 * 1024];
+    let buffer = block.get();
     loop {
         if stop.is_asked() {
             return Err(io::ErrorKind::Interrupted.into());
         }
-        let read = file.read(&mut buffer)?;
+        let read = file.read(buffer)?;
         if read == 0 {
             return Ok(hasher.finish().0);
         }

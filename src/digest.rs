@@ -39,32 +39,53 @@ impl Sha256 {
         &self.0
     }
 
-    /// hashes a whole file, reading it once.
-    pub(crate) fn of_file(path: &Path) -> io::Result<Sha256> {
-        Self::of_reader(File::open(path)?)
+    /// hashes a whole file, reading it once through `block`.
+    pub(crate) fn of_file(path: &Path, block: Block) -> io::Result<Sha256> {
+        Self::of_reader(File::open(path)?, block)
     }
 
-    /// hashes an opened reader so cache checks never reopen a checked path.
-    pub(crate) fn of_reader(reader: impl Read) -> io::Result<Sha256> {
-        Self::of_reader_telling(reader, &|_| {})
+    /// hashes an opened reader through `block`, so cache checks never reopen a checked path.
+    pub(crate) fn of_reader(reader: impl Read, block: Block) -> io::Result<Sha256> {
+        Self::of_reader_telling(reader, block, &|_| {})
     }
 
     /// hashes `reader` as [`Sha256::of_reader`] does, telling `read` the bytes of each block as
     /// it reads them, so a bar moves while a large file is hashed.
     pub(crate) fn of_reader_telling(
         mut reader: impl Read,
+        mut block: Block,
         read: &dyn Fn(u64),
     ) -> io::Result<Sha256> {
         let mut hasher = Hasher::default();
-        let mut buffer = vec![0; 1024 * 1024];
+        let buffer = block.get();
         loop {
-            let bytes = reader.read(&mut buffer)?;
+            let bytes = reader.read(buffer)?;
             if bytes == 0 {
                 return Ok(hasher.finish().0);
             }
             hasher.update(&buffer[..bytes]);
             read(bytes as u64);
         }
+    }
+}
+
+/// the most one read of a file being hashed takes.
+pub(crate) const BLOCK: usize = 1 << 20;
+
+/// a buffer a file is read into, a block at a time, to be hashed.
+pub(crate) struct Block(Vec<u8>);
+
+impl Block {
+    /// a buffer for reading at most `most` bytes: no larger than that, nor than [`BLOCK`]. a
+    /// file's `most` is its size and one byte, which shows a file that grew while it was read.
+    pub(crate) fn sized(most: u64) -> Block {
+        // zeroing a whole block for each small file cost more than hashing it
+        let len = usize::try_from(most).map_or(BLOCK, |most| most.clamp(1, BLOCK));
+        Block(vec![0; len])
+    }
+
+    pub(crate) fn get(&mut self) -> &mut [u8] {
+        &mut self.0
     }
 }
 
@@ -206,9 +227,11 @@ mod tests {
         let block = 1024 * 1024;
         let bytes = vec![7; 2 * block + 3];
         let told = std::cell::RefCell::new(Vec::new());
-        let digest =
-            Sha256::of_reader_telling(bytes.as_slice(), &|read| told.borrow_mut().push(read))
-                .unwrap();
+        let most = bytes.len() as u64 + 1;
+        let digest = Sha256::of_reader_telling(bytes.as_slice(), Block::sized(most), &|read| {
+            told.borrow_mut().push(read);
+        })
+        .unwrap();
         assert_eq!(digest, sha256(&bytes));
         let block = block as u64;
         assert_eq!(told.into_inner(), [block, block, 3]);
@@ -229,5 +252,36 @@ mod tests {
         assert_eq!(Sha256::from_hex(&"g".repeat(64)), None);
         assert_eq!(Md5::from_hex(&"a".repeat(64)), None);
         assert_eq!(Sha256::from_hex(&"é".repeat(32)), None);
+    }
+
+    /// a file's buffer holds its size and one byte, at least one byte and at most a block.
+    #[test]
+    fn a_block_holds_the_file_and_one_byte_up_to_a_mebibyte() {
+        for (most, len) in [
+            (0, 1),
+            (1, 1),
+            (4097, 4097),
+            (BLOCK as u64, BLOCK),
+            (BLOCK as u64 + 1, BLOCK),
+            (u64::MAX, BLOCK),
+        ] {
+            assert_eq!(Block::sized(most).get().len(), len, "{most}");
+        }
+    }
+
+    /// a buffer smaller than the bytes, or larger, hashes them the same as one call over all.
+    #[test]
+    fn every_block_size_hashes_a_reader_the_same() {
+        let bytes: Vec<u8> = (0..=250).cycle().take(3 * BLOCK + 5).collect();
+        for size in [0, 1, 4096, BLOCK - 1, BLOCK, BLOCK + 1, 3 * BLOCK + 5] {
+            let bytes = &bytes[..size];
+            for block in [Block::sized(size as u64 + 1), Block::sized(1)] {
+                assert_eq!(
+                    Sha256::of_reader(bytes, block).unwrap(),
+                    sha256(bytes),
+                    "{size}"
+                );
+            }
+        }
     }
 }

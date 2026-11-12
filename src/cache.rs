@@ -43,7 +43,7 @@ pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Supply, Use};
 pub(crate) use usage::Usage;
 
-use crate::digest::{self, Md5, Sha256};
+use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain, refuses_links};
 
@@ -344,7 +344,7 @@ impl Cache {
         let mut object = staging.new_object().map_err(written)?;
         // a clone is hashed whole: its file holds every byte it shares, however many there are
         #[cfg(target_os = "linux")]
-        let cloned = object.clone_from(&source, u64::MAX, stop)?;
+        let cloned = object.clone_from(&source, u64::MAX, size.saturating_add(1), stop)?;
         #[cfg(not(target_os = "linux"))]
         let cloned = false;
         if !cloned {
@@ -410,7 +410,7 @@ impl Cache {
     /// leaves the object and its change mark untouched.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
-        match hash_object(&path) {
+        match hash_object(&path, None) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
                 self.mark_changed(digest)?;
@@ -596,7 +596,7 @@ impl Cache {
         };
         if !new {
             let found = fs::symlink_metadata(path);
-            match existing(&found, size, || hash_object(path), digest) {
+            match existing(&found, size, || hash_object(path, Some(size)), digest) {
                 Existing::Keep => {}
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
@@ -622,7 +622,8 @@ impl Cache {
                         // was being opened to clear its flag
                         Err(_)
                             if source.exists()
-                                && hash_object(path).is_ok_and(|actual| actual == *digest) => {}
+                                && hash_object(path, Some(size))
+                                    .is_ok_and(|actual| actual == *digest) => {}
                         Err(err) => {
                             return Err(io::Error::new(
                                 err.kind(),
@@ -663,8 +664,14 @@ fn exclude_native_backup_and_indexing(root: &Path) -> io::Result<()> {
     }
 }
 
-fn hash_object(path: &Path) -> io::Result<Sha256> {
-    Sha256::of_reader(read_unfollowed(path)?)
+/// hashes the object at `path`, never through a link, which holds `size` bytes when known.
+fn hash_object(path: &Path, size: Option<u64>) -> io::Result<Sha256> {
+    let file = read_unfollowed(path)?;
+    let size = match size {
+        Some(size) => size,
+        None => file.metadata()?.len(),
+    };
+    Sha256::of_reader(file, Block::sized(size.saturating_add(1)))
 }
 
 /// what is at an object's path when a new copy of its bytes arrives.

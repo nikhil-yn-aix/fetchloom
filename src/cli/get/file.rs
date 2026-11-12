@@ -17,7 +17,7 @@ use super::{
 };
 use crate::archive::{self, Packed};
 use crate::cache::{Cache, Claim, Partial, UrlRecord};
-use crate::digest::Sha256;
+use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
 use crate::place::{Method, Order, Placer};
@@ -196,9 +196,11 @@ fn existing(path: &Path) -> Result<Existing, Error> {
             format!("{} became a folder while downloading", path.display()),
         )
         .help("choose another name with -o")),
-        Ok(metadata) if metadata.is_file() => Sha256::of_file(path)
-            .map(Existing::Holds)
-            .map_err(|err| unreadable(&err)),
+        Ok(metadata) if metadata.is_file() => {
+            Sha256::of_file(path, Block::sized(metadata.len().saturating_add(1)))
+                .map(Existing::Holds)
+                .map_err(|err| unreadable(&err))
+        }
         Ok(_) => Ok(Existing::Other),
         Err(err) if err.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
             Ok(_) => Ok(Existing::Dangling(fs::read_link(path).unwrap_or_default())),

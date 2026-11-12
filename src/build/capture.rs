@@ -15,7 +15,7 @@ use std::sync::Arc;
 use icu_normalizer::ComposingNormalizerBorrowed;
 
 use crate::cache::{Cache, Copied, Member, Seen, read_unfollowed};
-use crate::digest::{Hasher, Sha256};
+use crate::digest::{Block, Hasher, Sha256};
 use crate::name;
 use crate::place::run_all;
 use crate::stop::Stop;
@@ -224,11 +224,12 @@ fn take(
     let mut file = read_unfollowed(disk)?;
     let before = Seen::of(&file.metadata()?);
     let mut hasher = Hasher::default();
-    let mut block = vec![0; 1 << 20];
+    let mut block = Block::sized(before.size.saturating_add(1));
+    let block = block.get();
     let mut size = 0;
     loop {
         stopped(stop)?;
-        let read = match file.read(&mut block) {
+        let read = match file.read(block) {
             Ok(0) => break,
             Ok(read) => read,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
