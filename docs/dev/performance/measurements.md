@@ -34,6 +34,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | each dataset's folder found with one lookup | sync of 40,000 datasets 9.68 to 6.33 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -357,6 +358,18 @@ a stopped run pays the whole bound when a blocking task outlives it: `status --v
 | 1 s | 1,001.12 ms | 1,001.12 ms |
 
 a second SIGINT sent as `Stopped` showed did not shorten the wait at 100 ms or 1 s, since the run's listener goes with the runtime; a second ctrl-c while the command still runs exits 130 from a runtime thread without the wait.
+
+## short-copy EOF dispatch, 2026-11-12
+
+the operating-system sweep of a8f9dad7 found that `copy_stoppable` calls `io::copy` again after a short completed 1 MiB block has already reached EOF. an optimized standalone Rust reproduction of that loop copied 10,000 distinct 4 KiB files, one binary with a runtime switch, each arm once per seeded shuffled round after a warmup. every output was checked outside the clock. these are primitive measurements, not timings of a changed fetchloom command.
+
+| filesystem | rounds | current loop, median and range | short-block stop, median and range | new/old [95%] |
+|---|---:|---|---|---|
+| ext4 over nvme | 10 | 0.454 s, 0.449 to 0.464 s | 0.429 s, 0.421 to 0.438 s | 0.941 [0.932, 0.949] |
+
+strace counted one fewer `copy_file_range`, one fewer `sendfile` and two fewer `statx` calls per file, 40,000 calls across this fixture. tmpfs medians suggested about 11% less time, but the first batch and its repeat both contained unrelated-load bursts, so neither supplied a clean acceptance result. the memory fields of those early runs also inherited the harness parent's RSS floor and are not memory-regression evidence.
+
+the ext4 gain is below the 10% keep rule, and there is no checked whole-command win. the change is dropped; the copy loop and its 1 MiB cancellation boundary stay unchanged. raw commands, counts and both noisy batches remain with the sweep outside the repository.
 
 ## evidence limits
 
