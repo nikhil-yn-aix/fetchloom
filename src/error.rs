@@ -168,6 +168,21 @@ impl Error {
         self
     }
 
+    /// the error with the first `most` of `lines` as details, then a line saying how many more
+    /// there are.
+    pub(crate) fn details_up_to(mut self, lines: &[impl AsRef<str>], most: usize) -> Error {
+        for line in lines.iter().take(most) {
+            self.details.push(line.as_ref().to_owned());
+        }
+        if lines.len() > most {
+            self.details.push(format!(
+                "and {} more",
+                crate::units::grouped((lines.len() - most) as u64)
+            ));
+        }
+        self
+    }
+
     /// marks the error as a refusal `account` could lift, after accepting `terms` where a source
     /// asks for that too.
     pub(crate) fn needs(mut self, account: crate::auth::Account, terms: Option<String>) -> Error {
@@ -482,6 +497,36 @@ mod tests {
             assert_eq!(
                 (error.kind, error.message.as_str()),
                 (Kind::Unconfirmed, "needs a yes")
+            );
+        }
+    }
+
+    /// an error names the first lines it is given and counts the rest, with thousands apart.
+    #[test]
+    fn details_name_the_first_lines_and_count_the_rest() {
+        let lines: Vec<String> = (1..=1_204).map(|n| format!("file {n}")).collect();
+        let cases: [(usize, usize, &[&str]); 4] = [
+            (0, 5, &[]),
+            (5, 5, &["file 1", "file 2", "file 3", "file 4", "file 5"]),
+            (
+                6,
+                5,
+                &[
+                    "file 1",
+                    "file 2",
+                    "file 3",
+                    "file 4",
+                    "file 5",
+                    "and 1 more",
+                ],
+            ),
+            (1_204, 2, &["file 1", "file 2", "and 1,202 more"]),
+        ];
+        for (given, most, details) in cases {
+            let error = Error::new(Kind::OfflineMissing, "x").details_up_to(&lines[..given], most);
+            assert_eq!(
+                error.details, details,
+                "{given} lines, at most {most} named"
             );
         }
     }

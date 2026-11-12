@@ -1497,15 +1497,7 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
         .into_iter()
         .flat_map(|(how, paths)| paths.iter().map(move |path| format!("{how} {path}")))
         .collect();
-        for line in lines.iter().take(LISTED) {
-            error = error.detail(line.clone());
-        }
-        if lines.len() > LISTED {
-            error = error.detail(format!(
-                "and {} more",
-                units::grouped((lines.len() - LISTED) as u64)
-            ));
-        }
+        error = error.details_up_to(&lines, LISTED);
     }
     for step in steps.iter().filter(|step| step.action == Did::Skipped) {
         error = error.detail(format!(

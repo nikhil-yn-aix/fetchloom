@@ -40,6 +40,9 @@ use crate::units;
 /// the most of a title the `Resolved` line shows.
 const TITLE: usize = 50;
 
+/// the most files an error about missing files names; it counts the rest.
+const NAMED: usize = 5;
+
 /// which datasets move to their newest version.
 pub(super) enum Upgrade {
     Nothing,
@@ -1223,7 +1226,7 @@ impl<'a> Loop<'a> {
                 Kind::OfflineMissing,
                 "offline, and a new link must be downloaded once to learn its SHA-256",
             );
-            error = shown_five(error, &missing);
+            error = error.details_up_to(&missing, NAMED);
             return Err(error.help(self.net.offline().unlearned_help()));
         }
         Err(self.offline_missing(&missing))
@@ -1285,7 +1288,7 @@ impl<'a> Loop<'a> {
                 if missing.len() == 1 { "is" } else { "are" }
             ),
         );
-        error = shown_five(error, missing);
+        error = error.details_up_to(missing, NAMED);
         let help = format!(
             "{}, or name a folder mirror that holds them with `--mirror <folder>`",
             self.net.offline().missing_help("them")
@@ -1327,11 +1330,13 @@ impl<'a> Loop<'a> {
             .filter(|(dataset, file)| *dataset == import && file.url.is_empty())
             .map(|(dataset, file)| format!("{dataset}/{}", file.path))
             .collect();
-        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-        shown_five(Error::new(Kind::OfflineMissing, message), &labels).help(format!(
+        let help = format!(
             "no link fetches an import, so going online does not help: copy its files from the folder they came from to {folder} by hand, then run `{}`, or sync with `--mirror <folder>` naming a folder mirror that holds them",
             super::project::command("sync")
-        ))
+        );
+        Error::new(Kind::OfflineMissing, message)
+            .details_up_to(&labels, NAMED)
+            .help(help)
     }
 }
 
@@ -1443,20 +1448,6 @@ pub(super) fn unbuilt_here(names: &[String]) -> Error {
         "run `{}` to make {them} here",
         super::project::command(&format!("build {}", names.join(" ")))
     ))
-}
-
-/// names the first five of `labels` in `error`, and how many more there are.
-fn shown_five(mut error: Error, labels: &[&str]) -> Error {
-    for label in labels.iter().take(5) {
-        error = error.detail((*label).to_owned());
-    }
-    if labels.len() > 5 {
-        error = error.detail(format!(
-            "and {} more",
-            units::grouped((labels.len() - 5) as u64)
-        ));
-    }
-    error
 }
 
 /// what [`Loop::relock_dry`] found relocking would do.

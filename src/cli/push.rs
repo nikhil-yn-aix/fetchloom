@@ -729,7 +729,11 @@ fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
             )
         })
         .collect();
-    Some(named_lines(error, &made).help(help.join("; ")))
+    Some(
+        error
+            .details_up_to(&made, super::fetch::NAMED)
+            .help(help.join("; ")),
+    )
 }
 
 /// the error for files a push still lacks once it fetched them, `lacked`, and the archives whose
@@ -745,22 +749,9 @@ fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
         Kind::OfflineMissing,
         "this machine's cache lacks files the push needs",
     );
-    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
-    named_lines(error, &lines).help("run the push again, which downloads them")
-}
-
-/// `error` with the first few of `lines` as details, and how many more there are.
-fn named_lines(mut error: Error, lines: &[&str]) -> Error {
-    for line in lines.iter().take(super::fetch::NAMED) {
-        error = error.detail((*line).to_owned());
-    }
-    if lines.len() > super::fetch::NAMED {
-        error = error.detail(format!(
-            "and {} more",
-            units::grouped((lines.len() - super::fetch::NAMED) as u64)
-        ));
-    }
     error
+        .details_up_to(&lines, super::fetch::NAMED)
+        .help("run the push again, which downloads them")
 }
 
 /// the datasets of `datasets` that ask before they are pushed: one fetched from a source that
