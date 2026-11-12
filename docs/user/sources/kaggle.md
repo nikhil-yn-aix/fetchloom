@@ -1,6 +1,6 @@
 # kaggle
 
-kaggle references pin a dataset version and its selected files, or the current data files of a competition.
+a kaggle reference pins a dataset's version and its selected files, or a competition's data files as they are now.
 
 ```sh
 fetchloom add kaggle:uciml/breast-cancer-wisconsin-data@2
@@ -10,13 +10,11 @@ fetchloom add kaggle:competitions/titanic --select "*.csv"
 
 ## references and pins
 
-use `kaggle:` followed by the owner and dataset name, with `@version` for a specific version. `resolved` records that version. an explicitly versioned reference stays on it under `lock --upgrade`.
+write `kaggle:` and the owner and dataset name, with `@<version>` for one version; without it, the newest. `resolved` records the version, and a reference that names one keeps it under `lock --upgrade`.
 
 a kaggle DOI such as `doi:10.34740/kaggle/dsv/2736749` names one dataset version. fetchloom follows the `kaggle.com/dsv/` link it points to, one extra request, and resolves the dataset at that version.
 
-each file download uses the kaggle API with `datasetVersionNumber` and `raw=true`. the entire file path is encoded as one URL segment. SHA-256 and size pin its downloaded bytes.
-
-selection patterns match source paths. [manifest patterns](../reference/data-toml.md#patterns) defines matching and [lock records](../reference/data-lock.md#what-each-source-records) defines the stored URL form.
+each file downloads through the kaggle API with `datasetVersionNumber` and `raw=true`, its whole path encoded as one part of the link, and SHA-256 and size pin the bytes.
 
 ## competitions
 

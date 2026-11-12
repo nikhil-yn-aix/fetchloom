@@ -1,6 +1,6 @@
 # dropbox
 
-dropbox shared links download a file or a folder zip through the shared cache.
+a dropbox shared link downloads a file, or a folder as one zip.
 
 ```sh
 fetchloom get "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1"
@@ -15,20 +15,16 @@ fetchloom get "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1"
 | `/scl/fi/` | shared file |
 | `/scl/fo/` | shared folder |
 
-quote links containing query strings so the shell passes them unchanged. fetchloom uses `dl=1` for the download.
+quote a link with a query string, as above, so your shell passes it unchanged. fetchloom downloads with `dl=1`.
 
 ## pins and extraction
 
-`resolved` and the file download URL keep the shared URL with `dl=1`. SHA-256 and size pin the downloaded file.
+`resolved` and the file's link are the shared link with `dl=1`, and SHA-256 and size pin the downloaded bytes.
 
-a folder arrives as one zip named by `Content-Disposition`. the lock pins the zip. extraction also records its tree hash and caches its members. `--no-extract` with `add` or `get` keeps it packed.
-
-selection patterns match the listed zip, not paths inside it. [archive placement](../concepts.md#archives) determines which folders remain after unpacking.
+a folder arrives as one zip, named by its `Content-Disposition`. the lock pins the zip, and unpacking also records its tree hash and caches its members; `--no-extract` keeps it packed. patterns match the zip, not the paths inside it, and [archives](../concepts.md#archives) says which folders remain once it is unpacked.
 
 ## access and limits
 
-use a shared link whose access allows the download. fetchloom does not provide a browser login or access-approval workflow.
+a link works when anyone who has it may download; fetchloom cannot sign in to dropbox or ask for access. an answer that is a web page without a file name fails instead of entering the cache, so check that the link is shared.
 
-an unnamed HTML answer fails instead of entering the cache as dataset bytes. check that the link names accessible data when that happens.
-
-shared-link contents can change. normal project sync checks the original hashes, while another `get` can accept new bytes. use [add](../commands/add.md) for reproducible project inputs.
+what a shared link holds can change. a sync checks the pinned hashes, while another `get` takes the new bytes, so pin inputs with [add](../commands/add.md).

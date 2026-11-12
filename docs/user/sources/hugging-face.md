@@ -1,6 +1,6 @@
 # hugging face
 
-hugging face references resolve a repository revision to a full commit before listing files.
+a hugging face reference pins a repository at one commit: a branch or a tag is turned into its full commit before any file is listed.
 
 ```sh
 fetchloom add hf:datasets/openai/openai_humaneval@7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544
@@ -16,7 +16,7 @@ a pasted link to a file, such as `https://huggingface.co/datasets/org/name/blob/
 
 `resolved` records the repository kind, name and full commit. download URLs use the repository's `/resolve/` route with that commit and file path. stated LFS SHA-256 is checked, and the lock records each selected file's SHA-256 and size. a dataset's title is the `pretty_name` its card gives, when that is one line of at most 100 characters; its license comes from the card's license tags. a generated dataset name still comes from the repository id, such as `multi_nli`, not from the title.
 
-use quoted `--select` and `--exclude` patterns to choose listed files. patterns do not filter members inside a downloaded archive. an explicit commit still names that commit under `lock --upgrade`.
+a reference that names a commit keeps it under `lock --upgrade`.
 
 a repository may hold one large archive cut into parts, such as `train.tar.gz.aa` and `train.tar.gz.ab`. they unpack as that one archive when the dataset lists every part, so a folder link or a `--select` should take all of them; [split archives](../concepts.md#split-archives) explains the rules.
 
@@ -29,5 +29,3 @@ use the [credential precedence](../reference/environment.md#credentials) for `HF
 ## limits
 
 sign in with `fetchloom auth login hf`, or reuse a token the hf tools saved. gated data requires approval from the repository owner before a token can download it. fetchloom cannot grant that approval.
-
-follow [offline preparation](../concepts.md#offline) before disconnecting.

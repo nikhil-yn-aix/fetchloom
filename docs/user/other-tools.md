@@ -17,6 +17,13 @@ each row is a command people run to fetch dataset files, and what does that job 
 | `kaggle competitions download -c titanic` | `fetchloom add kaggle:competitions/titanic` | needs `fetchloom auth login kaggle` and, for most competitions, the rules accepted on kaggle |
 | `hf download org/name --repo-type dataset --include "*.parquet"` | `fetchloom add hf:org/name --select "*.parquet"` | pins the commit; [hugging face](sources/hugging-face.md) |
 | `aws s3 cp --no-sign-request --recursive s3://openneuro.org/ds000001/ ds000001/` | `fetchloom add s3://openneuro.org/ds000001/` | [cloud buckets](sources/buckets.md) |
+| `gcloud storage cp -r gs://cloud-samples-data/bigquery/us-states .` | `fetchloom add gs://cloud-samples-data/bigquery/us-states/` | [cloud buckets](sources/buckets.md) |
+| `az storage blob download-batch --account-name azureopendatastorage --source mnist --destination mnist` | `fetchloom add azure:azureopendatastorage/mnist/` | [azure blob storage](sources/azure.md) |
+| `gh release download jq-1.8.2 --repo jqlang/jq --pattern jq-linux-amd64` | `fetchloom add github:jqlang/jq@jq-1.8.2 --select jq-linux-amd64` | gitlab releases too; [github and gitlab releases](sources/releases.md) |
+| `fasterq-dump SRR390728` | `fetchloom add ena:SRR390728` | the FASTQ ENA keeps for the run, checked against its MD5; [ENA](sources/ena.md) |
+| `getGEOSuppFiles("GSE1000")` in R | `fetchloom add geo:GSE1000 --select "suppl/*"` | [GEO](sources/geo.md) |
+| `dandi download DANDI:000027` | `fetchloom add dandi:000027` | [DANDI](sources/dandi.md) |
+| `openneuro-py download --dataset=ds000001` | `fetchloom add openneuro:ds000001` | pins the newest snapshot; [OpenNeuro](sources/openneuro.md) |
 | `dvc import-url <link> data/<file>` | `fetchloom add <link>` | as [below](#dvc-import-url) |
 | `pooch.retrieve(link, known_hash="sha256:<hash>")` | `fetchloom.get(link, "<file>", sha256="<hash>")` | the [python helper](scripting.md#python-helper) |
 | `kagglehub.dataset_download("uciml/breast-cancer-wisconsin-data")` | once `fetchloom add kaggle:uciml/breast-cancer-wisconsin-data --as cancer`, then `fetchloom.path("cancer")` | the files are in `data/cancer` |

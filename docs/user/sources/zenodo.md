@@ -1,6 +1,6 @@
 # zenodo
 
-zenodo references resolve to a concrete record whose selected files are pinned by size and SHA-256.
+a zenodo reference names a record, and its selected files are pinned by size and SHA-256.
 
 ```sh
 fetchloom add zenodo:3608990
@@ -12,12 +12,10 @@ fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 
 | reference | behavior |
 |---|---|
-| `zenodo:3608990` | list the concrete record |
-| `https://zenodo.org/records/3608990` | accept a record page |
-| a zenodo file-page link | select that file unless you supply `--select` |
-| a DOI routed to zenodo | use the same record resolver |
-
-patterns match listed paths. listing limits and access checks apply before filtering.
+| `zenodo:3608990` | list the record |
+| `https://zenodo.org/records/3608990` | accept a record's page |
+| a link to a file's page on zenodo | select that file, unless `--select` is given |
+| a DOI zenodo registered | list the record it names |
 
 a record may hold one large archive cut into parts, such as `scans.zip.001` to `scans.zip.003`. they unpack as that one archive when the dataset lists every part; a `--select` that keeps only some of them leaves them packed with a warning, as [split archives](../concepts.md#split-archives) explains.
 
@@ -27,14 +25,12 @@ a record may hold one large archive cut into parts, such as `scans.zip.001` to `
 
 ## pins
 
-`resolved` is `zenodo:` followed by the concrete record id. the answer must name the requested record, or identify the requested concept as the parent of that record. unrelated record ids are refused. download URLs use the record's API file-content endpoint. fetchloom checks stated MD5 while learning SHA-256 and size.
+`resolved` is `zenodo:` and the record's id. zenodo's answer must name the record asked for, or name the concept asked for as that record's parent; any other record is refused. files download from the record's API, and the MD5 zenodo states is checked while SHA-256 and size are learned.
 
-zenodo permits [minor file corrections](https://help.zenodo.org/docs/deposit/manage-files/#modify) within 30 days after publication, with republication within 45 days, without changing the DOI. resolving the same record again, including after a filter change, can therefore pin corrected bytes. review the lock diff before committing it. an unchanged locked sync still requires the original size and hashes.
+zenodo lets owners make [minor file corrections](https://help.zenodo.org/docs/deposit/manage-files/#modify) within 30 days of publication, and republish within 45, without a new DOI. so resolving a record again, also after a filter change, can pin corrected bytes: read the lock's diff before you commit it. a sync of an unchanged lock still wants the pinned size and hashes.
 
-source metadata keeps its casing. the iris record supplies `license = "cc-by-4.0"`. hashes and sizes identify the selected bytes; they do not guarantee that the host will keep serving them.
+metadata keeps zenodo's casing, so the iris record gives `license = "cc-by-4.0"`.
 
 ## credentials and limits
 
 public records need no account. for a restricted, embargoed or closed record, request access on its zenodo page, then sign in with `fetchloom auth login zenodo`, or set `ZENODO_TOKEN`. zenodo lists such a record's files only to an account allowed to read them, so fetchloom downloads them when the key can, and otherwise stops with `auth.required` and the record's page. selection filters do not bypass that check. keys are kept out of the manifest, lock, logs and JSON output.
-
-use [lock upgrades](../commands/lock.md#upgrading) deliberately. changing a pinned input requires a new lock and a sync, followed by committing the lock.

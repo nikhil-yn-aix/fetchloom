@@ -1,6 +1,6 @@
 # figshare
 
-figshare references pin an article version and the bytes of its selected files.
+a figshare reference pins an article's version and the bytes of its selected files.
 
 ```sh
 fetchloom add figshare:34744689@1
@@ -11,21 +11,19 @@ fetchloom get figshare:34744689@1
 
 | spelling | behavior |
 |---|---|
-| `figshare:34744689@1` | request article version 1 |
-| a figshare article link | resolve the article and pin its version |
-| an institutional figshare article link | extract the article id and use figshare's API |
+| `figshare:34744689@1` | list version 1 of the article |
+| `figshare:34744689` | list the article's newest version |
+| an article's link, on figshare.com or an institution's figshare site | read the article's id, and its version when the link has one |
 
-article links keep the title, article id and optional version in their own path positions. a numeric title does not become an id, and an explicit version stays attached to that article. modern type/title/id links and older title/id links are accepted. other portal pages are refused, including on institutional hosts. file-download endpoints, including `/ndownloader/` links, remain ordinary file URLs.
+an article link holds its title, id and version at fixed places in its path, so a title made of digits never passes for an id. links of the newer type/title/id form and the older title/id form both work. other figshare pages are refused, on institutions' sites too. a file's download link, such as one under `/ndownloader/`, stays an ordinary [URL](urls-and-dois.md).
 
-use `--select` or `--exclude` with quoted [patterns](../reference/data-toml.md#patterns) to choose listed files. filters do not bypass access checks or listing-size limits.
-
-a file figshare lists as a link to another site has no stored bytes. it is listed as an entry fetchloom cannot download, so the rest of the article can still be fetched with `--exclude` for that path.
+a file figshare lists as a link to another site has no bytes on figshare. it is listed as one fetchloom cannot download, so `--exclude` its path to fetch the rest.
 
 ## pins
 
-`resolved` records the article id and version in `figshare:` form. each file keeps the API's download URL. downloads check stated MD5 and record SHA-256 and size.
+`resolved` is `figshare:<id>@<version>`, and each file keeps the download link figshare's API gives. downloads check the MD5 figshare states, and the lock records each file's SHA-256 and size.
 
-an explicitly versioned reference keeps naming that version under `lock --upgrade`. edit the reference if you intend to use another version, then lock and sync.
+a reference that names a version keeps it under `lock --upgrade`; to move to another, edit the reference, then lock and sync.
 
 ## credentials and limits
 

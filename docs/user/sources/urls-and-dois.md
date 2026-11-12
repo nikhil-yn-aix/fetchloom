@@ -1,6 +1,6 @@
 # URLs and DOIs
 
-HTTP and HTTPS links name one file; DOIs route a persistent handle to a known dataset source.
+an HTTP or HTTPS link names one file. a DOI leads, through doi.org, to a dataset at one of the [sources](README.md) fetchloom knows.
 
 ```sh
 fetchloom add https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv
@@ -12,8 +12,8 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 
 | spelling | behavior |
 |---|---|
-| HTTP or HTTPS URL | fetch one file, including direct release-asset URLs |
-| `doi:10.5281/zenodo.3608990` | resolve the DOI handle and route its URL |
+| HTTP or HTTPS URL | fetch one file, a release file's own link included |
+| `doi:10.5281/zenodo.3608990` | ask doi.org where it points, and list the dataset there |
 | `10.5281/zenodo.3608990` | accept a bare DOI |
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
 | `doi:10.34740/kaggle/dsv/2736749` | follow kaggle's version link to that dataset version |
@@ -74,6 +74,4 @@ project commands refuse a link holding a login or a known secret, such as `token
 
 ## limits
 
-DOIs must route to a known source. a DOI that leads to a page of a known source that is not a dataset, such as a kaggle notebook, is refused as unresolved. a DOI alone does not provide a download permission or a permanent copy of the bytes.
-
-follow [offline preparation](../concepts.md#offline) for direct-URL reuse and locked projects.
+a DOI must lead to a dataset at a known source. one that leads to another site, or to a page of a known source that is no dataset, such as a kaggle notebook, is refused with `reference.unresolved`, exit 10. a DOI gives no right to download, nor a lasting copy of the bytes.

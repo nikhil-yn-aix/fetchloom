@@ -37,7 +37,7 @@ a file in git-annex comes from openneuro's S3 bucket at the object version the s
 
 ## listing
 
-openneuro lists a snapshot one folder at a time, so the top folder takes a request, and each folder in it another, up to `most_files`. `--select` patterns that name folders, as `sub-01/anat/*` does, list only those folders and the ones on the way to them, so a dataset of hundreds of subjects takes a few requests. a folder the snapshot does not have has the whole snapshot listed instead, so the pattern that matches nothing is told against all it holds. `DataLad`'s own `.datalad` folder, which holds none of the data, is left out.
+openneuro lists a snapshot one folder at a time, so the top folder takes a request, and each folder in it another, up to `most_files`. `--select` patterns that name folders, as `sub-01/anat/*` does, list only those folders and the ones on the way to them, so a dataset of hundreds of subjects takes a few requests. a folder the snapshot does not have has the whole snapshot listed instead, so the pattern that matches nothing is told against all it holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.
 
 the API refuses a query sent by a plain GET as a request another site may have forged, so each query carries the header it asks for, `apollo-require-preflight`. the run keeps the answers it reads by the query's link and that header, so the same query asked again is answered from them.
 

@@ -1,47 +1,49 @@
 # sources
 
-fetchloom accepts direct links and published dataset references from these source families.
+a reference names data at a source: a link, a DOI, or an id such as `zenodo:3608990`. `get` downloads what it names once, and `add` pins it in a project, each file by its SHA-256 and size in `data.lock`. where a source states a checksum, the download is checked against it before anything is pinned.
 
 ```sh
 fetchloom get zenodo:3608990
 fetchloom add zenodo:3608990 --select "*.csv"
 ```
 
-use [search](../commands/search.md) when you have words rather than a reference. use `get` to inspect data once, or `add` to pin it in a project. each selected file gets a SHA-256 and size in `data.lock`. supported source checksums are checked while pinning downloads.
+a dataset's page works as well as its id, so you can paste the link from your browser. words instead of a reference [search](../commands/search.md) hugging face, kaggle and zenodo.
 
-a reference is a link, a DOI or an id, never a path on this machine. `add` given a path such as `./flowers`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv` imports the files there, [pinned by their bytes](../commands/add.md#files-on-this-machine) with `ref = "local"`, and sends nothing anywhere. `get` refuses a path with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, is not searched for either: it exits 2 with `usage`, `fetchloom add ./iris` imports it, and `fetchloom search iris` searches for it.
+| source | what it holds | write it as | an account is needed for |
+|---|---|---|---|
+| [URLs and DOIs](urls-and-dois.md) | any file a link serves; a DOI leads to a source below | `https://…/iris.csv`, `doi:10.5281/zenodo.3608990` | a server that asks for a login |
+| [zenodo](zenodo.md) | research data of any field | `zenodo:3608990` | restricted, embargoed and closed records |
+| [figshare](figshare.md) | research data, also on institutions' own figshare sites | `figshare:34744689@1` | nothing public; embargoed articles are refused |
+| [dataverse](dataverse.md) | datasets on harvard's and other dataverse installations | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP` | restricted files |
+| [dryad](dryad.md) | data behind published papers | `dryad:10.5061/dryad.j1fd7` | every download |
+| [mendeley data](mendeley.md) | research data | `mendeley:rscbjbr9sj@2` | nothing; an embargo stops the download |
+| [OSF](osf.md) | the files of OSF projects | `osf:3eunr` | private projects |
+| [hugging face](hugging-face.md) | machine learning datasets, models and spaces | `hf:datasets/scikit-learn/iris` | gated and private repositories |
+| [kaggle](kaggle.md) | datasets and competitions | `kaggle:uciml/iris`, `kaggle:competitions/titanic` | competitions |
+| [ENA](ena.md) | sequencing reads, SRA's and DDBJ's included | `ena:SRR390728` | nothing; controlled-access runs are left out |
+| [GEO](geo.md) | gene expression series, samples and platforms | `geo:GSE1000` | nothing |
+| [DANDI](dandi.md) | neurophysiology dandisets | `dandi:000027` | nothing; embargoed dandisets are refused |
+| [OpenNeuro](openneuro.md) | neuroimaging datasets | `openneuro:ds000001@1.0.0` | nothing; private datasets are refused |
+| [github and gitlab releases](releases.md) | the files of a release | `github:jqlang/jq@jq-1.8.2`, `gitlab:gitlab-org/gitlab-runner@v19.3.6` | private gitlab projects, and on github more than 60 requests an hour |
+| [google drive](google-drive.md) | shared files and folders | a shared link, `drive:<id>` or `drive:folders/<id>` | items shared only with some people |
+| [dropbox](dropbox.md) | shared files and folders | a shared link | nothing |
+| [cloud buckets](buckets.md) | S3, services that speak its API, and google cloud storage | `s3://<bucket>/<prefix>/`, `gs://<bucket>/<prefix>/` | private buckets |
+| [azure blob storage](azure.md) | azure containers | `azure:<account>/<container>/<prefix>/` | private containers |
+
+[auth](../commands/auth.md) says how to sign in. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts.md#recovery) can find a file's new link while keeping its pinned hashes.
+
+## references and paths
+
+a reference is never a path on this machine. `add` given a path, such as `./flowers`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv`, imports the files there, [pinned by their bytes](../commands/add.md#files-on-this-machine) with `ref = "local"`, and sends nothing anywhere. `get` refuses a path with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, is not searched for either: it exits 2 with `usage`, `fetchloom add ./iris` imports it, and `fetchloom search iris` searches for it.
 
 a link to a folder or a site's page, which answers with a web page rather than a file, is refused with `source.invalid` before anything is cached or pinned; [URLs and DOIs](urls-and-dois.md) says when.
 
-| family | reference spellings | what gets pinned | credentials | limits |
-|---|---|---|---|---|
-| [URLs and DOIs](urls-and-dois.md) | HTTP or HTTPS URL; `doi:10.5281/zenodo.3608990`, bare DOI or doi.org link | direct file bytes, or files from the routed source | HTTPS host logins from `.netrc`; one-off signed URLs work with `get` | DOI must route to a known source; project URLs reject recognized secrets |
-| [zenodo](zenodo.md) | `zenodo:3608990`, record or file-page link | concrete record and file bytes; stated MD5 | `fetchloom auth login zenodo` or `ZENODO_TOKEN` | restricted, embargoed and closed records need an account zenodo lets read them |
-| [figshare](figshare.md) | `figshare:34744689@1`, article links including institutional sites | article version and file bytes; stated MD5 | `FIGSHARE_TOKEN` | embargoed or download-disabled articles refused |
-| [dataverse](dataverse.md) | host plus dataset PID or file id; dataset or file page | published dataset or file version; stated MD5 or SHA-256 | `fetchloom auth login dataverse`, or `DATAVERSE_API_TOKEN` for the host `DATAVERSE_URL` names | without a key for the host, any listed restricted file rejects the dataset |
-| [dryad](dryad.md) | `dryad:10.5061/dryad.j1fd7@1`, dataset page link | published version and file bytes; stated MD5 or SHA-256 | an API account's token: `fetchloom auth login dryad` or `DRYAD_TOKEN` | anyone can list a dataset, but dryad sends files only to an API account; its tokens last 10 hours |
-| [mendeley data](mendeley.md) | `mendeley:rscbjbr9sj@2`, dataset page link | published version and file bytes; stated SHA-256 | none: published versions are public | the public API mendeley's site uses; an embargo stops the download |
-| [ENA](ena.md) | `ena:SRR390728`, `ena:submitted/ERR1160846`, a run, experiment, sample or study accession, a page of ENA's browser | each run's FASTQ, submitted or SRA files; stated MD5 and size | none: public runs only | runs under controlled access are left out; a study must fit `most_files`, since ENA sends its report whole |
-| [GEO](geo.md) | `geo:GSE1000`, `geo:GSM2666939`, `geo:GPL96`, an accession's page or its folder on NCBI's file server | the files GEO keeps for the accession, by their bytes; NCBI states no checksums | none: public records only | GEO remakes a series' SOFT, MINiML and matrix files, so a pin can stop matching; requests to NCBI start a third of a second apart |
-| [DANDI](dandi.md) | `dandi:000027`, `dandi:000027@0.210831.2033`, dandiarchive.org dandiset and file browser links, DANDI DOIs | the version and asset bytes; the SHA-256 dandi states for each asset | none; embargoed dandisets are refused | zarr assets are listed but not downloaded; a draft can change, so the lock's SHA-256 names its bytes |
-| [OpenNeuro](openneuro.md) | `openneuro:ds000001`, `openneuro:ds000001@1.0.0`, dataset and snapshot pages on openneuro.org, OpenNeuro DOIs | the snapshot and file bytes; the SHA-256 or MD5 each git-annex key states | none; private datasets are refused | a request per folder, fewer with `--select`; files kept in git have no stated digest |
-| [OSF](osf.md) | `osf:3eunr`, project or file GUID link | versioned file URLs and bytes | `OSF_TOKEN` | walks osfstorage; a node can change when resolved again |
-| [hugging face](hugging-face.md) | `hf:datasets/openai/openai_humaneval@7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544` | repository commit and bytes; stated LFS SHA-256 | `HF_TOKEN` or existing token files | gated data requires approved access |
-| [kaggle](kaggle.md) | `kaggle:uciml/breast-cancer-wisconsin-data@2`, `kaggle:competitions/titanic`, dataset or competition link | dataset version and file bytes; competition file bytes, which have no version | token or existing kaggle credentials; public datasets need none | competitions need `fetchloom auth login kaggle` and accepted rules; a file kaggle sends zipped is unpacked |
-| [google drive](google-drive.md) | shared file or folder links, `open?id=`, `drive:` or `drive:folders/` | file ids, resource keys and byte hashes | shared-link access; items `drive_folders` lists through drive's api with google application default credentials | selected google docs entries and empty folders refused |
-| [dropbox](dropbox.md) | shared `/s/`, `/sh/`, `/scl/fi/` or `/scl/fo/` links | file bytes or folder zip, with an extracted tree when enabled | shared-link access | unnamed HTML pages refused |
-| [github and gitlab releases](releases.md) | `github:jqlang/jq@jq-1.8.2`, `gitlab:gitlab-org/gitlab-runner@v19.3.6`, release page links | the release's tag and file bytes; github's stated SHA-256 where it gives one | `GH_TOKEN` or `GITHUB_TOKEN`, `GITLAB_TOKEN`, or `fetchloom auth login github` or `gitlab`; public releases need none | github allows 60 requests an hour without a key; tags can move, so the lock's SHA-256 names the bytes; private github release files are not downloaded |
-| [cloud buckets](buckets.md) | `s3://<bucket>/<prefix>/`, `s3:https://<host>/<bucket>/<prefix>/`, `gs://<bucket>/<prefix>/` or an HTTPS prefix link ending in `/` | object URLs and bytes; S3 single-part ETag from an unsigned AWS listing or cloud storage MD5; the S3 version or cloud storage generation | AWS keys from the environment or `~/.aws`, for S3 buckets `s3_buckets` lists; google application default credentials, for cloud storage buckets `gcs_buckets` lists | requester-pays buckets refused |
-| [azure blob storage](azure.md) | `azure:<account>/<container>/<prefix>/` or a container or folder link on `<account>.blob.core.windows.net` | blob URLs and bytes; the MD5 azure states where it keeps one | a SAS in `AZURE_STORAGE_SAS_TOKEN` or the settings file, for containers `azure_containers` lists; public containers need none | public cloud only; archive-tier blobs fail until rehydrated |
+## choosing files
 
-## selection and access
+`--select` and `--exclude` match the paths a source lists, before anything downloads. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions, and some files must remain. patterns do not reach members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom drop`](../commands/drop.md) writes one.
 
-`--select` and `--exclude` match listed source paths before download. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions; some files must remain. patterns do not select members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom drop`](../commands/drop.md) writes one.
+the limit on how many files a dataset lists applies before filtering, and filters cannot get around a source's access checks, such as zenodo's, figshare's or dataverse's. a selected google docs entry is different: exclude it, and the fixed files around it still download.
 
-listing-size limits apply before filtering. filters cannot bypass zenodo, figshare or dataverse access checks. a selected google docs entry is different: you can exclude it before fetching the remaining fixed files.
+## what a pin records
 
-plain URLs have no resolved-metadata line. other sources show available metadata; a license containing `-NC` or `-ND`, ignoring case, gets a warning. check the license before using or sharing those files.
-
-accepting a reference spelling does not guarantee access or a successful download. hosts can move or remove files. [locked URL recovery](../concepts.md#recovery) can find a replacement URL while retaining the original hashes.
-
-[environment](../reference/environment.md#credentials) defines credential precedence. [lock records](../reference/data-lock.md#what-each-source-records) defines resolved references and download URLs.
+`Resolved` names what a reference resolved to, with the title, file count, size and license a source states; a plain link has no such line. a license holding `-NC` or `-ND`, in any case, gets a warning, so check the license before you use or share those files. [lock records](../reference/data-lock.md#what-each-source-records) gives what each source writes in data.lock.

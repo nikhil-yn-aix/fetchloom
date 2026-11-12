@@ -24,7 +24,7 @@ accessions are written in capitals, whatever case they are typed in. other ebi.a
 
 ## which files
 
-a run accession names reads, not bytes. ENA keeps up to three kinds of file for a run, and they are different files: the FASTQ ENA makes from the reads, the files the submitter sent, and an SRA file. a reference lists one kind, so a lock never mixes them: FASTQ unless it names `submitted/` or `sra/`. FASTQ is the default because most runs have it, ENA states an MD5 for it, and tools read it directly. in practice ENA keeps SRA files for few runs; none of the runs checked while writing this page had one.
+a run accession names reads, not bytes. ENA keeps up to three kinds of file for a run, and they are different files: the FASTQ ENA makes from the reads, the files the submitter sent, and an SRA file. a reference lists one kind, so a lock never mixes them: FASTQ unless it names `submitted/` or `sra/`. FASTQ is the default because most runs have it, ENA states an MD5 for it, and tools read it directly. in practice few runs have an SRA file.
 
 a run's files sit at the top of the dataset, as `ERR1160846.fastq.gz`. an experiment, a sample or a study can hold many runs, so each run's files sit in a folder named by its run, as `SRR390728/SRR390728_1.fastq.gz`. `--select "SRR390728/*"` takes one run, and `--select "**/*_1.fastq.gz"` the first reads of every run.
 
