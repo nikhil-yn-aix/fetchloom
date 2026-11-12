@@ -44,6 +44,9 @@ pub(crate) enum SignIn {
     None,
     /// `az account get-access-token`, with the az cli at this path.
     Cli(PathBuf),
+    /// this machine's managed identity, from its instance metadata service: the user-assigned
+    /// one with `client_id`, or the machine's own.
+    Managed { client_id: Option<String> },
 }
 
 /// a token for azure storage, a secret, and how long it lives from when it was asked for.
@@ -176,23 +179,46 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
 
 /// how `AZURE_TOKEN_CREDENTIALS` asks for a token, read as azure's own libraries read it, any
 /// case alike: unset, `AzureCliCredential` or `dev` take the az cli's login, the one developer
-/// tool fetchloom reads, which a folder on PATH named by its full path must hold. unset, no az
-/// cli means no sign-in.
+/// tool fetchloom reads, which a folder on PATH named by its full path must hold, and
+/// `ManagedIdentityCredential` or `prod` take this machine's managed identity, the user-assigned
+/// one `AZURE_CLIENT_ID` names when it names one. unset, no az cli means no sign-in, and no
+/// managed identity is ever asked for unless the variable names it, since its metadata service
+/// answers at an address on this machine's own network.
 ///
 /// # Errors
 ///
-/// `auth.required` for the az cli asked for by name with none on PATH, or a credential
-/// fetchloom does not read.
+/// `auth.required` for the az cli asked for by name with none on PATH, `prod` beside a service
+/// principal's secret or a federated token, which azure's libraries would sign in with first, a
+/// client id that is none, or a credential fetchloom does not read.
 fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
-    let written = var("AZURE_TOKEN_CREDENTIALS")
-        .and_then(|value| value.into_string().ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+    let set = |name: &str| {
+        var(name)
+            .and_then(|value| value.into_string().ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let written = set("AZURE_TOKEN_CREDENTIALS");
     let asked = written.as_deref().map(str::to_ascii_lowercase);
     let cli = var("PATH").and_then(|path| {
         let file = if cfg!(windows) { "az.cmd" } else { "az" };
         crate::machine::installed(&path, file)
     });
+    let managed = || {
+        let client_id = set("AZURE_CLIENT_ID")
+            .map(|id| {
+                let plain = id.len() <= 64
+                    && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+                plain.then_some(id).ok_or_else(|| {
+                    Error::new(
+                        Kind::AuthRequired,
+                        "AZURE_CLIENT_ID holds no client id of a managed identity",
+                    )
+                    .help("set it to the client id of the user-assigned identity to sign in as, a GUID such as 0b4f5c1e-1a2b-4c3d-8e9f-000000000001, or unset it for the machine's own identity")
+                })
+            })
+            .transpose()?;
+        Ok(SignIn::Managed { client_id })
+    };
     match asked.as_deref() {
         None => Ok(cli.map_or(SignIn::None, SignIn::Cli)),
         Some("azureclicredential" | "dev") => cli.map(SignIn::Cli).ok_or_else(|| {
@@ -202,6 +228,22 @@ fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
             )
             .help("install the azure cli and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS")
         }),
+        Some("managedidentitycredential") => managed(),
+        Some("prod") => {
+            let first = ["AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH", "AZURE_FEDERATED_TOKEN_FILE"]
+                .into_iter()
+                .find(|name| set(name).is_some());
+            match first {
+                None => managed(),
+                Some(name) => Err(Error::new(
+                    Kind::AuthRequired,
+                    format!(
+                        "AZURE_TOKEN_CREDENTIALS asks for prod, and {name} is set, which azure's libraries would sign in with first and fetchloom does not read"
+                    ),
+                )
+                .help("set AZURE_TOKEN_CREDENTIALS to ManagedIdentityCredential to sign in as this machine's managed identity alone")),
+            }
+        }
         Some(_) => Err(Error::new(
             Kind::AuthRequired,
             format!(
@@ -209,7 +251,7 @@ fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
                 crate::auth::google::plain(written.as_deref().unwrap_or_default())
             ),
         )
-        .help("set it to AzureCliCredential to sign in with the az cli, or unset it")),
+        .help("set it to AzureCliCredential to sign in with the az cli, or ManagedIdentityCredential for this machine's managed identity, or unset it")),
     }
 }
 
@@ -460,6 +502,48 @@ mod tests {
             other.message,
             "AZURE_TOKEN_CREDENTIALS asks for EnvironmentCredential, which fetchloom does not read"
         );
+    }
+
+    /// `ManagedIdentityCredential`, or `prod`, takes this machine's managed identity, the one
+    /// `AZURE_CLIENT_ID` names when it names one, and never the az cli. `prod` refuses when the
+    /// environment names a service principal's secret or a federated token, which azure's
+    /// libraries would sign in with first.
+    #[test]
+    fn azure_token_credentials_may_ask_for_the_machines_identity() {
+        let chosen = |pairs: &[(&'static str, &'static str)]| sign_in(&environment(pairs));
+        let id = "0b4f5c1e-1a2b-4c3d-8e9f-000000000001";
+        assert_eq!(
+            chosen(&[("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential")]).unwrap(),
+            SignIn::Managed { client_id: None }
+        );
+        assert_eq!(
+            chosen(&[("AZURE_TOKEN_CREDENTIALS", "PROD"), ("AZURE_CLIENT_ID", id)]).unwrap(),
+            SignIn::Managed {
+                client_id: Some(id.to_owned())
+            }
+        );
+        let principal = chosen(&[
+            ("AZURE_TOKEN_CREDENTIALS", "prod"),
+            ("AZURE_CLIENT_SECRET", "leaked-secret"),
+        ])
+        .unwrap_err();
+        assert_eq!(principal.kind, Kind::AuthRequired);
+        assert_eq!(
+            principal.message,
+            "AZURE_TOKEN_CREDENTIALS asks for prod, and AZURE_CLIENT_SECRET is set, which azure's libraries would sign in with first and fetchloom does not read"
+        );
+        let unnamed = chosen(&[
+            ("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
+            ("AZURE_CLIENT_ID", "leaked id"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            unnamed.message,
+            "AZURE_CLIENT_ID holds no client id of a managed identity"
+        );
+        for error in [principal, unnamed] {
+            assert!(!format!("{error:?}").contains("leaked"), "{error:?}");
+        }
     }
 
     #[test]

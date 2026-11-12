@@ -150,9 +150,10 @@ storage buckets in gcs_buckets and drive items in drive_folders, the key file
 that GOOGLE_APPLICATION_CREDENTIALS names, else the login that
 gcloud auth application-default login saved, and for azure containers in
 azure_containers, the SAS AZURE_STORAGE_SAS_TOKEN holds, else the key
-AZURE_STORAGE_KEY holds for AZURE_STORAGE_ACCOUNT, else the az cli's login,
-as AZURE_TOKEN_CREDENTIALS chooses. drive needs the google login made through
-an oauth client of your own: see the google drive page.
+AZURE_STORAGE_KEY holds for AZURE_STORAGE_ACCOUNT, else the az cli's login or
+the machine's managed identity, as AZURE_TOKEN_CREDENTIALS chooses. drive needs
+the google login made through an oauth client of your own: see the google
+drive page.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
 

@@ -400,6 +400,60 @@ fn a_listed_private_container_is_read_with_the_az_clis_login() -> Result {
     Ok(())
 }
 
+/// a listed private container is read with this machine's managed identity once
+/// `AZURE_TOKEN_CREDENTIALS` asks for it: the token, from a stand-in for the instance metadata
+/// service asked with `metadata: true`, goes with the listing once refused, and with the blob.
+/// the token never shows.
+#[test]
+fn a_listed_private_container_is_read_with_the_machines_identity() -> Result {
+    let sandbox = Sandbox::new()?;
+    let identity = Routes::start(vec![(
+        "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F".to_owned(),
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            br#"{"access_token":"identity-token","expires_in":"86399","resource":"https://storage.azure.com/","token_type":"Bearer"}"#,
+        ),
+    )])?;
+    let server = Server::start(
+        "/",
+        vec![
+            unauthenticated(),
+            page("raw", &[("scans/a.csv", A_CSV.len(), A_MD5)], None),
+            bytes(A_CSV),
+        ],
+    )?;
+    let output = sandbox
+        .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
+        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env(
+            "FETCHLOOM_TEST_AZURE_IDENTITY",
+            format!("{}/metadata/identity/oauth2/token", identity.url),
+        )
+        .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
+        .env("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let asked = identity.requests();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].contains("\r\nmetadata: true\r\n"), "{}", asked[0]);
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    for head in &heads[1..] {
+        assert!(
+            head.contains("\r\nauthorization: bearer identity-token\r\n"),
+            "{head}"
+        );
+    }
+    assert_eq!(fs::read(sandbox.work().join("data/scans/a.csv"))?, A_CSV);
+    for said in [&stderr, &text(&output.stdout)?] {
+        assert!(!said.contains("identity-token"), "{said}");
+    }
+    Ok(())
+}
+
 /// a container nobody listed never gets the SAS, though one is on the machine, and the refusal
 /// says how to list it.
 #[test]

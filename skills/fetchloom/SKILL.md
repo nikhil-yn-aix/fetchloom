@@ -71,7 +71,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 - `--force`: on `sync` it replaces files a person edited, on `get -o` and `export -o` a file already at the path.
 - `fetchloom build` runs the project's code as the user, and `fetchloom build --accept` pins a rebuild that differs: show `fetchloom build --dry-run --json` first.
 - `fetchloom lock --upgrade` pins what the sources serve now, and `fetchloom cache gc --now` frees files less than a day old.
-- signing in: the user runs `fetchloom auth login <source>` in their own terminal. never ask for a key in chat, and never put a SAS, a signed link or a link holding a key, such as dataverse's `?key=`, in data.toml: `add` refuses one.
+- signing in: the user runs `fetchloom auth login <source>` in their own terminal, and for private buckets and containers the cloud's own sign-in, such as `aws sso login`, `gcloud auth application-default login` or `az login`. never ask for a key in chat, and never put a SAS, a signed link or a link holding a key, such as dataverse's `?key=`, in data.toml: `add` refuses one.
 - trust settings are the user's. never set `allowed_origins`, `s3_buckets`, `gcs_buckets`, `azure_containers` or `drive_folders`, or their `FETCHLOOM_` variables: they decide which private servers, buckets, containers and drive folders get the user's keys, and a drive token reads their whole drive. never turn off `mirrors_only`, and never pass `--no-config` or set `FETCHLOOM_NO_CONFIG` unless the user asks: it leaves their whole settings file unread.
 - `push` puts data where everyone who can read the folder can copy it: never choose the folder yourself.
 

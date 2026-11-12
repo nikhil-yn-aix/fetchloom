@@ -73,7 +73,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones once `drive_folders` lists them
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private ones once `s3_buckets` or `gcs_buckets` lists them
-- [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them
+- [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them, read with a SAS, an account key, the az cli's login or a virtual machine's managed identity
 - [signing in](docs/user/signing-in.md): which sources need a key, `fetchloom auth login` or the source's variable, and the settings that let keys reach private buckets, containers and drive folders
 
 ## reference

@@ -1,6 +1,6 @@
 # azure blob storage
 
-fetchloom lists and downloads azure blob containers over HTTPS, without an azure SDK. a public container needs no account. a private container you list in the `azure_containers` setting is read with a SAS, a shared access signature, that you keep in `AZURE_STORAGE_SAS_TOKEN` or in the settings file, with a key of its storage account in `AZURE_STORAGE_KEY`, or with the az cli's login, never with anything in `data.toml` or `data.lock`.
+fetchloom lists and downloads azure blob containers over HTTPS, without an azure SDK. a public container needs no account. a private container you list in the `azure_containers` setting is read with a SAS, a shared access signature, that you keep in `AZURE_STORAGE_SAS_TOKEN` or in the settings file, with a key of its storage account in `AZURE_STORAGE_KEY`, or with the az cli's login or this machine's managed identity, never with anything in `data.toml` or `data.lock`.
 
 ```sh
 fetchloom add azure:azureopendatastorage/mnist/
@@ -57,6 +57,7 @@ each listed container takes the first of these it has:
 | a SAS | `AZURE_STORAGE_SAS_TOKEN`, as the az cli reads it | those in the account `AZURE_STORAGE_ACCOUNT` names |
 | an account key | `AZURE_STORAGE_KEY`, with the account it is for in `AZURE_STORAGE_ACCOUNT` | those in that account |
 | a token of the az cli's login | `az account get-access-token`, which runs once a container needs it | every listed container |
+| a token of this machine's managed identity, in place of the az cli's | the virtual machine's instance metadata service, asked only when `AZURE_TOKEN_CREDENTIALS` names it | every listed container |
 
 a SAS is one account's, so when `AZURE_STORAGE_ACCOUNT` names none, the listed containers without a SAS of their own must all be in one account. listed containers in two accounts, with `AZURE_STORAGE_ACCOUNT` unset, fail the first request that needs the SAS with `auth.required`, exit 40, asking for `AZURE_STORAGE_ACCOUNT`, before the SAS goes to either. a SAS needs read and list permission, `sp=rl`, for a container's listing.
 
@@ -68,7 +69,20 @@ with no SAS or key for a listed container, fetchloom asks the az cli, version 2.
 
 one run gives a token for every listed container. it is asked for again 5 minutes before it expires, and once when azure turns it away with 401, as an expired one is. an az cli without a login exits with an error, which fails the request with `auth.required`, exit 40, and help to sign in with `az login`; a role azure refuses fails the same way and names the role to ask for.
 
-`AZURE_TOKEN_CREDENTIALS`, which azure's own libraries read, chooses the sign-in: unset, `AzureCliCredential` or `dev` take the az cli's login, and any other credential it names fails with `auth.required` once a container needs a token, as [environment](../reference/environment.md#azure-credentials) lists.
+`AZURE_TOKEN_CREDENTIALS`, which azure's own libraries read, chooses the sign-in: unset, `AzureCliCredential` or `dev` take the az cli's login, `ManagedIdentityCredential` or `prod` take this machine's managed identity, and any other credential it names fails with `auth.required` once a container needs a token, as [environment](../reference/environment.md#azure-credentials) lists.
+
+### a managed identity
+
+on an azure virtual machine with a managed identity, `AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential` reads the listed containers as that identity, with no az cli:
+
+```sh
+export AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
+FETCHLOOM_AZURE_CONTAINERS=azure:lab/raw fetchloom add azure:lab/raw/scans/
+```
+
+the token comes from the machine's instance metadata service, `http://169.254.169.254/metadata/identity/oauth2/token`, asked with `metadata: true` for azure storage. that address is on the machine's own network, which fetchloom refuses for every link, so only this request, made with no proxy, no redirect and no other credential, reaches it, and only when your environment names the identity: nothing in `data.toml` or `data.lock` can. `AZURE_CLIENT_ID` picks a user-assigned identity by its client id, as azure's libraries read it; unset takes the machine's own. `prod` does the same unless the environment names a service principal's secret or certificate, or a federated token, which azure's libraries would sign in with first: then it fails with `auth.required`, and `ManagedIdentityCredential` asks for the identity alone.
+
+the token is kept and asked for again as the az cli's is. a machine without that identity fails with `auth.required`, exit 40, in azure's words, and a machine where no metadata service answers, as off azure, fails at once and says so.
 
 ```console
 $ fetchloom add https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/01/C/CV/ --dry-run
@@ -82,4 +96,4 @@ azure refuses a container that does not exist as it refuses a private one, so th
 
 ## access and limits
 
-azure containers record no `access`. only azure's public cloud, `*.blob.core.windows.net`, is read: other clouds, data lake (`dfs`) endpoints, static website hosts and the `$root` and `$web` containers are not. a blob in the archive tier fails to download until its owner rehydrates it. a managed identity is not read, and the planetary computer's own SAS service is not asked: give such a container a SAS from `planetarycomputer.microsoft.com/api/sas/v1/token/<account>/<container>` yourself.
+azure containers record no `access`. only azure's public cloud, `*.blob.core.windows.net`, is read: other clouds, data lake (`dfs`) endpoints, static website hosts and the `$root` and `$web` containers are not. a blob in the archive tier fails to download until its owner rehydrates it. identities of azure app service, azure arc, service fabric and workload identity federation are not read, and the planetary computer's own SAS service is not asked: give such a container a SAS from `planetarycomputer.microsoft.com/api/sas/v1/token/<account>/<container>` yourself.

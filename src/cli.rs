@@ -202,6 +202,8 @@ impl Context {
             self.settings.azure_containers.value.clone(),
             Arc::new(crate::auth::env),
         );
+        #[cfg(debug_assertions)]
+        let azure = azure.with_identity_endpoint(net::test_identity_endpoint());
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_memory(self.settings.memory.value)
             .with_rate(self.rate.clone())

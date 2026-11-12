@@ -3,12 +3,14 @@
 //! only to the container's own blob host over https, before any redirect. the credential is the
 //! SAS the container's entry gives, else what the environment gives as the az cli reads it: the
 //! SAS in `AZURE_STORAGE_SAS_TOKEN`, or the key in `AZURE_STORAGE_KEY`, kept to the account
-//! `AZURE_STORAGE_ACCOUNT` names, else a token of the az cli's login, as [`crate::auth::azure`]
-//! finds them. a key signs the request, as [`shared_key`] does, and is never sent; a token is
-//! asked for when first needed and again shortly before it expires, by one request while the
-//! others wait. every first request to a blob host asks for the version of azure's API that
-//! listings are read in.
+//! `AZURE_STORAGE_ACCOUNT` names, else a token of the az cli's login or, when
+//! `AZURE_TOKEN_CREDENTIALS` names it, of this machine's managed identity, as [`identity`] asks,
+//! as [`crate::auth::azure`] finds them. a key signs the request, as [`shared_key`] does, and is
+//! never sent; a token is asked for when first needed and again shortly before it expires, by
+//! one request while the others wait. every first request to a blob host asks for the version
+//! of azure's API that listings are read in.
 
+mod identity;
 mod shared_key;
 
 use std::borrow::Cow;
@@ -28,7 +30,6 @@ use crate::auth::azure::{AccountKey, SignIn, Storage};
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
 use crate::source::{AZURE_VERSION, AzureContainer, Sas, azure_account, is_azure_container};
-use crate::stop::Stop;
 
 /// what one run knows about azure access: the containers listed, what the environment gives,
 /// read when first needed, and which containers refused a request without a credential.
@@ -41,6 +42,10 @@ pub(crate) struct Azure {
     refused: Mutex<HashSet<String>>,
     /// the sign-in's token, which reads every listed container its identity may read.
     token: Lease<Bearer>,
+    /// in debug builds, a server on this machine that stands in for the instance metadata
+    /// service.
+    #[cfg(debug_assertions)]
+    identity_endpoint: Option<Url>,
 }
 
 /// who a token signs in as, as messages name it.
@@ -48,12 +53,15 @@ pub(crate) struct Azure {
 pub(crate) enum SignedIn {
     /// the az cli's login.
     Cli,
+    /// this machine's managed identity.
+    Managed,
 }
 
 impl SignedIn {
     fn phrase(self) -> &'static str {
         match self {
             SignedIn::Cli => "the az cli's login",
+            SignedIn::Managed => "this machine's managed identity",
         }
     }
 }
@@ -152,7 +160,17 @@ impl Azure {
             storage: OnceLock::new(),
             refused: Mutex::default(),
             token: Lease::default(),
+            #[cfg(debug_assertions)]
+            identity_endpoint: None,
         }
+    }
+
+    /// asks the server at `endpoint` for managed identities' tokens instead of the instance
+    /// metadata service. only tests need it.
+    #[cfg(debug_assertions)]
+    pub(crate) fn with_identity_endpoint(mut self, endpoint: Option<Url>) -> Azure {
+        self.identity_endpoint = endpoint;
+        self
     }
 
     /// the container `url` is for, when it is a request over https to an azure blob host.
@@ -189,12 +207,9 @@ impl Azure {
     /// # Errors
     ///
     /// what [`crate::auth::azure::find`] finds wrong with the environment, or what getting a
-    /// token found wrong, the same for every later request, or `interrupted` once `stop` asks.
-    async fn credential(
-        &self,
-        located: &Located,
-        stop: &Stop,
-    ) -> Result<Option<Credential>, Error> {
+    /// token through `net` found wrong, the same for every later request, or `interrupted` once
+    /// the run is stopped.
+    async fn credential(&self, net: &Net, located: &Located) -> Result<Option<Credential>, Error> {
         if located.signed {
             return Ok(None);
         }
@@ -222,20 +237,37 @@ impl Azure {
         {
             return Ok(Some(Credential::Key(key)));
         }
-        let SignIn::Cli(path) = storage.sign_in.as_ref().map_err(Clone::clone)? else {
-            return Ok(None);
+        #[cfg(debug_assertions)]
+        let endpoint = self.identity_endpoint.as_ref();
+        #[cfg(not(debug_assertions))]
+        let endpoint = None;
+        // boxed, so the future of every request does not carry the token's request
+        let bearer = match storage.sign_in.as_ref().map_err(Clone::clone)? {
+            SignIn::None => return Ok(None),
+            SignIn::Cli(path) => {
+                self.token
+                    .get(Instant::now, || {
+                        Box::pin(async {
+                            let token =
+                                crate::auth::azure::cli_token(path, SystemTime::now(), &net.stop)
+                                    .await?;
+                            Ok((bearer(&token.value, SignedIn::Cli)?, Some(token.lifetime)))
+                        })
+                    })
+                    .await?
+            }
+            SignIn::Managed { client_id } => {
+                self.token
+                    .get(Instant::now, || {
+                        Box::pin(async {
+                            let (token, lifetime) =
+                                net.identity_token(client_id.as_deref(), endpoint).await?;
+                            Ok((bearer(&token, SignedIn::Managed)?, Some(lifetime)))
+                        })
+                    })
+                    .await?
+            }
         };
-        // boxed, so the future of every request does not carry the az cli's run
-        let bearer = self
-            .token
-            .get(Instant::now, || {
-                Box::pin(async {
-                    let token =
-                        crate::auth::azure::cli_token(path, SystemTime::now(), stop).await?;
-                    Ok((bearer(&token.value, SignedIn::Cli)?, Some(token.lifetime)))
-                })
-            })
-            .await?;
         Ok(Some(Credential::Token(bearer)))
     }
 
@@ -358,12 +390,18 @@ fn key_refused(container: &str, account: &str, what: &str) -> Error {
 }
 
 fn token_refused(container: &str, by: SignedIn, what: &str) -> Error {
+    let ask = match by {
+        SignedIn::Cli => {
+            "ask the container's owner for one, or sign in as another account with `az login`"
+        }
+        SignedIn::Managed => "ask the container's owner to give one to this machine's identity",
+    };
     Error::new(
         Kind::AuthRequired,
         format!("azure refused {} for {what}", by.phrase()),
     )
     .help(format!(
-        "it needs a role that reads blobs, such as Storage Blob Data Reader, on {container}: ask the container's owner for one, or sign in as another account with `az login`"
+        "it needs a role that reads blobs, such as Storage Blob Data Reader, on {container}: {ask}"
     ))
 }
 
@@ -500,7 +538,7 @@ impl Net {
         let credential = match located {
             Some(located) if refused => self
                 .azure
-                .credential(located, &self.stop)
+                .credential(self, located)
                 .await
                 .map_err(Failure::Final)?,
             _ => None,
@@ -554,7 +592,7 @@ impl Net {
             && refused(response)
             && self
                 .azure
-                .credential(located, &self.stop)
+                .credential(self, located)
                 .await
                 .map_err(Failure::Final)?
                 .is_some()
@@ -571,6 +609,13 @@ impl Net {
         }
         Ok(false)
     }
+}
+
+/// the server on this machine that `FETCHLOOM_TEST_AZURE_IDENTITY` names to stand in for the
+/// instance metadata service, read once when the network is made. release builds never read it.
+#[cfg(debug_assertions)]
+pub(crate) fn test_identity_endpoint() -> Option<Url> {
+    super::api::local_test_server("FETCHLOOM_TEST_AZURE_IDENTITY")
 }
 
 /// whether azure turned a request away for want of access: 401 or 403, or 409 from an account

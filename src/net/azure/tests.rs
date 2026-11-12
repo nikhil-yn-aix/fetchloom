@@ -74,6 +74,11 @@ fn blob_host(signature: &'static str) -> (Url, Arc<Mutex<Vec<Asked>>>) {
 
 /// a network that sends a SAS for the `listed` containers, with the environment `set` gives.
 fn azure_net(listed: &[&str], set: &[(&str, &str)]) -> Net {
+    azure_net_at(listed, set, None)
+}
+
+/// [`azure_net`], asking the instance metadata service at `identity` instead of this machine's.
+fn azure_net_at(listed: &[&str], set: &[(&str, &str)], identity: Option<Url>) -> Net {
     let listed = listed
         .iter()
         .map(|text| AzureContainer::parse(text).unwrap())
@@ -89,7 +94,8 @@ fn azure_net(listed: &[&str], set: &[(&str, &str)]) -> Net {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| OsString::from(value))
         }),
-    );
+    )
+    .with_identity_endpoint(identity);
     Net::new(
         Options {
             offline: Offline::No,
@@ -501,4 +507,117 @@ fn a_token_azure_turns_away_is_asked_for_again_once() {
     assert_eq!(answer.status(), 200);
     assert_eq!(std::fs::read_to_string(&runs).unwrap(), "ran\nran\n");
     assert_eq!(asked.lock().unwrap().len(), 3);
+}
+
+/// the client id of a user-assigned identity, as azure writes one.
+const CLIENT_ID: &str = "0b4f5c1e-1a2b-4c3d-8e9f-000000000001";
+
+/// a stand-in for an instance metadata service, which gives `identity-token` to a request that
+/// says `metadata: true`, as azure's does, and 400 to any other.
+fn metadata_service() -> (Url, Arc<Mutex<Vec<Asked>>>) {
+    server(|head, _| {
+        if head.contains("\r\nmetadata: true\r\n") {
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                br#"{"access_token":"identity-token","client_id":"0b4f5c1e-1a2b-4c3d-8e9f-000000000001","expires_in":"86399","expires_on":"4102444800","ext_expires_in":"86399","not_before":"1794524399","resource":"https://storage.azure.com/","token_type":"Bearer"}"#,
+            )
+        } else {
+            reply("400 Bad Request", &[], b"")
+        }
+    })
+}
+
+/// this machine's managed identity, which `AZURE_TOKEN_CREDENTIALS` asks for, reads a listed
+/// container once it refused a request without credentials: a token asked of the instance
+/// metadata service, with `metadata: true`, for azure storage and the identity `AZURE_CLIENT_ID`
+/// names, goes in `authorization`. the service's address stays refused to any other request.
+#[test]
+fn the_machines_managed_identity_reads_a_listed_container_once_refused() {
+    let (identity, identity_asked) = metadata_service();
+    let (local, asked) = server(|head, _| {
+        if head.contains("authorization: bearer identity-token\r\n") {
+            reply("200 OK", &[], b"blob")
+        } else {
+            reply("401 Unauthorized", &[], b"")
+        }
+    });
+    let net = azure_net_at(
+        &["azure:lab/raw"],
+        &[
+            ("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
+            ("AZURE_CLIENT_ID", CLIENT_ID),
+        ],
+        Some(identity.join("metadata/identity/oauth2/token").unwrap()),
+    );
+    let answer = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap();
+    assert_eq!(answer.status(), 200);
+    assert_eq!(
+        sent(&answer),
+        Some(&Sent::Token {
+            container: "azure:lab/raw".to_owned(),
+            by: SignedIn::Managed,
+        })
+    );
+    assert_eq!(asked.lock().unwrap().len(), 2);
+    let identity_asked = identity_asked.lock().unwrap().clone();
+    assert_eq!(identity_asked.len(), 1);
+    assert_eq!(
+        identity_asked[0].line,
+        format!(
+            "get /metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3a%2f%2fstorage.azure.com%2f&client_id={CLIENT_ID} http/1.1"
+        )
+    );
+    let project = Url::parse("http://169.254.169.254/metadata/identity/oauth2/token").unwrap();
+    let refused = block_on(crate::net::Api::get(&net, &project)).unwrap_err();
+    assert_eq!(refused.kind, Kind::NetworkRefused);
+}
+
+/// a machine without the identity asked for says so in azure's words, and one where no metadata
+/// service answers, as off azure, says so at once rather than trying again.
+#[test]
+fn a_managed_identity_that_cannot_be_had_says_why() {
+    let (identity, _) = server(|_, _| {
+        reply(
+            "400 Bad Request",
+            &[("Content-Type", "application/json")],
+            br#"{"error":"invalid_request","error_description":"Identity not found"}"#,
+        )
+    });
+    let (local, asked) = blob_host("never");
+    let ask = |identity: Url| {
+        let net = azure_net_at(
+            &["azure:lab/raw"],
+            &[
+                ("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
+                ("AZURE_CLIENT_ID", CLIENT_ID),
+            ],
+            Some(identity),
+        );
+        through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap_err()
+    };
+    let missing = ask(identity.join("metadata/identity/oauth2/token").unwrap());
+    assert_eq!(missing.kind, Kind::AuthRequired);
+    assert_eq!(
+        missing.message,
+        format!(
+            "this machine has no managed identity with the client id {CLIENT_ID}, or azure refused it"
+        )
+    );
+    assert_eq!(
+        missing.details,
+        ["azure said invalid_request: Identity not found"]
+    );
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+    let nowhere = Url::parse(&format!("http://{}/token", closed.local_addr().unwrap())).unwrap();
+    drop(closed);
+    let unanswered = ask(nowhere);
+    assert!(
+        unanswered
+            .message
+            .starts_with("this machine's managed identity could not be asked"),
+        "{}",
+        unanswered.message
+    );
+    assert_eq!(lines(&asked).len(), 2);
 }

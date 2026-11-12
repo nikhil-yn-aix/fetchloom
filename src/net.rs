@@ -30,6 +30,8 @@ pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
 #[cfg(test)]
 pub(crate) use azure::Given;
+#[cfg(debug_assertions)]
+pub(crate) use azure::test_identity_endpoint;
 pub(crate) use azure::{Azure, Sent};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
