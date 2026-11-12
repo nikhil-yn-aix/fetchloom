@@ -108,6 +108,33 @@ pub(super) fn warn_misnamed(output: &Output, names: impl IntoIterator<Item = std
     }
 }
 
+/// the variables that change only what a person sees, each with the help for a value that is
+/// neither true nor false, which leaves it off with a warning rather than stopping the run.
+const DISPLAY_VARIABLES: [(&str, &str); 2] = [
+    (
+        "FETCHLOOM_ACCESSIBLE",
+        "set it to true for plain lines a screen reader reads well, or unset it",
+    ),
+    (
+        "FETCHLOOM_NO_HINTS",
+        "set it to true to drop the hint: and next: lines, or unset it",
+    ),
+];
+
+/// warns about each variable that changes only what a person sees and holds neither true nor
+/// false, which leaves it off.
+pub(super) fn warn_unread(output: &Output, var: crate::settings::Var<'_>) {
+    for (name, help) in DISPLAY_VARIABLES {
+        if let Err(error) = crate::settings::switched(name, var(name).as_deref()) {
+            output.warn_with(
+                Warning::SettingsSwitchUnread,
+                &format!("{}, so it stays off", error.message),
+                help,
+            );
+        }
+    }
+}
+
 /// every setting the run uses, in the order the table shows them.
 fn rows(context: &Context) -> Vec<Shown> {
     let settings = &context.settings;
@@ -226,7 +253,7 @@ fn floor(settings: &crate::settings::Settings, cache: Option<&std::path::Path>) 
     }
 }
 
-/// the settings only a variable sets: threads, rate and split.
+/// the settings only a variable sets: threads, rate, split and accessible.
 fn variables(context: &Context) -> Vec<Shown> {
     let settings = &context.settings;
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
@@ -274,6 +301,14 @@ fn variables(context: &Context) -> Vec<Shown> {
         origin: vec![from_env("FETCHLOOM_SPLIT")],
         variable: "FETCHLOOM_SPLIT",
         said: said.to_owned(),
+    });
+    let accessible = crate::settings::is_on(&var, "FETCHLOOM_ACCESSIBLE");
+    shown.push(Shown {
+        name: "accessible",
+        value: json!(accessible),
+        origin: vec![from_env("FETCHLOOM_ACCESSIBLE")],
+        variable: "FETCHLOOM_ACCESSIBLE",
+        said: accessible.to_string(),
     });
     shown
 }

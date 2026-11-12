@@ -316,7 +316,7 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
 /// whether `FETCHLOOM_OFFLINE`, as `value` holds it, asks for offline mode: `true` or `1`, and
 /// `false`, `0`, unset or empty for no, as the settings read a switch. any other value fails
 /// rather than letting a run meant to be offline go online.
-fn offline(value: Option<std::ffi::OsString>) -> Result<bool, Error> {
+fn offline(value: Option<&std::ffi::OsStr>) -> Result<bool, Error> {
     switch(
         "FETCHLOOM_OFFLINE",
         value,
@@ -324,10 +324,25 @@ fn offline(value: Option<std::ffi::OsString>) -> Result<bool, Error> {
     )
 }
 
+/// reads the on/off variables a named command needs before its settings into `context`: offline
+/// mode, which `flag`, `--offline`, also asks, how large downloads split, and whether keys may go
+/// to the credential store. a value that is neither true nor false stops the run before any
+/// request.
+fn read_switches(
+    context: &mut Context,
+    flag: bool,
+    var: crate::settings::Var<'_>,
+) -> Result<(), Error> {
+    let environment = offline(var("FETCHLOOM_OFFLINE").as_deref())?;
+    context.offline = net::Offline::from_settings(flag, environment);
+    context.split = splits(var("FETCHLOOM_SPLIT").as_deref())?;
+    keyring(var("FETCHLOOM_KEYRING").as_deref())
+}
+
 /// the settings file this run reads, or leaves unread as `--no-config`, when `flag` says it was
 /// given, or `FETCHLOOM_NO_CONFIG` asks.
 fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Error> {
-    match no_config(flag, var("FETCHLOOM_NO_CONFIG"))? {
+    match no_config(flag, var("FETCHLOOM_NO_CONFIG").as_deref())? {
         Some(by) => Ok(File::bypassed(var, by)),
         None => File::read(var),
     }
@@ -335,7 +350,7 @@ fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Erro
 
 /// what leaves the settings file unread for this run: `--no-config`, as `flag` says, else
 /// `FETCHLOOM_NO_CONFIG`, which takes true or false as `FETCHLOOM_OFFLINE` does.
-fn no_config(flag: bool, value: Option<std::ffi::OsString>) -> Result<Option<&'static str>, Error> {
+fn no_config(flag: bool, value: Option<&std::ffi::OsStr>) -> Result<Option<&'static str>, Error> {
     if flag {
         return Ok(Some("--no-config"));
     }
@@ -347,33 +362,37 @@ fn no_config(flag: bool, value: Option<std::ffi::OsString>) -> Result<Option<&'s
     Ok(bypassed.then_some("FETCHLOOM_NO_CONFIG"))
 }
 
-/// the variable `name`'s `value` as true or false: unset or empty is false, and anything but
-/// true, false, 1 or 0 is a usage error whose help is `help`.
-fn switch(name: &str, value: Option<std::ffi::OsString>, help: &str) -> Result<bool, Error> {
-    let Some(value) = value.filter(|value| !value.is_empty()) else {
-        return Ok(false);
-    };
-    let text = value.to_string_lossy();
-    match text.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" => Ok(true),
-        "false" | "0" => Ok(false),
-        _ => Err(Error::new(
-            Kind::Usage,
-            format!("{name} is \"{text}\", which is not true or false"),
-        )
-        .help(help)),
-    }
+/// the variable `name`'s `value` as true or false, read as every on/off variable is: unset or
+/// empty is false, and anything but true, false, 1 or 0 is a usage error whose help is `help`.
+fn switch(name: &str, value: Option<&std::ffi::OsStr>, help: &str) -> Result<bool, Error> {
+    crate::settings::switched(name, value)
+        .map(|on| on.unwrap_or(false))
+        .map_err(|error| error.help(help))
 }
 
-/// when large downloads split, by `FETCHLOOM_SPLIT`: `0` never, `1` from the first answer, and
-/// otherwise once one stream proves slow. splitting from the start lost in the lab on lan and
-/// home, while it won on far, where one stream is slow.
-fn splits(value: Option<std::ffi::OsString>) -> net::Splitting {
-    match value {
-        Some(value) if value == "0" => net::Splitting::Never,
-        Some(value) if value == "1" => net::Splitting::Always,
-        _ => net::Splitting::WhenSlow,
-    }
+/// when large downloads split, by `FETCHLOOM_SPLIT`: false never, true from the first answer,
+/// and unset or empty once one stream proves slow; any other value is a usage error. splitting
+/// from the start lost in the lab on lan and home, while it won on far, where one stream is slow.
+fn splits(value: Option<&std::ffi::OsStr>) -> Result<net::Splitting, Error> {
+    let split = crate::settings::switched("FETCHLOOM_SPLIT", value).map_err(|error| {
+        error.help("set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow")
+    })?;
+    Ok(match split {
+        Some(true) => net::Splitting::Always,
+        Some(false) => net::Splitting::Never,
+        None => net::Splitting::WhenSlow,
+    })
+}
+
+/// refuses a `FETCHLOOM_KEYRING` that is neither true nor false before any work, as a setting
+/// that cannot be read stops every named command, though only `auth login` saves keys.
+fn keyring(value: Option<&std::ffi::OsStr>) -> Result<(), Error> {
+    switch(
+        "FETCHLOOM_KEYRING",
+        value,
+        "set FETCHLOOM_KEYRING to false to keep keys out of the system's credential store, or unset it",
+    )
+    .map(|_| ())
 }
 
 /// the cache this machine uses, created on first use and held shared until the last clone is
@@ -557,7 +576,7 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let output = Output::new(style, level, global.json, logs.on_stderr())
-        .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"))
+        .without_hints(crate::settings::is_on(&var, "FETCHLOOM_NO_HINTS"))
         .with_progress(global.progress)
         .fitted(crate::output::story_columns());
     let mut context = Context::new(output);
@@ -565,7 +584,6 @@ pub(crate) fn run() -> ExitCode {
         context.output.warn(Warning::TraceUnwritable, refused);
     }
     context.yes = global.yes;
-    context.split = splits(var("FETCHLOOM_SPLIT"));
     context.building = var("FETCHLOOM_BUILDING")
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from);
@@ -615,11 +633,9 @@ pub(crate) fn run() -> ExitCode {
         return execute(context, None, started);
     };
     settings::warn_misnamed(&context.output, std::env::vars_os().map(|(name, _)| name));
-    match offline(var("FETCHLOOM_OFFLINE")) {
-        Ok(environment) => {
-            context.offline = net::Offline::from_settings(global.offline, environment);
-        }
-        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    settings::warn_unread(&context.output, &var);
+    if let Err(error) = read_switches(&mut context, global.offline, &var) {
+        return finish::<()>(&context, name, Err(error), started);
     }
     let file = match settings_file(global.no_config, &var) {
         Ok(file) => file,
@@ -2185,7 +2201,7 @@ mod tests {
     /// cannot read is a usage error naming it, never a run that goes online.
     #[test]
     fn the_offline_variable_takes_true_or_false_and_refuses_the_rest() {
-        let read = |value: Option<&str>| offline(value.map(std::ffi::OsString::from));
+        let read = |value: Option<&str>| offline(value.map(std::ffi::OsStr::new));
         for (value, expected) in [
             (None, false),
             (Some(""), false),
@@ -2208,18 +2224,29 @@ mod tests {
         }
     }
 
+    /// `FETCHLOOM_SPLIT` reads true and false as every on/off variable does, splits once one
+    /// stream proves slow when it is unset or empty, and refuses any other value.
     #[test]
     fn downloads_split_once_one_stream_is_slow_unless_told_otherwise() {
         use net::Splitting::{Always, Never, WhenSlow};
-        assert_eq!(splits(None), WhenSlow);
-        assert_eq!(splits(Some("0".into())), Never);
-        assert_eq!(
-            splits(Some("1".into())),
-            Always,
-            "kept to measure splitting from the start"
-        );
-        for other in ["", "2", "yes", " 1"] {
-            assert_eq!(splits(Some(other.into())), WhenSlow, "{other:?}");
+        let read = |value: Option<&str>| splits(value.map(std::ffi::OsStr::new));
+        for (value, expected) in [
+            (None, WhenSlow),
+            (Some(""), WhenSlow),
+            (Some("0"), Never),
+            (Some(" False "), Never),
+            (Some("1"), Always),
+            (Some("TRUE"), Always),
+        ] {
+            assert_eq!(read(value).ok(), Some(expected), "{value:?}");
+        }
+        for value in ["yes", "2", "when_slow"] {
+            let error = read(Some(value)).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{value}");
+            assert_eq!(
+                error.to_string(),
+                format!("FETCHLOOM_SPLIT is \"{value}\", which is not true or false")
+            );
         }
     }
 

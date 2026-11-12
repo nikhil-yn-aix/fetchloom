@@ -303,6 +303,22 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
                 "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256",
             ),
         ),
+        (
+            "FETCHLOOM_SPLIT",
+            "yes",
+            "FETCHLOOM_SPLIT is \"yes\", which is not true or false",
+            Some(
+                "set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow",
+            ),
+        ),
+        (
+            "FETCHLOOM_KEYRING",
+            "no",
+            "FETCHLOOM_KEYRING is \"no\", which is not true or false",
+            Some(
+                "set FETCHLOOM_KEYRING to false to keep keys out of the system's credential store, or unset it",
+            ),
+        ),
     ] {
         let output = sandbox
             .command(&["--json", "cache"])
@@ -316,6 +332,78 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
             assert_eq!(document["errors"][0]["help"], help, "{name}");
         }
     }
+    Ok(())
+}
+
+/// every on/off variable reads `true` and `false`, in any case and with spaces around them, as
+/// well as `1` and `0`.
+#[test]
+fn on_off_variables_take_true_and_false_in_any_case() -> Result {
+    let sandbox = Sandbox::new()?;
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_SPLIT", " False ")
+            .env("FETCHLOOM_ACCESSIBLE", "TRUE")
+            .output()?,
+    )?;
+    assert_eq!(document["status"], "ok", "{document}");
+    assert_eq!(document["warnings"], serde_json::json!([]), "{document}");
+    assert_eq!(shown(&document, "split")["value"], "never");
+    let accessible = shown(&document, "accessible");
+    assert_eq!(accessible["value"], true, "{document}");
+    assert_eq!(accessible["origin"], "environment");
+    assert_eq!(accessible["variable"], "FETCHLOOM_ACCESSIBLE");
+    let told = sandbox
+        .command(&["settings"])
+        .env("FETCHLOOM_NO_HINTS", "true")
+        .output()?;
+    let stderr = text(&told.stderr)?;
+    assert_eq!(told.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("hint:"), "{stderr}");
+    Ok(())
+}
+
+/// `FETCHLOOM_ACCESSIBLE` and `FETCHLOOM_NO_HINTS` change only what a person sees, so a value
+/// that is neither true nor false leaves each off with a warning instead of stopping the run.
+#[test]
+fn a_display_variable_it_cannot_read_stays_off_with_a_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["--json", "settings"])
+        .env("FETCHLOOM_ACCESSIBLE", "yes")
+        .env("FETCHLOOM_NO_HINTS", "on")
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(0), "{document}");
+    assert_eq!(shown(&document, "accessible")["value"], false);
+    let kinds: Vec<&str> = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| warning["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, ["settings.switch_unread"; 2], "{document}");
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            "FETCHLOOM_ACCESSIBLE is \"yes\", which is not true or false, so it stays off; set it to true for plain lines a screen reader reads well, or unset it",
+            "FETCHLOOM_NO_HINTS is \"on\", which is not true or false, so it stays off; set it to true to drop the hint: and next: lines, or unset it",
+        ]
+    );
+    let told = sandbox
+        .command(&["settings"])
+        .env("FETCHLOOM_NO_HINTS", "on")
+        .output()?;
+    let stderr = text(&told.stderr)?;
+    assert_eq!(told.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.starts_with(
+            "warning: FETCHLOOM_NO_HINTS is \"on\", which is not true or false, so it stays off\n"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("hint:"), "{stderr}");
     Ok(())
 }
 

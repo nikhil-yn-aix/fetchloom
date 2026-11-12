@@ -64,7 +64,7 @@ quick look.";
 const ENVIRONMENT: &str = "fetchloom environment
 
   FETCHLOOM_CACHE      the cache folder, instead of the system's cache folder
-  FETCHLOOM_OFFLINE    1 works offline, as --offline does
+  FETCHLOOM_OFFLINE    true works offline, as --offline does
   FETCHLOOM_RESOURCES  lean, default or max: lean spends less memory and runs
                        fewer downloads at once, max runs more; FETCHLOOM_JOBS,
                        FETCHLOOM_MEMORY and the like still win over it
@@ -86,10 +86,11 @@ const ENVIRONMENT: &str = "fetchloom environment
                        the most entries, bytes and times its size one archive
                        unpacks to: 10000000, 16T and 1000 by default
   FETCHLOOM_THREADS    a cap on local worker threads, 1 to 256
-  FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
+  FETCHLOOM_SPLIT      false never splits a large download into parts, true
+                       splits it from the start; unset splits a slow one
   FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in
                        fetchloom's folder
-  FETCHLOOM_NO_CONFIG  1 leaves the settings file unread, as --no-config does
+  FETCHLOOM_NO_CONFIG  true leaves the settings file unread, as --no-config does
   FETCHLOOM_ALLOWED_ORIGINS
                        servers on your network that data.toml may name, as
                        http://lab.local:8080, separated by commas
@@ -117,10 +118,10 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
-  FETCHLOOM_NO_HINTS   1 drops the hint: and next: lines
-  FETCHLOOM_ACCESSIBLE 1 asks on plain lines, takes a choice by its number and
-                       draws no live progress, for screen readers
-  FETCHLOOM_KEYRING    0 keeps keys out of the system's credential store
+  FETCHLOOM_NO_HINTS   true drops the hint: and next: lines
+  FETCHLOOM_ACCESSIBLE true asks on plain lines, takes a choice by its number
+                       and draws no live progress, for screen readers
+  FETCHLOOM_KEYRING    false keeps keys out of the system's credential store
   FETCHLOOM_BUILDING   set by fetchloom build for its steps: the project
                        a fetchloom inside a step may not lock
 

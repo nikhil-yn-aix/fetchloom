@@ -43,11 +43,11 @@ pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
         .map(|config| config.join("fetchloom"))
 }
 
-/// whether the system's credential store can be used. `FETCHLOOM_KEYRING=0` turns it off, and a
+/// whether the system's credential store can be used. `FETCHLOOM_KEYRING` can turn it off, and a
 /// linux session without a message bus has none, which is checked first so a server never waits
 /// on a bus that is not there.
 pub(crate) fn keyring_usable(var: Var<'_>) -> bool {
-    if var("FETCHLOOM_KEYRING").is_some_and(|value| value == "0") {
+    if !keyring_allowed(var) {
         return false;
     }
     if cfg!(all(unix, not(target_os = "macos")))
@@ -56,6 +56,16 @@ pub(crate) fn keyring_usable(var: Var<'_>) -> bool {
         return false;
     }
     keyring::Entry::store_status().is_ok()
+}
+
+/// whether `FETCHLOOM_KEYRING` leaves the system's credential store in use: unless it is false,
+/// as an on/off variable is read. a run refuses any other value before it starts.
+fn keyring_allowed(var: Var<'_>) -> bool {
+    let name = "FETCHLOOM_KEYRING";
+    !matches!(
+        crate::settings::switched(name, var(name).as_deref()),
+        Ok(Some(false))
+    )
 }
 
 /// what was saved, and where.
@@ -247,6 +257,28 @@ mod tests {
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+        }
+    }
+
+    /// `FETCHLOOM_KEYRING` keeps keys out of the system's credential store when it is false or 0,
+    /// in any case, and leaves the store in use when it is unset, empty, true or 1.
+    #[test]
+    fn the_keyring_variable_turns_the_store_off_with_false_or_0() {
+        for (value, allowed) in [
+            (None, true),
+            (Some(""), true),
+            (Some("1"), true),
+            (Some("True"), true),
+            (Some("0"), false),
+            (Some("false"), false),
+            (Some(" FALSE "), false),
+        ] {
+            let var = |name: &str| {
+                value
+                    .filter(|_| name == "FETCHLOOM_KEYRING")
+                    .map(OsString::from)
+            };
+            assert_eq!(keyring_allowed(&var), allowed, "{value:?}");
         }
     }
 

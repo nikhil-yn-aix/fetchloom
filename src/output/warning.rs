@@ -98,6 +98,8 @@ pub(crate) enum Warning {
     SearchPartial,
     /// `FETCHLOOM_COLORS` holds entries fetchloom cannot read.
     SettingsColorsUnread,
+    /// a variable that changes only what a person sees holds neither true nor false.
+    SettingsSwitchUnread,
     /// a variable set is one typo from one fetchloom reads.
     SettingsUnknownVariable,
     /// a file is gone from its link in data.lock and came from where the source lists it now.
@@ -158,6 +160,7 @@ impl Warning {
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::SearchPartial => "search.partial",
             Warning::SettingsColorsUnread => "settings.colors_unread",
+            Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
@@ -235,6 +238,7 @@ mod tests {
             ProjectNotRestored,
             SearchPartial,
             SettingsColorsUnread,
+            SettingsSwitchUnread,
             SettingsUnknownVariable,
             SourceMoved,
             SourcePartial,

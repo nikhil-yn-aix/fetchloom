@@ -38,9 +38,9 @@ memory            4.0 GiB                  this machine   FETCHLOOM_MEMORY
 | `resources = lean`, `resources = max` | the [resources level](../resources.md), for a setting no variable or settings file key sets. the `resources` row shows the level and where it came from |
 | `command line` | `--mirror`, for the mirrors it names. a run asks them before those of the setting, so with a setting that names others the `mirrors` row shows both, as `command line, settings file` |
 
-the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.
+the [environment](../reference/environment.md) page explains each setting. `threads`, `rate`, `split` and `accessible` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.
 
-a variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them.
+a variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them. `FETCHLOOM_ACCESSIBLE` and `FETCHLOOM_NO_HINTS` change only what you see, so a value in either that is neither true nor false leaves it off with a warning instead of stopping the command.
 
 ```text
 warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it changes nothing
@@ -53,7 +53,7 @@ warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it chan
    Settings ~/.config/fetchloom/settings.toml (bypassed by --no-config)
 ```
 
-JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets`, `azure_containers`, `drive_folders` and `mirrors`, true or false for `mirrors_only`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default`, `flag` or `resources`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
+JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets`, `azure_containers`, `drive_folders` and `mirrors`, true or false for `mirrors_only` and `accessible`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default`, `flag` or `resources`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 
 ## exit codes
 

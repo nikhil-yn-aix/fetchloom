@@ -1093,28 +1093,51 @@ fn level(given: &Given<'_>) -> Result<Set<Level>, Error> {
         })
 }
 
-/// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default` when it is unset
+/// true or false, as `key` holds it, read as [`switched`] reads it, or `default` when it is unset
 /// or empty.
 fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Error> {
     let Some((text, origin, named)) = given.get(key) else {
         return Ok(Set::default(default));
     };
-    let value = match text.trim().to_ascii_lowercase().as_str() {
-        "" => default,
-        "true" | "1" => true,
-        "false" | "0" => false,
-        _ => {
-            return Err(Error::new(
-                Kind::Usage,
-                format!("{named} is \"{text}\", which is not true or false"),
-            )
-            .help(format!(
-                "{} to use the default of {default}, or set it to true or false",
-                undo(origin, key)
-            )));
-        }
+    let value = switched(&named, Some(text.as_ref())).map_err(|error| {
+        error.help(format!(
+            "{} to use the default of {default}, or set it to true or false",
+            undo(origin, key)
+        ))
+    })?;
+    Ok(Set {
+        value: value.unwrap_or(default),
+        origin,
+    })
+}
+
+/// whether the on/off variable `name` is on, as [`switched`] reads it: a value it cannot read is
+/// off.
+pub(crate) fn is_on(var: Var<'_>, name: &str) -> bool {
+    matches!(switched(name, var(name).as_deref()), Ok(Some(true)))
+}
+
+/// what an on/off setting `named` says as `value`: none when it is unset or holds only spaces,
+/// true for `true` or `1` and false for `false` or `0`, in any case and with spaces around it.
+/// any other value is a usage error, without a help, for the caller to refuse or to tell as a
+/// warning.
+pub(crate) fn switched(
+    named: &str,
+    value: Option<&std::ffi::OsStr>,
+) -> Result<Option<bool>, Error> {
+    let Some(value) = value else {
+        return Ok(None);
     };
-    Ok(Set { value, origin })
+    let text = value.to_string_lossy();
+    match text.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "true" | "1" => Ok(Some(true)),
+        "false" | "0" => Ok(Some(false)),
+        _ => Err(Error::new(
+            Kind::Usage,
+            format!("{named} is \"{text}\", which is not true or false"),
+        )),
+    }
 }
 
 /// the whole seconds `key` holds, within `range`, or `default`.

@@ -287,20 +287,26 @@ impl Style {
 }
 
 fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    terminal && !marks("CI", var) && var("TERM").is_none_or(|v| v != "dumb") && !by_agent(var)
+}
+
+/// whether `FETCHLOOM_ACCESSIBLE` is on at a terminal, `TERM=dumb` included, outside CI and
+/// coding agents, which a question would leave waiting.
+fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
     terminal
-        && var("CI").is_none_or(|v| v.is_empty())
-        && var("TERM").is_none_or(|v| v != "dumb")
+        && crate::settings::is_on(var, "FETCHLOOM_ACCESSIBLE")
+        && !marks("CI", var)
         && !by_agent(var)
 }
 
-/// whether `FETCHLOOM_ACCESSIBLE` is `1` or `true` at a terminal, `TERM=dumb` included, outside
-/// CI and coding agents, which a question would leave waiting.
-fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
-    terminal
-        && var("FETCHLOOM_ACCESSIBLE")
-            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        && var("CI").is_none_or(|v| v.is_empty())
-        && !by_agent(var)
+/// whether `name`, a variable a CI service or a coding agent sets, marks this run: any value
+/// but empty, false or 0, read as an on/off variable is, so a service's own word counts too, as
+/// drone's `CI=drone` does.
+fn marks(name: &str, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    !matches!(
+        crate::settings::switched(name, var(name).as_deref()),
+        Ok(None | Some(false))
+    )
 }
 
 /// variables coding agents set on the commands they run, often in a real terminal where a
@@ -321,9 +327,7 @@ const AGENT_VARIABLES: [&str; 10] = [
 
 /// whether a coding agent runs this command, which then gets no questions, colors or animation.
 pub(crate) fn by_agent(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
-    AGENT_VARIABLES.iter().any(|name| {
-        var(name).is_some_and(|value| !value.is_empty() && value != "0" && value != "false")
-    })
+    AGENT_VARIABLES.iter().any(|name| marks(name, var))
 }
 
 fn wants_color(
@@ -348,7 +352,7 @@ fn wants_color(
     if !terminal {
         return false;
     }
-    if is("CLICOLOR", "0") || is("TERM", "dumb") || non_empty("CI") || by_agent(var) {
+    if is("CLICOLOR", "0") || is("TERM", "dumb") || marks("CI", var) || by_agent(var) {
         return false;
     }
     terminal
@@ -441,6 +445,7 @@ mod tests {
         assert!(!auto(&[("CLICOLOR", "0")], true));
         assert!(!auto(&[("TERM", "dumb")], true));
         assert!(!auto(&[("CI", "true")], true));
+        assert!(auto(&[("CI", "0")], true), "CI=0 is no CI");
     }
 
     #[test]
@@ -472,8 +477,14 @@ mod tests {
     fn bars_and_questions_need_a_person_at_a_terminal() {
         assert!(is_interactive(true, &env(&[])));
         assert!(!is_interactive(false, &env(&[])));
-        assert!(!is_interactive(true, &env(&[("CI", "true")])));
         assert!(!is_interactive(true, &env(&[("TERM", "dumb")])));
+        // a service's own word, as drone's, marks CI too
+        for value in ["true", "1", "drone"] {
+            assert!(!is_interactive(true, &env(&[("CI", value)])), "{value}");
+        }
+        for value in ["false", "0", " FALSE ", ""] {
+            assert!(is_interactive(true, &env(&[("CI", value)])), "{value:?}");
+        }
     }
 
     #[test]
@@ -483,10 +494,15 @@ mod tests {
         assert!(is_accessible(true, &env(&[asked, ("TERM", "dumb")])));
         assert!(is_accessible(
             true,
-            &env(&[("FETCHLOOM_ACCESSIBLE", "True")])
+            &env(&[("FETCHLOOM_ACCESSIBLE", " True ")])
         ));
+        assert!(is_accessible(true, &env(&[asked, ("CI", "false")])));
         assert!(!is_accessible(false, &env(&[asked])));
         assert!(!is_accessible(true, &env(&[asked, ("CI", "true")])));
+        assert!(!is_accessible(
+            true,
+            &env(&[("FETCHLOOM_ACCESSIBLE", "yes")])
+        ));
         assert!(!is_accessible(true, &env(&[asked, ("CLAUDECODE", "1")])));
         assert!(!is_accessible(true, &env(&[("FETCHLOOM_ACCESSIBLE", "0")])));
         assert!(!is_accessible(true, &env(&[])));
