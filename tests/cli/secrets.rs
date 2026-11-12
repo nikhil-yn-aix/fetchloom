@@ -40,6 +40,40 @@ fn sync_refuses_a_token_written_into_data_toml() -> Result {
     Ok(())
 }
 
+/// a source reads a zenodo record by its own reference and drops a token its link carries, but
+/// data.toml keeps the link as written and data.lock copies it, so the token is refused there as
+/// in any link, and an add of the link is refused alike, before any request. a catalog on this
+/// machine stands in for zenodo, which debug builds alone allow, so a run that let the token
+/// through asks it rather than zenodo.
+#[cfg(debug_assertions)]
+#[test]
+fn a_token_in_a_link_a_source_reads_is_refused_too() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalog = Server::start(
+        "/",
+        vec![reply("404 Not Found", &[("Content-Length", "0")], b"")],
+    )?;
+    let link = "https://zenodo.org/records/3608990?token=abc123";
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{link}\"\n"),
+    )?;
+    for arguments in [&["sync"][..], &["add", link]] {
+        let output = sandbox
+            .command(arguments)
+            .env("FETCHLOOM_TEST_ZENODO_API", &catalog.url)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(10), "{arguments:?}: {stderr}");
+        assert!(stderr.contains("this link carries token"), "{stderr}");
+        assert!(stderr.contains("zenodo:3608990"), "{stderr}");
+        assert!(!stderr.contains("abc123"), "{stderr}");
+    }
+    assert!(!sandbox.work().join("data.lock").exists());
+    assert_eq!(catalog.requests(), Vec::<String>::new());
+    Ok(())
+}
+
 #[test]
 fn a_failing_link_never_shows_its_token() -> Result {
     let sandbox = Sandbox::new()?;

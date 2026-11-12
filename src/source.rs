@@ -109,6 +109,9 @@ pub(crate) struct Parsed {
     pub(crate) reference: Reference,
     pub(crate) file: Option<String>,
     pub(crate) folder: Option<String>,
+    /// the key of a value granting access, such as a token, that the reference's link carried,
+    /// even where the source's own reference leaves the value out.
+    pub(crate) secret: Option<String>,
 }
 
 impl Parsed {
@@ -120,6 +123,29 @@ impl Parsed {
             .iter()
             .map(|folder| format!("{}/**", crate::glob::escape(folder)));
         file.chain(folder).collect()
+    }
+
+    /// refuses a link that carries a value granting access, such as a token or the signature of
+    /// a presigned storage link: data.toml keeps a reference as written, data.lock copies it, git
+    /// would share both, and a signature stops working within days anyway.
+    pub(crate) fn check_shareable(&self) -> Result<(), Error> {
+        let Some(key) = &self.secret else {
+            return Ok(());
+        };
+        let error = Error::new(
+            Kind::ReferenceInvalid,
+            format!(
+                "this link carries {key}, a secret that data.toml and data.lock would keep and share"
+            ),
+        );
+        Err(match &self.reference {
+            Reference::Url(_) | Reference::Dropbox(_) => error.help(
+                "use a link that works without it, or download the file once with `fetchloom get`",
+            ),
+            read => error.help(format!(
+                "leave {key} out of the link: fetchloom reads {read} without it, with your saved key where its source asks for one"
+            )),
+        })
     }
 }
 
@@ -233,6 +259,7 @@ impl Reference {
                 reference,
                 file: None,
                 folder: None,
+                secret: None,
             })
         };
         if local::is_path(text) {
@@ -292,25 +319,6 @@ impl Reference {
         match self {
             Reference::Url(url) => crate::net::Shown(url).to_string(),
             other => net::mask_query(&other.to_string()).into_owned(),
-        }
-    }
-
-    /// refuses a link that carries a value granting access, such as a token or the signature of
-    /// a presigned storage link: data.toml and data.lock would keep it, git would share it, and a
-    /// signature stops working within days anyway.
-    pub(crate) fn check_shareable(&self) -> Result<(), Error> {
-        let url = match self {
-            Reference::Url(url) => url,
-            Reference::Dropbox(link) => link.url(),
-            _ => return Ok(()),
-        };
-        match crate::net::secret(url) {
-            None => Ok(()),
-            Some(key) => Err(Error::new(
-                Kind::ReferenceInvalid,
-                format!("this link carries {key}, a secret that data.toml and data.lock would keep and share"),
-            )
-            .help("use a link that works without it, or download the file once with `fetchloom get`")),
         }
     }
 
@@ -517,10 +525,12 @@ fn link(text: &str) -> Result<Parsed, Error> {
             "copy the complete link from your browser, including https:// and the website name",
         ));
     }
+    let secret = net::secret(&url);
     let parsed = |reference, file| Parsed {
         reference,
         file,
         folder: None,
+        secret: secret.clone(),
     };
     if let Some(versioned) = osf::versioned(&url) {
         return versioned.map(|url| parsed(Reference::Url(url), None));
@@ -551,6 +561,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
                 reference: Reference::HuggingFace(repo),
                 file,
                 folder,
+                secret: secret.clone(),
             })
         })
         .or_else(|| kaggle::from_link(&url).map(|(reference, file)| parsed(reference, file)))
@@ -817,6 +828,31 @@ mod tests {
 
     fn parse(text: &str) -> Parsed {
         Reference::parse(text).unwrap()
+    }
+
+    /// a value granting access in a link is refused whichever source reads the link, since
+    /// data.toml keeps the link as written and data.lock copies it. the help names the reference
+    /// fetchloom reads without it.
+    #[test]
+    fn a_secret_in_a_link_is_refused_whichever_source_reads_it() {
+        for (link, read) in [
+            (
+                "https://zenodo.org/records/3608990?token=abc",
+                "zenodo:3608990",
+            ),
+            (
+                "https://doi.org/10.5281/zenodo.3608990#access_token=abc",
+                "doi:10.5281/zenodo.3608990",
+            ),
+        ] {
+            let error = parse(link).check_shareable().unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{link}");
+            assert!(!error.message.contains("abc"), "{link}");
+            let help = error.help.unwrap_or_default();
+            assert!(help.contains(read), "{link}: {help}");
+        }
+        let plain = parse("https://zenodo.org/records/3608990?download=1");
+        assert!(plain.check_shareable().is_ok());
     }
 
     #[test]

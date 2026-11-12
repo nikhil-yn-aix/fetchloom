@@ -919,7 +919,6 @@ impl<'a> Loop<'a> {
             let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             // the line itself may hold a secret, so only its place is shown
             parsed
-                .reference
                 .check_shareable()
                 .map_err(|err| cite_place(err, entry, "ref"))?;
             if !resolves_locally(&parsed.reference) {

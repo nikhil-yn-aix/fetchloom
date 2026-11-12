@@ -1379,7 +1379,7 @@ fn validate_add(
 ) -> Result<Parsed, Error> {
     let parsed = Reference::parse(link)?;
     engine::tell_raw(&context.output, link, &parsed.reference);
-    parsed.reference.check_shareable()?;
+    parsed.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
         usable(asked, manifest)?;

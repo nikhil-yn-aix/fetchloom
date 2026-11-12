@@ -174,7 +174,6 @@ pub(super) fn checked(
         let parsed = Reference::parse(&line.link).map_err(|error| on_line(error, &at))?;
         if for_project {
             parsed
-                .reference
                 .check_shareable()
                 .map_err(|error| on_line(error, &at))?;
         }

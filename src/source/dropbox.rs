@@ -46,10 +46,6 @@ impl Link {
         Some(Link { url: link })
     }
 
-    pub(super) fn url(&self) -> &Url {
-        &self.url
-    }
-
     /// one download, named by the link until dropbox sends the file's real name.
     pub(super) fn listing(&self) -> Listing {
         let parts: Vec<&str> = self
