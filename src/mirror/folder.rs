@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below};
 use crate::cache::{Cache, Copied, Stored, read_unfollowed};
-use crate::digest::{Hasher, Sha256};
+use crate::digest::{Block, Hasher, Sha256};
 use crate::place::Placer;
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -295,9 +295,6 @@ const TMP: &str = "tmp";
 /// how long a file a push left unfinished in `tmp/` stays before a later push removes it, as a
 /// push that was killed leaves one.
 const STALE: Duration = Duration::from_hours(24);
-
-/// how much a push reads before it looks for a stop again.
-const BLOCK: usize = 1 << 20;
 
 /// a file a push writes into a mirror: a pinned file under [`OBJECTS`], or under [`TREES`] the
 /// list of what an archive unpacks to, each named by the SHA-256 its bytes must have.
@@ -1092,7 +1089,8 @@ fn hashed(
     stop: &Stop,
     mut each: impl FnMut(&[u8]) -> bool,
 ) -> io::Result<(u64, Sha256)> {
-    let mut block = vec![0; usize::try_from(most).map_or(BLOCK, |most| most.clamp(1, BLOCK))];
+    let mut block = Block::sized(most);
+    let block = block.get();
     let mut hasher = Hasher::default();
     let mut read = 0_u64;
     while read < most {

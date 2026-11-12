@@ -72,8 +72,16 @@ impl Sha256 {
 /// the most one read of a file being hashed takes.
 pub(crate) const BLOCK: usize = 1 << 20;
 
-/// a buffer a file is read into, a block at a time, to be hashed.
-pub(crate) struct Block(Vec<u8>);
+/// the boundary a [`Block`] starts at: a page on most systems.
+pub(crate) const PAGE: usize = 4096;
+
+/// a buffer a file is read into, a block at a time, to be hashed. it starts at a page.
+pub(crate) struct Block {
+    bytes: Vec<u8>,
+    /// where the buffer starts in `bytes`: the first page boundary in it.
+    start: usize,
+    len: usize,
+}
 
 impl Block {
     /// a buffer for reading at most `most` bytes: no larger than that, nor than [`BLOCK`]. a
@@ -81,11 +89,15 @@ impl Block {
     pub(crate) fn sized(most: u64) -> Block {
         // zeroing a whole block for each small file cost more than hashing it
         let len = usize::try_from(most).map_or(BLOCK, |most| most.clamp(1, BLOCK));
-        Block(vec![0; len])
+        // a kernel copies into a buffer 16 bytes past a page, where glibc's allocator puts one,
+        // several times slower on some cpus
+        let bytes = vec![0; len + PAGE - 1];
+        let start = bytes.as_ptr().align_offset(PAGE).min(PAGE - 1);
+        Block { bytes, start, len }
     }
 
     pub(crate) fn get(&mut self) -> &mut [u8] {
-        &mut self.0
+        &mut self.bytes[self.start..self.start + self.len]
     }
 }
 
@@ -266,6 +278,14 @@ mod tests {
             (u64::MAX, BLOCK),
         ] {
             assert_eq!(Block::sized(most).get().len(), len, "{most}");
+        }
+    }
+
+    /// every block starts at a page, whatever its size.
+    #[test]
+    fn a_block_starts_at_a_page() {
+        for most in [1, 4097, u64::MAX] {
+            assert_eq!(Block::sized(most).get().as_ptr().addr() % PAGE, 0, "{most}");
         }
     }
 
