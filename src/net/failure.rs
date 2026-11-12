@@ -22,6 +22,8 @@ pub(crate) const MOST_RETRIES: u32 = 20;
 /// sends a few bytes before every break still ends.
 const MOST_TRIES: u32 = 50;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
+/// the most the wait before a first retry takes; each retry after it may wait twice as long.
+pub(super) const FIRST_WAIT: Duration = Duration::from_secs(1);
 /// how many times a request waits for a rate limit to reset before those waits spend retries.
 const LIMITED: u32 = 10;
 
@@ -163,7 +165,8 @@ impl<'a> Retry<'a> {
                 host(self.url)
             )));
         }
-        let wait = backoff(self.attempt, asked).map_err(|asked| rate_limited(self.url, asked))?;
+        let wait = backoff(self.net.first_wait, self.attempt, asked)
+            .map_err(|asked| rate_limited(self.url, asked))?;
         self.attempt += 1;
         self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
@@ -634,15 +637,18 @@ fn rate_limited(url: &Url, asked: Duration) -> Error {
     .help("run the same command again later")
 }
 
-/// how long to wait before the next try: a random share of a doubling ceiling, never less than
-/// the server asked for. a server asking for more than a minute is an error, not a wait.
-fn backoff(attempt: u32, asked: Option<Duration>) -> Result<Duration, Duration> {
+/// how long to wait before the next try: a random share of a ceiling that starts at `first` and
+/// doubles each try, never less than the server asked for. a server asking for more than a
+/// minute is an error, not a wait.
+fn backoff(first: Duration, attempt: u32, asked: Option<Duration>) -> Result<Duration, Duration> {
     if let Some(asked) = asked
         && asked > LONGEST_WAIT
     {
         return Err(asked);
     }
-    let ceiling = Duration::from_secs(1 << attempt.saturating_sub(1).min(6)).min(LONGEST_WAIT);
+    let ceiling = first
+        .saturating_mul(1 << attempt.saturating_sub(1).min(6))
+        .min(LONGEST_WAIT);
     let jitter = ceiling.mul_f64(fastrand::f64());
     Ok(jitter.max(asked.unwrap_or_default()))
 }
@@ -824,21 +830,23 @@ mod tests {
     #[test]
     fn backoff_accepts_sixty_seconds_but_never_exceeds_it() {
         for attempt in [0, 1, 7, 100, u32::MAX] {
-            assert!(backoff(attempt, None).unwrap() <= Duration::from_secs(60));
+            assert!(backoff(FIRST_WAIT, attempt, None).unwrap() <= Duration::from_secs(60));
             assert_eq!(
-                backoff(attempt, Some(Duration::from_secs(60))),
+                backoff(FIRST_WAIT, attempt, Some(Duration::from_secs(60))),
                 Ok(Duration::from_secs(60))
             );
             assert_eq!(
-                backoff(attempt, Some(Duration::from_millis(60_001))),
+                backoff(FIRST_WAIT, attempt, Some(Duration::from_millis(60_001))),
                 Err(Duration::from_millis(60_001))
             );
         }
-        // a server's shorter wait is kept as it asked
-        assert_eq!(
-            backoff(1, Some(Duration::from_secs(5))),
-            Ok(Duration::from_secs(5))
-        );
+        // a server's shorter wait is kept as it asked, also where tests wait nothing of their own
+        for first in [FIRST_WAIT, Duration::ZERO] {
+            assert_eq!(
+                backoff(first, 1, Some(Duration::from_secs(5))),
+                Ok(Duration::from_secs(5))
+            );
+        }
     }
 
     /// a connection refused names the host and port, which tell which server is not there, and

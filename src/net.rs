@@ -215,6 +215,8 @@ pub(crate) struct Net {
     host_jobs: usize,
     /// tries after the first that a request gets once it stops making progress.
     retries: u32,
+    /// the most the wait before a first retry takes, which tests of broken answers set to zero.
+    first_wait: Duration,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
@@ -384,6 +386,7 @@ impl Net {
             connect: CONNECT,
             host_jobs: crate::settings::HOST_JOBS,
             retries: RETRIES,
+            first_wait: failure::FIRST_WAIT,
             split: Split {
                 when: options.split,
                 above: download::SPLIT_ABOVE,

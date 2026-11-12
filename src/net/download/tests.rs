@@ -181,7 +181,9 @@ fn net(url: &Url) -> Net {
         credentials: Vec::new(),
         split: crate::net::Splitting::WhenSlow,
     };
-    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+    let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+    // these tests break answers on purpose, and a wait between their tries only makes them slow
+    net.first_wait = std::time::Duration::ZERO;
     net.typed(url);
     net
 }
