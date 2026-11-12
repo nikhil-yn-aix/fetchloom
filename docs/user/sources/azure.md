@@ -49,7 +49,7 @@ azure_containers = [
 
 a request for a listed container goes without a SAS first, as for any container. once azure refuses it, the request goes again with the SAS, and the container's later requests carry it from the start. a container not listed never gets a SAS, whatever `data.toml` names. the SAS goes only to the container's own blob host over HTTPS, never on to where a redirect sends a request.
 
-each container gets the SAS its own entry carries, as in the second line above, which is the SAS link the azure portal gives for a container, else `AZURE_STORAGE_SAS_TOKEN`, as the az cli reads it. when `AZURE_STORAGE_ACCOUNT` names an account, that SAS goes only to listed containers in that account. a SAS needs read and list permission, `sp=rl`, for a container's listing.
+each container gets the SAS its own entry carries, as in the second line above, which is the SAS link the azure portal gives for a container, else `AZURE_STORAGE_SAS_TOKEN`, as the az cli reads it. a SAS is one account's, so when `AZURE_STORAGE_ACCOUNT` names an account, that SAS goes only to listed containers in that account, and when it names none, the listed containers without a SAS of their own must all be in one account. listed containers in two accounts, with `AZURE_STORAGE_ACCOUNT` unset, fail the first request that needs the SAS with `auth.required`, exit 40, asking for `AZURE_STORAGE_ACCOUNT`, before the SAS goes to either. a SAS needs read and list permission, `sp=rl`, for a container's listing.
 
 ```console
 $ fetchloom add https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/01/C/CV/ --dry-run

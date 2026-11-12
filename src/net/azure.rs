@@ -1,9 +1,10 @@
 //! which requests to azure's blob hosts carry a SAS: those for a container the `azure_containers`
 //! setting lists, once azure refused one without a SAS this run, and only to the container's own
 //! blob host over https, before any redirect. the SAS is the one the container's entry gives,
-//! else `AZURE_STORAGE_SAS_TOKEN`, kept to the account `AZURE_STORAGE_ACCOUNT` names when it
-//! names one, as the az cli reads them. every first request to a blob host asks for the version
-//! of azure's API that listings are read in.
+//! else `AZURE_STORAGE_SAS_TOKEN`, kept to the account `AZURE_STORAGE_ACCOUNT` names, as the az
+//! cli reads them, or without that variable to the one account the listed containers are in.
+//! every first request to a blob host asks for the version of azure's API that listings are
+//! read in.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -152,7 +153,7 @@ impl Azure {
         }
         let shared = self
             .shared
-            .get_or_init(|| shared(&*self.environment))
+            .get_or_init(|| shared(&*self.environment, &self.listed))
             .clone()?;
         Ok(shared
             .filter(|shared| {
@@ -170,8 +171,11 @@ impl Azure {
 }
 
 /// the SAS `AZURE_STORAGE_SAS_TOKEN` gives, kept to the account `AZURE_STORAGE_ACCOUNT` names.
+/// without that variable, the `listed` containers it may go to must be in one account, since a
+/// SAS is one account's.
 fn shared(
     environment: &(dyn Fn(&str) -> Option<std::ffi::OsString> + Send + Sync),
+    listed: &[AzureContainer],
 ) -> Result<Option<Shared>, Error> {
     let set = |name| environment(name).filter(|value| !value.is_empty());
     let Some(text) = set("AZURE_STORAGE_SAS_TOKEN") else {
@@ -200,6 +204,26 @@ fn shared(
                 })?,
         ),
     };
+    if account.is_none() {
+        let mut accounts: Vec<&str> = listed
+            .iter()
+            .filter(|entry| entry.sas().is_none())
+            .map(AzureContainer::account)
+            .collect();
+        accounts.sort_unstable();
+        accounts.dedup();
+        if accounts.len() > 1 {
+            return Err(Error::new(
+                Kind::AuthRequired,
+                format!(
+                    "AZURE_STORAGE_SAS_TOKEN names no account, and azure_containers lists containers in {} accounts: {}",
+                    accounts.len(),
+                    crate::units::some_of(&accounts, 3)
+                ),
+            )
+            .help("set AZURE_STORAGE_ACCOUNT to the account the SAS is for, or give each container its own SAS link in azure_containers"));
+        }
+    }
     Ok(Some(Shared { sas, account }))
 }
 

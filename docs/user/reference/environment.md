@@ -163,6 +163,6 @@ a SAS goes only to the containers `azure_containers` lists, as [private containe
 | variable | effect |
 |---|---|
 | `AZURE_STORAGE_SAS_TOKEN` | a SAS, the query the azure portal or `az storage container generate-sas` gives, with or without its leading `?`; one without `sv` and `sig` fails with `auth.required` once a listed container needs it, without repeating it |
-| `AZURE_STORAGE_ACCOUNT` | the storage account that SAS is for, so it goes only to listed containers in that account; unset sends it to every listed container without a SAS of its own |
+| `AZURE_STORAGE_ACCOUNT` | the storage account that SAS is for, so it goes only to listed containers in that account. unset, the listed containers without a SAS of their own must all be in one account: in two or more, a request that needs the SAS fails with `auth.required` and names this variable, before the SAS goes anywhere |
 
 the az cli's logins, managed identities and account keys are not read.

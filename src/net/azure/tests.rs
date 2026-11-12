@@ -238,6 +238,38 @@ fn a_sas_never_goes_where_the_settings_do_not_send_it() {
     );
 }
 
+/// the environment's SAS without `AZURE_STORAGE_ACCOUNT` is refused, before it reaches any
+/// container, when the listed containers it would go to are in more than one account. a
+/// container with a SAS of its own takes none of it, so it does not count.
+#[test]
+fn a_sas_without_its_account_is_refused_for_containers_in_two_accounts() {
+    let (local, asked) = blob_host("shared%3d");
+    let net = azure_net(
+        &["azure:lab/raw", "azure:lab/scans", "azure:other/data"],
+        &[("AZURE_STORAGE_SAS_TOKEN", SAS)],
+    );
+    let error = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "AZURE_STORAGE_SAS_TOKEN names no account, and azure_containers lists containers in 2 accounts: lab and other"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "set AZURE_STORAGE_ACCOUNT to the account the SAS is for, or give each container its own SAS link in azure_containers"
+        )
+    );
+    assert_eq!(lines(&asked), ["get /raw/a.csv http/1.1"]);
+    let own = format!("https://other.blob.core.windows.net/data?{OWN}");
+    let net = azure_net(
+        &["azure:lab/raw", &own],
+        &[("AZURE_STORAGE_SAS_TOKEN", SAS)],
+    );
+    let answer = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap();
+    assert_eq!(answer.status(), 200);
+}
+
 /// a container's entry may carry a SAS of its own, which it gets before the environment's. a
 /// SAS azure refuses is not sent again for that request, and the refusal names where it came
 /// from.
