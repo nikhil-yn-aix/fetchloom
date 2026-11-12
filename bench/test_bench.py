@@ -162,19 +162,22 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_process_exit_codes_are_distinct(self):
+    def test_a_run_reports_how_its_command_ended_and_leaves_only_its_log(self):
         import run
         import os
         from pathlib import Path
         import shutil
         root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         try:
-            passed = run.measure(["/bin/true"], root, os.environ, root / "log", 2)
-            self.assertEqual(passed["exit_code"], 0)
-            failed = run.measure(["/bin/false"], root, os.environ, root / "log", 2)
-            self.assertEqual(failed["exit_code"], 1)
-            self.assertFalse(passed["timeout"])
-            self.assertFalse(passed["interruption_sent"])
+            # a signal reads as its negative number, as in subprocess, and a missing tool as 127
+            for argv, code in [(["/bin/true"], 0), (["/bin/false"], 1), (["bash", "-c", "exit 3"], 3),
+                               (["bash", "-c", "kill -INT $$"], -2), (["no-such-benchmark-tool"], 127)]:
+                with self.subTest(argv=argv):
+                    result = run.measure(argv, root, os.environ, root / "log", 5)
+                    self.assertEqual(result["exit_code"], code)
+                    self.assertFalse(result["timeout"])
+                    self.assertFalse(result["interruption_sent"])
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["log"])
         finally:
             shutil.rmtree(root)
 
@@ -191,10 +194,6 @@ class MeasurementTests(unittest.TestCase):
                                 root, os.environ, root / "log", 30)
             self.assertGreater(large["maxrss_bytes"], 100 * 1024 * 1024)
             self.assertLess(large["maxrss_bytes"], 160 * 1024 * 1024)
-            self.assertEqual(run.measure(["bash", "-c", "kill -INT $$"], root, os.environ, root / "log", 5)["exit_code"], -2)
-            self.assertEqual(run.measure(["bash", "-c", "exit 3"], root, os.environ, root / "log", 5)["exit_code"], 3)
-            self.assertEqual(run.measure(["no-such-benchmark-tool"], root, os.environ, root / "log", 5)["exit_code"], 127)
-            self.assertEqual(sorted(path.name for path in root.iterdir()), ["log"])
         finally:
             del ballast
             shutil.rmtree(root)

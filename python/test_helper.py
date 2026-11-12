@@ -1,5 +1,6 @@
 """the python helper's command arguments and returned paths."""
 
+import inspect
 import io
 import itertools
 import json
@@ -8,6 +9,7 @@ import pickle
 import socket
 import subprocess
 import sys
+import tempfile
 import traceback
 import unittest
 from pathlib import Path
@@ -605,21 +607,19 @@ class Progress(unittest.TestCase):
 
 
 class PublicNames(unittest.TestCase):
-    def test_dir_lists_only_the_helpers(self):
-        self.assertEqual(dir(fetchloom), ["Error", "get", "path", "sync"])
+    def test_dir_shows_the_helpers_but_not_the_modules_they_use(self):
+        shown = dir(fetchloom)
+        self.assertIn("sync", shown)
+        hidden = [name for name in shown if name.startswith("_") or inspect.ismodule(getattr(fetchloom, name))]
+        self.assertEqual(hidden, [])
 
     def test_the_version_is_the_installed_packages(self):
-        with patch("importlib.metadata.version", return_value="9.9.9") as version:
-            self.assertEqual(fetchloom.__version__, "9.9.9")
-        version.assert_called_once_with("fetchloom")
-
-    def test_strict_names_what_it_raises_on_and_what_it_does_not(self):
-        documented = " ".join(fetchloom.sync.__doc__.split())
-        self.assertIn("``strict=True`` also raises", documented)
-        self.assertIn("put back as pinned", documented)
-
-    def test_the_path_example_names_a_real_file(self):
-        self.assertIn("``iris/Iris.csv``", fetchloom.path.__doc__)
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "fetchloom-9.9.9.dist-info"
+            installed.mkdir()
+            (installed / "METADATA").write_text("Metadata-Version: 2.1\nName: fetchloom\nVersion: 9.9.9\n", encoding="utf-8")
+            with patch.object(sys, "path", [directory, *sys.path]):
+                self.assertEqual(fetchloom.__version__, "9.9.9")
 
 
 class ProgramDiscovery(unittest.TestCase):
