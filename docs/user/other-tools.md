@@ -87,7 +87,7 @@ path = "raw"
 
 ```text
      Placed data/raw · 2 files linked to the cache
-    Removed 2 files no dataset needs
+    Removed 2 files from data/ that no dataset needs
      Synced 2 datasets into data
 ```
 

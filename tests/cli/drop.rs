@@ -87,7 +87,7 @@ fn drop_leaves_out_a_file_inside_an_archive_without_a_request() -> Result {
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
-        "   Excluded 1 file of pets.zip in data.toml\n    Removed 1 file no dataset needs\n"
+        "   Excluded 1 file of pets.zip in data.toml\n    Removed 1 file from data/ that no dataset needs\n"
     );
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
@@ -369,7 +369,7 @@ fn a_folder_is_dropped_as_one_pattern_and_a_whole_archive_leaves_data_lock() -> 
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
-        "   Excluded 1 file of set in data.toml and data.lock\n    Removed 1 file no dataset needs\n"
+        "   Excluded 1 file of set in data.toml and data.lock\n    Removed 1 file from data/ that no dataset needs\n"
     );
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
@@ -718,7 +718,7 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
-        "   Excluded 2 files of ds000001 in data.toml and data.lock\n    Removed 2 files no dataset needs\n"
+        "   Excluded 2 files of ds000001 in data.toml and data.lock\n    Removed 2 files from data/ that no dataset needs\n"
     );
     let manifest = fs::read_to_string(work.join("data.toml"))?;
     assert!(

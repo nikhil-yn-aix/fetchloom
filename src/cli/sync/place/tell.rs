@@ -485,7 +485,8 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
 
 /// the lines for the files a placement removed, or would remove: under the first of `verbs`, one
 /// for each dataset `place = false` keeps out of the data folder now, then under the second one
-/// for the files no dataset needs.
+/// for the files no dataset needs, which names the data folder they leave, so it never reads as
+/// a cleanup of the cache.
 fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placement: &Placement) {
     for (dataset, files) in &placement.unplaced {
         output.step(
@@ -503,7 +504,11 @@ fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placemen
     if unneeded > 0 {
         output.step(
             verbs[1],
-            &units::count(unneeded, "file no dataset needs", "files no dataset needs"),
+            &format!(
+                "{} from {}/ that no dataset needs",
+                units::count(unneeded, "file", "files"),
+                manifest.data_dir
+            ),
         );
     }
 }

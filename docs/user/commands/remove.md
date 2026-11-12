@@ -47,7 +47,7 @@ if deleting files fails after metadata was written, fix the reported error and r
 
 ```text
 Would remove a from data.toml and data.lock
-Would remove 1 file no dataset needs
+Would remove 1 file from data/ that no dataset needs
          Ok dry run, nothing was changed
 ```
 

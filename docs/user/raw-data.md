@@ -38,7 +38,7 @@ warning: put back data/uci/iris.names, which was deleted or moved, since data.lo
 ```text
 $ fetchloom drop data/uci/bezdekIris.data
    Excluded 1 file of iris.zip in data.toml
-    Removed 1 file no dataset needs
+    Removed 1 file from data/ that no dataset needs
 ```
 
 data.toml then holds:

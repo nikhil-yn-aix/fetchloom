@@ -34,7 +34,7 @@ stderr when the curator drops a broken image from a dataset that is one zip, `pe
 
 ```text
    Excluded 1 file of pets.zip in data.toml
-    Removed 1 file no dataset needs
+    Removed 1 file from data/ that no dataset needs
 ```
 
 `data.toml` then reads:
@@ -54,7 +54,7 @@ with ten-sample shards whose files have the same names in each, and `select = ["
 ```text
    Excluded 1 file of shard-000001.tar in data.toml
   hint: shard-000001.tar now has its own members table, copied from members."shard-*.tar", so later changes to that table do not reach it
-    Removed 1 file no dataset needs
+    Removed 1 file from data/ that no dataset needs
 ```
 
 and adds to `data.toml`:
@@ -123,7 +123,7 @@ the pattern reads paths inside the archive, so in a dataset that is one archive 
 
 ```text
 Would exclude 1 file of pets.zip in data.toml
-Would remove 1 file no dataset needs
+Would remove 1 file from data/ that no dataset needs
          Ok dry run, nothing was changed
 ```
 
