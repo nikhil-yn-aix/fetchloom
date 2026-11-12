@@ -11,7 +11,7 @@
 | file | what it holds | types and functions |
 |---|---|---|
 | [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs) | lazy clients, redirect policy and concurrency | `Net`, `Wire`, `Options`, `Credential`, `Offline`, `Splitting`, `Split`, `send_on`, `permit`, `pace_holding` |
-| [api.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api.rs) | bounded metadata responses, and `Api::get_once`, one try with no retry and no wait for a host's rate limit, for a hint a person can do without | `Api`, `Response`, `json`, `text`, `get_once` |
+| [api.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api.rs) | bounded metadata responses, `Api::get_once`, one try with no retry and no wait for a host's rate limit, for a hint a person can do without, and `Api::get_with`, a GET that carries extra headers | `Api`, `Response`, `json`, `text`, `get_once`, `get_with` |
 | [api/memo.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api/memo.rs) | bounded request-scoped metadata reuse and in-flight sharing | `Memo`, `Key`, `Flight`, `Claim` |
 | [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | cache hits, resumes, body streaming and expected hashes | `Fetch`, `Expect`, `Fetched`, `Origin`, `Event`, `Resumable`, `download` |
 | [download/split.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/split.rs) | adaptive range scheduling | `Job`, `Board`, `Share`, `Streamed`, `split` |
@@ -31,7 +31,7 @@
 
 ### metadata reuse
 
-ordinary `Api::get` calls reuse successful metadata within one `Net` run and share identical in-flight requests. bodies are shared through `Arc`, not copied. the key follows the outgoing URL and headers, including credential values, plus the signing or token scope; credential refresh and access checks happen before reuse. only 2xx answers are retained. each page keeps its next link and total item count. hints through `get_once` and mirror reads bypass the memo; offline and mirror-only rules still apply.
+ordinary `Api::get` and `Api::get_with` calls reuse successful metadata within one `Net` run and share identical in-flight requests. `get_with` adds its static headers, as the `apollo-require-preflight` openneuro's GraphQL API asks of a query sent by GET, both to the key and to the request that goes out, so a query is reused only for the same link and headers, never for another query or a plain GET of its link. bodies are shared through `Arc`, not copied. the key follows the outgoing URL and headers, including credential values, plus the signing or token scope; credential refresh and access checks happen before reuse. only 2xx answers are retained. each page keeps its next link and total item count. hints through `get_once` and mirror reads bypass the memo; offline and mirror-only rules still apply.
 
 the allowance is one sixteenth of the memory setting, capped at 64 MiB, with at most 4,096 entries. retained bodies and metadata count against it; old ready entries are evicted and oversized listings are not retained. a dead origin download clears discovery before source recovery, and a request invalidated while in flight cannot repopulate the memo. nothing is persisted. the [measurement](../performance/measurements.md#a-per-run-metadata-memo-2026-11-12) records the speed and memory tradeoff.
 

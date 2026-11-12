@@ -142,6 +142,29 @@ impl Api for Recorded {
         ready(Ok(answer))
     }
 
+    /// answers as [`Api::get`] does, and remembers the request as its link, then each header
+    /// it carried, as `name: value`.
+    fn get_with(
+        &self,
+        url: &Url,
+        headers: &'static [(&'static str, &'static str)],
+    ) -> impl Future<Output = Result<Response, Error>> + Send {
+        let carried: Vec<String> = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}"))
+            .collect();
+        self.asked
+            .lock()
+            .unwrap()
+            .push(format!("{url} {}", carried.join(" ")));
+        let answer = self
+            .answers
+            .get(url.as_str())
+            .cloned()
+            .unwrap_or_else(|| panic!("nothing recorded for {url}"));
+        ready(Ok(answer))
+    }
+
     fn drive_refused<'a>(
         &'a self,
         id: &'a str,

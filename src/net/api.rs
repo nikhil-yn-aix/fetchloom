@@ -24,6 +24,19 @@ const LARGEST: usize = 64 * 1024 * 1024;
 pub(crate) trait Api: Sync {
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send;
 
+    /// a GET that also carries `headers`, as a GraphQL server's guard against requests from
+    /// other sites asks of a query sent by GET. the network keeps its answer for the run by the
+    /// link and every header it carried, so one query never gets another's answer. a test's
+    /// network that answers by link alone may answer as [`Api::get`] does.
+    fn get_with(
+        &self,
+        url: &Url,
+        headers: Extra,
+    ) -> impl Future<Output = Result<Response, Error>> + Send {
+        let _ = headers;
+        self.get(url)
+    }
+
     /// one try at a GET, for a hint a person can do without: an answer a retry or a wait for a
     /// rate limit would get past fails at once instead.
     fn get_once(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
@@ -38,6 +51,16 @@ pub(crate) trait Api: Sync {
     ) -> impl Future<Output = Result<super::Private, Error>> + Send + 'a {
         std::future::ready(Ok(super::Private::Unlisted))
     }
+}
+
+/// headers a request carries besides those the network gives it, by name and value.
+pub(crate) type Extra = &'static [(&'static str, &'static str)];
+
+/// `request` with the `extra` headers.
+fn with_extra(request: reqwest::RequestBuilder, extra: Extra) -> reqwest::RequestBuilder {
+    extra.iter().fold(request, |request, (name, value)| {
+        request.header(*name, *value)
+    })
 }
 
 /// what a server answered, with the few headers sources read.
@@ -79,7 +102,11 @@ impl Response {
 
 impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
-        Box::pin(self.get_for(url, false)).await
+        Box::pin(self.get_for(url, false, &[])).await
+    }
+
+    async fn get_with(&self, url: &Url, headers: Extra) -> Result<Response, Error> {
+        Box::pin(self.get_for(url, false, headers)).await
     }
 
     fn drive_refused<'a>(
@@ -107,6 +134,7 @@ impl Api for Net {
                 false,
                 false,
                 Some(super::Holding::new(&url, &mut permits)),
+                &[],
             )
             .await
         {
@@ -124,7 +152,7 @@ impl Net {
     /// request ask a mirror for.
     pub(crate) async fn mirror_get(&self, url: &Url) -> Result<Response, Error> {
         let url = self.asking(url)?;
-        self.get_unmemoized(&url, true, false)
+        self.get_unmemoized(&url, true, false, &[])
             .await
             .map(|(response, _)| response)
     }
@@ -134,7 +162,7 @@ impl Net {
         self
     }
 
-    async fn get_for(&self, url: &Url, mirror: bool) -> Result<Response, Error> {
+    async fn get_for(&self, url: &Url, mirror: bool, extra: Extra) -> Result<Response, Error> {
         let url = self.asking(url)?;
         self.may_ask(&url, mirror, None)
             .map_err(|failure| match failure {
@@ -145,9 +173,9 @@ impl Net {
             })?;
         loop {
             self.stop.check()?;
-            let Some(key) = self.metadata_key(&url, mirror).await? else {
+            let Some(key) = self.metadata_key(&url, mirror, extra).await? else {
                 return self
-                    .get_unmemoized(&url, mirror, false)
+                    .get_unmemoized(&url, mirror, false, extra)
                     .await
                     .map(|(response, _)| response);
             };
@@ -163,7 +191,7 @@ impl Net {
                         () = self.stop.asked() => return Err(failure::interrupted(&url)),
                     }
                     self.stop.check()?;
-                    if let Some(key) = self.metadata_key(&url, mirror).await?
+                    if let Some(key) = self.metadata_key(&url, mirror, extra).await?
                         && key.sent.current(self.wire()?)
                         && let Some(response) = flight.response(&key)
                     {
@@ -171,7 +199,7 @@ impl Net {
                     }
                 }
                 memo::Found::Fetching(claim) => {
-                    let (response, sent) = self.get_unmemoized(&url, mirror, true).await?;
+                    let (response, sent) = self.get_unmemoized(&url, mirror, true, extra).await?;
                     if let Some(sent) = sent
                         && sent.sent.current(self.wire()?)
                     {
@@ -181,7 +209,7 @@ impl Net {
                 }
                 memo::Found::Unkept => {
                     return self
-                        .get_unmemoized(&url, mirror, false)
+                        .get_unmemoized(&url, mirror, false, extra)
                         .await
                         .map(|(response, _)| response);
                 }
@@ -189,7 +217,12 @@ impl Net {
         }
     }
 
-    async fn metadata_key(&self, url: &Url, mirror: bool) -> Result<Option<memo::Key>, Error> {
+    async fn metadata_key(
+        &self,
+        url: &Url,
+        mirror: bool,
+        extra: Extra,
+    ) -> Result<Option<memo::Key>, Error> {
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
         let container = self.azure.locate(url);
@@ -234,6 +267,7 @@ impl Net {
             header::ACCEPT,
             "application/json, text/html;q=0.9, */*;q=0.8",
         );
+        let request = with_extra(request, extra);
         let (authorized, drive) = tokened.metadata_scope();
         let authorized = authorized.or_else(|| blobbed.authorized());
         Ok(Sent::capture(wire, url, &request).map(|sent| memo::Key {
@@ -252,6 +286,7 @@ impl Net {
         url: &Url,
         mirror: bool,
         memoized: bool,
+        extra: Extra,
     ) -> Result<(Response, Option<memo::Key>), Error> {
         let mut permits = Some(self.permit(url).await?);
         let mut retry = Retry::new(self, url);
@@ -263,6 +298,7 @@ impl Net {
                     mirror,
                     memoized,
                     Some(super::Holding::new(url, &mut permits)),
+                    extra,
                 )
                 .await
             {
@@ -315,6 +351,7 @@ impl Net {
         mirror: bool,
         memoized: bool,
         holding: Option<super::Holding<'_>>,
+        extra: Extra,
     ) -> Result<(Response, Option<memo::Key>), Failure> {
         let mut response = self
             .send_on(
@@ -326,9 +363,12 @@ impl Net {
                 url,
                 mirror,
                 |request| {
-                    request.header(
-                        header::ACCEPT,
-                        "application/json, text/html;q=0.9, */*;q=0.8",
+                    with_extra(
+                        request.header(
+                            header::ACCEPT,
+                            "application/json, text/html;q=0.9, */*;q=0.8",
+                        ),
+                        extra,
                     )
                 },
                 holding,

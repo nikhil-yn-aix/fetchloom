@@ -171,7 +171,9 @@ fn response(url: &Url, status: u16, body: &[u8]) -> Response {
 }
 
 fn key(net: &Net, url: &Url) -> memo::Key {
-    block_on(net.metadata_key(url, false)).unwrap().unwrap()
+    block_on(net.metadata_key(url, false, &[]))
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
@@ -549,4 +551,41 @@ fn azure_sas_values_and_anonymous_requests_cannot_share_a_metadata_entry() {
             .iter()
             .all(|request| request.contains("x-ms-version:"))
     );
+}
+
+/// a query sent by GET with a header the server asks for, as a GraphQL server's guard against
+/// cross-site requests does, carries that header and goes by its link and headers as any
+/// request does: each query gets its own answer, the same query again in a run gets the one
+/// already read, and a plain GET of the same link is asked anew, without the header.
+#[test]
+fn a_query_sent_with_headers_never_gets_the_answer_to_another() {
+    let (url, asked) = route(|target| reply("200 OK", &[], target.as_bytes()));
+    let net = net(&url);
+    let preflight: &[(&str, &str)] = &[("apollo-require-preflight", "true")];
+    let first = url.join("graphql?query=one").unwrap();
+    let second = url.join("graphql?query=two").unwrap();
+    block_on(async {
+        for (link, said) in [
+            (&first, "/graphql?query=one"),
+            (&second, "/graphql?query=two"),
+            (&first, "/graphql?query=one"),
+        ] {
+            assert_eq!(net.get_with(link, preflight).await.unwrap().text(), said);
+        }
+        assert_eq!(net.get(&first).await.unwrap().text(), "/graphql?query=one");
+    });
+    let heads: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|head| head.to_ascii_lowercase())
+        .collect();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(
+        heads[..2]
+            .iter()
+            .all(|head| head.contains("apollo-require-preflight: true")),
+        "{heads:?}"
+    );
+    assert!(!heads[2].contains("apollo-require-preflight"), "{heads:?}");
 }
