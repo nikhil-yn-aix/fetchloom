@@ -14,7 +14,7 @@ use url::Url;
 use super::super::failure::{self, Failure, Retry};
 use super::super::{Net, host};
 use crate::auth::azure::STORAGE;
-use crate::error::{Error, Kind};
+use crate::error::{Error, Kind, report_answer};
 use crate::work::Work;
 
 /// where every virtual machine's instance metadata service gives its identity's tokens.
@@ -221,7 +221,7 @@ fn token(status: u16, body: &[u8], client_id: Option<&str>) -> Result<(String, D
             Kind::SourceInvalid,
             format!("azure's metadata service sent {what}"),
         )
-        .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
+        .help(report_answer())
     };
     let answer = answer.ok_or_else(|| unusable("an answer fetchloom could not read"))?;
     if answer
