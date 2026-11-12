@@ -35,6 +35,8 @@ _SWITCHES = {
 _VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256", "-C": "project"}
 # an example or command in backticks, or input fetchloom quotes, as in `found no dataset matching "x"`
 _QUOTED = re.compile(r'`[^`]*`|"[^"]*"')
+# a fetchloom command in backticks, which fetchloom words with the arguments the helper gave it
+_COMMAND = re.compile(r"`fetchloom ([^`]*)`")
 # how fetchloom says that no folder from -C upward holds a project
 _NO_PROJECT = "there is no data.toml in this folder or any folder above it"
 # how many of the last lines fetchloom said on stderr an error without a JSON answer repeats
@@ -110,7 +112,16 @@ def path(
     with kind ``lock.outdated``.
     """
     arguments = _options(["path"], yes, offline, locked)
-    return Path(_run([*arguments, "--", name], project, {"project", "yes", "offline", "locked"})["path"])
+    keywords = {"project", "yes", "offline", "locked"}
+    try:
+        answer = _run([*arguments, "--", name], project, keywords)
+    except Error as error:
+        meant = _meant(error.help, project)
+        if meant is None:
+            raise
+        call = _path_call(meant, project, {"yes": yes, "offline": offline, "locked": locked})
+        raise Error(error.kind, error.message, error.details, f"did you mean `{call}`?", error.code) from None
+    return Path(answer["path"])
 
 
 def sync(
@@ -261,9 +272,13 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             f"fetchloom exited with code {finished.returncode} without a JSON answer. it said: {said}",
             code=finished.returncode,
         ) from None
+
+    def told(text: str) -> str:
+        return _spoken(_as_typed(text, project), keywords)
+
     for warning in answer["warnings"]:
         said = f"{warning['message']}; {warning['help']}" if warning["help"] else warning["message"]
-        warnings.warn(_spoken(said, keywords), stacklevel=3)
+        warnings.warn(told(said), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
         help = error["help"]
@@ -271,16 +286,56 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             # a script or notebook often runs in another folder than its project's
             help = _no_project(project)
         elif help:
-            # the program quotes its own command line, which holds the flags this helper adds
-            for own in ["--json --progress ", "--json ", "--progress "]:
-                help = help.replace(f"`fetchloom {own}", "`fetchloom ")
-            if os.fspath(project) == ".":
-                help = help.replace("`fetchloom -C . ", "`fetchloom ")
-            help = _spoken(help, keywords)
-        message = _spoken(error["message"], keywords)
-        details = [_spoken(detail, keywords) for detail in error["details"]]
-        raise Error(error["kind"], message, details, help, finished.returncode)
+            help = told(help)
+        details = [told(detail) for detail in error["details"]]
+        raise Error(error["kind"], told(error["message"]), details, help, finished.returncode)
     return answer["result"]
+
+
+def _as_typed(text: str, project: str | os.PathLike[str]) -> str:
+    """``text`` with each ``fetchloom`` command in backticks as a person types it at a terminal.
+
+    fetchloom words them with the arguments the helper gave it, so each leaves out the
+    ``--json`` and ``--progress`` the helper passes, the ``-C`` that names the working folder
+    when ``project`` is that folder, as ``.`` or as fetchloom spells it out, and the ``--`` the
+    helper puts before names, unless a name after it starts with ``-``.
+    """
+
+    def typed(match: re.Match[str]) -> str:
+        words = match.group(1)
+        for own in ["--json --progress ", "--json ", "--progress "]:
+            words = words.removeprefix(own)
+        if os.fspath(project) == ".":
+            for folder in [".", os.getcwd()]:
+                words = words.removeprefix(f"-C {_shell_word(folder)} ")
+        before, separator, names = words.partition(" -- ")
+        if separator and not any(name.lstrip("'\"").startswith("-") for name in names.split()):
+            words = f"{before} {names}"
+        return f"`fetchloom {words}`"
+
+    return _COMMAND.sub(typed, text)
+
+
+def _meant(help: str | None, project: str | os.PathLike[str]) -> str | None:
+    """the name fetchloom guessed was meant in ``help``, its did-you-mean for a name given to
+    ``path`` in ``project`` that names nothing, or None for any other help and for a name a shell
+    needs quoted."""
+    folder = "" if os.fspath(project) == "." else f"-C {_shell_word(_local(project))} "
+    flags = "(?: --(?:yes|offline|locked))*"
+    guess = re.fullmatch(
+        rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
+    )
+    return guess.group(1) if guess else None
+
+
+def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, bool]) -> str:
+    """the call of :func:`path` for ``name`` in ``project`` with the keywords in ``switches``
+    that are on, as a python caller types it."""
+    words = [json.dumps(name, ensure_ascii=False)]
+    if os.fspath(project) != ".":
+        words.append(f"project={json.dumps(os.fspath(project), ensure_ascii=False)}")
+    words += [f"{keyword}=True" for keyword, on in switches.items() if on]
+    return f"fetchloom.path({', '.join(words)})"
 
 
 def _call(argv: list[str]) -> subprocess.CompletedProcess[str]:

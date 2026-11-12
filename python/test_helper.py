@@ -299,7 +299,7 @@ class Errors(unittest.TestCase):
             traceback.format_exception_only(type(raised.exception), raised.exception)[-1],
             "fetchloom.Error: usage: iris has no file or folder called iris.csv\n"
             "  iris holds Iris.csv and README.md\n"
-            "  help: did you mean `fetchloom path iris/Iris.csv`?\n",
+            "  help: did you mean `fetchloom.path(\"iris/Iris.csv\")`?\n",
         )
         self.assertEqual(raised.exception.code, 2)
 
@@ -327,6 +327,79 @@ class Errors(unittest.TestCase):
                             fetchloom.path("iris", project)
                 self.assertEqual(raised.exception.help, shown)
 
+    def test_commands_leave_out_the_folder_and_separator_the_helper_added(self):
+        # what fetchloom says with the -C and the -- the helper gives it, and how python shows it
+        cases = [
+            (
+                lambda: fetchloom.sync(strict=True),
+                "`fetchloom -C /work/study build clean` makes it",
+                "`fetchloom build clean` makes it",
+            ),
+            (
+                lambda: fetchloom.sync("/work/study", strict=True),
+                "`fetchloom -C /work/study build clean` makes it",
+                "`fetchloom -C /work/study build clean` makes it",
+            ),
+            (
+                lambda: fetchloom.sync(names=["irs"]),
+                "did you mean `fetchloom --json --progress -C . sync -- iris`?",
+                "did you mean `fetchloom sync iris`?",
+            ),
+            (
+                lambda: fetchloom.sync(names=["-irs"]),
+                "did you mean `fetchloom --json --progress -C . sync -- -iris`?",
+                "did you mean `fetchloom sync -- -iris`?",
+            ),
+        ]
+        for call, said, shown in cases:
+            answer = {
+                "status": "error",
+                "errors": [{"kind": "usage", "message": "refused", "details": [said], "help": said}],
+                "warnings": [{"kind": "build.unbuilt", "message": "refused", "details": [], "help": said}],
+            }
+            response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+            with self.subTest(said=said, shown=shown):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom, "_call", return_value=response):
+                        with patch.object(fetchloom.os, "getcwd", return_value="/work/study"):
+                            with self.assertWarns(UserWarning) as warned:
+                                with self.assertRaises(fetchloom.Error) as raised:
+                                    call()
+                self.assertEqual((raised.exception.details, raised.exception.help), ([shown], shown))
+                self.assertEqual(str(warned.warning), f"refused; {shown}")
+
+    def test_a_mistyped_name_is_suggested_as_the_call_that_finds_it(self):
+        for call, typed, shown in [
+            (
+                lambda: fetchloom.path("irs"),
+                "fetchloom --json --progress -C . path -- iris",
+                'fetchloom.path("iris")',
+            ),
+            (
+                lambda: fetchloom.path("irs", "study", offline=True),
+                "fetchloom --json --progress -C study path --offline -- iris",
+                'fetchloom.path("iris", project="study", offline=True)',
+            ),
+        ]:
+            answer = {
+                "status": "error",
+                "errors": [{
+                    "kind": "usage",
+                    "message": 'data.toml has no dataset called "irs"',
+                    "details": [],
+                    "help": f"did you mean `{typed}`?",
+                }],
+                "warnings": [],
+            }
+            response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+            with self.subTest(typed=typed):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom, "_call", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            call()
+                self.assertEqual(raised.exception.help, f"did you mean `{shown}`?")
+                self.assertEqual(raised.exception.args[3], f"did you mean `{shown}`?")
+
     def test_a_script_outside_its_project_is_told_to_pass_project(self):
         missing = "there is no data.toml in this folder or any folder above it"
         start = "run `fetchloom add <link>` to start a project here"
@@ -351,7 +424,7 @@ class Errors(unittest.TestCase):
                 lambda: fetchloom.path("processed", "elsewhere"),
                 "data.toml is not valid TOML: unclosed table, expected `]`",
                 "fix that line, then run `fetchloom --json --progress -C elsewhere path -- processed` again",
-                "fix that line, then run `fetchloom -C elsewhere path -- processed` again",
+                "fix that line, then run `fetchloom -C elsewhere path processed` again",
             ),
         ]:
             answer = {
@@ -403,7 +476,7 @@ class Errors(unittest.TestCase):
             (
                 "get",
                 "check the connection and run `fetchloom get --output=u.csv -- https://example.org/u.csv` again",
-                "check the connection and run `fetchloom get --output=u.csv -- https://example.org/u.csv` again",
+                "check the connection and run `fetchloom get --output=u.csv https://example.org/u.csv` again",
             ),
             (
                 "get",
