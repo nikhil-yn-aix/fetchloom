@@ -10,6 +10,7 @@ use crate::project::{partial_bytes, told_a_stop};
 use crate::support::wait_until;
 use crate::support::{
     Part, Result, Routes, Sandbox, Server, delete_folder, file, json, reply, text,
+    without_copy_warning,
 };
 
 #[test]
@@ -1162,7 +1163,7 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let stderr = text(&added.stderr)?;
     assert_eq!(added.status.code(), Some(0), "{stderr}");
     assert_eq!(
-        stderr,
+        without_copy_warning(&stderr),
         format!(
             "warning: a later run downloads from {origin}, a private address, only once allowed_origins lists it\n  help: {line}\n"
         )

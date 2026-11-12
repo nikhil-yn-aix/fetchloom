@@ -412,6 +412,18 @@ pub(crate) fn partial_files(cache: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// `stderr` without the warning a drive that cannot link adds, as ci's fat32 and exfat passes
+/// do, so a test can compare the rest whole.
+pub(crate) fn without_copy_warning(stderr: &str) -> String {
+    stderr
+        .split_inclusive('\n')
+        .filter(|line| {
+            !(line.starts_with("warning: the drive holding ")
+                && line.ends_with(" cannot link files, so files were copied\n"))
+        })
+        .collect()
+}
+
 /// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
 /// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
 /// alone, since a placed hardlink shares it with the cached object.

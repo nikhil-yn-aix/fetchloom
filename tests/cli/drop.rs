@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use crate::support::{Result, Sandbox, Server, delete, delete_folder, file, json, text};
+use crate::support::{
+    Result, Sandbox, Server, delete, delete_folder, file, json, text, without_copy_warning,
+};
 
 /// the pets the curator keeps, in one zip whose files share the folder `pets-v1`.
 const PETS: [(&str, &[u8]); 4] = [
@@ -633,7 +635,10 @@ fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() ->
         let output = sandbox.run(&["sync"])?;
         ok(&output)?;
         let stderr = text(&output.stderr)?;
-        assert!(!stderr.contains("warning"), "{stderr}");
+        assert!(
+            !without_copy_warning(&stderr).contains("warning"),
+            "{stderr}"
+        );
         assert!(
             stderr.contains("     Placed data/tree · 6 files ")
                 && stderr.contains(" · the folder was missing\n"),
