@@ -687,7 +687,7 @@ class ProgramDiscovery(unittest.TestCase):
         with patch.object(fetchloom, "__file__", str(root / package / "__init__.py")):
             with patch.object(fetchloom.sysconfig, "get_path", side_effect=scripts):
                 with patch.object(Path, "is_file", lambda path: path in available):
-                    with patch.object(fetchloom.shutil, "which", return_value=fallback):
+                    with patch.object(fetchloom, "_on_path", return_value=fallback):
                         return fetchloom._program()
 
     def executable(self, folder):
@@ -727,11 +727,37 @@ class ProgramDiscovery(unittest.TestCase):
             "https://github.com/nikhil-yn-aix/fetchloom#install says, or put it on PATH",
         )
 
+    def test_path_is_searched_in_its_absolute_folders_alone(self):
+        # a cloned project may hold a program called fetchloom, which a search of the working
+        # folder, a relative entry or an empty one would run
+        name = "fetchloom.exe" if fetchloom.sys.platform == "win32" else "fetchloom"
+        with tempfile.TemporaryDirectory() as root:
+            clone, installed = Path(root, "clone"), Path(root, "installed")
+            for folder in [clone, installed]:
+                folder.mkdir()
+                (folder / name).write_text("")
+                (folder / name).chmod(0o755)
+            here = os.getcwd()
+            os.chdir(clone)
+            try:
+                for entries, found in [([".", "", str(installed)], str(installed / name)), (["."], None)]:
+                    environment = {"PATH": os.pathsep.join(entries), "PATHEXT": ".exe"}
+                    with self.subTest(entries=entries):
+                        with patch.dict(os.environ, environment), \
+                             patch.object(fetchloom.sysconfig, "get_path", return_value=""):
+                            if found is None:
+                                with self.assertRaises(FileNotFoundError):
+                                    fetchloom._program()
+                            else:
+                                self.assertEqual(fetchloom._program(), found)
+            finally:
+                os.chdir(here)
+
     def test_user_scripts_follow_the_interpreters_preferred_scheme(self):
         with patch.object(fetchloom.sysconfig, "get_preferred_scheme", return_value="custom_user") as preferred:
             with patch.object(fetchloom.sysconfig, "get_path", return_value="") as get_path:
                 with patch.object(Path, "is_file", return_value=False), \
-                     patch.object(fetchloom.shutil, "which", return_value="from-path"):
+                     patch.object(fetchloom, "_on_path", return_value="from-path"):
                     self.assertEqual(fetchloom._program(), "from-path")
         preferred.assert_called_once_with("user")
         get_path.assert_any_call("scripts", "custom_user")

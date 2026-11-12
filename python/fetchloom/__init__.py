@@ -10,7 +10,6 @@ import collections
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import sysconfig
@@ -472,10 +471,29 @@ def _program() -> str:
     for folder in folders:
         if folder and Path(folder, name).is_file():
             return str(Path(folder, name))
-    found = shutil.which("fetchloom")
+    found = _on_path(windows)
     if found is None:
         raise FileNotFoundError(
             "the fetchloom program is missing: install it as "
             "https://github.com/nikhil-yn-aix/fetchloom#install says, or put it on PATH"
         )
     return found
+
+
+def _on_path(windows: bool) -> str | None:
+    """the fetchloom program in the first absolute folder of PATH that holds it as a file this
+    user may run, with each extension PATHEXT names on ``windows``. a relative folder, an empty
+    entry among them, is passed over, and so is the working folder, which python's own search
+    tries first on windows: a cloned project could hold a program of that name."""
+    names = ["fetchloom"]
+    if windows:
+        extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+        names = [f"fetchloom{extension}" for extension in extensions if extension]
+    for folder in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        if not os.path.isabs(folder):
+            continue
+        for name in names:
+            program = os.path.join(folder, name)
+            if os.path.isfile(program) and os.access(program, os.X_OK):
+                return program
+    return None
