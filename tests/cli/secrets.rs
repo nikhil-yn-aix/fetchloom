@@ -143,7 +143,8 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         Ok(document["errors"][0].clone())
     };
     let untrusted = format!(
-        "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
+        "if you trust that server, put `allowed_origins = [\"{origin}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run",
+        settings_file(&sandbox)?
     );
     assert_eq!(refused("sync", "", &sandbox.cache())?["help"], untrusted);
     // another port of the host is another origin, which the refusal tells apart
@@ -154,7 +155,7 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     );
     assert_eq!(
         error["help"],
-        format!("add {origin} to allowed_origins to reach it too")
+        format!("to reach it too, set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:9,{origin}`")
     );
     assert_eq!(server.requests(), Vec::<String>::new());
     let output = sandbox
@@ -172,6 +173,15 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     );
     assert_eq!(server.requests().len(), 1, "only the allowed sync asked");
     Ok(())
+}
+
+/// the settings file fetchloom reads in `sandbox`, as `fetchloom settings` names it.
+fn settings_file(sandbox: &Sandbox) -> Result<String> {
+    let document = json(&sandbox.run(&["--json", "settings"])?)?;
+    let path = document["result"]["file"]["path"]
+        .as_str()
+        .ok_or("settings names no file")?;
+    Ok(path.to_owned())
 }
 
 /// the line a refusal adds when `trusted` is another origin on `host`, the refused link's host.
@@ -209,7 +219,7 @@ fn another_port_of_an_allowed_host_reaches_no_private_address() -> Result {
     assert_eq!(
         error["help"],
         format!(
-            "add {} to allowed_origins to reach it too",
+            "to reach it too, set `FETCHLOOM_ALLOWED_ORIGINS=http://localhost:9,{}`",
             link.trim_end_matches(PATH)
         )
     );
@@ -252,12 +262,17 @@ fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
     assert_eq!(error["kind"], "network.refused");
     assert_eq!(
         error["message"],
-        format!("fetchloom will not follow {link}: {link} points at the private address 127.0.0.1")
+        format!("fetchloom will not follow {link}: it points at the private address 127.0.0.1")
     );
     assert_eq!(error["details"][0], trusted_alone(&mirror.url, "127.0.0.1"));
     assert_eq!(
         error["help"],
-        format!("add {} to allowed_origins to reach it too", source.url)
+        format!(
+            "to reach it too, put `allowed_origins = [\"{}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
+            source.url,
+            settings_file(&sandbox)?,
+            source.url
+        )
     );
     Ok(())
 }
@@ -384,12 +399,17 @@ fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
     assert_eq!(error["kind"], "network.refused", "{error}");
     assert_eq!(
         error["message"],
-        format!("fetchloom will not follow {link}: {link} points at the private address 127.0.0.1")
+        format!("fetchloom will not follow {link}: it points at the private address 127.0.0.1")
     );
     assert_eq!(error["details"][0], trusted_alone(&typed.url, "127.0.0.1"));
     assert_eq!(
         error["help"],
-        format!("add {} to allowed_origins to reach it too", named.url)
+        format!(
+            "to reach it too, put `allowed_origins = [\"{}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
+            named.url,
+            settings_file(&sandbox)?,
+            named.url
+        )
     );
     Ok(())
 }
@@ -980,5 +1000,51 @@ fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
             assert!(shown.contains("run the same command again"), "{shown}");
         }
     }
+    Ok(())
+}
+
+/// in mirror-only mode a web mirror that sends fetchloom on to another origin is refused there,
+/// and the refusal names that origin with its port and the mirror's that sent it, since both may
+/// be on one host, where it named the host alone.
+#[test]
+fn a_mirror_that_sends_fetchloom_elsewhere_names_both_origins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = b"a,b\n";
+    let source = Routes::start(vec![(PATH.to_owned(), file(body, "\"v1\""))])?;
+    let link = format!("{}{PATH}", source.url);
+    sandbox.allow(&source.url);
+    let added = sandbox.run(&["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let hex = crate::add::sha256_hex(body);
+    let mirror = Routes::start(vec![
+        (
+            "/m/fetchloom-mirror".to_owned(),
+            file(b"fetchloom mirror 1\n", "\"m\""),
+        ),
+        (
+            format!("/m/objects/{}/{}", &hex[..2], &hex[2..]),
+            reply(
+                "302 Found",
+                &[("Location", link.as_str()), ("Content-Length", "0")],
+                b"",
+            ),
+        ),
+    ])?;
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let asked = source.requests().len();
+    let output = sandbox
+        .command_in(&clone, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS", format!("{}/m", mirror.url))
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?;
+    let document = text(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(source.requests().len(), asked, "the source is never asked");
+    let said = format!(
+        "fetchloom will not ask {}, where {} sent it, since mirrors_only lets it ask its mirrors alone",
+        source.url, mirror.url
+    );
+    assert!(document.contains(&said), "{document}");
     Ok(())
 }

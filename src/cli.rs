@@ -153,6 +153,16 @@ impl Context {
         }
     }
 
+    /// the `allowed_origins` setting, with where a person changes it.
+    fn allowed(&self) -> net::Allowed {
+        let allowed = &self.settings.allowed_origins;
+        net::Allowed {
+            origins: allowed.value.clone(),
+            by_variable: allowed.origin == crate::settings::Origin::Environment,
+            file: self.settings.file.path.clone(),
+        }
+    }
+
     /// the network with only `credentials`, as checking one key needs.
     fn net_with(&self, credentials: Vec<net::Credential>) -> Net {
         let output = self.output.clone();
@@ -191,7 +201,7 @@ impl Context {
         );
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
-            .with_allowed_origins(&self.settings.allowed_origins.value)
+            .with_allowed_origins(self.allowed())
             .with_signing(signing)
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)

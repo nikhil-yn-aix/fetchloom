@@ -462,6 +462,7 @@ async fn add_held(
     .await?;
     let [name] = names;
     render_add(&work, &new_manifest, &name, here, starting)?;
+    tell_private(&work, &parsed.reference);
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -1542,6 +1543,26 @@ fn render_add(
     }
     ignore_data(work, manifest)?;
     tell_added(work, manifest, name, here)
+}
+
+/// says, after an add of a link a person typed, that its origin is on a private address, such as
+/// a lab server's: typing it trusted it for this run alone, so a later run that downloads from
+/// it, here or in a clone, needs `allowed_origins` to list it.
+fn tell_private(work: &Loop<'_>, reference: &Reference) {
+    let Some(origin) = reference.written_origin() else {
+        return;
+    };
+    let context = work.context;
+    if context.settings.allowed_origins.value.contains(&origin)
+        || !work.net.on_private_address(&origin)
+    {
+        return;
+    }
+    context.output.hint(&format!(
+        "a later run downloads from {}, a private address, only once allowed_origins lists it: {}",
+        origin.ascii_serialization(),
+        context.allowed().remedy(&origin)
+    ));
 }
 
 /// restores both project files after a failed add of the datasets `names`, including their

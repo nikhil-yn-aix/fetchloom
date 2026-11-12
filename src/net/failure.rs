@@ -414,11 +414,12 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     );
-    let origin = url.origin().ascii_serialization();
+    let Some(allowed) = &reason.allowed else {
+        return error.help("open the link in a browser to see where it leads");
+    };
+    let remedy = allowed.remedy(&url.origin());
     let Some((last, others)) = reason.trusted_on_host.split_last() else {
-        return error.help(format!(
-            "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
-        ));
+        return error.help(format!("if you trust that server, {remedy}"));
     };
     let (trusted, covered) = if others.is_empty() {
         (format!("{last} is"), "that origin")
@@ -433,7 +434,7 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
             "only {trusted} trusted on {}, and trust covers {covered} alone",
             host(url)
         ))
-        .help(format!("add {origin} to allowed_origins to reach it too"))
+        .help(format!("to reach it too, {remedy}"))
 }
 
 pub(super) fn interrupted(url: &Url) -> Error {
@@ -545,6 +546,7 @@ mod tests {
     fn a_refusal_names_every_origin_trusted_on_its_host() {
         let url = Url::parse("http://lab.local:9090/a.zip").unwrap();
         let mut reason = address::Refused::new("lab.local resolves only to private addresses");
+        reason.allowed = Some(address::Allowed::default());
         reason.trusted_on_host = vec![
             "http://lab.local".to_owned(),
             "http://lab.local:8080".to_owned(),
@@ -559,7 +561,9 @@ mod tests {
         );
         assert_eq!(
             error.help.as_deref(),
-            Some("add http://lab.local:9090 to allowed_origins to reach it too")
+            Some(
+                "to reach it too, put `allowed_origins = [\"http://lab.local:9090\"]` in the settings file, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` for one run"
+            )
         );
     }
 

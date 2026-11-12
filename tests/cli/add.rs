@@ -56,6 +56,8 @@ fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    // the story of a link on the internet, which a later run reaches without allowed_origins
+    sandbox.allow(&server.url);
     let output = sandbox.run(&["add", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
@@ -1051,5 +1053,86 @@ fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
     assert!(!work.join(".fetchloom").exists());
     let named = sandbox.run(&["add", "-i", "links.txt", "--as", "flowers"])?;
     assert_eq!(named.status.code(), Some(2), "--as names one dataset");
+    Ok(())
+}
+
+/// a link typed for add reaches a private address, such as a lab server's, for that run alone.
+/// the add says so with the exact origin and the settings file to list it in, and a clone with an
+/// empty cache is refused, naming the link once and quoting the setting that lets it through,
+/// until `allowed_origins` lists that origin.
+#[test]
+fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let origin = server.url.trim_end_matches(PATH).to_owned();
+    let settings = sandbox.folder("config")?.join("settings.toml");
+    fs::write(&settings, "")?;
+    let line = format!(
+        "put `allowed_origins = [\"{origin}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run",
+        settings.display()
+    );
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_SETTINGS", &settings)
+        .output()?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "hint: a later run downloads from {origin}, a private address, only once allowed_origins lists it: {line}"
+        )),
+        "{stderr}"
+    );
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let sync = |allowed: &str| {
+        sandbox
+            .command_in(&clone, &["--json", "sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_SETTINGS", &settings)
+            .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
+            .output()
+    };
+    let refused = sync("")?;
+    assert_eq!(
+        refused.status.code(),
+        Some(20),
+        "{}",
+        text(&refused.stdout)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        format!(
+            "fetchloom will not follow {}: it points at the private address 127.0.0.1",
+            server.url
+        )
+    );
+    assert_eq!(error["help"], format!("if you trust that server, {line}"));
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    assert_eq!(server.requests().len(), 1, "the clone asked nothing");
+    let allowed = sync(&origin)?;
+    assert_eq!(allowed.status.code(), Some(0), "{}", text(&allowed.stdout)?);
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}
+
+/// a typed link whose name resolves to this machine, as localhost does, gets the same hint, from
+/// what the add's own lookup found: nothing is looked up again for it.
+#[test]
+fn a_typed_name_on_a_private_address_gets_the_same_hint() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let link = server.url.replace("127.0.0.1", "localhost");
+    let origin = link.trim_end_matches(PATH);
+    let added = sandbox.run(&["add", &link])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "a later run downloads from {origin}, a private address, only once allowed_origins lists it"
+        )),
+        "{stderr}"
+    );
     Ok(())
 }

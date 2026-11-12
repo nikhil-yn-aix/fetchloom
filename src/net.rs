@@ -23,6 +23,7 @@ use reqwest::header::{self, HeaderName, HeaderValue};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
+pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES};
@@ -433,8 +434,9 @@ impl Net {
     }
 
     /// refuses `url` in mirror-only mode unless it is a `mirror`'s request below a mirror's
-    /// address: the same scheme, host and port, and a path inside the mirror's.
-    fn may_ask(&self, url: &Url, mirror: bool) -> Result<(), Failure> {
+    /// address: the same scheme, host and port, and a path inside the mirror's. a hop a redirect
+    /// gave names the origin that sent it, which may be a mirror on the same host.
+    fn may_ask(&self, url: &Url, mirror: bool, sent_by: Option<&Url>) -> Result<(), Failure> {
         let Some(bases) = &self.mirrors_only else {
             return Ok(());
         };
@@ -443,12 +445,19 @@ impl Net {
         if mirror && bases.iter().any(below) {
             return Ok(());
         }
+        let asked = match sent_by {
+            Some(from) => format!(
+                "{}, where {} sent it",
+                url.origin().ascii_serialization(),
+                from.origin().ascii_serialization()
+            ),
+            None => host(url).to_owned(),
+        };
         Err(Failure::Final(
             Error::new(
                 Kind::NetworkRefused,
                 format!(
-                    "fetchloom will not ask {}, since mirrors_only lets it ask its mirrors alone",
-                    host(url)
+                    "fetchloom will not ask {asked}, since mirrors_only lets it ask its mirrors alone"
                 ),
             )
             .help("ask whoever keeps the mirrors to add what is missing, or turn off mirrors_only in the settings file or FETCHLOOM_MIRRORS_ONLY"),
@@ -516,7 +525,7 @@ impl Net {
         mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
-        self.may_ask(url, mirror)?;
+        self.may_ask(url, mirror, None)?;
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);
@@ -531,11 +540,12 @@ impl Net {
         };
         let wire = self.wire().map_err(Failure::Final)?;
         let mut hop = url.clone();
+        let mut sent_by: Option<Url> = None;
         let mut redirects = 0;
         let mut name = None;
         let mut first_origin = true;
         loop {
-            self.may_ask(&hop, mirror)?;
+            self.may_ask(&hop, mirror, sent_by.as_ref())?;
             wire.proxies
                 .check(&hop, &self.typed)
                 .await
@@ -609,7 +619,7 @@ impl Net {
                 .check(&next)
                 .map_err(|reason| refused(&next, reason))?;
             tracing::debug!(from = host(&hop), to = host(&next), "redirect");
-            hop = next;
+            sent_by = Some(std::mem::replace(&mut hop, next));
         }
     }
 

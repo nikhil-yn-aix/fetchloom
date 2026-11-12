@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use hyper_util::client::proxy::matcher::Matcher;
@@ -30,6 +31,54 @@ struct Hosts {
     /// a proxy may sit on a private address, and only reaching it is allowed: a URL that asks
     /// for the proxy's host itself, as a redirect could, is refused unless its origin is trusted.
     proxies: HashSet<String>,
+    /// the `allowed_origins` setting, which a refusal quotes.
+    allowed: Allowed,
+    /// names this run's lookups for a trusted origin found on a private address.
+    private: HashSet<String>,
+}
+
+/// the `allowed_origins` setting as refusals and hints quote it: the origins it lists and where
+/// a person changes it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Allowed {
+    pub(crate) origins: Vec<url::Origin>,
+    /// set by `FETCHLOOM_ALLOWED_ORIGINS`, which wins over the settings file while it is set.
+    pub(crate) by_variable: bool,
+    /// the settings file, which keeps the setting for every run.
+    pub(crate) file: Option<PathBuf>,
+}
+
+impl Allowed {
+    /// how to let a later run reach `origin` as well: the setting's whole value with `origin`
+    /// added, quoted for the settings file and for one run's variable, or for the variable alone
+    /// while it is the one that sets it.
+    pub(crate) fn remedy(&self, origin: &url::Origin) -> String {
+        let mut listed: Vec<String> = self
+            .origins
+            .iter()
+            .map(url::Origin::ascii_serialization)
+            .collect();
+        let origin = origin.ascii_serialization();
+        if !listed.contains(&origin) {
+            listed.push(origin);
+        }
+        let variable = format!("`FETCHLOOM_ALLOWED_ORIGINS={}`", listed.join(","));
+        if self.by_variable {
+            return format!("set {variable}");
+        }
+        let quoted: Vec<String> = listed
+            .iter()
+            .map(|origin| format!("\"{origin}\""))
+            .collect();
+        let file = self.file.as_deref().map_or_else(
+            || "the settings file".to_owned(),
+            |path| path.display().to_string(),
+        );
+        format!(
+            "put `allowed_origins = [{}]` in {file}, or set {variable} for one run",
+            quoted.join(", ")
+        )
+    }
 }
 
 /// which addresses the lookups of one HTTP client may keep.
@@ -59,6 +108,31 @@ impl Typed {
         self.hosts().origins.extend(origins);
     }
 
+    /// lets requests reach the origins `allowed` lists, and keeps it for refusals to quote.
+    fn set_allowed(&self, allowed: Allowed) {
+        let mut hosts = self.hosts();
+        hosts.origins.extend(allowed.origins.iter().cloned());
+        hosts.allowed = allowed;
+    }
+
+    /// whether `origin` is on a private address: its host is one written out, or a name this
+    /// run's lookups for a trusted origin found on one. nothing is looked up for it.
+    pub(crate) fn on_private_address(&self, origin: &url::Origin) -> bool {
+        let url::Origin::Tuple(_, host, _) = origin else {
+            return false;
+        };
+        match host {
+            Host::Ipv4(ip) => is_private(IpAddr::V4(*ip)),
+            Host::Ipv6(ip) => is_private(IpAddr::V6(*ip)),
+            Host::Domain(name) => self.hosts().private.contains(&key(name)),
+        }
+    }
+
+    /// the refusal of `host`'s private address, `reason`, which `allowed_origins` can lift.
+    fn refused(&self, reason: String, host: &str) -> Refused {
+        self.hosts().refused(reason, &key(host))
+    }
+
     /// whether the origin of `url` is trusted.
     pub(crate) fn trusts(&self, url: &Url) -> bool {
         self.hosts().origins.contains(&url.origin())
@@ -71,11 +145,6 @@ impl Typed {
         let key = key(host);
         let hosts = self.hosts();
         hosts.proxies.contains(&key) || (reach == Reach::Trusted && hosts.trusts_on(&key))
-    }
-
-    /// the trusted origins on `host`, as messages show them.
-    pub(crate) fn origins_on(&self, host: &str) -> Vec<String> {
-        self.hosts().origins_on(&key(host))
     }
 
     fn hosts(&self) -> std::sync::MutexGuard<'_, Hosts> {
@@ -96,10 +165,10 @@ impl Typed {
         }
         let host = key(host);
         if hosts.proxies.contains(&host) {
-            return Err(Refused::new(format!(
-                "{} asks for the proxy this machine sends requests through",
-                Shown(url)
-            )));
+            return Err(hosts.refused(
+                "it asks for the proxy this machine sends requests through".to_owned(),
+                &host,
+            ));
         }
         let ip = match url.host() {
             Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
@@ -107,24 +176,37 @@ impl Typed {
             _ => return Ok(()),
         };
         if is_private(ip) {
-            return Err(Refused::private(
-                format!("{} points at the private address {ip}", Shown(url)),
-                hosts.origins_on(&host),
-            ));
+            return Err(hosts.refused(format!("it points at the private address {ip}"), &host));
         }
         Ok(())
     }
 }
 
 impl super::Net {
-    /// lets requests reach the origins the `allowed_origins` setting lists, wherever they are.
-    pub(crate) fn with_allowed_origins(self, origins: &[url::Origin]) -> super::Net {
-        self.typed.allow(origins.iter().cloned());
+    /// lets requests reach the origins the `allowed_origins` setting lists, wherever they are,
+    /// and has refusals quote the setting.
+    pub(crate) fn with_allowed_origins(self, allowed: Allowed) -> super::Net {
+        self.typed.set_allowed(allowed);
         self
+    }
+
+    /// whether `origin` is on a private address, as far as its host or this run's lookups say.
+    pub(crate) fn on_private_address(&self, origin: &url::Origin) -> bool {
+        self.typed.on_private_address(origin)
     }
 }
 
 impl Hosts {
+    /// the refusal of `host`'s private address, `reason`, naming the origins trusted on `host`,
+    /// given as [`key`] makes it, and quoting `allowed_origins`, which can lift it.
+    fn refused(&self, reason: String, host: &str) -> Refused {
+        Refused {
+            reason,
+            trusted_on_host: self.origins_on(host),
+            allowed: Some(self.allowed.clone()),
+        }
+    }
+
     /// whether a trusted origin is on `host`, given as [`key`] makes it.
     fn trusts_on(&self, host: &str) -> bool {
         self.origins.iter().any(|origin| is_on(origin, host))
@@ -164,21 +246,17 @@ pub(crate) struct Refused {
     /// for a private address, the origins trusted on the same host, as messages show them: a
     /// person may have expected one of them to cover this URL too.
     pub(crate) trusted_on_host: Vec<String>,
+    /// the `allowed_origins` setting, for a refusal that listing the origin there lifts.
+    pub(crate) allowed: Option<Allowed>,
 }
 
 impl Refused {
+    /// a refusal no setting lifts, such as a link without a host.
     pub(crate) fn new(reason: impl Into<String>) -> Refused {
         Refused {
             reason: reason.into(),
             trusted_on_host: Vec::new(),
-        }
-    }
-
-    /// the refusal of a private address, on a host where `trusted_on_host` are trusted.
-    fn private(reason: String, trusted_on_host: Vec<String>) -> Refused {
-        Refused {
-            reason,
-            trusted_on_host,
+            allowed: None,
         }
     }
 }
@@ -414,9 +492,7 @@ impl Proxies {
             self.lock().insert(name.clone(), refused.clone());
             refused
         };
-        refused.map_or(Ok(()), |reason| {
-            Err(Refused::private(reason, typed.origins_on(&name)))
-        })
+        refused.map_or(Ok(()), |reason| Err(typed.refused(reason, &name)))
     }
 
     #[cfg(test)]
@@ -502,6 +578,7 @@ impl reqwest::dns::Resolve for Resolver {
         let allowed = self.typed.may_resolve_privately(&host, self.reach);
         let typed = self.typed.clone();
         let offline = self.offline;
+        let reach = self.reach;
         Box::pin(async move {
             if offline {
                 return Err(Box::new(Offline) as Box<dyn std::error::Error + Send + Sync>);
@@ -521,11 +598,14 @@ impl reqwest::dns::Resolve for Resolver {
                 .filter(|address| allowed || !is_private(address.ip()))
                 .collect();
             if kept.is_empty() && !found.is_empty() {
-                let refused = Refused::private(
-                    format!("{host} resolves only to private addresses"),
-                    typed.origins_on(&host),
-                );
+                let refused =
+                    typed.refused(format!("{host} resolves only to private addresses"), &host);
                 return Err(Box::new(refused) as Box<dyn std::error::Error + Send + Sync>);
+            }
+            // noted so an add can say its typed origin needs allowed_origins later, with no
+            // lookup of its own
+            if reach == Reach::Trusted && kept.iter().any(|address| is_private(address.ip())) {
+                typed.hosts().private.insert(key(&host));
             }
             Ok(Box::new(kept.into_iter()) as reqwest::dns::Addrs)
         })
@@ -737,8 +817,39 @@ mod tests {
         assert!(typed.may_resolve_privately("lab.local", Reach::Trusted));
         assert!(!typed.may_resolve_privately("lab.local", Reach::Public));
         assert!(!typed.may_resolve_privately("other.local", Reach::Trusted));
-        assert_eq!(typed.origins_on("Lab.Local"), ["http://lab.local:8080"]);
-        assert_eq!(typed.origins_on("other.local"), Vec::<String>::new());
+        let on = |host| typed.refused(String::new(), host).trusted_on_host;
+        assert_eq!(on("Lab.Local"), ["http://lab.local:8080"]);
+        assert_eq!(on("other.local"), Vec::<String>::new());
+    }
+
+    /// a refusal quotes the whole value `allowed_origins` needs to lift it: for the settings
+    /// file, with what it lists already, and for one run's variable, or for the variable alone
+    /// while it sets the list, since it wins over the file then.
+    #[test]
+    fn a_refusal_quotes_the_whole_setting_that_lifts_it() {
+        let origin = Url::parse("http://10.0.0.5:9001/a.zip").unwrap().origin();
+        let lab = Url::parse("http://lab.local:8080").unwrap().origin();
+        let file = Some(PathBuf::from("/home/ada/.config/fetchloom/settings.toml"));
+        let remedy = |origins: Vec<url::Origin>, by_variable, file| {
+            Allowed {
+                origins,
+                by_variable,
+                file,
+            }
+            .remedy(&origin)
+        };
+        assert_eq!(
+            remedy(Vec::new(), false, file.clone()),
+            "put `allowed_origins = [\"http://10.0.0.5:9001\"]` in /home/ada/.config/fetchloom/settings.toml, or set `FETCHLOOM_ALLOWED_ORIGINS=http://10.0.0.5:9001` for one run"
+        );
+        assert_eq!(
+            remedy(vec![lab.clone()], false, None),
+            "put `allowed_origins = [\"http://lab.local:8080\", \"http://10.0.0.5:9001\"]` in the settings file, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` for one run"
+        );
+        assert_eq!(
+            remedy(vec![lab], true, file),
+            "set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001`"
+        );
     }
 
     /// an origin `allowed_origins` lists, a link a person types and a mirror they name are each

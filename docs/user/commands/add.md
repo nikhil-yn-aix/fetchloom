@@ -53,6 +53,12 @@ stderr for a single-file addition in a new project, matching a test snapshot. `[
 
 commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rules](../reference/data-toml.md). a zenodo file-page link selects that file unless you supply `--select`.
 
+a link you type may be on this machine or your network, such as a lab server: `add` reaches its origin, the scheme, host and port, for that run alone. a later run that downloads from it, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists that origin, so the add ends with a hint that quotes the line to write. from a real run, on stderr, with the settings file's folder shortened to `~`:
+
+```text
+  hint: a later run downloads from http://127.0.0.1:19291, a private address, only once allowed_origins lists it: put `allowed_origins = ["http://127.0.0.1:19291"]` in ~/.config/fetchloom/settings.toml, or set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19291` for one run
+```
+
 adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. a resolved reference from an old lock identifies that entry only while its manifest reference is unchanged; editing `ref` does not make the old source count as already added. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads stay, so running the add again reuses them, while the files it placed for the new dataset are removed with it.
