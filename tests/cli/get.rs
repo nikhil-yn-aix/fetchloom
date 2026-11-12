@@ -1894,7 +1894,8 @@ fn sha256_takes_the_form_sites_write() -> Result {
 }
 
 /// a hash that differs from the file's late still reads apart: a person reads both whole, one
-/// under the other, to check against a published checksum, and JSON gives them in one detail.
+/// under the other within 80 columns, to check against a published checksum, and JSON gives
+/// them in one detail.
 #[test]
 fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1918,9 +1919,7 @@ fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     let told = sandbox.run(&["get", &server.url, "--sha256", &wrong])?;
     assert_eq!(told.status.code(), Some(30));
     assert!(
-        text(&told.stderr)?.contains(&format!(
-            "  expected sha256 {wrong}\n  got             {IRIS_SHA256}\n"
-        )),
+        text(&told.stderr)?.contains(&format!("  expected {wrong}\n  got      {IRIS_SHA256}\n")),
         "{}",
         text(&told.stderr)?
     );

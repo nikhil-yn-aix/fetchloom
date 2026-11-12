@@ -1423,7 +1423,7 @@ fn stopped_text(error: &Error, color: bool) -> String {
         "Stopped",
         accented(&rest, Paint::new(), color)
     );
-    for line in error.details.iter().flat_map(|line| readable(line)) {
+    for line in error.details.iter().flat_map(|line| readable(line, 12)) {
         let _ = write!(
             text,
             "\n{:>11} {dim}{}{dim:#}",
@@ -1445,7 +1445,7 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         "{red}error:{red:#} {}",
         accented(&plain(&error.message), Paint::new(), color)
     );
-    for line in error.details.iter().flat_map(|line| readable(line)) {
+    for line in error.details.iter().flat_map(|line| readable(line, 2)) {
         let _ = write!(
             text,
             "\n  {dim}{}{dim:#}",
@@ -1462,22 +1462,37 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
     text
 }
 
-/// the lines a person reads for the detail `line`: a comparison of two whole SHA-256 values, as
-/// `expected sha256 <a>, got <b>`, on two lines with every digit, one value under the other,
-/// since a person checks them against a published checksum; any other line as [`hashes_apart`]
-/// shows it.
-fn readable(line: &str) -> Vec<Cow<'_, str>> {
+/// the lines a person reads for the detail `line`, shown `indent` columns in: a comparison of
+/// two whole SHA-256 values, as `expected sha256 <a>, got <b>`, with every digit, one value
+/// under the other, since a person checks them against a published checksum. a label leads its
+/// value, without the `sha256` that 64 hex digits make plain, where both lines fit in 80
+/// columns, at which a terminal would wrap through a hash, else stands on a line of its own
+/// above it. any other line as [`hashes_apart`] shows it.
+fn readable(line: &str, indent: usize) -> Vec<Cow<'_, str>> {
+    const COLUMNS: usize = 80;
     if let [(first, a), (second, b)] = whole_hashes(line)[..]
         && line[first + a.len()..second].starts_with(", ")
         && second + b.len() == line.len()
     {
-        let before = &line[..first];
-        let between = &line[first + a.len() + 2..second];
-        let width = before.chars().count().max(between.chars().count());
-        return vec![
-            Cow::Owned(format!("{before:<width$}{a}")),
-            Cow::Owned(format!("{between:<width$}{b}")),
-        ];
+        let labels = [&line[..first], &line[first + a.len() + 2..second]].map(|label| {
+            let label = label.trim_end();
+            label.strip_suffix(" sha256").unwrap_or(label)
+        });
+        let width = 1 + labels
+            .iter()
+            .map(|label| label.chars().count())
+            .max()
+            .unwrap_or(0);
+        let compared = labels.into_iter().zip([a, b]);
+        if indent + width + a.len() <= COLUMNS {
+            return compared
+                .map(|(label, hash)| Cow::Owned(format!("{label:<width$}{hash}")))
+                .collect();
+        }
+        return compared
+            .flat_map(|(label, hash)| [format!("{label}:"), format!("  {hash}")])
+            .map(Cow::Owned)
+            .collect();
     }
     vec![hashes_apart(line)]
 }
@@ -2140,30 +2155,64 @@ mod tests {
         );
     }
 
-    /// two hashes on a line read apart wherever they differ, at least 12 digits each; a lone
-    /// hash takes 12, and hex digits in a path or a longer word stay as they are.
+    /// a comparison of two hashes shows both whole, one under the other, in 80 columns with
+    /// its indent: each label leads its hash where both fit, else stands on a line above it. a
+    /// lone hash reads as [`super::hashes_apart`] cuts it.
     #[test]
     fn a_hash_comparison_reads_whole_one_value_under_the_other() {
         let wrong = "0".repeat(64);
         let got = "492d5ea49605a5bb7e1c3c4d8b1f0f6c2a9d3e7b5c1a0f9e8d7c6b5a49382716";
-        assert_eq!(
-            super::readable(&format!("expected sha256 {wrong}, got {got}")),
-            [
-                format!("expected sha256 {wrong}"),
-                format!("got             {got}")
-            ]
-        );
-        assert_eq!(
-            super::readable(&format!("expected sha256 {wrong}, the source states {got}")),
-            [
-                format!("expected sha256   {wrong}"),
-                format!("the source states {got}")
-            ]
-        );
-        assert_eq!(
-            super::readable(&format!("got {got}.")),
-            [format!("got {}.", &got[..12])]
-        );
+        let cases = [
+            (
+                format!("expected sha256 {wrong}, got {got}"),
+                2,
+                vec![format!("expected {wrong}"), format!("got      {got}")],
+            ),
+            (
+                format!("expected sha256 {wrong}, the source states {got}"),
+                2,
+                vec![
+                    "expected:".to_owned(),
+                    format!("  {wrong}"),
+                    "the source states:".to_owned(),
+                    format!("  {got}"),
+                ],
+            ),
+            (
+                format!("--sha256 names {wrong}, data/iris/iris.csv holds {got}"),
+                2,
+                vec![
+                    "--sha256 names:".to_owned(),
+                    format!("  {wrong}"),
+                    "data/iris/iris.csv holds:".to_owned(),
+                    format!("  {got}"),
+                ],
+            ),
+            // under a `Stopped` line, whose details start at its twelfth column
+            (
+                format!("expected sha256 {wrong}, got {got}"),
+                12,
+                vec![
+                    "expected:".to_owned(),
+                    format!("  {wrong}"),
+                    "got:".to_owned(),
+                    format!("  {got}"),
+                ],
+            ),
+            (
+                format!("got {got}."),
+                2,
+                vec![format!("got {}.", &got[..12])],
+            ),
+        ];
+        for (line, indent, shown) in cases {
+            let read = super::readable(&line, indent);
+            assert_eq!(read, shown, "{line}");
+            assert!(
+                read.iter().all(|line| indent + line.chars().count() <= 80),
+                "{read:?}"
+            );
+        }
     }
 
     #[test]
