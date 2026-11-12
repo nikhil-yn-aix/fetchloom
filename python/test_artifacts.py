@@ -38,9 +38,10 @@ class InventoryTests(unittest.TestCase):
                 data = name.encode()
                 (packages / name).write_bytes(data)
                 files[name] = hashlib.sha256(data).hexdigest()
+            current = '3.14.7' if target == 'x86_64-apple-darwin' else '3.15.2'
             checks = {name: {'ok': True, 'version': VERSION, 'commit': COMMIT,
                              'binary_sha256': 'b' * 64, 'helper': name.startswith('wheel-'),
-                             'python': '3.10.11' if name == 'wheel-minimum' else '3.15.2'}
+                             'python': '3.10.11' if name == 'wheel-minimum' else current}
                       for name in stages(target)}
             folder = proofs / target
             folder.mkdir()
@@ -55,7 +56,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(len(inventory(packages, proofs, VERSION, COMMIT)), 14)
 
     def test_missing_target_check_asset_or_source_proof_is_rejected(self):
-        for change in ['target', 'check', 'asset', 'source', 'checksum', 'revision', 'helper']:
+        for change in ['target', 'check', 'asset', 'source', 'checksum', 'revision', 'helper', 'python']:
             with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
                 packages, proofs = self.make(Path(directory))
                 proof = next(proofs.rglob('verified.json'))
@@ -73,6 +74,9 @@ class InventoryTests(unittest.TestCase):
                     next(packages.iterdir()).write_bytes(b'wrong')
                 elif change == 'helper':
                     document['checks']['wheel-current']['helper'] = False
+                    proof.write_text(json.dumps(document))
+                elif change == 'python':
+                    document['checks']['wheel-current']['python'] = '3.13.9'
                     proof.write_text(json.dumps(document))
                 else:
                     document['commit'] = 'c' * 40

@@ -67,6 +67,9 @@ jobs:
             python: python
             scripts: bin
             wheel-tags: ''
+            # the image's own python: installing 3.15.2 on this slow runner takes about 90 s, and
+            # the other five targets test their wheels on it
+            python-version: '3.14'
           - os: macos-15
             target: aarch64-apple-darwin
             exe: ''
@@ -82,7 +85,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.15.2'
+          python-version: ${{ matrix.python-version || '3.15.2' }}
       - name: read the version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
@@ -307,7 +310,7 @@ jobs:
           python python/check_archive.py --target ${{ matrix.target }} --version "$VERSION" \
             --commit "$FETCHLOOM_COMMIT" --built target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }} \
             --proofs "$PROOFS"
-      - name: installed wheel on newest python
+      - name: installed wheel on python ${{ matrix.python-version || '3.15.2' }}
         run: |
           python python/check_wheel.py dist/*.whl --binary "$PACKAGED" --version "$VERSION" \
             --commit "$FETCHLOOM_COMMIT" --stage wheel-current --proofs "$PROOFS"

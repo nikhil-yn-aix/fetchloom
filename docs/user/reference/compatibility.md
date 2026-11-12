@@ -82,7 +82,7 @@ shell completions: bash, zsh, fish, elvish, windows powershell 5.1 and powershel
 
 ## the python helper
 
-python 3.10 or later. CI installs each of the six wheels on Python 3.15.2 and also checks Python 3.10 on linux x86_64 and Windows x86_64. native Windows-arm Python 3.10 is not tested.
+python 3.10 or later. CI installs the x86_64 macos wheel on Python 3.14, the other five wheels on Python 3.15.2, and also checks Python 3.10 on linux x86_64 and Windows x86_64. native Windows-arm Python 3.10 is not tested.
 
 ## building from source
 
