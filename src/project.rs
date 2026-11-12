@@ -306,6 +306,15 @@ impl Project {
     /// the state, and when it was written in nanoseconds since 1970, like the times it records. a
     /// missing or unreadable state is empty.
     pub(crate) fn state(&self) -> (State, u64) {
+        self.state_by(State::parse)
+    }
+
+    /// [`Project::state`] with only the records of the paths `keep` accepts.
+    pub(crate) fn state_only(&self, keep: &dyn Fn(&str) -> bool) -> (State, u64) {
+        self.state_by(|bytes| State::parse_only(bytes, keep))
+    }
+
+    fn state_by(&self, parse: impl FnOnce(&[u8]) -> State) -> (State, u64) {
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
         // a planted link to a device or a fifo would never end; it reads as no state at all
         let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
@@ -319,7 +328,7 @@ impl Project {
         match read {
             Ok((bytes, written)) => {
                 span.record("bytes", bytes.len());
-                (State::parse(&bytes), written)
+                (parse(&bytes), written)
             }
             Err(_) => (State::default(), 0),
         }

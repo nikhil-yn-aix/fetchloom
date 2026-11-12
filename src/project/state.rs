@@ -101,6 +101,18 @@ impl State {
         }
     }
 
+    /// [`State::parse`] keeping only the records of the paths `keep` accepts. the others are
+    /// passed over without being built, so a few files of a large state cost little to read.
+    pub(crate) fn parse_only(bytes: &[u8], keep: &dyn Fn(&str) -> bool) -> State {
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        let state = serde::de::DeserializeSeed::deserialize(Only(keep), &mut deserializer)
+            .and_then(|state| deserializer.end().map(|()| state));
+        match state {
+            Ok(state) if state.version == VERSION => state,
+            _ => State::default(),
+        }
+    }
+
     /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
     /// recipe's pin, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
@@ -122,6 +134,127 @@ impl State {
             candidates: &self.candidates,
         };
         serde_json::to_vec(&state).unwrap_or_default()
+    }
+}
+
+/// reads a state as its derived reader does, keeping only the records of the paths it accepts.
+struct Only<'a>(&'a dyn Fn(&str) -> bool);
+
+impl<'de> serde::de::DeserializeSeed<'de> for Only<'_> {
+    type Value = State;
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<State, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Only<'_> {
+    type Value = State;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("fetchloom's state")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<State, A::Error> {
+        use serde::de::Error;
+        let mut state = State::default();
+        let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
+        while let Some(key) = map.next_key::<String>()? {
+            let twice = match key.as_str() {
+                "version" => version.replace(map.next_value()?).is_some(),
+                "files" => {
+                    state.files = map.next_value_seed(Records(self.0))?;
+                    std::mem::replace(&mut files, true)
+                }
+                "synced" => {
+                    state.synced = map.next_value()?;
+                    std::mem::replace(&mut synced, true)
+                }
+                "candidates" => {
+                    state.candidates = map.next_value()?;
+                    std::mem::replace(&mut candidates, true)
+                }
+                _ => {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                    false
+                }
+            };
+            if twice {
+                return Err(A::Error::custom(format!("duplicate field `{key}`")));
+            }
+        }
+        if !files {
+            return Err(A::Error::missing_field("files"));
+        }
+        state.version = version.ok_or_else(|| A::Error::missing_field("version"))?;
+        Ok(state)
+    }
+}
+
+/// the state's records of the paths [`Only`] accepts.
+struct Records<'a>(&'a dyn Fn(&str) -> bool);
+
+impl<'de> serde::de::DeserializeSeed<'de> for Records<'_> {
+    type Value = BTreeMap<String, Placed>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Records<'_> {
+    type Value = BTreeMap<String, Placed>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("the files fetchloom placed")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut records = BTreeMap::new();
+        while let Some(path) = map.next_key_seed(Kept(self.0))? {
+            match path {
+                Some(path) => {
+                    records.insert(path, map.next_value()?);
+                }
+                None => {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(records)
+    }
+}
+
+/// a record's path, when [`Only`] accepts it.
+struct Kept<'a>(&'a dyn Fn(&str) -> bool);
+
+impl<'de> serde::de::DeserializeSeed<'de> for Kept<'_> {
+    type Value = Option<String>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_str(self)
+    }
+}
+
+impl serde::de::Visitor<'_> for Kept<'_> {
+    type Value = Option<String>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a path")
+    }
+
+    fn visit_str<E>(self, path: &str) -> Result<Self::Value, E> {
+        Ok((self.0)(path).then(|| path.to_owned()))
+    }
+
+    fn visit_string<E>(self, path: String) -> Result<Self::Value, E> {
+        Ok((self.0)(&path).then_some(path))
     }
 }
 
@@ -208,6 +341,59 @@ mod tests {
             .unwrap()
             .replace(r#","writable":true"#, "");
         assert!(State::parse(unrecorded.as_bytes()).files.is_empty());
+    }
+
+    /// a read of some records keeps them, and the rest of the state, as a read of all would.
+    #[test]
+    fn a_read_of_some_records_matches_a_read_of_all() {
+        let mut state = State::default();
+        for (path, size) in [("data/a/x", 1), ("data/a/\"q\u{e9}\"", 2), ("data/ab/y", 3)] {
+            state.files.insert(
+                path.to_owned(),
+                Placed {
+                    dataset: "a".to_owned(),
+                    sha256: digest::sha256(path.as_bytes()),
+                    method: Method::Hardlink,
+                    look: Look { size, modified: 42 },
+                    writable: false,
+                    checked: 43,
+                    adopted: size == 2,
+                },
+            );
+        }
+        state.synced = Some(Synced {
+            manifest: digest::sha256(b"manifest"),
+            lock: digest::sha256(b"lock"),
+            complete: true,
+        });
+        let kept = Candidate {
+            key: digest::sha256(b"key"),
+            tree: digest::sha256(b"tree"),
+            pinned: digest::sha256(b"pinned"),
+            files: Vec::new(),
+        };
+        state.candidates.insert("clean".to_owned(), kept);
+        let bytes = state.render();
+        let inside = |path: &str| path.starts_with("data/a/");
+        let read = State::parse_only(&bytes, &inside);
+        let mut expected = State::parse(&bytes);
+        expected.files.retain(|path, _| inside(path));
+        assert_eq!(read.files.len(), 2);
+        assert_eq!(read.files, expected.files);
+        assert_eq!(read.synced, state.synced);
+        assert_eq!(read.candidates, state.candidates);
+        assert_eq!(read.version, VERSION);
+        for unread in [
+            &b"not json"[..],
+            br#"{"version": 9, "files": {}}"#,
+            br#"{"version": 1}"#,
+            br#"{"version": 1, "files": {}, "files": {}}"#,
+            br#"{"version": 1, "files": {}} trailing"#,
+        ] {
+            let read = State::parse_only(unread, &|_| true);
+            assert!(read.files.is_empty() && read.synced.is_none(), "{unread:?}");
+            assert_eq!(read.version, 0);
+        }
     }
 
     #[test]

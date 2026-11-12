@@ -141,11 +141,11 @@ impl Survey {
         threads: Threads,
     ) -> Survey {
         let started = nanos(SystemTime::now());
-        let (mut state, written) = project.state();
         let within = within.map(|folders| outermost(data_dir, folders));
-        if let Some(folders) = &within {
-            state.files.retain(|path, _| inside_any(path, folders));
-        }
+        let (state, written) = match &within {
+            None => project.state(),
+            Some(folders) => project.state_only(&|path| inside_any(path, folders)),
+        };
         let Scanned {
             found: disk,
             temporaries,
@@ -1079,7 +1079,7 @@ fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
 }
 
 /// whether `path` is `folder` or inside it, both paths in the project.
-fn is_inside(path: &str, folder: &str) -> bool {
+pub(crate) fn is_inside(path: &str, folder: &str) -> bool {
     path.strip_prefix(folder)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
