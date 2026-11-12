@@ -1159,3 +1159,66 @@ fn live_buckets() {
         start.elapsed()
     );
 }
+
+/// a store may pause a listing with empty pages, which must never fail it. a server that answers
+/// every page with nothing in it and a token for another is stopped after a hundred.
+#[test]
+fn empty_pages_pause_a_listing_and_a_hundred_in_a_row_end_it() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Answers(fn(usize) -> String, AtomicUsize);
+
+    impl crate::net::Api for Answers {
+        fn get(
+            &self,
+            url: &Url,
+        ) -> impl Future<Output = Result<crate::net::Response, Error>> + Send {
+            let page = self.1.fetch_add(1, Ordering::Relaxed);
+            std::future::ready(Ok(crate::net::Response {
+                status: 200,
+                url: url.clone(),
+                next: None,
+                total: None,
+                region: None,
+                keyed: None,
+                authorized: None,
+                drive: None,
+                body: Arc::new((self.0)(page).into_bytes()),
+            }))
+        }
+    }
+
+    let states = "gs://cloud-samples-data/bigquery/us-states/";
+    // an object, 99 empty pages, then the last object
+    let paused = Answers(
+        |page| {
+            let item = format!(
+                r#"{{"name":"bigquery/us-states/{page}.csv","size":"1","generation":"1"}}"#
+            );
+            match page {
+                0 => format!(r#"{{"items":[{item}],"nextPageToken":"t0"}}"#),
+                100 => format!(r#"{{"items":[{item}]}}"#),
+                _ => format!(r#"{{"items":[],"nextPageToken":"t{page}"}}"#),
+            }
+        },
+        AtomicUsize::new(0),
+    );
+    let listing = block_on(reference(states).resolve(&paused)).unwrap();
+    assert_eq!(listing.files.len(), 2);
+    assert_eq!(paused.1.load(Ordering::Relaxed), 101);
+
+    let endless = Answers(
+        |page| format!(r#"{{"items":[],"nextPageToken":"t{page}"}}"#),
+        AtomicUsize::new(0),
+    );
+    let error = block_on(reference(states).resolve(&endless)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(
+        error
+            .message
+            .ends_with("sent an invalid listing: it sent 100 pages in a row that held nothing new"),
+        "{}",
+        error.message
+    );
+    assert_eq!(endless.1.load(Ordering::Relaxed), 100);
+}

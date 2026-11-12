@@ -36,14 +36,15 @@ struct Pages(super::Pages<String>);
 
 impl Default for Pages {
     fn default() -> Pages {
-        Pages(super::Pages::new())
+        Pages(super::Pages::after_first())
     }
 }
 
 impl Pages {
-    fn follow(&mut self, prefix: &Prefix, token: &str) -> Result<(), Error> {
+    /// follows `token`, the listing holding `objects` so far.
+    fn follow(&mut self, prefix: &Prefix, token: &str, objects: usize) -> Result<(), Error> {
         self.0
-            .next(token.to_owned())
+            .next(token.to_owned(), objects)
             .map_err(|reason| prefix.invalid(&reason))
     }
 }

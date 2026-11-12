@@ -35,7 +35,7 @@ S3 buckets are listed with ListObjectsV2, up to 1,000 keys a page, following con
 
 a bucket at another service is listed the same way, by path on its host. no region move applies there.
 
-cloud storage buckets are listed through the JSON API at `storage.googleapis.com/storage/v1/b/<bucket>/o`, following page tokens.
+cloud storage buckets are listed through the JSON API at `storage.googleapis.com/storage/v1/b/<bucket>/o`, following page tokens. for either store, an empty page partway through is fine, but a token sent again, or 100 empty pages in a row, end the listing as broken, with `source.invalid`.
 
 zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty object ending in `/` cannot name a file on disk, so the listing fails with `source.invalid` before selection or downloads. ask the owner to rename it, or choose a prefix that leaves it out. the limit on how many files a dataset lists, [`FETCHLOOM_MOST_FILES`](../reference/environment.md), applies before `--select` and `--exclude`, so name a narrower prefix inside a large bucket. a prefix that holds no objects fails with `reference.unresolved`.
 

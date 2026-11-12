@@ -150,7 +150,7 @@ impl Competition {
     /// every data file, following the pages kaggle sends.
     async fn files(&self, api: &impl Api) -> Result<Vec<Remote>, Error> {
         let mut files = Vec::new();
-        let mut pages = crate::source::Pages::new();
+        let mut pages = crate::source::Pages::after_first();
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&token)?).await?;
@@ -183,7 +183,7 @@ impl Competition {
                 return Ok(files);
             }
             pages
-                .next(page.next_page_token.clone())
+                .next(page.next_page_token.clone(), files.len())
                 .map_err(|reason| unusable(self, &reason))?;
             token = page.next_page_token;
         }

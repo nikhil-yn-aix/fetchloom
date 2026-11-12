@@ -145,7 +145,7 @@ impl Dandiset {
         let mut unavailable = Vec::new();
         while let Some(url) = next.take() {
             pages
-                .next(url.to_string())
+                .next(url.to_string(), files.len() + unavailable.len())
                 .map_err(|reason| self.invalid(&reason))?;
             let page: Page = self.answer(&api.get(&url).await?)?;
             if page

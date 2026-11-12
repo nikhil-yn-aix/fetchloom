@@ -77,12 +77,20 @@ pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
 
 /// the pages of one listing, which a source names one after another by a token, a link or a
 /// number. a page named again would loop, and more pages than a listing of the most files it may
-/// hold needs would never end, so the pages of every source are refused for either in one
-/// wording, which the source's own error carries.
+/// hold needs would never end, nor would pages that bring nothing new, so the pages of every
+/// source are refused for any of these in one wording, which the source's own error carries.
 pub(crate) struct Pages<K> {
     asked: HashSet<K>,
     most: usize,
+    /// the entries the listing held when the page before, in this chain of pages, was asked for.
+    held: Option<usize>,
+    /// the pages in a row of this chain that brought no entry.
+    idle: usize,
 }
+
+/// pages in a row that bring no entry before a listing counts as broken. cloud storage may
+/// pause a listing with empty pages, which must never fail it, so only a long run counts.
+const MOST_IDLE: usize = 100;
 
 impl<K: Eq + std::hash::Hash> Pages<K> {
     /// the pages of a listing of at most [`most_files`] files.
@@ -95,19 +103,48 @@ impl<K: Eq + std::hash::Hash> Pages<K> {
         Pages {
             asked: HashSet::new(),
             most,
+            held: None,
+            idle: 0,
         }
     }
 
-    /// counts the page `key` names before it is asked for, or says why it is not.
-    pub(crate) fn next(&mut self, key: K) -> Result<(), String> {
-        if self.asked.len() >= self.most {
+    /// the pages of a listing that follows each page's token, whose first page, which no token
+    /// names, is asked for before the guard hears of the next.
+    pub(crate) fn after_first() -> Pages<K> {
+        Pages {
+            held: Some(0),
+            ..Pages::new()
+        }
+    }
+
+    /// starts another chain of pages, as a walk does for each folder it lists: an empty folder
+    /// is one page with nothing in it and no next, which leaves no listing broken.
+    pub(crate) fn begin(&mut self) {
+        self.held = None;
+        self.idle = 0;
+    }
+
+    /// counts the page `key` names before it is asked for, the listing holding `entries` from
+    /// the pages before it, or says why it is not.
+    pub(crate) fn next(&mut self, key: K, entries: usize) -> Result<(), String> {
+        if let Some(held) = self.held {
+            self.idle = if entries > held { 0 } else { self.idle + 1 };
+        }
+        self.held = Some(entries);
+        // a loop is the plainer cause, so it is told first when pages also bring nothing new
+        if !self.asked.insert(key) {
+            return Err("it repeated an earlier page".to_owned());
+        }
+        if self.idle >= MOST_IDLE {
+            return Err(format!(
+                "it sent {MOST_IDLE} pages in a row that held nothing new"
+            ));
+        }
+        if self.asked.len() > self.most {
             return Err(format!(
                 "it sent more than {} pages",
                 crate::units::grouped(self.most as u64)
             ));
-        }
-        if !self.asked.insert(key) {
-            return Err("it repeated an earlier page".to_owned());
         }
         Ok(())
     }
@@ -1098,18 +1135,39 @@ mod tests {
         );
     }
 
-    /// a page named again would loop, and more pages than a listing needs would never end, so
-    /// both are refused, in the words every source's error carries.
+    /// a page named again would loop, and more pages than a listing needs, or pages that bring
+    /// nothing, would never end, so each is refused, in the words every source's error carries.
     #[test]
     fn pages_refuse_a_page_named_again_and_more_than_a_listing_needs() {
         let mut pages = Pages::most(2);
-        assert_eq!(pages.next("a"), Ok(()));
+        assert_eq!(pages.next("a", 0), Ok(()));
         assert_eq!(
-            pages.next("a"),
+            pages.next("a", 1),
             Err("it repeated an earlier page".to_owned())
         );
-        assert_eq!(pages.next("b"), Ok(()));
-        assert_eq!(pages.next("c"), Err("it sent more than 2 pages".to_owned()));
+        assert_eq!(pages.next("b", 1), Ok(()));
+        assert_eq!(
+            pages.next("c", 2),
+            Err("it sent more than 2 pages".to_owned())
+        );
+        let mut idle = Pages::most(1_000);
+        for page in 0..100 {
+            assert_eq!(idle.next(page, 7), Ok(()), "{page}");
+        }
+        // a page that brings an entry starts the run again
+        for page in 100..200 {
+            assert_eq!(idle.next(page, 8), Ok(()), "{page}");
+        }
+        assert_eq!(
+            idle.next(200, 8),
+            Err("it sent 100 pages in a row that held nothing new".to_owned())
+        );
+        // each empty folder of a walk is a chain of its own
+        let mut walk = Pages::most(1_000);
+        for folder in 0..200 {
+            walk.begin();
+            assert_eq!(walk.next(folder, 0), Ok(()), "{folder}");
+        }
     }
 
     /// a commit, a dataset's version and a snapshot fix their bytes. a branch, a dataset without

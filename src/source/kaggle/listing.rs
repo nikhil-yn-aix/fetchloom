@@ -111,7 +111,7 @@ impl Dataset {
     async fn files(&self, api: &impl Api, version: u32, newest: u32) -> Result<Vec<Remote>, Error> {
         let version = version.to_string();
         let mut files = Vec::new();
-        let mut pages = crate::source::Pages::new();
+        let mut pages = crate::source::Pages::after_first();
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&version, &token)?).await?;
@@ -152,7 +152,7 @@ impl Dataset {
                 return Ok(files);
             }
             pages
-                .next(page.next_page_token.clone())
+                .next(page.next_page_token.clone(), files.len())
                 .map_err(|reason| unusable(self, &reason))?;
             token = page.next_page_token;
         }

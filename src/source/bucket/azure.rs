@@ -209,7 +209,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         match page.text_of("NextMarker").filter(|next| !next.is_empty()) {
             None => return Ok(without_folder_marks(objects)),
             Some(next) => {
-                pages.follow(prefix, next)?;
+                pages.follow(prefix, next, objects.len())?;
                 marker = Some(next.to_owned());
             }
         }

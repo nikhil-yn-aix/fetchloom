@@ -107,9 +107,10 @@ pub(super) async fn files(node: &Node, api: &impl Api, root: Url) -> Result<Vec<
     let mut pages = crate::source::Pages::new();
     while let Some(folder) = walk.folders.pop_front() {
         let mut url = folder.url;
+        pages.begin();
         loop {
             pages
-                .next(url.clone())
+                .next(url.clone(), walk.seen.len())
                 .map_err(|reason| node.invalid(&reason))?;
             let response = api.get(&url).await?;
             let page: Page = crate::source::json(node, &response)?;

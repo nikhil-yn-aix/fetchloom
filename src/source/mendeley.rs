@@ -160,7 +160,10 @@ impl Dataset {
         let mut ids = HashSet::new();
         let mut pages = super::Pages::new();
         loop {
-            pages.next(seen).map_err(|reason| self.invalid(&reason))?;
+            let held = usize::try_from(seen).unwrap_or(usize::MAX);
+            pages
+                .next(seen, held)
+                .map_err(|reason| self.invalid(&reason))?;
             url.set_query(Some(&format!(
                 "folder_id={folder}&version={version}&$start={seen}"
             )));

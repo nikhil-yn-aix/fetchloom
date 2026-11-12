@@ -98,7 +98,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         match page.next_page_token.filter(|next| !next.is_empty()) {
             None => return Ok(objects),
             Some(next) => {
-                pages.follow(prefix, &next)?;
+                pages.follow(prefix, &next, objects.len())?;
                 token = Some(next);
             }
         }

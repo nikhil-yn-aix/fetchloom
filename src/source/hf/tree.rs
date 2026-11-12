@@ -78,8 +78,9 @@ impl Repo {
         let mut next = Some(first);
         let mut pages = crate::source::Pages::new();
         let mut first = true;
+        let mut listed = 0;
         while let Some(url) = next {
-            pages.next(url.clone()).map_err(|reason| {
+            pages.next(url.clone(), listed).map_err(|reason| {
                 Error::new(
                     Kind::SourceInvalid,
                     format!("huggingface.co sent an invalid listing of {self}: {reason}"),
@@ -92,6 +93,7 @@ impl Repo {
             }
             first = false;
             let entries: Vec<Entry> = crate::source::json(self, &response)?;
+            listed += entries.len();
             for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
                 files.push(self.remote(commit, entry)?);
             }

@@ -175,7 +175,9 @@ impl Dataset {
         let (mut seen, mut total) = (0, 0);
         let mut pages = super::Pages::new();
         for page in 1.. {
-            pages.next(page).map_err(|reason| self.invalid(&reason))?;
+            pages
+                .next(page, seen)
+                .map_err(|reason| self.invalid(&reason))?;
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
             let response = api.get(&url).await?;
             let answer: Page<Files> = super::json(self, &response)?;

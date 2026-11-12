@@ -187,16 +187,19 @@ pub(super) async fn list_at_most(
     walk.folders.push_back((item.id.clone(), String::new()));
     // drive may send a page with no items and a token for the next, but not forever
     let mut pages = crate::source::Pages::most(most + 1);
+    let mut listed = 0;
     while let Some((id, path)) = walk.folders.pop_front() {
         let mut token = None;
+        pages.begin();
         loop {
             pages
-                .next((id.clone(), token.clone()))
+                .next((id.clone(), token.clone()), listed)
                 .map_err(|reason| unreadable(item, &reason))?;
             let page: Page = read(&api.get(&children(&id, token.as_deref())?).await?)?;
             if page.incomplete_search {
                 return Err(unreadable(item, "drive said its listing is incomplete"));
             }
+            listed += page.files.len();
             walk.add(item, &path, page.files)?;
             match page.next_page_token.filter(|next| !next.is_empty()) {
                 Some(next) => token = Some(next),
