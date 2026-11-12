@@ -522,9 +522,9 @@ async fn import_held(
     let own = match (&supplied, args.name.as_deref()) {
         (Some(name), _) => name.clone(),
         (None, Some(asked)) => asked.to_owned(),
-        (None, None) => unreserved(
-            import::dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned()),
-        ),
+        (None, None) => {
+            import::dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
+        }
     };
     let net = Arc::new(context.net());
     if dry_run {
@@ -1963,30 +1963,15 @@ fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
             name::DATASET_NAME_MOST
         );
         return Err(match name::dataset_name(asked) {
-            Some(suggested) => {
-                error.help(format!("{rule}, such as --as {}", unreserved(suggested)))
+            // lowercase letters cannot fix a name windows keeps for a device
+            Some(suggested) if name::is_reserved_on_windows(asked) => {
+                error.help(format!("pick another name, such as --as {suggested}"))
             }
+            Some(suggested) => error.help(format!("{rule}, such as --as {suggested}")),
             None => error.help(rule),
         });
     }
-    // a dataset's name is its folder, and data.toml travels to windows machines too
-    if name::is_reserved_on_windows(asked) {
-        return Err(Error::new(
-            Kind::Usage,
-            format!("\"{asked}\" is a name windows keeps for devices, so it cannot be a folder"),
-        )
-        .help(format!("pick another name, such as --as {asked}-data")));
-    }
     unused(asked, manifest)
-}
-
-/// `name`, or `name-data` where windows keeps `name` for a device, such as con.
-fn unreserved(name: String) -> String {
-    if name::is_reserved_on_windows(&name) {
-        format!("{name}-data")
-    } else {
-        name
-    }
 }
 
 /// how to name a dataset of one add yourself.
@@ -2023,16 +2008,15 @@ fn choose_name(
     free_name(output, name, manifest, rename)
 }
 
-/// `name`, a name fetchloom chose, made usable: with `-data` added where windows keeps it for a
-/// device, and the next number when data.toml has it already, told with `rename`.
+/// `name`, a name fetchloom chose, made usable: the next number when data.toml has it already,
+/// told with `rename`. a chosen name never names a windows device, as [`name::dataset_name`]
+/// makes it.
 fn free_name(
     output: &Output,
     name: String,
     manifest: &Manifest,
     rename: &str,
 ) -> Result<String, Error> {
-    // data.toml travels to windows machines, where a folder named con or aux cannot exist
-    let name = unreserved(name);
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number
     if !manifest.datasets.contains_key(&name) {
         return Ok(name);

@@ -284,6 +284,20 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
     assert!(!sandbox.work().join("data").exists());
 
     fs::remove_file(&manifest)?;
+    // a device name keeps every rule for its letters, so only another name helps
+    for device in ["con", "lpt1"] {
+        let named = sandbox.run(&["add", &server.url, "--as", device])?;
+        let stderr = text(&named.stderr)?;
+        assert_eq!(named.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.ends_with(&format!(
+                "error: \"{device}\" is not a valid dataset name\n  windows keeps it for a device, so it cannot be a folder there\n  help: pick another name, such as --as {device}-data\n"
+            )),
+            "{stderr}"
+        );
+    }
+    assert_eq!(server.requests().len(), 0);
+    assert!(!manifest.exists());
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     assert!(fs::read_to_string(&manifest)?.contains("[datasets.con-data]"));
