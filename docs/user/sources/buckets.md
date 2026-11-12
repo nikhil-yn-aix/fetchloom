@@ -1,6 +1,6 @@
 # cloud buckets
 
-fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys, which a profile may also get from a program or, for a sign-in or a role, from the AWS CLI, and a private cloud storage bucket you list in the `gcs_buckets` setting with your google application default credentials.
+fetchloom lists and downloads S3 and google cloud storage buckets over HTTPS, without an AWS or google SDK. a public bucket needs no account; a private S3 bucket you list in the `s3_buckets` setting is read with your AWS keys, which a profile may also get from a program or, for a sign-in or a role, from the AWS CLI, and a private cloud storage bucket you list in the `gcs_buckets` setting with your google application default credentials. azure blob containers have [a page of their own](azure.md).
 
 ```sh
 fetchloom add s3://openneuro.org/ds000001/

@@ -32,7 +32,11 @@ use std::path::PathBuf;
 use tracing::Instrument as _;
 use url::Url;
 
-pub(crate) use bucket::{Bucket, GcsBucket, Keyed, Signing, unversioned, with_version};
+pub(crate) use bucket::{
+    AzureContainer, Bucket, GcsBucket, Keyed, Sas, Signing, VERSION as AZURE_VERSION,
+    account_of as azure_account, is_account as is_azure_account,
+    is_container as is_azure_container, unversioned, with_version,
+};
 pub(crate) use drive::DriveId;
 
 use crate::digest::{Md5, Sha256};
@@ -157,6 +161,10 @@ impl Parsed {
             ),
         );
         Err(match &self.reference {
+            Reference::Url(url) if url.host_str().and_then(bucket::account_of).is_some() => error
+                .help(
+                    "keep the SAS out of the link: list the container in azure_containers and set AZURE_STORAGE_SAS_TOKEN to the SAS, or download the file once with `fetchloom get`",
+                ),
             Reference::Url(_) | Reference::Dropbox(_) => error.help(
                 "use a link that works without it, or download the file once with `fetchloom get`",
             ),
@@ -318,6 +326,10 @@ impl Reference {
             )?)),
             "gs" => whole(Reference::Bucket(bucket::Prefix::parse(
                 bucket::Store::Gcs,
+                rest,
+            )?)),
+            "azure" => whole(Reference::Bucket(bucket::Prefix::parse(
+                bucket::Store::Azure,
                 rest,
             )?)),
             _ => Err(unknown(text)),
@@ -920,6 +932,16 @@ mod tests {
         }
         let plain = parse("https://zenodo.org/records/3608990?download=1");
         assert!(plain.check_shareable().is_ok());
+        let sas = parse(
+            "https://lab.blob.core.windows.net/raw/a.csv?sv=2022-11-02&sr=c&sp=rl&se=2026-12-31&sig=abc",
+        );
+        let error = sas.check_shareable().unwrap_err();
+        assert!(!error.message.contains("abc"), "{}", error.message);
+        let help = error.help.unwrap_or_default();
+        assert!(
+            help.contains("AZURE_STORAGE_SAS_TOKEN") && help.contains("azure_containers"),
+            "{help}"
+        );
     }
 
     #[test]
@@ -1008,6 +1030,54 @@ mod tests {
             ),
         ] {
             assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
+        }
+    }
+
+    /// a container is written with its account, and a pasted link to a container or a folder
+    /// in one is read as that. a link to one blob stays a link, as one to an S3 object does.
+    #[test]
+    fn azure_containers_and_their_links_find_their_source() {
+        for (text, canonical) in [
+            (
+                "azure:azureopendatastorage/mnist/",
+                "azure:azureopendatastorage/mnist/",
+            ),
+            (
+                "azure:AzureOpenDataStorage/mnist",
+                "azure:azureopendatastorage/mnist/",
+            ),
+            (
+                "azure:azureopendatastorage/mnist/t10k-labels",
+                "azure:azureopendatastorage/mnist/t10k-labels",
+            ),
+            (
+                "https://azureopendatastorage.blob.core.windows.net/mnist/",
+                "azure:azureopendatastorage/mnist/",
+            ),
+            (
+                "https://azureopendatastorage.blob.core.windows.net/mnist",
+                "azure:azureopendatastorage/mnist/",
+            ),
+            (
+                "https://azureopendatastorage.blob.core.windows.net/mnist/processedManifest/",
+                "azure:azureopendatastorage/mnist/processedManifest/",
+            ),
+            (
+                "https://azureopendatastorage.blob.core.windows.net/mnist/t10k-labels-idx1-ubyte.gz",
+                "https://azureopendatastorage.blob.core.windows.net/mnist/t10k-labels-idx1-ubyte.gz",
+            ),
+        ] {
+            assert_eq!(parse(text).reference.to_string(), canonical, "{text}");
+        }
+        for bad in [
+            "azure:mnist",
+            "azure:azureopendatastorage/",
+            "azure:open_data/mnist/",
+            "azure:azureopendatastorage/MNIST/",
+            "azure:azureopendatastorage/mn--ist/",
+        ] {
+            let error = Reference::parse(bad).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");
         }
     }
 

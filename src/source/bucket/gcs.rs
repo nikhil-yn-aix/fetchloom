@@ -145,8 +145,9 @@ fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error
     })
 }
 
-/// the 16 bytes of an MD5 written in padded standard base64, as cloud storage states them.
-fn base64_md5(text: &str) -> Option<Md5> {
+/// the 16 bytes of an MD5 written in padded standard base64, as cloud storage and azure state
+/// them.
+pub(super) fn base64_md5(text: &str) -> Option<Md5> {
     let digits = text.strip_suffix("==")?;
     if digits.len() != 22 {
         return None;

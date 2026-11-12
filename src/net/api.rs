@@ -272,15 +272,16 @@ pub(super) fn stand_in(url: &Url) -> Option<Url> {
         .or_else(|| test_drive(url))
 }
 
-/// local object storage for CLI tests, listings and object bytes alike: a request to an S3 or
-/// cloud storage host goes to `/<host><path>` on the test server instead. release builds never
-/// read this override.
+/// local object storage for CLI tests, listings and object bytes alike: a request to an S3, cloud
+/// storage or azure blob host goes to `/<host><path>` on the test server instead. release builds
+/// never read this override.
 #[cfg(debug_assertions)]
 fn test_bucket(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
     let storage = host.ends_with(".amazonaws.com")
         || host == "storage.googleapis.com"
-        || host.ends_with(".storage.googleapis.com");
+        || host.ends_with(".storage.googleapis.com")
+        || host.ends_with(".blob.core.windows.net");
     if !storage {
         return None;
     }

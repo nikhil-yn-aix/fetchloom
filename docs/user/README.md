@@ -43,6 +43,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |
 | [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [cloud buckets](sources/buckets.md) | list and pin S3 and google cloud storage prefixes, private S3 buckets with your AWS keys and private cloud storage buckets with your google credentials |
+| [azure blob storage](sources/azure.md) | list and pin azure containers and folders, private ones with a SAS you keep out of the project |
 | [data.toml](reference/data-toml.md) | edit datasets, paths and selection patterns |
 | [data.lock](reference/data-lock.md) | inspect pins, spec hashes and archive tree hashes |
 | [JSON output](reference/json-output.md) | parse result fields, warnings and work counters |

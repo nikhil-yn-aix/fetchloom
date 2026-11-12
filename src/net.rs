@@ -3,6 +3,7 @@
 
 mod address;
 mod api;
+mod azure;
 mod download;
 mod failure;
 mod google;
@@ -26,6 +27,9 @@ use url::Url;
 
 pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
+#[cfg(test)]
+pub(crate) use azure::Given;
+pub(crate) use azure::{Azure, Sent};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
 #[cfg(debug_assertions)]
@@ -201,6 +205,8 @@ pub(crate) struct Net {
     signing: crate::source::Signing,
     /// which requests to cloud storage buckets carry a google token.
     google: Google,
+    /// which requests to azure containers carry a SAS.
+    azure: Azure,
     /// buckets that refused this run an old version of an object whose version as it is now
     /// matched its pin: they likely refuse every old version, so their objects are asked for as
     /// they are now first.
@@ -383,6 +389,7 @@ impl Net {
             credentials,
             signing: crate::source::Signing::default(),
             google: Google::default(),
+            azure: Azure::default(),
             refuse_versions: Mutex::default(),
             mirrors_only: None,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
@@ -435,6 +442,13 @@ impl Net {
     /// cloud storage refused them without one.
     pub(crate) fn with_google(mut self, google: Google) -> Net {
         self.google = google;
+        self
+    }
+
+    /// sends a SAS with requests for the azure containers `azure` lists, once azure refused
+    /// them without one.
+    pub(crate) fn with_azure(mut self, azure: Azure) -> Net {
+        self.azure = azure;
         self
     }
 
@@ -545,6 +559,7 @@ impl Net {
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
+        let container = self.azure.locate(url);
         #[cfg(debug_assertions)]
         let local = api::stand_in(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
@@ -575,6 +590,7 @@ impl Net {
                 .await
                 .map_err(Failure::Final)?;
             let tokened = self.google_bearer(stored.as_ref(), redirects).await?;
+            let blobbed = self.azure_hop(container.as_ref(), redirects)?;
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = match &signer {
                 Some(signer) => {
@@ -585,7 +601,9 @@ impl Net {
                     )
                     .map_err(Failure::Final)?
                 }
-                None => shape(self.request(client, &hop, first_origin)).headers(tokened.headers()),
+                None => shape(self.request(client, &blobbed.url(&hop), first_origin))
+                    .headers(tokened.headers())
+                    .headers(blobbed.headers()),
             };
             // counted as it goes: one refused before is no request, and a redirect's hop is part
             // of the request it follows
@@ -625,24 +643,41 @@ impl Net {
             if self.google_again(&tokened, &mut response).await? {
                 continue;
             }
-            let Some(next) = redirect_target(&hop, &response) else {
+            if self.azure_again(&blobbed, &mut response)? {
+                continue;
+            }
+            let Some(next) = self.next_hop(url, &hop, &response, &mut redirects, &mut name)? else {
                 if let Some(name) = name {
                     response.extensions_mut().insert(RedirectName(name));
                 }
                 return Ok(response);
             };
-            name = headers::file_name(response.headers()).or(name);
-            redirects += 1;
-            if redirects > REDIRECTS {
-                let reason = address::Refused::new(format!("more than {REDIRECTS} redirects"));
-                return Err(refused(url, reason));
-            }
-            self.typed
-                .check(&next)
-                .map_err(|reason| refused(&next, reason))?;
-            tracing::debug!(from = host(&hop), to = host(&next), "redirect");
             sent_by = Some(std::mem::replace(&mut hop, next));
         }
+    }
+
+    fn next_hop(
+        &self,
+        from: &Url,
+        hop: &Url,
+        response: &reqwest::Response,
+        redirects: &mut usize,
+        name: &mut Option<String>,
+    ) -> Result<Option<Url>, Failure> {
+        let Some(next) = redirect_target(hop, response) else {
+            return Ok(None);
+        };
+        *name = headers::file_name(response.headers()).or_else(|| name.take());
+        *redirects += 1;
+        if *redirects > REDIRECTS {
+            let reason = address::Refused::new(format!("more than {REDIRECTS} redirects"));
+            return Err(Failure::Final(failure::refused(from, &reason)));
+        }
+        self.typed
+            .check(&next)
+            .map_err(|reason| Failure::Final(failure::refused(&next, &reason)))?;
+        tracing::debug!(from = host(hop), to = host(&next), "redirect");
+        Ok(Some(next))
     }
 
     /// sends `request` for `hop`, which `carrier` carries when a proxy does: the answer, or why

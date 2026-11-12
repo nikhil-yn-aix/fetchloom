@@ -323,7 +323,7 @@ mod tests {
                             settings.archive_limits(),
                             &settings.allowed_origins,
                             &settings.s3_buckets,
-                            &settings.gcs_buckets,
+                            (&settings.gcs_buckets, &settings.azure_containers),
                             &settings.mirrors,
                             settings.mirrors_only,
                             &settings.push_to,

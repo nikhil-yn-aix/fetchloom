@@ -181,6 +181,7 @@ fn rows(context: &Context) -> Vec<Shown> {
     ));
     shown.push(targets("s3_buckets", &settings.s3_buckets));
     shown.push(targets("gcs_buckets", &settings.gcs_buckets));
+    shown.push(targets("azure_containers", &settings.azure_containers));
     shown.push(targets("drive_folders", &settings.drive_folders));
     shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
     shown.push(Shown {

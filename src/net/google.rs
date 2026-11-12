@@ -89,6 +89,8 @@ pub(crate) enum Authorized {
         identity: String,
         lacks_scope: bool,
     },
+    /// a request for an azure container, as [`super::azure::Sent`] says it went.
+    Azure(super::azure::Sent),
 }
 
 impl Default for Google {
@@ -312,6 +314,7 @@ impl Authorized {
     pub(crate) fn refusal(&self, url: &Url) -> Error {
         let shown = Shown(url);
         match self {
+            Authorized::Azure(sent) => sent.refusal(url),
             Authorized::Token {
                 identity,
                 lacks_scope: true,
@@ -355,6 +358,7 @@ impl Authorized {
                 .contains("insufficient authentication scopes")
         });
         match self {
+            Authorized::Azure(sent) => sent.listing_refusal(prefix),
             Authorized::Token {
                 identity,
                 lacks_scope,

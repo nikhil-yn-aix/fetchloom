@@ -167,6 +167,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 | kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
 | S3 bucket | `s3://<bucket>/<prefix>`, or `s3:https://<host>/<bucket>/<prefix>` at another service | the object's HTTPS URL on the endpoint that listed it, with `?versionId=<id>` when the bucket keeps versions |
 | cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
+| azure container | `azure:<account>/<container>/<prefix>` | `https://<account>.blob.core.windows.net/<container>/<name>` |
 | [imported files](data-toml.md#imported-files) | `local` | empty |
 
 an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.

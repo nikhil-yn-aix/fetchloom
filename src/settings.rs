@@ -17,7 +17,7 @@ pub(crate) use resources::Level;
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::mirror::Location;
-use crate::source::{Bucket, DriveId, GcsBucket};
+use crate::source::{AzureContainer, Bucket, DriveId, GcsBucket};
 use crate::units;
 
 /// reads one environment variable, so tests can give each run its own.
@@ -42,7 +42,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 20] = [
+const KEYS: [(&str, &str); 21] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -58,6 +58,7 @@ const KEYS: [(&str, &str); 20] = [
     ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
     ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
     ("gcs_buckets", "FETCHLOOM_GCS_BUCKETS"),
+    ("azure_containers", "FETCHLOOM_AZURE_CONTAINERS"),
     ("drive_folders", "FETCHLOOM_DRIVE_FOLDERS"),
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
@@ -66,10 +67,11 @@ const KEYS: [(&str, &str); 20] = [
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 5] = [
+const LISTS: [&str; 6] = [
     "allowed_origins",
     "s3_buckets",
     "gcs_buckets",
+    "azure_containers",
     "drive_folders",
     "mirrors",
 ];
@@ -78,10 +80,11 @@ const BOOLEANS: [&str; 1] = ["mirrors_only"];
 /// the keys an empty variable clears rather than leaving to the settings file: who may be
 /// reached, which buckets keys sign for, where requests go and where push writes, so blanking one
 /// for a run cannot leave the file's choice in force.
-const CLEARED: [&str; 7] = [
+const CLEARED: [&str; 8] = [
     "allowed_origins",
     "s3_buckets",
     "gcs_buckets",
+    "azure_containers",
     "drive_folders",
     "mirrors",
     "mirrors_only",
@@ -389,6 +392,9 @@ pub(crate) struct Settings {
     /// the cloud storage buckets a request may carry a token of this machine's google
     /// credentials for, after cloud storage refused it without one.
     pub(crate) gcs_buckets: Set<Vec<GcsBucket>>,
+    /// the azure containers a request may carry a SAS for, its entry's own or the one in
+    /// `AZURE_STORAGE_SAS_TOKEN`, after azure refused it without one.
+    pub(crate) azure_containers: Set<Vec<AzureContainer>>,
     /// the google drive folders and files a request to drive's api may carry a token of this
     /// machine's google credentials for, after drive refused them without one.
     pub(crate) drive_folders: Set<Vec<DriveId>>,
@@ -423,6 +429,7 @@ impl Settings {
             allowed_origins: Set::default(Vec::new()),
             s3_buckets: Set::default(Vec::new()),
             gcs_buckets: Set::default(Vec::new()),
+            azure_containers: Set::default(Vec::new()),
             drive_folders: Set::default(Vec::new()),
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
@@ -504,6 +511,7 @@ impl Settings {
             allowed_origins: origins(&given, "allowed_origins")?,
             s3_buckets: buckets(&given, "s3_buckets")?,
             gcs_buckets: gcs_buckets(&given, "gcs_buckets")?,
+            azure_containers: azure_containers(&given, "azure_containers")?,
             drive_folders: drive_folders(&given, "drive_folders")?,
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
@@ -898,6 +906,45 @@ fn gcs_buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<GcsBucket>>, Erro
     }
     Ok(Set {
         value: buckets,
+        origin,
+    })
+}
+
+/// the azure containers `key` lists, separated by commas: `azure:account/container`, or the
+/// container's link, which may carry its SAS as the azure portal gives one. none when it is unset
+/// or empty.
+fn azure_containers(given: &Given<'_>, key: &str) -> Result<Set<Vec<AzureContainer>>, Error> {
+    let Some((entries, origin, named)) = given.list(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let mut containers: Vec<AzureContainer> = Vec::new();
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(container) = AzureContainer::parse(entry) else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{}\", which is not a container such as azure:lab/raw or its link",
+                    crate::net::mask_query(entry)
+                ),
+            )
+            .help(format!(
+                "{} to send a SAS to none, or list containers as azure:account/container, or as the container's link with its SAS, separated by commas",
+                undo(origin, key)
+            )));
+        };
+        let known = |listed: &AzureContainer| {
+            listed.account() == container.account() && listed.name() == container.name()
+        };
+        if !containers.iter().any(known) {
+            containers.push(container);
+        }
+    }
+    Ok(Set {
+        value: containers,
         origin,
     })
 }
@@ -1329,7 +1376,7 @@ mod tests {
         assert_eq!(
             unknown.help.as_deref(),
             Some(
-                "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, drive_folders, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+                "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, build_floor, each a number or text"
             )
         );
     }
@@ -1855,6 +1902,92 @@ mod tests {
                 error.help.as_deref(),
                 Some(
                     "unset FETCHLOOM_GCS_BUCKETS to send google credentials to none, or list buckets as gs://name, separated by commas"
+                )
+            );
+        }
+    }
+
+    /// containers are named by account and container, or by link, which in the settings file
+    /// may carry the container's own SAS. the SAS never shows, not even in a refused entry.
+    #[test]
+    fn azure_containers_name_containers_and_keep_their_sas_unshown() {
+        let shown = |settings: &Settings| -> Vec<String> {
+            settings
+                .azure_containers
+                .value
+                .iter()
+                .map(|container| format!("{container:?}"))
+                .collect()
+        };
+        assert_eq!(
+            read(&[], None).unwrap().azure_containers,
+            Set::default(vec![])
+        );
+        let set = read(
+            &[(
+                "FETCHLOOM_AZURE_CONTAINERS",
+                " azure:Lab/raw, https://lab.blob.core.windows.net/scans/ ,azure:lab/raw/,",
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            shown(&set),
+            [
+                "AzureContainer(azure:lab/raw)",
+                "AzureContainer(azure:lab/scans)"
+            ]
+        );
+        assert_eq!(set.azure_containers.origin, Origin::Environment);
+        let filed = file(
+            "azure_containers = [\"https://lab.blob.core.windows.net/raw?sv=2022-11-02&sr=c&sp=rl&sig=abc%3D\"]\n",
+        )
+        .unwrap();
+        let set = Settings::read(&env(&[]), filed.clone(), machine(None)).unwrap();
+        assert_eq!(shown(&set), ["AzureContainer(azure:lab/raw with a SAS)"]);
+        assert_eq!(
+            set.azure_containers.value[0]
+                .sas()
+                .map(crate::source::Sas::query),
+            Some("sv=2022-11-02&sr=c&sp=rl&sig=abc%3D")
+        );
+        assert_eq!(set.azure_containers.origin, Origin::File);
+        let cleared = Settings::read(
+            &env(&[("FETCHLOOM_AZURE_CONTAINERS", " ")]),
+            filed,
+            machine(None),
+        )
+        .unwrap();
+        assert_eq!(
+            cleared.azure_containers,
+            Set {
+                value: Vec::new(),
+                origin: Origin::Environment
+            }
+        );
+        for (entry, said) in [
+            ("azure:lab", "azure:lab"),
+            ("azure:lab/Raw", "azure:lab/Raw"),
+            ("gs://lab-raw", "gs://lab-raw"),
+            (
+                "http://lab.blob.core.windows.net/raw",
+                "http://lab.blob.core.windows.net/raw",
+            ),
+            (
+                "https://lab.blob.core.windows.net/raw/scans",
+                "https://lab.blob.core.windows.net/raw/scans",
+            ),
+            (
+                "https://lab.blob.core.windows.net/raw?sp=rl&sig=abc",
+                "https://lab.blob.core.windows.net/raw?sp=***&sig=***",
+            ),
+        ] {
+            let error = read(&[("FETCHLOOM_AZURE_CONTAINERS", entry)], None).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{entry}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "FETCHLOOM_AZURE_CONTAINERS holds \"{said}\", which is not a container such as azure:lab/raw or its link"
                 )
             );
         }

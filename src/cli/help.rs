@@ -98,6 +98,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_GCS_BUCKETS
                        private cloud storage buckets your google credentials
                        may sign in to, as gs://lab-data, separated by commas
+  FETCHLOOM_AZURE_CONTAINERS
+                       private azure containers a SAS may go to, as
+                       azure:lab/raw, separated by commas
   FETCHLOOM_DRIVE_FOLDERS
                        private google drive folders and files your google
                        credentials may read, by id or sharing link,
@@ -132,19 +135,21 @@ const ENVIRONMENT: &str = "fetchloom environment
 
 a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
 memory, most_files, the archive_ settings, allowed_origins, s3_buckets,
-gcs_buckets, drive_folders, mirrors, mirrors_only, push_to and build_floor for
-every run, one per line, as jobs = 16. a variable wins over the file.
+gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to
+and build_floor for every run, one per line, as jobs = 16. a variable wins over
+the file.
 fetchloom settings shows each value and where it came from.
 
 keys are read where each source's own tools keep them: HF_TOKEN and the hugging
 face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,
 OSF_TOKEN, DATAVERSE_API_TOKEN with DATAVERSE_URL, .netrc or the file NETRC
 names, for S3 buckets in s3_buckets, AWS_ACCESS_KEY_ID with
-AWS_SECRET_ACCESS_KEY, or the profile AWS_PROFILE names in ~/.aws, and for
-cloud storage buckets in gcs_buckets and drive items in drive_folders, the key
-file that GOOGLE_APPLICATION_CREDENTIALS names, else the login that
-gcloud auth application-default login saved. drive needs that login made
-through an oauth client of your own: see the google drive page.
+AWS_SECRET_ACCESS_KEY, or the profile AWS_PROFILE names in ~/.aws, for cloud
+storage buckets in gcs_buckets and drive items in drive_folders, the key file
+that GOOGLE_APPLICATION_CREDENTIALS names, else the login that
+gcloud auth application-default login saved, and for azure containers in
+azure_containers, the SAS AZURE_STORAGE_SAS_TOKEN holds. drive needs the google
+login made through an oauth client of your own: see the google drive page.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
 

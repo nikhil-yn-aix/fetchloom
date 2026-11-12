@@ -30,8 +30,8 @@ pub(crate) fn secret(url: &Url) -> Option<String> {
 }
 
 /// whether a query key's value grants access: any token, secret, password, signature, credential
-/// or api key however it is spelled, and the short names azure (`sig`) and cloudfront
-/// (`Key-Pair-Id`) sign links with.
+/// or api key however it is spelled, and the short names azure (`sig`, with the expiry `se` and
+/// permissions `sp` of its SAS) and cloudfront (`Key-Pair-Id`) sign links with.
 fn is_secret(key: &str) -> bool {
     let key: String = key
         .chars()
@@ -39,7 +39,7 @@ fn is_secret(key: &str) -> bool {
         .map(|c| c.to_ascii_lowercase())
         .collect();
     SECRET_ENDINGS.iter().any(|ending| key.ends_with(ending))
-        || matches!(key.as_str(), "sig" | "keypairid")
+        || matches!(key.as_str(), "sig" | "se" | "sp" | "keypairid")
 }
 
 /// a link as messages and logs show it, each value that grants access replaced by `***`.
@@ -225,6 +225,8 @@ mod tests {
             "x-api-key",
             "apiKey",
             "Sig",
+            "se",
+            "SP",
             "X-Amz-Credential",
             "Key-Pair-Id",
         ] {

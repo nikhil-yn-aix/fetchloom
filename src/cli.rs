@@ -229,11 +229,16 @@ impl Context {
         .with_drive(self.settings.drive_folders.value.clone());
         #[cfg(debug_assertions)]
         let google = google.with_token_endpoint(net::test_token_endpoint());
+        let azure = net::Azure::new(
+            self.settings.azure_containers.value.clone(),
+            Arc::new(crate::auth::env),
+        );
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
             .with_signing(signing)
             .with_google(google)
+            .with_azure(azure)
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value);

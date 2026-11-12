@@ -1,8 +1,9 @@
-//! cloud object storage: an S3 or google cloud storage bucket, or a prefix inside one, or a
-//! bucket at another service that speaks S3's API. listings and downloads go without a key, and
-//! only an S3 bucket the `s3_buckets` setting lists is asked again with one, as
-//! [`signing`] decides.
+//! cloud object storage: an S3, google cloud storage or azure blob bucket, or a prefix inside
+//! one, or a bucket at another service that speaks S3's API. listings and downloads go without a
+//! key, and only an S3 bucket the `s3_buckets` setting lists is asked again with one, as
+//! [`signing`] decides; cloud storage and azure containers have settings of their own.
 
+mod azure;
 mod gcs;
 mod s3;
 mod signing;
@@ -13,6 +14,9 @@ use std::fmt;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
+pub(crate) use self::azure::{
+    AzureContainer, BLOB_HOST, Sas, VERSION, account_of, is_account, is_container,
+};
 pub(crate) use self::gcs::GcsBucket;
 pub(crate) use self::signing::{Keyed, Signing};
 use super::{Access, Listing, Reference, Remote, malformed};
@@ -52,6 +56,8 @@ impl Pages {
 pub(crate) enum Store {
     S3,
     Gcs,
+    /// azure blob storage, whose containers are a bucket's part, inside a storage account.
+    Azure,
 }
 
 impl Store {
@@ -59,6 +65,7 @@ impl Store {
         match self {
             Store::S3 => "s3",
             Store::Gcs => "gs",
+            Store::Azure => "azure",
         }
     }
 
@@ -66,16 +73,18 @@ impl Store {
         match self {
             Store::S3 => "s3://openneuro.org/ds000001/",
             Store::Gcs => "gs://cloud-samples-data/bigquery/us-states/",
+            Store::Azure => "azure:azureopendatastorage/mnist/",
         }
     }
 }
 
 /// a bucket and the key prefix inside it, as written. a prefix ending in `/`, or none, names a
 /// folder. any other prefix names one object, or the folder of that name when no object has it.
+/// an azure container is the bucket, with its account's blob host as the endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Prefix {
     store: Store,
-    /// for a bucket at another service that speaks S3's API, where it is.
+    /// for a bucket at another service that speaks S3's API, or an azure container, where it is.
     endpoint: Option<url::Origin>,
     bucket: String,
     key: String,
@@ -244,9 +253,16 @@ struct Object {
 
 impl Prefix {
     /// reads the part after `s3:` or `gs:`, such as `//openneuro.org/ds000001/`, or for a
-    /// bucket at another service, `https://minio.lab.example:9000/scans/raw/`.
+    /// bucket at another service, `https://minio.lab.example:9000/scans/raw/`, or after
+    /// `azure:`, an account, a container and a prefix, such as `azureopendatastorage/mnist/`.
     pub(super) fn parse(store: Store, text: &str) -> Result<Prefix, Error> {
         let text = text.trim();
+        if store == Store::Azure {
+            let (account, rest) = text.split_once('/').unwrap_or((text, ""));
+            let (container, key) = rest.split_once('/').unwrap_or((rest, ""));
+            return Prefix::azure(&account.to_ascii_lowercase(), container, key)
+                .ok_or_else(|| malformed(&format!("azure:{text}"), store.example()));
+        }
         if let Some(rest) = text.strip_prefix("//") {
             let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
             return Prefix::new(store, None, bucket, key)
@@ -280,6 +296,25 @@ impl Prefix {
         })
     }
 
+    /// the prefix `key` in the azure container `container` of the storage account `account`.
+    fn azure(account: &str, container: &str, key: &str) -> Option<Prefix> {
+        if !azure::is_account(account) {
+            return None;
+        }
+        let host = Url::parse(&format!("https://{account}{BLOB_HOST}/")).ok()?;
+        Prefix::new(Store::Azure, Some(host.origin()), container, key)
+    }
+
+    /// the storage account of an azure container, as its blob host names it.
+    fn account(&self) -> &str {
+        match &self.endpoint {
+            Some(url::Origin::Tuple(_, url::Host::Domain(host), _)) => {
+                host.strip_suffix(BLOB_HOST).unwrap_or(host)
+            }
+            _ => "",
+        }
+    }
+
     /// whether the links of this listing may pin object versions, as S3's do.
     pub(super) fn keeps_versions(&self) -> bool {
         self.store == Store::S3
@@ -293,14 +328,14 @@ impl Prefix {
         }
     }
 
-    /// the origin of the service a person names by writing this prefix, when it is not AWS or
-    /// google's. it may be on a private network.
+    /// the origin of the service a person names by writing this prefix, when it is not AWS,
+    /// google's or azure's. it may be on a private network.
     pub(super) fn written_origin(&self) -> Option<url::Origin> {
-        self.endpoint.clone()
+        self.endpoint.clone().filter(|_| self.store != Store::Azure)
     }
 
-    /// a pasted HTTPS link to a bucket or a folder in one, ending in `/`. a link to a single
-    /// object is left alone, so it stays a plain link.
+    /// a pasted HTTPS link to a bucket or a folder in one, ending in `/`, or to an azure
+    /// container. a link to a single object is left alone, so it stays a plain link.
     pub(super) fn from_link(url: &Url) -> Option<Prefix> {
         if !matches!(url.scheme(), "http" | "https") || url.query().is_some() {
             return None;
@@ -309,6 +344,13 @@ impl Prefix {
         let path = percent_decode_str(url.path().strip_prefix('/')?)
             .decode_utf8()
             .ok()?;
+        if let Some(account) = account_of(&host) {
+            let (container, key) = path.split_once('/').unwrap_or((&path, ""));
+            if !(key.is_empty() || key.ends_with('/')) || url.scheme() != "https" {
+                return None;
+            }
+            return Prefix::azure(account, container, key);
+        }
         let (store, bucket, key) = if host == "storage.googleapis.com" {
             let (bucket, key) = path.split_once('/').unwrap_or((&path, ""));
             if matches!(bucket, "storage" | "download" | "upload" | "batch") {
@@ -334,6 +376,7 @@ impl Prefix {
         let objects = match self.store {
             Store::S3 => s3::list(self, api).await?,
             Store::Gcs => gcs::list(self, api).await?,
+            Store::Azure => azure::list(self, api).await?,
         };
         let files = self.files(objects)?;
         if files.is_empty() {
@@ -453,6 +496,27 @@ impl Prefix {
             )
             .help("use the AWS CLI with --request-payer requester for this bucket"),
             401 | 403 if self.store == Store::S3 => self.private(response.keyed.as_ref()),
+            401 | 403 if self.store == Store::Azure => response
+                .authorized
+                .clone()
+                .unwrap_or_else(|| {
+                    net::Authorized::Azure(net::Sent::Anonymous {
+                        container: format!("azure:{}/{}", self.account(), self.bucket),
+                        listed: false,
+                    })
+                })
+                .listing_refusal(&self.to_string(), message),
+            404 | 410 if self.store == Store::Azure => Error::new(
+                Kind::ReferenceUnresolved,
+                format!(
+                    "the container {} does not exist in the storage account {}",
+                    self.bucket,
+                    self.account()
+                ),
+            )
+            .help(format!(
+                "check the account and container in {self}. both are lowercase and exact"
+            )),
             401 | 403 => response
                 .authorized
                 .clone()
@@ -539,6 +603,9 @@ impl Prefix {
 impl fmt::Display for Prefix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.endpoint {
+            Some(_) if self.store == Store::Azure => {
+                write!(f, "azure:{}/{}/{}", self.account(), self.bucket, self.key)
+            }
             Some(endpoint) => write!(
                 f,
                 "{}:{}/{}/{}",
@@ -601,11 +668,13 @@ fn endpoint(text: &str) -> Option<(url::Origin, &str)> {
 }
 
 /// whether `name` follows the bucket naming rules: lowercase letters, digits, `-` and `.`, and
-/// `_` in cloud storage, starting and ending with a letter or digit.
+/// `_` in cloud storage, starting and ending with a letter or digit. an azure container's name
+/// has stricter rules of its own.
 fn is_bucket(store: Store, name: &str) -> bool {
     let longest = match store {
         Store::S3 => 63,
         Store::Gcs => 222,
+        Store::Azure => return is_container(name),
     };
     let bytes = name.as_bytes();
     let ends = |byte: Option<&u8>| byte.is_some_and(u8::is_ascii_alphanumeric);
