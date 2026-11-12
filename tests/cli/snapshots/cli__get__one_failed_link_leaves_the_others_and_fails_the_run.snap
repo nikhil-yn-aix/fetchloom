@@ -3,7 +3,7 @@ source: tests/cli/get.rs
 assertion_line: 809
 expression: stderr
 ---
-    Checked iris.csv · the cache holds what 127.0.0.1 serves now
+    Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
          Ok iris/iris.csv is already up to date
      Failed http://127.0.0.1:[port]/gone.csv · 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
 error: 1 of 2 links could not be fetched

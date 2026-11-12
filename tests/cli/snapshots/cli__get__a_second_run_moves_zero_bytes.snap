@@ -2,5 +2,5 @@
 source: tests/cli/get.rs
 expression: stderr
 ---
-    Checked iris.csv · the cache holds what 127.0.0.1 serves now
+    Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
          Ok iris/iris.csv is already up to date

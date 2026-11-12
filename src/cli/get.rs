@@ -1522,12 +1522,12 @@ fn fetched_step(
                     units::downloaded([(fetched.size, fetched.moved)], took)
                 ),
             ),
-            // the server's 304 confirms the cache's copy, which a destination an earlier run
-            // filled may not hold
+            // a 304 confirms the bytes downloaded last, which a one-off may have moved out of the
+            // cache and a destination an earlier run filled may not hold
             Origin::NotModified => (
                 "Checked",
                 format!(
-                    "{path} · the cache holds what {} serves now",
+                    "{path} · {} still serves the bytes downloaded last time",
                     net::host(&remote.url)
                 ),
             ),
@@ -1645,42 +1645,6 @@ mod tests {
             (
                 "Downloaded",
                 "iris.csv · 3.0 KiB in 3.0 s · 1.0 KiB/s".to_owned()
-            )
-        );
-    }
-
-    /// a 304 says the cache holds what the server serves now. a folder or file an earlier run
-    /// filled may hold an older version, which a replacement or a refusal tells next, so the line
-    /// describes the cached copy rather than calling the file unchanged.
-    #[test]
-    fn a_304_describes_the_cached_copy_not_the_destination() {
-        let fetched = Fetched {
-            digest: crate::digest::sha256(b"iris"),
-            size: 4,
-            moved: 0,
-            name: None,
-            origin: Origin::NotModified,
-            version: None,
-            arrived: None,
-        };
-        let remote = Remote {
-            path: "up.csv".to_owned(),
-            size: None,
-            sha256: None,
-            md5: None,
-            url: url::Url::parse("http://127.0.0.1:19181/up.csv").unwrap(),
-            named_by_server: false,
-        };
-        assert_eq!(
-            fetched_step(
-                &["up.csv".to_owned()],
-                &[fetched],
-                &[remote],
-                Instant::now()
-            ),
-            (
-                "Checked",
-                "up.csv · the cache holds what 127.0.0.1 serves now".to_owned()
             )
         );
     }

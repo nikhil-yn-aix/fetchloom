@@ -266,6 +266,28 @@ fn output_moves_a_one_off_out_of_the_cache() -> Result {
     Ok(())
 }
 
+/// a rerun the server answers with 304 after a one-off moved its bytes out of the cache says the
+/// server still serves what was downloaded last time, which is true, rather than that the cache
+/// holds those bytes, which it no longer does.
+#[test]
+fn a_304_after_a_one_off_left_the_cache_says_what_the_server_serves() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    let first = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    assert_eq!(objects(&sandbox), 0, "the one-off moved out");
+    let output = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(server.requests()[1].contains("if-none-match: \"v1\""));
+    assert!(
+        stderr.contains("Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// bytes a project here pins stay in the cache for it, and the file gets its own copy of them.
 #[test]
 fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
