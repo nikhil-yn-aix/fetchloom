@@ -66,6 +66,9 @@ pub(crate) struct Placement {
     /// the datasets the run places or replaces files of.
     #[serde(skip)]
     pub(crate) filled: BTreeSet<String>,
+    /// the datasets the plan has files of, placed now or before.
+    #[serde(skip)]
+    pub(crate) planned: BTreeSet<String>,
     /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
     /// a mirror holds them and only `fetchloom build` makes them.
     pub(crate) unbuilt: Vec<String>,
@@ -144,6 +147,7 @@ impl Placement {
         for target in targets {
             *planned.entry(target.dataset).or_default() += 1;
         }
+        self.planned = planned.keys().map(|&dataset| dataset.to_owned()).collect();
         self.filled = targets
             .iter()
             .zip(actions)

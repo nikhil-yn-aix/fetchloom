@@ -631,7 +631,15 @@ async fn add_held(
     .map_err(|error| on_lines(error, None, std::slice::from_ref(&typed_line)))?;
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
-    render_add(&work, &new_manifest, &name, here, starting, &private)?;
+    let has_files = outcome.placed.planned.contains(&name);
+    render_add(
+        &work,
+        &new_manifest,
+        (&name, has_files),
+        here,
+        starting,
+        &private,
+    )?;
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -888,7 +896,8 @@ async fn import_new(
         &[],
     )
     .await?;
-    render_add(work, &manifest, name, here, starting, &[])?;
+    let has_files = outcome.placed.planned.contains(name);
+    render_add(work, &manifest, (name, has_files), here, starting, &[])?;
     Ok(Report {
         project: work.project.root.clone(),
         datasets: names.to_vec(),
@@ -1211,7 +1220,8 @@ async fn add_list_held(
             .filter(|(_, from)| from.dataset.is_some())
             .map(|((_, parsed), _)| &parsed.reference),
     );
-    tell_list(&work, &manifest, &names, &already, here, &private)?;
+    let added = (names.as_slice(), &outcome.placed.planned);
+    tell_list(&work, &manifest, added, &already, here, &private);
     Ok(Report {
         project: project.root.clone(),
         datasets: names,
@@ -1687,24 +1697,18 @@ impl Promised {
     }
 }
 
-/// the last lines of `add -i`: each dataset added and where its files are, from `here`, then
-/// each one data.toml had already, then the closing lines, which name the `private` origins.
+/// the last lines of `add -i`: each dataset of `added` and where its files are, from `here`, or
+/// that it has none, as the datasets the placement planned files of say, then each one
+/// data.toml had already, then the closing lines, which name the `private` origins.
 fn tell_list(
     work: &Loop<'_>,
     manifest: &Manifest,
-    names: &[String],
+    (names, placed): (&[String], &std::collections::BTreeSet<String>),
     already: &[String],
     here: &Path,
     private: &[url::Origin],
-) -> Result<(), Error> {
+) {
     let output = &work.context.output;
-    let lock = work.project.lock()?.unwrap_or_default();
-    let placed: std::collections::BTreeSet<String> =
-        plan::from_cache(manifest, &lock, &work.cache)?
-            .targets
-            .iter()
-            .map(|target| target.dataset.to_owned())
-            .collect();
     for name in names {
         if placed.contains(name) {
             let folder = from_here(work.project, here, &plan::folder(manifest, name));
@@ -1720,7 +1724,7 @@ fn tell_list(
         output.done("Ok", &format!("{name} is already in data.toml"));
     }
     match names {
-        [] => return Ok(()),
+        [] => return,
         [name] => output.hint(&format!(
             "scripts can find it with `{}`",
             super::project::command(&format!("path {name}"))
@@ -1731,7 +1735,6 @@ fn tell_list(
         )),
     }
     close(work, private);
-    Ok(())
 }
 
 fn validate_add(
@@ -2009,17 +2012,19 @@ fn lock_changed_meanwhile() -> Error {
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
+/// the last lines of an add of the dataset `added`, a name and whether it has files.
 fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
-    name: &str,
+    added: (&str, bool),
     here: &Path,
     starting: bool,
     private: &[url::Origin],
 ) -> Result<(), Error> {
     tell_started(work, starting);
     ignore_data(work, manifest)?;
-    tell_added(work, manifest, name, here, private)
+    tell_added(work, manifest, added, here, private);
+    Ok(())
 }
 
 /// says that the add started its project, when it did.
@@ -2306,7 +2311,7 @@ async fn again(
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest)?;
-    let contents = if has_files(work, manifest, name)? {
+    let contents = if outcome.placed.planned.contains(name) {
         format!(
             "its files are in {}",
             from_here(work.project, here, &plan::folder(manifest, name))
@@ -2329,11 +2334,11 @@ async fn again(
 fn tell_added(
     work: &Loop<'_>,
     manifest: &Manifest,
-    name: &str,
+    (name, has_files): (&str, bool),
     here: &Path,
     private: &[url::Origin],
-) -> Result<(), Error> {
-    if has_files(work, manifest, name)? {
+) {
+    if has_files {
         let folder = from_here(work.project, here, &plan::folder(manifest, name));
         work.context
             .output
@@ -2349,20 +2354,11 @@ fn tell_added(
         );
     }
     close(work, private);
-    Ok(())
 }
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.
 fn from_here(project: &Project, here: &Path, path: &str) -> String {
     format!("{}{path}", super::up_to(&project.root, here))
-}
-
-fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {
-    let lock = work.project.lock()?.unwrap_or_default();
-    Ok(plan::from_cache(manifest, &lock, &work.cache)?
-        .targets
-        .iter()
-        .any(|target| target.dataset == name))
 }
 
 /// downloads each lone file whose name only its server knows, so each dataset can be named after
