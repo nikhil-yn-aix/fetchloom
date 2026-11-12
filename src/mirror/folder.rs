@@ -421,20 +421,24 @@ pub(crate) fn look(root: &Path) -> Result<State, Refused> {
         Ok(()) => return Ok(State::Mirror),
         Err(Missing::Unreadable(err)) => return Err(Refused::Failed(err)),
         Err(Missing::Folder) => {
-            return match fs::metadata(root) {
-                Ok(_) => Err(Refused::NotAFolder),
+            #[cfg(test)]
+            tests::between_looks(root);
+            match fs::metadata(root) {
+                // a push starting this mirror at the same time made the folder since
+                Ok(found) if found.is_dir() => {}
+                Ok(_) => return Err(Refused::NotAFolder),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     let parent = std::path::absolute(root)
                         .ok()
                         .and_then(|root| root.parent().map(Path::to_path_buf));
-                    if parent.is_some_and(|parent| parent.is_dir()) {
+                    return if parent.is_some_and(|parent| parent.is_dir()) {
                         Ok(State::New)
                     } else {
                         Err(Refused::NoParent)
-                    }
+                    };
                 }
-                Err(err) => Err(Refused::Failed(err)),
-            };
+                Err(err) => return Err(Refused::Failed(err)),
+            }
         }
         Err(Missing::Marker) => {}
     }
@@ -1139,6 +1143,16 @@ pub(crate) mod tests {
         /// which of a push's flushes fails, as a disk whose write-back failed makes it fail.
         #[cfg(target_os = "linux")]
         static FAILING: Cell<Option<Failing>> = const { Cell::new(None) };
+        /// what another push does to a mirror's folder between a look that found none and the
+        /// next, once.
+        static BETWEEN_LOOKS: Cell<Option<fn(&Path)>> = const { Cell::new(None) };
+    }
+
+    /// runs what a test has another push do between two looks at `root`.
+    pub(super) fn between_looks(root: &Path) {
+        if let Some(other) = BETWEEN_LOOKS.take() {
+            other(root);
+        }
     }
 
     /// what a test makes happen between a push writing its files and naming them.
@@ -1421,6 +1435,25 @@ pub(crate) mod tests {
             look(&folder.path().join("file")),
             Err(Refused::NotAFolder)
         ));
+    }
+
+    /// two pushes start one new mirror at once: one finds no folder, and the other makes it, or
+    /// the whole mirror, before the first looks again. the first takes it as new or as the
+    /// other's mirror, and the other, or a later push, finds one mirror with its marker.
+    #[test]
+    fn a_folder_another_push_makes_between_two_looks_is_taken() {
+        let folder_only: fn(&Path) = |root| fs::create_dir(root).unwrap();
+        let whole_mirror: fn(&Path) = |root| drop(Target::open(root, Arc::default()).unwrap());
+        for (other, starts) in [(folder_only, true), (whole_mirror, false)] {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("mirror");
+            BETWEEN_LOOKS.set(Some(other));
+            let (_, started) = Target::open(&root, Arc::default()).unwrap();
+            assert_eq!(started, starts);
+            assert!(probe(&root).is_ok());
+            let (_, started) = Target::open(&root, Arc::default()).unwrap();
+            assert!(!started);
+        }
     }
 
     /// a file takes its name only checked, as a read-only file, and nothing is left behind.
