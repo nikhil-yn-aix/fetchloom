@@ -133,15 +133,8 @@ fn walk(
     for entry in entries {
         let entry = entry.map_err(|err| unreadable(recipe, code, &err))?;
         let name = entry.file_name();
-        let inside = |name: &str| {
-            if prefix.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{prefix}/{name}")
-            }
-        };
         let Some(name) = name.to_str() else {
-            let shown = inside(&name.to_string_lossy());
+            let shown = crate::name::joined(prefix, &name.to_string_lossy());
             return Err(refused(
                 recipe,
                 code,
@@ -151,7 +144,7 @@ fn walk(
         if SKIPPED.contains(&name) {
             continue;
         }
-        let inside = inside(name);
+        let inside = crate::name::joined(prefix, name);
         let shown = format!("{code}/{inside}");
         let path = entry.path();
         let kind = fs::symlink_metadata(&path)

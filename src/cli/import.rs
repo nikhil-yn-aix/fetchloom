@@ -255,11 +255,7 @@ pub(super) fn walk(
                 if name::metadata(file_name).is_some() {
                     continue;
                 }
-                let relative = if folder.is_empty() {
-                    file_name.to_owned()
-                } else {
-                    format!("{folder}/{file_name}")
-                };
+                let relative = name::joined(&folder, file_name);
                 if name::made_by_system(file_name) {
                     walked.system.push(relative);
                     continue;

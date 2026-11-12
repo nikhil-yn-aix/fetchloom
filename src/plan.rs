@@ -262,7 +262,7 @@ fn planned<'a>(
         plan.targets
             .extend(result.files.iter().map(|member| Target {
                 dataset: &result.name,
-                path: join(&folder, &member.path),
+                path: name::joined(&folder, &member.path),
                 sha256: member.sha256,
                 size: member.size,
                 copy: entry.copy,
@@ -329,7 +329,7 @@ pub(crate) fn expand<'a>(
             Pinned::File(file) => {
                 plan.targets.push(Target {
                     dataset,
-                    path: join(folder, &file.path),
+                    path: name::joined(folder, &file.path),
                     sha256: file.sha256,
                     size: file.size,
                     copy,
@@ -342,7 +342,7 @@ pub(crate) fn expand<'a>(
         let file = archive.file;
         let target = |path: &str, sha256, size| Target {
             dataset,
-            path: join(folder, path),
+            path: name::joined(folder, path),
             sha256,
             size,
             copy,
@@ -696,7 +696,7 @@ pub(crate) fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> 
     let inside = if lone {
         beside.to_owned()
     } else {
-        join(beside, archive::stem(name))
+        name::joined(beside, archive::stem(name))
     };
     place_under(&inside, members, |path| path)
 }
@@ -704,16 +704,8 @@ pub(crate) fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> 
 fn place_under(folder: &str, members: &[Member], rest: impl Fn(&str) -> &str) -> Vec<String> {
     members
         .iter()
-        .map(|member| join(folder, rest(&member.path)))
+        .map(|member| name::joined(folder, rest(&member.path)))
         .collect()
-}
-
-fn join(folder: &str, path: &str) -> String {
-    if folder.is_empty() {
-        path.to_owned()
-    } else {
-        format!("{folder}/{path}")
-    }
 }
 
 /// the one top folder every member sits under, when there is one.

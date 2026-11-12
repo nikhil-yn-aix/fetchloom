@@ -370,6 +370,16 @@ pub(crate) fn is_bidi_control(character: char) -> bool {
     )
 }
 
+/// `name` in `folder`, as listings and data.lock write a path: `folder/name`, or `name` alone
+/// when `folder` is the top.
+pub(crate) fn joined(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
 /// why a path inside a dataset or an archive is refused, if it is: it could reach outside its
 /// folder on some platform, it spells a folder a second way, as `a/./b` spells `a/b`, or it holds
 /// a control character that terminals would act on. such a path is refused everywhere, so a
@@ -990,6 +1000,19 @@ mod tests {
             nearest("iris.csv", ["b.txt", "iris.tsv", "a.csv"], 2),
             ["iris.tsv", "a.csv"]
         );
+    }
+
+    /// a name joins its folder with one `/`, and stands alone at the top.
+    #[test]
+    fn a_name_joins_its_folder_with_one_slash() {
+        let cases = [
+            ("", "iris.csv", "iris.csv"),
+            ("data", "iris.csv", "data/iris.csv"),
+            ("data/raw", "iris.csv", "data/raw/iris.csv"),
+        ];
+        for (folder, name, path) in cases {
+            assert_eq!(joined(folder, name), path, "{name} in {folder:?}");
+        }
     }
 
     /// `one_typo` skips `distance`'s table, so the two must agree on every pair of words up to four

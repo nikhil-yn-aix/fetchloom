@@ -78,15 +78,8 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
 impl Walk {
     /// takes in the entries of the folder at `parent`, queueing its subfolders.
     fn add(&mut self, item: &Item, parent: &str, page: Page) -> Result<(), Error> {
-        let path = |name: &str| {
-            if parent.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{parent}/{name}")
-            }
-        };
         for entry in page.entries {
-            let path = path(&entry.name);
+            let path = crate::name::joined(parent, &entry.name);
             if let Some(reason) = crate::name::escapes(&path) {
                 return Err(unreadable(item, &format!("the path {path} {reason}")));
             }

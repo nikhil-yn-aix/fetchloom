@@ -135,9 +135,11 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
             let entry = entry?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
-                return Err(Refused::NotText(joined(&inside, &name.to_string_lossy())).into());
+                return Err(
+                    Refused::NotText(name::joined(&inside, &name.to_string_lossy())).into(),
+                );
             };
-            let path = joined(&inside, name);
+            let path = name::joined(&inside, name);
             let kind = entry.file_type()?;
             if kind.is_symlink() {
                 return Err(Refused::Link(path).into());
@@ -154,14 +156,6 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
         }
     }
     Ok(files)
-}
-
-fn joined(inside: &str, name: &str) -> String {
-    if inside.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{inside}/{name}")
-    }
 }
 
 /// each file's path in NFC, the form data.lock records, once every name passed: none reaches
