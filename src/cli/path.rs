@@ -309,11 +309,10 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
         return error.help(format!("did you mean `{}`?", shown(best)));
     }
     let near = name::nearest(file, inside.iter().copied(), 3);
-    let listed = match near.as_slice() {
-        [] => return error.help(format!("{name} holds no files")),
-        [only] => (*only).to_owned(),
-        [first @ .., last] => format!("{} and {last}", first.join(", ")),
-    };
+    if near.is_empty() {
+        return error.help(format!("{name} holds no files"));
+    }
+    let listed = crate::units::listed(&near, "and");
     let holds = if inside.len() > near.len() {
         let files = crate::units::count(inside.len() as u64, "file", "files");
         format!("{name} holds {files}, such as {listed}")

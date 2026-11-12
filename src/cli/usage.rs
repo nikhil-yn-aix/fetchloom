@@ -227,10 +227,10 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         .get(ContextKind::ValidValue)
         .filter(|values| !matches!(values, ContextValue::Strings(values) if values.is_empty()))
     {
-        match values.split_last() {
-            Some((last, [])) => format!("use {last}"),
-            Some((last, rest)) => format!("use one of {} or {last}", rest.join(", ")),
-            None => String::new(),
+        match values.as_slice() {
+            [] => String::new(),
+            [only] => format!("use {only}"),
+            many => format!("use one of {}", crate::units::listed(many, "or")),
         }
     } else if let Some(first) = usage.as_ref().and_then(|forms| forms.first()) {
         let command: Vec<&str> = first
@@ -265,12 +265,7 @@ fn needs(command: &str, forms: &[String]) -> String {
                 .trim_end_matches("...")
         })
         .collect();
-    match wanted.split_last() {
-        Some((last, rest)) if !rest.is_empty() => {
-            format!("{command} needs {} or {last}", rest.join(", "))
-        }
-        _ => format!("{command} needs {}", wanted.join("")),
-    }
+    format!("{command} needs {}", crate::units::listed(&wanted, "or"))
 }
 
 /// the command the person likely meant, with a command or option that does not exist changed
@@ -381,10 +376,7 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
         .collect();
     let (first, first_name, option) = owners.first()?;
     let names: Vec<_> = owners.iter().map(|(_, name, _)| name.as_str()).collect();
-    let commands = match names.split_last()? {
-        (last, []) => (*last).to_owned(),
-        (last, rest) => format!("{} and {last}", rest.join(", ")),
-    };
+    let commands = crate::units::listed(&names, "and");
     let mut example = format!("fetchloom {first_name}");
     // a positional also counts when the command needs it or an option in its place
     let needed = |arg: &clap::Arg| {

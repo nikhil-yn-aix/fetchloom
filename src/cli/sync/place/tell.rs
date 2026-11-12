@@ -585,7 +585,7 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
                 format!(
                     "{} files it did not place: {}",
                     units::grouped(count as u64),
-                    some_of(others)
+                    units::some_of(others, 3)
                 ),
                 format!(
                     "move the {} files fetchloom did not place out of {folder} before you delete {folder}",
@@ -635,22 +635,6 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
     output.warn_with(&said, &help);
     for path in files {
         output.detail(path);
-    }
-}
-
-/// the first three of `paths`, and how many more there are: `a, b, c and 2 more`.
-fn some_of(paths: &[String]) -> String {
-    match paths {
-        [first @ .., last] if paths.len() <= 3 && !first.is_empty() => {
-            format!("{} and {last}", first.join(", "))
-        }
-        [a, b, c, rest @ ..] if !rest.is_empty() => {
-            format!(
-                "{a}, {b}, {c} and {} more",
-                units::grouped(rest.len() as u64)
-            )
-        }
-        _ => paths.join(""),
     }
 }
 
@@ -778,15 +762,9 @@ fn readers<'m>(manifest: &'m Manifest, dataset: &str) -> Vec<&'m str> {
 /// data.lock pins, so the edit reaches no result, and replacing it would undo the fix.
 fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) {
     let recipes = readers(manifest, dataset);
-    let (them, either, verb) = match recipes.split_last() {
-        Some((last, [])) => ((*last).to_owned(), (*last).to_owned(), "reads"),
-        Some((last, rest)) => (
-            format!("{} and {last}", rest.join(", ")),
-            format!("{} or {last}", rest.join(", ")),
-            "read",
-        ),
-        None => (String::new(), String::new(), "reads"),
-    };
+    let them = units::listed(&recipes, "and");
+    let either = units::listed(&recipes, "or");
+    let verb = if recipes.len() > 1 { "read" } else { "reads" };
     (
         format!(
             "{path} has changed, so it stays, but {them} {verb} the bytes data.lock pins for {dataset}, not this edit"

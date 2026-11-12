@@ -507,10 +507,10 @@ fn unplanned(
         .filter(|name| within(name))
         .map(String::as_str)
         .collect();
-    let owners = match owners.split_last() {
-        None => "any dataset".to_owned(),
-        Some((last, [])) => (*last).to_owned(),
-        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    let owners = if owners.is_empty() {
+        "any dataset".to_owned()
+    } else {
+        units::listed(&owners, "or")
     };
     let error = Error::new(Kind::Usage, format!("{path} names no file of {owners}"));
     if let Some(wild) = path.chars().find(|c| matches!(c, '*' | '?' | '[')) {

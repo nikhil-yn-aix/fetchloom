@@ -276,10 +276,7 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
         .collect();
     recipes.sort_unstable();
     recipes.dedup();
-    let recipes = match recipes.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-        _ => recipes.join(""),
-    };
+    let recipes = units::listed(&recipes, "and");
     let what = match files.len() {
         1 => format!("{}, code of {recipes}", first.file),
         count => format!(
@@ -877,11 +874,11 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
 /// what a lock that changed nothing says of data.lock while the recipes `stale` need a build,
 /// so it never calls data.lock up to date.
 fn unbuilt_pins(stale: &[String]) -> String {
-    let names = match stale {
-        [first @ .., last] if !first.is_empty() => format!("{} and {last} need", first.join(", ")),
-        _ => format!("{} needs", stale.join("")),
-    };
-    format!("data.lock pins the fetched datasets as data.toml asks; {names} a build")
+    let need = if stale.len() > 1 { "need" } else { "needs" };
+    format!(
+        "data.lock pins the fetched datasets as data.toml asks; {} {need} a build",
+        units::listed(stale, "and")
+    )
 }
 
 /// says which datasets an upgrade of all leaves as they are: imports, which no source has a newer
@@ -893,11 +890,10 @@ fn tell_imports_kept(output: &Output, manifest: &Manifest) {
         .filter(|(_, entry)| entry.is_import())
         .map(|(name, _)| name.as_str())
         .collect();
-    let names = match imported.as_slice() {
-        [] => return,
-        [first @ .., last] if !first.is_empty() => format!("{} and {last}", first.join(", ")),
-        _ => imported.join(""),
-    };
+    if imported.is_empty() {
+        return;
+    }
+    let names = units::listed(&imported, "and");
     output.step(
         "Skipped",
         &format!("{names}, imported from files, which no source has a newer version of"),
@@ -1132,10 +1128,9 @@ pub(super) fn needs_building(unbuilt: &[(String, Vec<Change>)]) -> Option<Error>
         [(name, _)] => format!("data.lock is out of date: {name} changed since it was built"),
         many => {
             let names: Vec<&str> = many.iter().map(|(name, _)| name.as_str()).collect();
-            let (last, rest) = names.split_last()?;
             format!(
-                "data.lock is out of date: {} and {last} need building",
-                rest.join(", ")
+                "data.lock is out of date: {} need building",
+                units::listed(&names, "and")
             )
         }
     };

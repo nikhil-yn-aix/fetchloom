@@ -33,11 +33,12 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         })
         .map(|(name, _)| name.as_str())
         .collect();
-    if let Some((last, rest)) = readers.split_last() {
-        let (them, are, their) = if rest.is_empty() {
-            ((*last).to_owned(), "is", "its")
+    if !readers.is_empty() {
+        let them = crate::units::listed(&readers, "and");
+        let (are, their) = if readers.len() == 1 {
+            ("is", "its")
         } else {
-            (format!("{} and {last}", rest.join(", ")), "are", "their")
+            ("are", "their")
         };
         return Err(
             Error::new(Kind::Usage, format!("{them} {are} made from {name}")).help(format!(

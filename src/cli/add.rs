@@ -1638,13 +1638,13 @@ fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Er
             if error.help.as_deref() == Some(crate::net::MOVED_HELP) {
                 error.help = Some(moved_in(list_name).into());
             }
-            match ats.split_last() {
-                Some((last, [])) => error.detail(format!("the link on {last} failed")),
-                Some((last, rest)) => error.detail(format!(
-                    "the links on {} and {last} failed",
-                    rest.join(", ")
+            match ats.as_slice() {
+                [] => error,
+                [only] => error.detail(format!("the link on {only} failed")),
+                many => error.detail(format!(
+                    "the links on {} failed",
+                    units::listed(many, "and")
                 )),
-                None => error,
             }
         }
     }
@@ -2111,11 +2111,9 @@ fn restore(
     mut failure: Error,
 ) -> Error {
     let entries = match names {
+        [] => "the new dataset entries".to_owned(),
         [name] => format!("the {name} dataset entry"),
-        [first @ .., last] if !first.is_empty() => {
-            format!("the {} and {last} dataset entries", first.join(", "))
-        }
-        _ => "the new dataset entries".to_owned(),
+        many => format!("the {} dataset entries", units::listed(many, "and")),
     };
     let mut complete = true;
     let mut restored = Vec::new();

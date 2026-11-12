@@ -335,20 +335,10 @@ impl Loop<'_> {
         const SHOWN: usize = 3;
         let members = |archive: &Archive<'_>| archive.recorded(&self.cache);
         let paths = plan::unportable(manifest, locked, &members);
-        let Some((last, _)) = paths.split_last() else {
+        if paths.is_empty() {
             return;
-        };
-        let listed = match paths.len() {
-            1 => last.clone(),
-            count if count <= SHOWN => {
-                format!("{} and {last}", paths[..count - 1].join(", "))
-            }
-            count => format!(
-                "{} and {} more",
-                paths[..SHOWN].join(", "),
-                units::grouped((count - SHOWN) as u64)
-            ),
-        };
+        }
+        let listed = units::some_of(&paths, SHOWN);
         let name = &locked.name;
         let said = match paths.len() {
             1 => {

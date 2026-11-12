@@ -240,10 +240,7 @@ async fn find(
         .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
         .map(Catalog::label)
         .collect();
-    let named = match asked.as_slice() {
-        [first @ .., last] if !first.is_empty() => format!("{} and {last}", first.join(", ")),
-        _ => asked.join(""),
-    };
+    let named = units::listed(&asked, "and");
     context
         .output
         .step("Searching", &format!("{named} for \"{words}\""));

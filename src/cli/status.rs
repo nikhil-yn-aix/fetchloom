@@ -998,9 +998,9 @@ fn list(output: &Output, status: &Status) {
         let said = match status.lacking.get(name).map(Vec::as_slice) {
             None | Some([]) => said,
             Some([one]) => format!("{said}, nor is {one}, which it is made from"),
-            Some([first @ .., last]) => format!(
-                "{said}, nor are {} and {last}, which it is made from",
-                first.join(", ")
+            Some(many) => format!(
+                "{said}, nor are {}, which it is made from",
+                units::listed(many, "and")
             ),
         };
         output.report("Unbuilt", &said);
