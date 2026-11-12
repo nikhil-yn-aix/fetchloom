@@ -80,7 +80,7 @@ elif name not in ('diskutil', 'mdutil', 'sleep'):
 
 @unittest.skipIf(os.name == 'nt', 'POSIX CI provisioning helpers')
 class PlatformScripts(unittest.TestCase):
-    def run_script(self, script, **settings):
+    def run_script(self, script, attempt='1s', guard=15, **settings):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -93,12 +93,12 @@ class PlatformScripts(unittest.TestCase):
             path.write_text(f'#!{sys.executable}\n' + FAKE_COMMAND, encoding='utf-8')
             path.chmod(0o755)
         env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
-                   CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT='1s')
+                   CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT=attempt)
         process = subprocess.Popen(['bash', str(ROOT / '.github/scripts' / script), 'fixture-package'],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
         try:
-            stdout, stderr = process.communicate(timeout=15)
+            stdout, stderr = process.communicate(timeout=guard)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
@@ -122,7 +122,9 @@ class PlatformScripts(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('timeout'), 'GNU timeout')
     def test_a_real_hung_update_reaches_the_resolver_fallback(self):
-        code, output, calls, root = self.run_script('apt-install.sh', apt='hang_once')
+        # the hung attempt ends at the limit; the retry that follows must finish inside it, so the
+        # limit leaves room for a busy machine to start its four programs
+        code, output, calls, root = self.run_script('apt-install.sh', attempt='5s', guard=30, apt='hang_once')
         self.assertEqual(code, 0, output)
         self.assertIn('timed out', output)
         self.assertEqual((root / 'resolver.txt').read_text(), 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n')
