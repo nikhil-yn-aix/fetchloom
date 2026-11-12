@@ -44,12 +44,11 @@ jobs:
         run: |
           mkdir -p target/live
           cargo test --locked -- --ignored --nocapture 2>&1 | tee target/live/rust.log
-      - name: build the mac live executable
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
-        run: cargo build --locked --release
+      # the debug executable the tests above built: the services behave the same for it, and
+      # every push checks the release executables with the artifact journeys
       - name: mac public source and search journey
         if: ${{ !cancelled() && runner.os == 'macOS' }}
-        run: python3 python/mac_live.py --binary target/release/fetchloom 2>&1 | tee target/live/mac.log
+        run: python3 python/mac_live.py --binary target/debug/fetchloom 2>&1 | tee target/live/mac.log
       - name: report credential-dependent skips
         if: always()
         run: |
