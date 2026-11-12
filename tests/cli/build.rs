@@ -932,6 +932,39 @@ fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
     Ok(())
 }
 
+/// an edit made in place through a hardlink changed the cache's copy a step reads, so the build
+/// must fetch its pinned bytes again. when it cannot, as offline, its error says why it needed
+/// them, as a sync's does, and the edit stays.
+#[test]
+fn a_build_that_cannot_fetch_a_changed_cache_copy_again_says_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    if added["work"]["hardlinks"] != 1 {
+        return Ok(());
+    }
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("{}{COPY}", fs::read_to_string(&manifest)?),
+    )?;
+    let edited = placed(&sandbox, "iris", "iris.csv");
+    crate::support::edit(&edited, b"changed in place\n")?;
+    let output = build(&sandbox, &["--json", "--offline", "build"])?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, _, details, _, _) = error(&document);
+    assert_eq!(kind, "offline.missing");
+    assert!(
+        details.contains(&"data/iris/iris.csv is linked to the cache's copy, which was changed, so its pinned bytes must be fetched again"),
+        "{details:?}"
+    );
+    assert_eq!(fs::read(&edited)?, b"changed in place\n");
+    assert_eq!(runs(&sandbox.work())?, 0);
+    Ok(())
+}
+
 /// a rebuild keeps an edit of the result it replaces, which `copy = true` allows, and says the
 /// file holds an earlier version than data.lock pins now. its help names only the recipe whose
 /// file stays, never iris, which has `place = false`.

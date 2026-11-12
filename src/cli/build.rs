@@ -26,7 +26,8 @@ use self::preview::{Previewed, preview};
 use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{
-    Run, committed, find, hold, ignore_data, known, locked, register, sync_all, warn_recipe_code,
+    Run, committed, find, hold, ignore_data, known, locked, refetched, register, sync_all,
+    warn_recipe_code,
 };
 use super::sync::disk::Survey;
 use super::sync::place::{Placement, Seen};
@@ -436,9 +437,7 @@ impl<'a> Building<'a> {
             .filter(|read| !read.made)
             .map(|read| read.name.as_str())
             .collect();
-        self.work
-            .ready(&self.manifest, &self.lock, &sources)
-            .await?;
+        self.ready(&sources).await?;
         output.step("Running", &format!("{name} · {}", self.command(name)));
         let made = tokio::task::block_in_place(|| self.make(&step, key, Some(tree)))?;
         let compared = compare(files, &made.members);
@@ -509,9 +508,7 @@ impl<'a> Building<'a> {
                 .filter(|read| !read.made)
                 .map(|read| read.name.as_str())
                 .collect();
-            self.work
-                .ready(&self.manifest, &self.lock, &sources)
-                .await?;
+            self.ready(&sources).await?;
             output.step(
                 "Prepared",
                 &format!("{name} · what it reads is on this machine"),
@@ -642,9 +639,7 @@ impl<'a> Building<'a> {
             .filter(|read| !read.made)
             .map(|read| read.name.as_str())
             .collect();
-        self.work
-            .ready(&self.manifest, &self.lock, &sources)
-            .await?;
+        self.ready(&sources).await?;
         output.step("Running", &format!("{name} · {}", self.command(name)));
         let made = tokio::task::block_in_place(|| self.make(&step, key, expected))?;
         if let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key)
@@ -730,6 +725,31 @@ impl<'a> Building<'a> {
         project.write_state(&state)?;
         register(&self.work);
         Ok(())
+    }
+
+    /// puts in the cache the files of `sources`, fetched datasets a step reads, as
+    /// [`Loop::ready`] does. when that fails, the error names each placed file of theirs linked to
+    /// a cache copy someone changed, as a sync's does, since that is why their pinned bytes had to
+    /// be fetched again.
+    async fn ready(&self, sources: &BTreeSet<&str>) -> Result<(), Error> {
+        let Err(error) = self.work.ready(&self.manifest, &self.lock, sources).await else {
+            return Ok(());
+        };
+        if error.kind == Kind::Interrupted {
+            return Err(error);
+        }
+        let project = self.work.project;
+        let mut survey = Survey::read(project, &self.manifest.data_dir, self.context.threads);
+        if survey
+            .check_doubted(&project.root, &self.work.cache)
+            .is_err()
+        {
+            return Err(error);
+        }
+        let scope = Scope::Only(sources.iter().map(|name| (*name).to_owned()).collect());
+        Err(refetched(&survey, &scope)
+            .into_iter()
+            .fold(error, Error::detail))
     }
 
     /// takes the files of `files`, the result data.lock pins for `name`, that the cache lacks
