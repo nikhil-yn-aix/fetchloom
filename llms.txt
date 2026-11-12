@@ -7,7 +7,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 ## for agents
 
 - [agent skill](skills/fetchloom/SKILL.md): which command fits which task, what to ask the user first, and how to read a failure
-- [JSON output](docs/user/reference/json-output.md): the document `--json` prints, every command's result fields, dry runs and work counters
+- [JSON output](docs/user/reference/json-output.md): the document `--json` prints, every command's result fields, warning kinds, dry runs and work counters
 - [exit codes](docs/user/reference/exit-codes.md): each error kind, its exit code and the next step
 - [add](docs/user/commands/add.md): `fetchloom add <ref>` puts a dataset in the project, downloads and pins it; `--as` names it, `--select`, `--exclude` and `--no-extract` choose its files, `-i` reads a list of links, `-n` previews, and a path such as `./flowers` pins files on this machine
 - [sync](docs/user/commands/sync.md): `fetchloom sync` places what data.lock pins and keeps local edits; `--force` replaces them, `--locked` fails rather than change data.lock, `--strict` fails with `data.not_ready` while the data is not ready to use, `--verify` hashes every placed file, `-n` previews, and names sync only those datasets
@@ -55,26 +55,26 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 
 ## sources
 
-- [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each site
-- [URLs and DOIs](docs/user/sources/urls-and-dois.md): direct links and DOIs routed to known sources
+- [sources](docs/user/sources/README.md): every source, how to write its references and when it needs an account
+- [URLs and DOIs](docs/user/sources/urls-and-dois.md): direct links, and DOIs that lead to a source below
 - [zenodo](docs/user/sources/zenodo.md): records and record files
-- [figshare](docs/user/sources/figshare.md): article versions
-- [dataverse](docs/user/sources/dataverse.md): published dataset and file versions
+- [figshare](docs/user/sources/figshare.md): article versions, on institutions' sites too
+- [dataverse](docs/user/sources/dataverse.md): published dataset and file versions on any installation
 - [dryad](docs/user/sources/dryad.md): published dataset versions, downloaded with an API account's key
 - [mendeley data](docs/user/sources/mendeley.md): published dataset versions and their folders
-- [ENA](docs/user/sources/ena.md): the read files of runs, experiments, samples and studies, by accession, including runs from NCBI's SRA
-- [GEO](docs/user/sources/geo.md): the files GEO keeps for a series, a sample or a platform, pinned by their bytes since NCBI states no checksums
-- [DANDI](docs/user/sources/dandi.md): a dandiset's assets at one version, by number, page link or DOI, checked against the SHA-256 dandi states; embargoed dandisets are refused
-- [OpenNeuro](docs/user/sources/openneuro.md): a dataset's files at one snapshot, by accession, page link or DOI, checked against the SHA-256 or MD5 their git-annex keys state; private datasets are refused
-- [OSF](docs/user/sources/osf.md): osfstorage files and folders
-- [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
+- [OSF](docs/user/sources/osf.md): osfstorage files and folders of a project
+- [hugging face](docs/user/sources/hugging-face.md): repositories pinned at a commit, and gated access
 - [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions
-- [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones read through drive's api with google application default credentials once `drive_folders` lists them, with a service account or a login through an oauth client of your own
+- [ENA](docs/user/sources/ena.md): the read files of runs, experiments, samples and studies, SRA's runs included
+- [GEO](docs/user/sources/geo.md): the files of a series, a sample or a platform, pinned by their bytes alone
+- [DANDI](docs/user/sources/dandi.md): a dandiset's assets at one version, checked against the SHA-256 dandi states
+- [OpenNeuro](docs/user/sources/openneuro.md): a dataset's files at one snapshot, checked against their git-annex keys
+- [github and gitlab releases](docs/user/sources/releases.md): the files of a release at its tag
+- [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones once `drive_folders` lists them
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
-- [github and gitlab releases](docs/user/sources/releases.md): the files of a release at its tag, and github's limit of 60 requests an hour without a key
-- [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private S3 buckets read with AWS keys once `s3_buckets` lists them, and private cloud storage buckets read with google application default credentials once `gcs_buckets` lists them
-- [azure blob storage](docs/user/sources/azure.md): `azure:<account>/<container>/<prefix>` and container links, checked against the MD5 azure states, and private containers read with a SAS once `azure_containers` lists them
-- [signing in](docs/user/signing-in.md): which sources need a key and how to give one, `fetchloom auth login` or the source's variable, and the settings that let AWS keys, google credentials or a SAS reach private buckets, containers and drive folders
+- [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private ones once `s3_buckets` or `gcs_buckets` lists them
+- [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them
+- [signing in](docs/user/signing-in.md): which sources need a key, `fetchloom auth login` or the source's variable, and the settings that let keys reach private buckets, containers and drive folders
 
 ## reference
 
