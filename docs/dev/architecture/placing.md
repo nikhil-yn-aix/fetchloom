@@ -109,6 +109,7 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 - a members table filters an archive's targets after `unpacked_paths` placed every member; filtering first would change the top folder a dataset strips and move the kept files.
 - read each placed file's size and time immediately after placement, not after the whole batch.
 - `get -o` makes the folders of its file through the placer, as a copy would, before it moves a one-off out of the cache. a rename into a folder that is not there fails, and the copy it would fall back to holds the bytes twice until the cache drops its own.
+- another run of the same link can write the `-o` file, or move the bytes out of the cache for its own file, between `settle`'s look at the path and its write. a write refused because the name is taken, or the cache's copy gone, makes it look again: a file holding the wanted bytes is kept as a rerun keeps it, and anything else stays and fails the run as before.
 
 ## tests
 

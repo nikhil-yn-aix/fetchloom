@@ -482,44 +482,42 @@ fn settle(
         }
         return Ok(kept(context, Wanted::Served, destination, record(None)));
     }
-    let object = cache
-        .find(&fetched.digest, Some(fetched.size))
-        .ok_or_else(|| {
-            Error::new(
-                Kind::LocalIo,
-                format!("the cache lost {} while writing it", remote.path),
-            )
-            .help("run the same command again to download it")
-        })?;
+    // another run of the link may write the file between that look and this write, moving the
+    // bytes out of the cache to do so, and a file it wrote with them is kept as a rerun keeps it
+    let holds_them = || {
+        matches!(
+            existing(&destination.path),
+            Ok(Existing::Holds(found)) if found == fetched.digest
+        )
+    };
+    let Some(object) = cache.find(&fetched.digest, Some(fetched.size)) else {
+        if holds_them() {
+            return Ok(kept(context, Wanted::Served, destination, record(None)));
+        }
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!("the cache lost {} while writing it", remote.path),
+        )
+        .help("run the same command again to download it"));
+    };
     let replace = step == Step::Replace;
     let one_off = one_off(context, cache, &fetched.digest);
-    let moved = one_off
-        && take(&object, &destination.path, replace)
-            .map_err(|err| unwritten(&destination.shown, &err))?;
-    let how = if moved {
-        Written::Move
-    } else {
-        let method = publish(
-            &object,
-            &destination.path,
-            replace,
-            context.threads,
-            &context.stop,
-        )
-        .map_err(|err| unwritten(&destination.shown, &err))?;
-        let counter = match method {
-            Method::Reflink => &context.work.reflinks,
-            Method::Hardlink => &context.work.hardlinks,
-            Method::Copy => &context.work.copies,
-        };
-        Work::add(counter, 1);
-        if context.work.cached_before(&fetched.digest) {
-            Work::add(&context.work.placed_from_cache, 1);
+    let how = match write(
+        context,
+        cache,
+        (&object, &fetched.digest),
+        &destination.path,
+        replace,
+        one_off,
+    ) {
+        Ok(how) => how,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists && holds_them() => {
+            if one_off {
+                forget(cache, &fetched.digest);
+            }
+            return Ok(kept(context, Wanted::Served, destination, record(None)));
         }
-        if one_off {
-            forget(cache, &fetched.digest);
-        }
-        Written::from(method)
+        Err(err) => return Err(unwritten(&destination.shown, &err)),
     };
     context.output.done(
         if replace { "Replaced" } else { "Saved" },
@@ -527,6 +525,35 @@ fn settle(
     );
     warn_packed(context, remote, fetched, destination);
     Ok(written(destination, record(Some(how))))
+}
+
+/// gives `path` the bytes of `object`, the cache's copy of `digest`: moved out of the cache for a
+/// one-off, else published beside it and counted, the one-off's copy then dropped.
+fn write(
+    context: &Context,
+    cache: &Cache,
+    (object, digest): (&Path, &Sha256),
+    path: &Path,
+    replace: bool,
+    one_off: bool,
+) -> io::Result<Written> {
+    if one_off && take(object, path, replace)? {
+        return Ok(Written::Move);
+    }
+    let method = publish(object, path, replace, context.threads, &context.stop)?;
+    let counter = match method {
+        Method::Reflink => &context.work.reflinks,
+        Method::Hardlink => &context.work.hardlinks,
+        Method::Copy => &context.work.copies,
+    };
+    Work::add(counter, 1);
+    if context.work.cached_before(digest) {
+        Work::add(&context.work.placed_from_cache, 1);
+    }
+    if one_off {
+        forget(cache, digest);
+    }
+    Ok(Written::from(method))
 }
 
 /// warns of an archive saved under a name that does not say so, as a zip saved as `data.csv`:
@@ -1168,5 +1195,88 @@ mod tests {
             Some("use `--dir train` to unpack it into a folder")
         );
         refuse_zipped(&cache, &remote, &plain.digest).unwrap();
+    }
+
+    /// another run of the same link may write the file between this run's look at the path and
+    /// its own write, taking the bytes out of the cache or not: a file holding the same bytes is
+    /// kept, as a rerun keeps it, and one holding others stays as it is.
+    #[test]
+    fn a_file_another_run_wrote_meanwhile_is_kept_only_with_the_same_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = Context::new(crate::output::Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            crate::output::Level::Quiet,
+            false,
+            false,
+        ));
+        let served = b"served";
+        let remote = Remote {
+            path: "data.csv".to_owned(),
+            size: None,
+            sha256: None,
+            md5: None,
+            url: url::Url::parse("https://example.org/data.csv").unwrap(),
+            named_by_server: false,
+        };
+        let fetched = Fetched {
+            digest: crate::digest::sha256(served),
+            size: served.len() as u64,
+            moved: 0,
+            name: None,
+            origin: Origin::Cache,
+            version: None,
+            arrived: None,
+        };
+        // the path was free when the run looked, before it waited for the other run
+        let known = Known {
+            found: Some(Existing::Missing),
+            held: None,
+        };
+        for (index, (cached, there)) in [
+            (true, &served[..]),
+            (false, &served[..]),
+            (true, &b"mine"[..]),
+            (false, &b"mine"[..]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if cached {
+                crate::cache::tests::store(&cache, served);
+            } else if cache.find(&fetched.digest, None).is_some() {
+                cache.drop_object(&fetched.digest).unwrap();
+            }
+            let path = dir.path().join(index.to_string()).join("data.csv");
+            fs::create_dir(path.parent().unwrap()).unwrap();
+            fs::write(&path, there).unwrap();
+            let destination = Destination {
+                shown: path.display().to_string(),
+                path: path.clone(),
+            };
+            let settled = settle(
+                &context,
+                &cache,
+                &remote,
+                &fetched,
+                false,
+                &destination,
+                &known,
+            );
+            if there == served {
+                let (written, done) = settled.unwrap();
+                assert_eq!(written, path, "{index}");
+                assert_eq!(done.files[0].method, None, "{index}: nothing was written");
+            } else {
+                assert!(settled.is_err(), "{index}");
+            }
+            assert_eq!(fs::read(&path).unwrap(), there, "{index}");
+        }
     }
 }
