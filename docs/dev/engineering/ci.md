@@ -12,7 +12,7 @@ the one required check is `ci`, with `if: always()` and `needs: [quality, docs, 
 
 | runner | coverage |
 |---|---|
-| `ubuntu-24.04` | x86_64 linux, rustdoc, python tests, btrfs, xfs and a chmod-refusing FAT mount |
+| `ubuntu-24.04` | x86_64 linux, rustdoc, python tests, btrfs, xfs, a chmod-refusing FAT mount and a folder that ignores case |
 | `ubuntu-24.04-arm` | native arm64 linux |
 | `windows-2025` | native x86_64 windows on NTFS |
 | `windows-11-arm` | native arm64 windows |
@@ -28,7 +28,7 @@ nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero
 
 ## selected-test proof and reports
 
-[python/ci_tests.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_tests.py) compares Cargo's test-binary inventory with nextest's. it asks those libtest binaries for their ordinary and ignored test IDs, both with and without the old filesystem `--skip` arguments. before each nextest run, its selected nonignored IDs must equal that recorded selection and must not be empty. the chmod case has its own exact selection. doctests remain separate from this comparison.
+[python/ci_tests.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_tests.py) compares Cargo's test-binary inventory with nextest's. it asks those libtest binaries for their ordinary and ignored test IDs, both with and without the old filesystem `--skip` arguments. before each nextest run, its selected nonignored IDs must equal that recorded selection and must not be empty. the chmod case and the alias tests have exact selections of their own. doctests remain separate from this comparison.
 
 reports under `target/ci` contain the selections and each run's JUnit XML. failures and retry output remain in JUnit; slowest cases also appear in the step summary. reports upload even after a failure, with OS, filesystem and run attempt in their artifact names, and remain for seven days. a successful test run without a JUnit report or with different executed IDs fails the job.
 
@@ -36,7 +36,7 @@ reports under `target/ci` contain the selections and each run's JUnit XML. failu
 
 every native runner executes the full ordinary suite on its default disk. extra filesystems repeat the existing disk-touching selection, excluding the same substrings the old `DISKLESS` list excluded. a new disk test must not accidentally match one of those exclusions; the selection report makes that decision inspectable.
 
-linux reruns the built tests on btrfs and xfs loop images. their mounted filesystem types are checked first. a separate root-mounted FAT image lets the runner write but refuses chmod; `FETCHLOOM_TEST_NOOP_CHMOD` names it for the one writable-copy regression. macos attaches an HFS+ image for decomposed-unicode and no-reflink behavior. cleanup traps detach the images. macos disables Spotlight indexing immediately after attachment, records the owned device from hdiutil's plist, and makes three normal detach attempts with two-second pauses before forcing that device. it uses the device rather than the mountpoint: a failed eject can already have removed the mountpoint. cleanup preserves a failed test's exit code and fails a passing run if the owned device still cannot be detached. btrfs/xfs and HFS+ each have a 12-minute step cap; the linux step logs provisioning, mount, test and detach phases.
+linux reruns the built tests on btrfs and xfs loop images. their mounted filesystem types are checked first. a separate root-mounted FAT image lets the runner write but refuses chmod; `FETCHLOOM_TEST_NOOP_CHMOD` names it for the one writable-copy regression. an ext4 image made with casefold holds a folder flagged to ignore case, where the alias tests run with `FETCHLOOM_TEST_REQUIRE=aliases`, so one that skips there fails. macos attaches an HFS+ image for decomposed-unicode and no-reflink behavior. cleanup traps detach the images. macos disables Spotlight indexing immediately after attachment, records the owned device from hdiutil's plist, and makes three normal detach attempts with two-second pauses before forcing that device. it uses the device rather than the mountpoint: a failed eject can already have removed the mountpoint. cleanup preserves a failed test's exit code and fails a passing run if the owned device still cannot be detached. btrfs/xfs and HFS+ each have a 12-minute step cap; the linux step logs provisioning, mount, test and detach phases.
 
 a second `windows-2025` job builds and archives the test build once, including `recipe_step` and the libtest selection record, while the native job runs its suite. three jobs independently create ReFS, exFAT and FAT32 volumes, verify `Get-Volume` reports the requested filesystem, and point `TMP` and `TEMP` at that volume. each runs the entire disk selection, not one third. they depend only on the windows producer, not the slower linux/mac matrix. they check out into `source/` and use nextest's workspace remapping, exercising relocation of both executable and fixture paths. no Rust build is needed in these consumers. `finally` restores the environment and detaches the VHDX. the transfer archive is retained for one day.
 

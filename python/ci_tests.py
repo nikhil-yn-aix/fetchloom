@@ -14,6 +14,19 @@ SKIP = ("source::", "net::", "glob::", "name::", "output::", "units::", "digest:
         "error::", "basics::", "hints::", "progress::", "proxy::", "secrets::",
         "split::", "search::", "caps::")
 CHMOD = "place::tests::a_writable_copy_works_where_the_mount_refuses_chmod"
+# the tests of names a disk takes for one another, which run only where it ignores case
+ALIASES = (
+    "placing::a_file_renamed_in_another_case_still_matches_its_pin",
+    "placing::force_restores_pinned_bytes_in_a_file_renamed_in_another_case",
+    "placing::a_name_in_another_unicode_form_still_matches_its_pin",
+    "placing::a_data_folder_in_another_case_matches_and_data_dir_takes_its_spelling",
+    "placing::a_lock_path_in_another_case_matches_the_placed_file",
+    "placing::remove_deletes_a_placed_file_spelled_in_another_case",
+    "cli::sync::disk::tests::alias_retargeting_carries_edits_and_the_original_listed_spelling",
+    "cli::sync::disk::tests::a_name_listed_in_another_composition_is_the_targets_own_file",
+    "cli::sync::disk::tests::a_writable_file_listed_in_another_composition_stays_writable_under_the_targets_name",
+    "cli::sync::disk::tests::a_name_listed_in_another_case_stays_apart_until_a_record_joins_them",
+)
 
 
 def selected(document):
@@ -66,12 +79,13 @@ def record(args):
     listed = {Path(suite["binary-path"]).resolve() for suite in suites.values()}
     if binaries != listed:
         raise RuntimeError(f"cargo and nextest binaries differ: {binaries ^ listed}")
-    expected = {scope: set() for scope in ("native", "disk", "chmod")}
+    expected = {scope: set() for scope in ("native", "disk", "chmod", "aliases")}
     disk_flags = [word for skip in SKIP for word in ("--skip", skip)]
     for binary, suite in suites.items():
         path = suite["binary-path"]
         ignored = libtest(path, ignored=True)
-        for scope, filters in (("native", ()), ("disk", disk_flags), ("chmod", (CHMOD, "--exact"))):
+        for scope, filters in (("native", ()), ("disk", disk_flags), ("chmod", (CHMOD, "--exact")),
+                               ("aliases", (*ALIASES, "--exact"))):
             expected[scope].update(f"{binary}::{name}" for name in libtest(path, filters) - ignored)
     require_same(expected["native"], selected(document), "native")
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -80,13 +94,15 @@ def record(args):
 
 
 def run(args):
-    scope = "disk" if args.disk else "chmod" if args.chmod else "native"
+    scope = "disk" if args.disk else "chmod" if args.chmod else "aliases" if args.aliases else "native"
     expected = set(json.loads((RESULTS / "selection.json").read_text(encoding="utf-8"))[scope])
     filters = []
     if args.disk:
         filters = ["-E", "not (" + " | ".join(f"test({skip})" for skip in SKIP) + ")"]
     elif args.chmod:
         filters = ["-E", f"test(={CHMOD})"]
+    elif args.aliases:
+        filters = ["-E", " | ".join(f"test(={name})" for name in ALIASES)]
     document = listing(args, filters)
     actual = selected(document)
     require_same(expected, actual, args.scope)
@@ -131,6 +147,7 @@ def main():
     parser.add_argument("scope", nargs="?", default="native")
     parser.add_argument("--disk", action="store_true")
     parser.add_argument("--chmod", action="store_true")
+    parser.add_argument("--aliases", action="store_true")
     parser.add_argument("--archive", type=Path)
     args = parser.parse_args()
     if args.command == "record":

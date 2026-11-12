@@ -219,6 +219,23 @@ jobs:
           trap 'sudo umount /mnt/fetchloom-fat' EXIT
           test "$(findmnt -no FSTYPE /mnt/fetchloom-fat)" = vfat
           FETCHLOOM_TEST_NOOP_CHMOD=/mnt/fetchloom-fat python3 python/ci_tests.py run chmod --chmod
+      - name: alias tests in a folder that ignores case
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          truncate -s 128M "$RUNNER_TEMP/casefold.img"
+          mkfs.ext4 -q -O casefold "$RUNNER_TEMP/casefold.img"
+          sudo mkdir -p /mnt/fetchloom-casefold
+          sudo mount -o loop "$RUNNER_TEMP/casefold.img" /mnt/fetchloom-casefold
+          trap 'sudo umount /mnt/fetchloom-casefold' EXIT
+          # an empty folder takes the flag, and everything made in it then ignores case
+          folder=/mnt/fetchloom-casefold/tmp
+          sudo mkdir "$folder"
+          sudo chattr +F "$folder"
+          sudo chown "$(id -u):$(id -g)" "$folder"
+          touch "$folder/probe"
+          test -e "$folder/PROBE" || { echo "::error::$folder tells case apart"; exit 1; }
+          rm "$folder/probe"
+          TMPDIR="$folder" FETCHLOOM_TEST_REQUIRE=aliases python3 python/ci_tests.py run aliases --aliases
       - name: tests on hfs+
         if: matrix.os == 'macos-15'
         timeout-minutes: 12
