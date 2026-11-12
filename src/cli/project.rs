@@ -168,6 +168,140 @@ pub(super) fn committed(project: &Project) -> &'static str {
     }
 }
 
+/// the most files of recipe code a warning names in its `git add`; `-v` names each one.
+const NAMED_CODE: usize = 5;
+
+/// a file of a recipe's code git does not have: its path from the project's folder, the code
+/// entry of data.toml that holds it and the recipes that name that entry.
+struct Uncommitted<'m> {
+    file: String,
+    code: &'m str,
+    recipes: &'m [&'m str],
+}
+
+/// warns of the files a recipe's code in data.toml takes in that git does not have, which a
+/// commit then leaves out, so a clone cannot build the recipe from the same code: new files, as
+/// a new file in a code folder, apart from those .gitignore leaves out. `-v` names each file.
+/// it asks git once, and says nothing with no git, outside a repository, or when git has them
+/// all.
+pub(super) fn warn_recipe_code(output: &Output, project: &Project, manifest: &Manifest) {
+    let mut code: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (name, entry) in &manifest.datasets {
+        for path in entry.recipe().map_or(&[][..], |recipe| &recipe.code[..]) {
+            match code.iter_mut().find(|(seen, _)| seen == path) {
+                Some((_, recipes)) => recipes.push(name),
+                None => code.push((path, vec![name])),
+            }
+        }
+    }
+    let files: Vec<Uncommitted<'_>> = code
+        .iter()
+        .flat_map(|(path, recipes)| {
+            // code a build would refuse or cannot read is the build's to tell
+            recipe::code::files(&project.root, recipes[0], path)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|file| Uncommitted {
+                    file,
+                    code: path,
+                    recipes,
+                })
+        })
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    let paths: Vec<&str> = code.iter().map(|(path, _)| *path).collect();
+    let Some(known) = std::env::var_os("PATH")
+        .and_then(|path| git::find(Some(&path), &project.root))
+        .and_then(|program| git::known(&program, &project.root, &paths))
+    else {
+        return;
+    };
+    let (untracked, ignored): (Vec<Uncommitted<'_>>, Vec<Uncommitted<'_>>) = files
+        .into_iter()
+        .filter(|file| !in_git(&known.tracked, &file.file, ""))
+        .partition(|file| in_git(&known.untracked, &file.file, "/"));
+    for (files, ignored) in [(untracked, false), (ignored, true)] {
+        let Some((said, help)) = uncommitted(&files, ignored) else {
+            continue;
+        };
+        output.warn_with(&said, &help);
+        if files.len() > 1 {
+            for file in &files {
+                output.detail(&file.file);
+            }
+        }
+    }
+}
+
+/// whether `listed` holds `file`, or a folder above it, written with `end`, as git lists a
+/// submodule or a repository inside the work tree whole.
+fn in_git(listed: &std::collections::HashSet<String>, file: &str, end: &str) -> bool {
+    listed.contains(file)
+        || file
+            .match_indices('/')
+            .any(|(at, _)| listed.contains(&format!("{}{end}", &file[..at])))
+}
+
+/// the warning and its help for `files`, recipe code git does not have, which .gitignore leaves
+/// out when `ignored`.
+fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, String)> {
+    let first = files.first()?;
+    let mut recipes: Vec<&str> = files
+        .iter()
+        .flat_map(|file| file.recipes.iter().copied())
+        .collect();
+    recipes.sort_unstable();
+    recipes.dedup();
+    let recipes = match recipes.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => recipes.join(""),
+    };
+    let what = match files.len() {
+        1 => format!("{}, code of {recipes}", first.file),
+        count => format!(
+            "{count} files of the code of {recipes}, such as {}",
+            first.file
+        ),
+    };
+    let it = if files.len() == 1 { "it" } else { "them" };
+    let words = |paths: &mut dyn Iterator<Item = &str>| {
+        let mut words: Vec<String> = paths
+            .map(|path| super::shell_word(path).into_owned())
+            .collect();
+        words.dedup();
+        words.join(" ")
+    };
+    let since = format!("a clone without {it} cannot build {recipes} from the same code");
+    if ignored {
+        let add = if files.len() <= NAMED_CODE {
+            format!(
+                "`git add -f {}`",
+                words(&mut files.iter().map(|file| &*file.file))
+            )
+        } else {
+            format!(
+                "`git add -f`, as `git add -f {}`",
+                super::shell_word(&first.file)
+            )
+        };
+        return Some((
+            format!(".gitignore leaves out {what}"),
+            format!("{since}: commit {it} with {add}, or move {it} out of the recipe's code"),
+        ));
+    }
+    let add = if files.len() <= NAMED_CODE {
+        words(&mut files.iter().map(|file| &*file.file))
+    } else {
+        words(&mut files.iter().map(|file| file.code))
+    };
+    Some((
+        format!("git does not have {what}"),
+        format!("run `git add {add}`, then commit {it}, since {since}"),
+    ))
+}
+
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
@@ -1369,6 +1503,23 @@ pub(crate) mod tests {
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
         (dir, project, context)
+    }
+
+    /// git lists a submodule as one tracked entry and a repository inside the work tree as one
+    /// untracked folder, so a file below either is git's, and nothing else is.
+    #[test]
+    fn a_file_inside_a_folder_git_lists_whole_counts_as_listed() {
+        let listed = |paths: &[&str]| -> std::collections::HashSet<String> {
+            paths.iter().map(|path| (*path).to_owned()).collect()
+        };
+        let tracked = listed(&["prep.py", "lib/vendor"]);
+        assert!(in_git(&tracked, "prep.py", ""));
+        assert!(in_git(&tracked, "lib/vendor/x.py", ""));
+        assert!(!in_git(&tracked, "lib/vendored.py", ""));
+        assert!(!in_git(&tracked, "lib/new.py", ""));
+        let untracked = listed(&["lib/new.py", "lib/nested/"]);
+        assert!(in_git(&untracked, "lib/nested/deep/x.py", "/"));
+        assert!(!in_git(&untracked, "lib/nested.py", "/"));
     }
 
     #[test]

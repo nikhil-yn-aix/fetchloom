@@ -145,7 +145,7 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
     let project = super::project::find(&context.output)?;
     let status = check(&project, context.threads, &context.mirrors.mirrors, verify)?;
     let output = &context.output;
-    warn_untracked(output, &project);
+    warn_git(output, &project)?;
     list(output, &status);
     if sum_up(output, &status) {
         // a sync would pin what the sources serve now, which a clone may not want
@@ -204,11 +204,20 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
     let status = check(project, context.threads, &context.mirrors.mirrors, false)?;
     let output = &context.output;
-    warn_untracked(output, project);
+    warn_git(output, project)?;
     if sum_up(output, &status) {
         output.hint("`fetchloom status` lists what differs");
     }
     Ok(status)
+}
+
+/// warns of the files a commit would leave out that a clone needs: lists data.lock names and code
+/// recipes take in.
+fn warn_git(output: &Output, project: &Project) -> Result<(), Error> {
+    warn_untracked(output, project);
+    let (_, manifest) = project.manifest()?;
+    super::project::warn_recipe_code(output, project, &manifest);
+    Ok(())
 }
 
 /// warns of the lists data.lock names in data.lock.d that git does not have, which a commit then

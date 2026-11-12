@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use icu_normalizer::ComposingNormalizerBorrowed;
 
@@ -34,6 +34,62 @@ const SKIPPED: [&str; 7] = [
 ///
 /// `project.invalid` for a link or a special file, `local.io` when it cannot be read.
 pub(crate) fn hash(root: &Path, recipe: &str, path: &str) -> Result<Option<Code>, Error> {
+    let Some((at, is_folder)) = locate(root, recipe, path)? else {
+        return Ok(None);
+    };
+    if !is_folder {
+        let (sha256, _) = file(&at).map_err(|err| unreadable(recipe, path, &err))?;
+        return Ok(Some(Code {
+            path: path.to_owned(),
+            sha256,
+            folder: false,
+        }));
+    }
+    let mut members = Vec::new();
+    walk(&at, "", recipe, path, &mut |inside, found| {
+        let shown = format!("{path}/{inside}");
+        let (sha256, size) = file(found).map_err(|err| unreadable(recipe, &shown, &err))?;
+        members.push(Member {
+            path: ComposingNormalizerBorrowed::new_nfc()
+                .normalize(inside)
+                .into_owned(),
+            size,
+            sha256,
+        });
+        Ok(())
+    })?;
+    Ok(Some(Code {
+        path: path.to_owned(),
+        sha256: tree_hash(&members),
+        folder: true,
+    }))
+}
+
+/// the files whose bytes [`hash`] reads for the code at `path`, by their paths from `root` with
+/// `/` between folders, as the disk names them: the file itself, or each file of the folder its
+/// hash takes in. empty when nothing is there. no file is read.
+///
+/// # Errors
+///
+/// as [`hash`] refuses the code, or cannot read a folder of it.
+pub(crate) fn files(root: &Path, recipe: &str, path: &str) -> Result<Vec<String>, Error> {
+    let Some((at, is_folder)) = locate(root, recipe, path)? else {
+        return Ok(Vec::new());
+    };
+    if !is_folder {
+        return Ok(vec![path.to_owned()]);
+    }
+    let mut files = Vec::new();
+    walk(&at, "", recipe, path, &mut |inside, _| {
+        files.push(format!("{path}/{inside}"));
+        Ok(())
+    })?;
+    Ok(files)
+}
+
+/// where the code at `path` below `root` is, and whether it is a folder. none when nothing is
+/// there; a link anywhere on the way, or a special file, is refused.
+fn locate(root: &Path, recipe: &str, path: &str) -> Result<Option<(PathBuf, bool)>, Error> {
     let mut at = root.to_path_buf();
     let parts: Vec<&str> = path.split('/').collect();
     for (index, part) in parts.iter().enumerate() {
@@ -50,12 +106,7 @@ pub(crate) fn hash(root: &Path, recipe: &str, path: &str) -> Result<Option<Code>
         }
         let last = index + 1 == parts.len();
         if last && kind.is_file() {
-            let (sha256, _) = file(&at).map_err(|err| unreadable(recipe, path, &err))?;
-            return Ok(Some(Code {
-                path: path.to_owned(),
-                sha256,
-                folder: false,
-            }));
+            return Ok(Some((at, false)));
         }
         if !kind.is_dir() {
             let what = if kind.is_file() {
@@ -66,22 +117,17 @@ pub(crate) fn hash(root: &Path, recipe: &str, path: &str) -> Result<Option<Code>
             return Err(refused(recipe, path, &what));
         }
     }
-    let mut members = Vec::new();
-    folder(&at, "", recipe, path, &mut members)?;
-    Ok(Some(Code {
-        path: path.to_owned(),
-        sha256: tree_hash(&members),
-        folder: true,
-    }))
+    Ok(Some((at, true)))
 }
 
-/// adds the files below `at`, with `prefix` and their path inside it, to `members`.
-fn folder(
+/// calls `found` with each file below `at` that a folder of code holds, its path inside the
+/// folder after `prefix` as the disk names it and where it is. what [`SKIPPED`] names stays out.
+fn walk(
     at: &Path,
     prefix: &str,
     recipe: &str,
     code: &str,
-    members: &mut Vec<Member>,
+    found: &mut dyn FnMut(&str, &Path) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let entries = fs::read_dir(at).map_err(|err| unreadable(recipe, code, &err))?;
     for entry in entries {
@@ -114,16 +160,9 @@ fn folder(
         if kind.is_symlink() {
             return Err(refused(recipe, code, &format!("{shown} is a link")));
         } else if kind.is_dir() {
-            folder(&path, &inside, recipe, code, members)?;
+            walk(&path, &inside, recipe, code, found)?;
         } else if kind.is_file() {
-            let (sha256, size) = file(&path).map_err(|err| unreadable(recipe, &shown, &err))?;
-            members.push(Member {
-                path: ComposingNormalizerBorrowed::new_nfc()
-                    .normalize(&inside)
-                    .into_owned(),
-                size,
-                sha256,
-            });
+            found(&inside, &path)?;
         } else {
             return Err(refused(recipe, code, &format!("{shown} is a special file")));
         }
@@ -311,6 +350,12 @@ mod tests {
         );
         let lib = hashed(root.path(), "lib");
         assert!(lib.folder);
+        let listed = || {
+            let mut listed = files(root.path(), "clean", "lib").unwrap();
+            listed.sort();
+            listed
+        };
+        assert_eq!(listed(), ["lib/a.py", "lib/sub/b.py"]);
         let members = [
             Member {
                 path: "a.py".to_owned(),
@@ -340,9 +385,22 @@ mod tests {
             ],
         );
         assert_eq!(hashed(root.path(), "lib").sha256, lib.sha256);
+        assert_eq!(
+            listed(),
+            ["lib/a.py", "lib/sub/b.py"],
+            "the files the hash reads"
+        );
         write(root.path(), &[("lib/sub/c.py", b"c\n")]);
         assert_ne!(hashed(root.path(), "lib").sha256, lib.sha256);
         assert_eq!(hash(root.path(), "clean", "missing.py").unwrap(), None);
+        assert_eq!(
+            files(root.path(), "clean", "missing.py").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            files(root.path(), "clean", "lib/a.py").unwrap(),
+            ["lib/a.py"]
+        );
         assert_eq!(
             hash(root.path(), "clean", "lib/missing/x.py").unwrap(),
             None

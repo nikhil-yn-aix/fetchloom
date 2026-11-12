@@ -606,6 +606,87 @@ fn status_names_lists_git_does_not_have() -> Result {
     Ok(())
 }
 
+/// the warnings of the json document `value` about recipe code git does not have.
+fn code_warnings(value: &serde_json::Value) -> Vec<String> {
+    value["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|warning| warning.contains("code of clean"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// a recipe's code is part of what its key answers, so a commit that leaves out a code file, a
+/// new file in a code folder or one .gitignore leaves out, leaves a clone unable to build the
+/// recipe from the same code: status names each, with the git command that adds it, and says
+/// nothing of what the code's hash skips, once git has them all, or with no git.
+#[test]
+fn status_names_recipe_code_git_does_not_have() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let manifest = work.join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{written}\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"prep.py\", \"{{iris}}\", \"{{out}}\"]\ncode = [\"prep.py\", \"lib\"]\n"
+        ),
+    )?;
+    fs::create_dir_all(work.join("lib").join("__pycache__"))?;
+    for (path, bytes) in [
+        ("prep.py", "print(1)\n"),
+        ("lib/a.py", "a = 1\n"),
+        ("lib/new.py", "b = 2\n"),
+        ("lib/model.bin", "weights"),
+        ("lib/__pycache__/a.cpython-312.pyc", "cache"),
+    ] {
+        fs::write(work.join(path), bytes)?;
+    }
+    let ignore = fs::read_to_string(work.join(".gitignore"))?;
+    fs::write(work.join(".gitignore"), format!("{ignore}*.bin\n"))?;
+    let commit = ["data.toml", "data.lock", ".gitignore", "lib/a.py"];
+    crate::merge::ok(&sandbox, &[&["add"][..], &commit].concat())?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "clean"])?;
+
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        code_warnings(&status),
+        [
+            "git does not have 2 files of the code of clean, such as prep.py; run `git add prep.py lib/new.py`, then commit them, since a clone without them cannot build clean from the same code",
+            ".gitignore leaves out lib/model.bin, code of clean; a clone without it cannot build clean from the same code: commit it with `git add -f lib/model.bin`, or move it out of the recipe's code",
+        ]
+    );
+    let told = sandbox.run(&["-v", "status"])?;
+    let stderr = text(&told.stderr)?;
+    assert!(
+        stderr
+            .contains("warning: git does not have 2 files of the code of clean, such as prep.py\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("            lib/new.py\n"), "{stderr}");
+    assert!(!stderr.contains("__pycache__"), "{stderr}");
+    let unfound = sandbox
+        .command(&["--json", "status"])
+        .env("PATH", "")
+        .output()?;
+    assert_eq!(code_warnings(&json(&unfound)?), Vec::<String>::new());
+
+    crate::merge::ok(&sandbox, &["add", "prep.py", "lib"])?;
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(code_warnings(&status).len(), 1, "{status}");
+    crate::merge::ok(&sandbox, &["add", "-f", "lib/model.bin"])?;
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(code_warnings(&status), Vec::<String>::new());
+    Ok(())
+}
+
 /// a command that writes a list git does not have ends by saying so, as a warning for a script
 /// and as a `next:` line for a person at a terminal. outside a git repository, or once git has
 /// the list, it says nothing.

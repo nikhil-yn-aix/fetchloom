@@ -1,12 +1,12 @@
 //! git, run as a reader of a project's repository: data.toml and data.lock whole as each side of
 //! a merge git left unfinished has them, with their merge base, so `fetchloom lock` takes no line
-//! git merged from the other side for a side's, and which of the files in `data.lock.d` git has,
-//! so a list a commit would leave out is named. apart from the steps `fetchloom build` runs, git
-//! is the one program fetchloom runs: found by an absolute path outside the project, with no
-//! shell, no input, no transport to fetch with, and bounded output and time. reading objects also
-//! takes `--no-lazy-fetch` where git knows it, so a partial clone never reaches the network;
-//! listing the index reads no object. any failure, a folder outside a repository among them,
-//! means no answer.
+//! git merged from the other side for a side's, and which of the files in `data.lock.d` and of
+//! a recipe's code git has, so a file a commit would leave out is named. apart from the steps
+//! `fetchloom build` runs, git is the one program fetchloom runs: found by an absolute path
+//! outside the project, with no shell, no input, no transport to fetch with, and bounded output
+//! and time. reading objects also takes `--no-lazy-fetch` where git knows it, so a partial clone
+//! never reaches the network; listing the index reads no object. any failure, a folder outside a
+//! repository among them, means no answer.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -141,6 +141,52 @@ pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<S
             .filter_map(|path| std::str::from_utf8(path).ok().map(str::to_owned))
             .collect(),
     )
+}
+
+/// what git knows of the files below some paths of a work tree, by their paths from its root
+/// with `/` between folders. a file in neither set is one an ignore rule leaves out.
+#[derive(Debug, Default)]
+pub(crate) struct Known {
+    /// the files git has, tracked or staged, and the folder of a submodule.
+    pub(crate) tracked: HashSet<String>,
+    /// the files git does not have that no ignore rule leaves out, and the folder of a repository
+    /// inside the work tree, ending with `/`.
+    pub(crate) untracked: HashSet<String>,
+}
+
+/// what git knows of the files below `paths` in the work tree at `root`, each path taken as
+/// written, never as a pattern. it reads git's index and ignore rules, no object. none when git
+/// cannot tell, as outside a repository.
+pub(crate) fn known(git: &Path, root: &Path, paths: &[&str]) -> Option<Known> {
+    let specs: Vec<String> = paths.iter().map(|path| format!("./{path}")).collect();
+    let mut arguments = vec![
+        "--literal-pathspecs",
+        "ls-files",
+        "-z",
+        "-t",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+    ];
+    arguments.extend(specs.iter().map(String::as_str));
+    let listed = run(git, root, &arguments).ok()?;
+    let mut known = Known::default();
+    // each entry is `<tag> <path>`, where `?` tags a file git does not have
+    for entry in listed.split(|byte| *byte == 0) {
+        let Some((tag, path)) = std::str::from_utf8(entry)
+            .ok()
+            .and_then(|entry| entry.split_once(' '))
+        else {
+            continue;
+        };
+        if tag == "?" {
+            known.untracked.insert(path.to_owned());
+        } else {
+            known.tracked.insert(path.to_owned());
+        }
+    }
+    Some(known)
 }
 
 /// what git prints for `arguments`, which read objects: with `--no-lazy-fetch` where git knows
