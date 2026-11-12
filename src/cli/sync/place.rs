@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
-pub(crate) use self::tell::tell_preview;
+pub(crate) use self::tell::{emptied, holding, tell_preview};
 use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};

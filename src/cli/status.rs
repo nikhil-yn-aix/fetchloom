@@ -26,7 +26,8 @@ use crate::recipe;
 use crate::threads::Threads;
 use crate::units;
 
-/// the most paths printed for each kind of difference. `--json` lists them all.
+/// the most rows a terminal shows of each kind of difference. a pipe, a file and `--json` get
+/// them all.
 const SHOWN: usize = 20;
 
 #[derive(Default, Serialize)]
@@ -115,6 +116,10 @@ pub(super) struct Status {
     /// next one retires, told in its line rather than one by one, with its folder.
     #[serde(skip)]
     retiring: BTreeMap<String, (String, Vec<String>)>,
+    /// of `missing`, those in a folder that holds no file now, as one deleted whole, with that
+    /// folder, so a person at a terminal reads the folder once.
+    #[serde(skip)]
+    gone: HashMap<String, String>,
 }
 
 /// the rebuild a build kept of a recipe, files that differ from what data.lock pins for the
@@ -480,9 +485,32 @@ fn check(
         }
     }
     unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
+    status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
+}
+
+/// the files of `missing` in a folder that holds no file now, as one deleted whole, each with
+/// that folder, no higher than its dataset's own.
+fn gone(
+    missing: &[String],
+    manifest: &Manifest,
+    survey: &Survey,
+    planned: &plan::Plan<'_>,
+) -> HashMap<String, String> {
+    let holding = place::holding(survey.disk.keys());
+    let missing: HashSet<&str> = missing.iter().map(String::as_str).collect();
+    planned
+        .targets
+        .iter()
+        .filter(|target| missing.contains(target.path.as_str()))
+        .filter_map(|target| {
+            let floor = plan::folder(manifest, target.dataset);
+            let folder = place::emptied(&holding, &target.path, &floor)?;
+            Some((target.path.clone(), format!("{folder}/")))
+        })
+        .collect()
 }
 
 /// moves to `unbuilt` each recipe whose result sync would leave out: one with a missing or
@@ -874,9 +902,12 @@ fn tell_unplaced(output: &Output, status: &Status) {
     }
 }
 
-/// a row on stdout for each difference, at most `SHOWN` of each kind, after the lines of the
-/// datasets with `place = false`, so a pipe or a file gets the rows and stderr keeps the story.
+/// a row on stdout for each difference, after the lines of the datasets with `place = false`,
+/// so a pipe or a file gets the rows and stderr keeps the story. a script gets every file; a
+/// person at a terminal reads a folder whose files are all gone as one row, and at most `SHOWN`
+/// rows of each kind.
 fn list(output: &Output, status: &Status) {
+    let shown = output.answer_width().map(|_| SHOWN);
     tell_unplaced(output, status);
     let unpinned = if status.lockless {
         "data.lock does not exist"
@@ -900,7 +931,7 @@ fn list(output: &Output, status: &Status) {
         );
     }
     for kept in &status.candidates {
-        tell_kept(output, kept);
+        tell_kept(output, kept, shown);
     }
     let retiring: HashSet<&String> = status
         .retiring
@@ -908,32 +939,35 @@ fn list(output: &Output, status: &Status) {
         .flat_map(|(_, paths)| paths)
         .collect();
     for (verb, paths, said) in status.lists() {
-        let paths: Vec<&String> = paths
-            .iter()
-            .filter(|path| !retiring.contains(path))
-            .collect();
-        for path in paths.iter().copied().take(SHOWN) {
-            if let Some(said) = said {
-                output.report(verb, &format!("{path} · {said}"));
+        let mut rows: Vec<(String, u64)> = Vec::new();
+        let mut folders: HashMap<&str, usize> = HashMap::new();
+        for path in paths.iter().filter(|path| !retiring.contains(path)) {
+            if let Some(folder) = status.gone.get(path).filter(|_| shown.is_some()) {
+                let at = *folders.entry(folder).or_insert_with(|| {
+                    rows.push((String::new(), 0));
+                    rows.len() - 1
+                });
+                rows[at].1 += 1;
+                rows[at].0 = format!("{folder} · {}", units::count(rows[at].1, "file", "files"));
+            } else if let Some(said) = said {
+                rows.push((format!("{path} · {said}"), 1));
             } else if status.shared.contains(path) {
-                output.report(
-                    verb,
-                    &format!("{path} · changed through a hardlink other projects may share"),
-                );
+                rows.push((
+                    format!("{path} · changed through a hardlink other projects may share"),
+                    1,
+                ));
             } else if status.unsealed.contains(path) {
-                output.report(
-                    verb,
-                    &format!(
+                rows.push((
+                    format!(
                         "{path} · a link to the cache's copy made writable, so an edit would change it for every project"
                     ),
-                );
+                    1,
+                ));
             } else {
-                output.report(verb, path);
+                rows.push((path.clone(), 1));
             }
         }
-        if paths.len() > SHOWN {
-            output.report("", &format!("and {} more", paths.len() - SHOWN));
-        }
+        report_rows(output, verb, rows, shown);
     }
     for archive in &status.not_unpacked {
         output.report(
@@ -955,33 +989,54 @@ fn list(output: &Output, status: &Status) {
         };
         output.report("Unbuilt", &said);
     }
-    for blocker in status.blocked.iter().take(SHOWN) {
-        output.report(
-            "Blocked",
-            &format!("{} · {}", blocker.path, in_the_way(blocker)),
-        );
-    }
-    if status.blocked.len() > SHOWN {
-        let more = status.blocked.len() - SHOWN;
-        output.report("", &format!("and {more} more"));
-    }
-    for path in status.damaged.iter().take(SHOWN) {
+    let blocked = status
+        .blocked
+        .iter()
+        .map(|blocker| (format!("{} · {}", blocker.path, in_the_way(blocker)), 1));
+    report_rows(output, "Blocked", blocked.collect(), shown);
+    let damaged = status.damaged.iter().map(|path| {
         let cause = if status.linked.contains(path) {
             "linked to the cache's copy, which was changed"
         } else {
             "its bytes changed though its size and time did not"
         };
-        output.report("Damaged", &format!("{path} · {cause}"));
+        (format!("{path} · {cause}"), 1)
+    });
+    report_rows(output, "Damaged", damaged.collect(), shown);
+}
+
+/// at most `shown` of `rows` under `verb`, each a row's text and the files it stands for, then
+/// how many files the rest stand for and how to see them. none of `shown` prints every row.
+fn report_rows(output: &Output, verb: &str, rows: Vec<(String, u64)>, shown: Option<usize>) {
+    let most = shown.unwrap_or(usize::MAX);
+    let hidden: u64 = rows.iter().skip(most).map(|(_, files)| files).sum();
+    for (text, _) in rows.into_iter().take(most) {
+        output.report(verb, &text);
     }
-    if status.damaged.len() > SHOWN {
-        let more = status.damaged.len() - SHOWN;
-        output.report("", &format!("and {more} more"));
+    report_more(output, hidden, false);
+}
+
+/// the row after those a terminal shows, saying how many more there are and that a pager gets
+/// them all, as a script reading stdout does.
+fn report_more(output: &Output, hidden: u64, detail: bool) {
+    if hidden == 0 {
+        return;
+    }
+    let text = format!(
+        "and {} more · `{} | less` shows all",
+        units::grouped(hidden),
+        super::project::command("status")
+    );
+    if detail {
+        report_detail(output, &text);
+    } else {
+        output.report("", &text);
     }
 }
 
 /// the row of a kept rebuild, and with `-v` each of its files that differs from data.lock with
-/// the cache file that holds the rebuild's bytes.
-fn tell_kept(output: &Output, kept: &Kept) {
+/// the cache file that holds the rebuild's bytes, at most `shown` of them.
+fn tell_kept(output: &Output, kept: &Kept, shown: Option<usize>) {
     let name = &kept.name;
     if kept.stale {
         output.report(
@@ -994,7 +1049,8 @@ fn tell_kept(output: &Output, kept: &Kept) {
             &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
         );
     }
-    for file in kept.files.iter().take(SHOWN) {
+    let most = shown.unwrap_or(usize::MAX);
+    for file in kept.files.iter().take(most) {
         let how = match file.difference {
             "extra" => "new",
             how => how,
@@ -1009,9 +1065,7 @@ fn tell_kept(output: &Output, kept: &Kept) {
             },
         );
     }
-    if kept.files.len() > SHOWN {
-        report_detail(output, &format!("and {} more", kept.files.len() - SHOWN));
-    }
+    report_more(output, kept.files.len().saturating_sub(most) as u64, true);
 }
 
 /// a `-v` row under the row before it, on stdout with it.

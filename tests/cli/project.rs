@@ -1559,8 +1559,81 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     Ok(())
 }
 
+/// a project whose data.lock pins 25 files in data/set/a and one in data/set/b, with only the one
+/// in b in place and 25 files of a person's own in data, for status to list.
+fn many_differences(sandbox: &Sandbox) -> Result {
+    use std::fmt::Write as _;
+
+    let mut lock = String::from(
+        "version = 1\n\n[[dataset]]\nname = 'set'\nref = 'zenodo:2'\nspec = ''\nresolved = 'zenodo:2'\nlocked = '2026-01-01T00:00:00Z'\n",
+    );
+    for (path, sha256) in (0..25)
+        .map(|index| (format!("a/file{index:02}.csv"), "0".repeat(64)))
+        .chain(std::iter::once(("b/kept.csv".to_owned(), sha256(b"kept"))))
+    {
+        writeln!(
+            lock,
+            "\n[[dataset.files]]\npath = '{path}'\nsize = 4\nsha256 = '{sha256}'\nurl = 'https://example.org/{path}'"
+        )?;
+    }
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.set]\nref = 'zenodo:2'\n",
+    )?;
+    fs::write(sandbox.work().join("data.lock"), lock)?;
+    let data = sandbox.work().join("data");
+    fs::create_dir_all(data.join("set").join("b"))?;
+    fs::write(data.join("set").join("b").join("kept.csv"), b"kept")?;
+    for index in 0..25 {
+        fs::write(data.join(format!("extra{index:02}.txt")), b"keep")?;
+    }
+    Ok(())
+}
+
+/// a pipe or a file gets every row, as `git status` gives them, so grep finds each path.
 #[test]
-fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
+fn status_lists_every_row_for_a_script() -> Result {
+    let sandbox = Sandbox::new()?;
+    many_differences(&sandbox)?;
+    let output = sandbox.run(&["--offline", "status"])?;
+    let stdout = text(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(stdout.matches("    Missing data/set/a/file").count(), 25);
+    assert_eq!(stdout.matches("      Extra data/extra").count(), 25);
+    assert!(!stdout.contains(" more"), "{stdout}");
+    Ok(())
+}
+
+/// at a terminal, a folder whose files are all gone is one row, each kind shows 20 rows, and the
+/// line after them says how to see the rest.
+#[cfg(target_os = "linux")]
+#[test]
+fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result {
+    let sandbox = Sandbox::new()?;
+    many_differences(&sandbox)?;
+    let Some(screen) = sandbox.on_a_terminal(&["--offline", "status"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("    Missing data/set/a/ · 25 files\n"),
+        "{screen}"
+    );
+    assert!(!screen.contains("file00.csv"), "{screen}");
+    assert!(
+        screen.contains("      Extra data/extra19.txt\n"),
+        "{screen}"
+    );
+    assert!(!screen.contains("extra20.txt"), "{screen}");
+    assert!(
+        screen.contains("            and 5 more · `fetchloom status | less` shows all\n"),
+        "{screen}"
+    );
+    assert!(screen.contains("Found 52 differences"), "{screen}");
+    Ok(())
+}
+
+#[test]
+fn status_keeps_all_differences_in_json() -> Result {
     use std::fmt::Write as _;
 
     let sandbox = Sandbox::new()?;
@@ -1604,11 +1677,7 @@ fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
         stdout.contains("Removed old · not in data.toml"),
         "{stdout}"
     );
-    assert!(stdout.contains("Missing data/set/file19.csv"), "{stdout}");
-    assert!(!stdout.contains("file20.csv"), "{stdout}");
-    assert!(stdout.contains("Extra data/extra19.txt"), "{stdout}");
-    assert!(!stdout.contains("extra20.txt"), "{stdout}");
-    assert_eq!(stdout.matches("and 5 more").count(), 2);
+    assert!(stdout.contains("Missing data/set/file24.csv"), "{stdout}");
     assert!(stderr.contains("53 differences from data.lock"), "{stderr}");
     let output = sandbox.run(&["--offline", "--json", "status"])?;
     assert_eq!(output.status.code(), Some(0));

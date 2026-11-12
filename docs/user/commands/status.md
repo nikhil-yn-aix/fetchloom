@@ -97,7 +97,16 @@ an entry in a file's way is listed once as blocked, rather than each file behind
 
 a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as unneeded, and the files behind it as missing.
 
-human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. once something changed since the last complete sync, files placed from an archive this machine has no record of can also appear as extra.
+a pipe or a file gets every file on a row of its own, as `git status` gives them, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row:
+
+```text
+    Missing data/many/part03/ · 30 files
+    Missing data/many/part04/ · 30 files
+```
+
+and each kind shows at most 20 rows, then one that says how to see the rest, as ``and 5 more · `fetchloom status | less` shows all``.
+
+unlocked or removed datasets and not-unpacked archives are never cut short. JSON includes every difference. once something changed since the last complete sync, files placed from an archive this machine has no record of can also appear as extra.
 
 ## exit codes
 
@@ -109,7 +118,7 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 |---|---|---|
 | exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON |
 | a file shows as damaged that you did not touch | an edit through another project's link changed the cache's copy you share | run `fetchloom sync`; use `copy = true` on datasets you edit |
-| fewer paths appear in the terminal | human categories are limited to 20 paths | use `--json` |
+| fewer paths appear in the terminal | a terminal shows 20 rows of each kind, and a gone folder as one row | run `fetchloom status \| less`, or use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |
 | `warning: data.lock no longer names data.lock.d/clean.450ae405bf79.tsv.zst, so nothing reads it` | a list a build or a big dataset wrote is left after `git checkout` or a reset put an older data.lock back | run the delete or `git rm` its help names; never `git add data.lock.d` before that |
 | `warning: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which git does not have` | a build or a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |

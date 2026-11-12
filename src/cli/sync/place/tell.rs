@@ -1,7 +1,7 @@
 //! the lines a placement prints: what each dataset cost, what was removed, and every file left
 //! alone or put back, with the reason.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::put::Tally;
 use super::{
@@ -232,6 +232,40 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
     for path in paths {
         output.detail(path);
     }
+}
+
+/// every folder above a file in `files`, by its path in the project, so a folder outside the set
+/// holds no file.
+pub(crate) fn holding<'f>(files: impl Iterator<Item = &'f String>) -> HashSet<&'f str> {
+    let mut folders = HashSet::new();
+    for file in files {
+        let mut path = file.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            if !folders.insert(parent) {
+                break;
+            }
+            path = parent;
+        }
+    }
+    folders
+}
+
+/// the topmost folder above `path`, no higher than `floor`, that holds no file, as `holding`
+/// says: the folder a person deleted whole, or emptied, or none while the file's own folder still
+/// holds one.
+pub(crate) fn emptied<'p>(holding: &HashSet<&str>, path: &'p str, floor: &str) -> Option<&'p str> {
+    let inside = path.strip_prefix(floor)?.strip_prefix('/')?;
+    if !holding.contains(floor) {
+        return Some(&path[..floor.len()]);
+    }
+    let mut end = floor.len();
+    for part in inside.split('/').collect::<Vec<_>>().split_last()?.1 {
+        end += 1 + part.len();
+        if !holding.contains(&path[..end]) {
+            return Some(&path[..end]);
+        }
+    }
+    None
 }
 
 /// the paths of `by_dataset` gathered by the folder of their dataset, in the order the folders
