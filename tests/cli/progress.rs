@@ -24,7 +24,8 @@ fn held_iris() -> (Vec<Part>, Sender<()>) {
     (held, release)
 }
 
-/// a reply that holds back its body for 3 s, past the moment a batch says what it is doing.
+/// a reply that holds back its body for half a second, past the tenth of a second a batch runs
+/// before it says what it is doing once a test sets `FETCHLOOM_TEST_TICKER`.
 fn slow_iris() -> Vec<Part> {
     let mut slow = reply(
         "200 OK",
@@ -34,7 +35,7 @@ fn slow_iris() -> Vec<Part> {
         ],
         b"",
     );
-    slow.push(Part::Pause(Duration::from_millis(3000)));
+    slow.push(Part::Pause(Duration::from_millis(500)));
     slow.push(Part::Bytes(IRIS.to_vec()));
     slow
 }

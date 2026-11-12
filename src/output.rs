@@ -77,6 +77,8 @@ pub(crate) struct Output {
     drawn: Mutex<Vec<indicatif::WeakProgressBar>>,
     /// how long work that is usually quick goes untold at a terminal.
     untold: Duration,
+    /// how long a batch runs before its first plain line, or none when a test turns them off.
+    moment: Option<Duration>,
     /// the last closing line told, such as `Added iris`, and whether a ctrl-c that let the run
     /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
     /// a ctrl-c comes, so that line is told once more at the end.
@@ -284,6 +286,7 @@ impl Output {
             report_color: Style::stdout_colored(),
             drawn: Mutex::new(Vec::new()),
             untold: progress::UNTOLD,
+            moment: progress::moment(),
             closing: Mutex::new((None, false)),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
@@ -711,15 +714,9 @@ impl Output {
         sizes: impl IntoIterator<Item = Option<u64>>,
     ) -> Ticker {
         let told = self.level >= Level::Normal && (!self.json || self.progress);
-        if self.bars.is_some() || !told {
+        let Some(moment) = self.moment.filter(|_| self.bars.is_none() && told) else {
             return Ticker::quiet();
-        }
-        // tests turn off these lines, since how fast a machine runs decides when they come.
-        // release builds never read it
-        #[cfg(debug_assertions)]
-        if std::env::var_os("FETCHLOOM_TEST_TICKER").is_some_and(|value| value == "off") {
-            return Ticker::quiet();
-        }
+        };
         let known = sizes
             .into_iter()
             .fold((0, 0), |(total, unknown), size| match size {
@@ -728,7 +725,7 @@ impl Output {
             });
         let color = self.style.color;
         let unicode = self.style.unicode;
-        Ticker::start(verb, what, known, move |verb, text| {
+        Ticker::start(verb, what, known, moment, move |verb, text| {
             write_line(
                 color,
                 &shown(&verb_line(verb, text, Tone::Work, color), unicode),

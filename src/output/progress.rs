@@ -32,6 +32,9 @@ const WINDOW: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_millis(100);
 /// how long a batch runs before its first plain line, so a quick one adds no line at all.
 const MOMENT: Duration = Duration::from_secs(2);
+/// the same for a test that waits on that line, so it waits a tenth of a second, not two.
+#[cfg(debug_assertions)]
+const TEST_MOMENT: Duration = Duration::from_millis(100);
 /// how often a batch that is still running says how far it got.
 const EVERY: Duration = Duration::from_secs(10);
 
@@ -746,6 +749,24 @@ struct Shared {
     wake: Condvar,
 }
 
+/// how long a batch runs before its first plain line, or none for no lines. debug builds read
+/// `FETCHLOOM_TEST_TICKER`, which only tests set, since how busy the machine is decides when the
+/// lines come: `off` drops them, and either value tells the first after a tenth of a second.
+#[cfg_attr(
+    not(debug_assertions),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "only a debug build's tests turn the lines off"
+    )
+)]
+pub(super) fn moment() -> Option<Duration> {
+    #[cfg(debug_assertions)]
+    if let Some(value) = std::env::var_os("FETCHLOOM_TEST_TICKER") {
+        return (value != "off").then_some(TEST_MOMENT);
+    }
+    Some(MOMENT)
+}
+
 impl Ticker {
     pub(super) fn quiet() -> Ticker {
         Ticker {
@@ -754,15 +775,17 @@ impl Ticker {
         }
     }
 
-    /// tells `verb` and `what` through `say`, for a batch whose known sizes add up to `total`,
-    /// with `unknown` more files whose downloads have yet to tell theirs.
+    /// tells `verb` and `what` through `say` once the batch lasts `moment`, for a batch whose
+    /// known sizes add up to `total`, with `unknown` more files whose downloads have yet to tell
+    /// theirs.
     pub(super) fn start(
         verb: &'static str,
         what: String,
         (total, unknown): (u64, usize),
+        moment: Duration,
         say: impl Fn(&str, &str) + Send + 'static,
     ) -> Ticker {
-        Ticker::paced(verb, what, (total, unknown), (MOMENT, EVERY), say)
+        Ticker::paced(verb, what, (total, unknown), (moment, EVERY), say)
     }
 
     fn paced(
