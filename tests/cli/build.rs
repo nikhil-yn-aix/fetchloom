@@ -2296,6 +2296,46 @@ fn prepare_fetches_what_the_build_places() -> Result {
     Ok(())
 }
 
+/// `--prepare` ends by naming the build it prepared for, with the recipes named and `--check`
+/// kept, and once data.lock pins every result as building it now would make, it names no step to
+/// run.
+#[cfg(target_os = "linux")]
+#[test]
+fn prepare_names_the_build_it_prepared_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let told = |args: &[&str]| -> Result<Option<String>> {
+        sandbox.on_a_terminal_running(&building_in(&sandbox, &sandbox.work(), args)?)
+    };
+    let Some(unbuilt) = told(&["build", "--prepare", "clean"])? else {
+        return Ok(());
+    };
+    assert!(
+        unbuilt
+            .contains("  next: run `fetchloom --offline build clean` where the steps should run\n"),
+        "{unbuilt}"
+    );
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let checking = told(&["build", "--prepare", "--check", "clean"])?.unwrap_or_default();
+    assert!(
+        checking.contains(
+            "  next: run `fetchloom --offline build --check clean` where the steps should run\n"
+        ),
+        "{checking}"
+    );
+    let built = told(&["build", "--prepare"])?.unwrap_or_default();
+    assert!(built.contains(" Up to date clean\n"), "{built}");
+    assert!(
+        built.contains(
+            "  next: run `fetchloom --offline build`, which places the results without running a step\n"
+        ),
+        "{built}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 1, "only the build ran");
+    Ok(())
+}
+
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
 /// status says it is stale and `--accept` refuses it and changes nothing.
 #[test]

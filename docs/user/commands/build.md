@@ -201,6 +201,22 @@ error: data.lock is out of date: clean changed since it was built
          Ok a build of these steps needs only what this machine holds now; nothing ran
 ```
 
+at a terminal, the last line names that build, with the recipes named and `--check` or `--locked` as given. here it is the end of `fetchloom build --prepare --check made` with a folder mirror:
+
+```text
+   Prepared made · what it reads is on this machine
+         Ok a build of these steps needs only what this machine holds now; nothing ran
+  next: run `fetchloom --offline build --check made` where the steps should run
+```
+
+when every step is up to date, or fetched from a mirror, no step would run, and the line says so:
+
+```text
+ Up to date made
+         Ok a build of these steps needs only what this machine holds now; nothing ran
+  next: run `fetchloom --offline build`, which places the results without running a step
+```
+
 `fetchloom --offline build` then runs the step with no request. [HPC](../hpc.md#recipes-in-jobs) shows the two halves on a cluster. `--prepare` cannot be combined with `--accept` or `--dry-run`.
 
 ## a rebuild that differs

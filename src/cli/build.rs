@@ -148,7 +148,7 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
     }
     let mut building = Building::start(context, &project, &args.names, current).await?;
     if args.prepare {
-        building.prepare(args.check).await?;
+        building.prepare(args).await?;
         return Ok(Report::Built(Box::new(building.report)));
     }
     building.room(args.check)?;
@@ -234,6 +234,23 @@ fn listed(words: &[&str]) -> String {
         Some((last, [])) => (*last).to_owned(),
         Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
     }
+}
+
+/// the build `--prepare` readied this machine for, as a person types it there: without the
+/// network, with the recipes named and `--check` and `--locked` as `args` gave them.
+fn prepared_for(args: &args::Build) -> String {
+    let mut words = vec!["--offline".to_owned(), "build".to_owned()];
+    for (given, flag) in [(args.check, "--check"), (args.locked, "--locked")] {
+        if given {
+            words.push(flag.to_owned());
+        }
+    }
+    words.extend(
+        args.names
+            .iter()
+            .map(|name| super::shell_word(name).into_owned()),
+    );
+    super::project::command(&words.join(" "))
 }
 
 /// a word of a command as a person reads it among the others: quoted when a space or a quote
@@ -470,12 +487,13 @@ impl<'a> Building<'a> {
         Ok(done)
     }
 
-    /// puts in the cache everything a build of the recipes, or with `check` a check of them,
+    /// puts in the cache everything a build of the recipes, or with `--check` a check of them,
     /// needs, mirrors first, and runs nothing: the datasets each step that would run reads, the
     /// pinned results a build would take as they are and, for a build, what placing its datasets
     /// needs. the sources the build pins anew are written to data.lock, so a later build needs no
-    /// network for them either.
-    async fn prepare(&mut self, check: bool) -> Result<(), Error> {
+    /// network for them either. it ends with that later build, as `args` asks for it.
+    async fn prepare(&mut self, args: &args::Build) -> Result<(), Error> {
+        let check = args.check;
         let output = &self.context.output;
         let mut running: BTreeSet<String> = BTreeSet::new();
         for name in self.recipes.clone() {
@@ -547,7 +565,14 @@ impl<'a> Building<'a> {
                 "Ok",
                 "a build of these steps needs only what this machine holds now; nothing ran",
             );
-            output.next("run `fetchloom --offline build` where the steps should run");
+            let build = prepared_for(args);
+            if running.is_empty() {
+                output.next(&format!(
+                    "run `{build}`, which places the results without running a step"
+                ));
+            } else {
+                output.next(&format!("run `{build}` where the steps should run"));
+            }
         }
         Ok(())
     }
