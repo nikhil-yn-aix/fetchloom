@@ -1,6 +1,6 @@
 # fetchloom
 
-fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64.
+fetchloom is uv for research data. `fetchloom add` pins the files of a dataset by SHA-256 in your project, one shared cache keeps each file once, and `fetchloom sync` puts the same bytes in `data/` on every machine that clones the project. it runs on windows, linux and macos, on x86_64 and arm64.
 
 ```text
 $ mkdir iris-study && cd iris-study
@@ -13,11 +13,9 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
-`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you choose. a DOI or an id such as `kaggle:uciml/iris` works too. `fetchloom get iris` downloads once, without a project, and `fetchloom get <link> -o data.csv` writes the one file a link serves at that path, as curl does.
+`data.toml` lists the datasets you want, and `data.lock` pins their exact files, each with its SHA-256 and size. commit both, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock. `fetchloom add iris` finds a dataset by name on hugging face, kaggle and zenodo, and `fetchloom get <link>` downloads once, without a project.
 
-`data.toml` lists the datasets you want. `data.lock` pins them: it records the exact files with their SHA-256 and size. the cache is one folder that keeps each file once for all your projects, and `fetchloom sync` puts the pinned files in `data/` as links to the cache, or as copies where a link cannot work.
-
-commit `data.toml` and `data.lock`, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
+it reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](docs/user/sources/README.md) shows how to write each, and [signing in](docs/user/signing-in.md) covers private data.
 
 ## install
 
@@ -70,9 +68,7 @@ learn more: `fetchloom --help` lists the commands;
 `fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
 ```
 
-that is what bare `fetchloom` prints outside a project, after its version line. inside a project it shows the project's status.
-
-files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the [python helper](docs/user/scripting.md#python-helper).
+that is what bare `fetchloom` prints outside a project, after its version line. inside a project it shows the project's status. [scripting](docs/user/scripting.md) covers JSON output and the [python helper](docs/user/scripting.md#python-helper).
 
 ## docs
 
@@ -81,7 +77,7 @@ files in `data/` are read-only by default. `sync` keeps your local edits and rep
 | install, try it and uninstall | [getting started](docs/user/getting-started.md) |
 | understand data.toml, data.lock, the cache and sync | [concepts](docs/user/concepts.md) |
 | look up a command or option | [commands](docs/user/commands/README.md) |
-| use a supported site | [sources](docs/user/sources/README.md) |
+| use a supported site, or sign in for private data | [sources](docs/user/sources/README.md), [signing in](docs/user/signing-in.md) |
 | fix a failed download or a local conflict | [troubleshooting](docs/user/troubleshooting.md) |
 | every other topic: scripts, CI, clusters, agents, windows, macos | [user guide](docs/user/README.md) |
 | work on the code | [developer guide](docs/dev/README.md) |
