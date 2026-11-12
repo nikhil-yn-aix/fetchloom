@@ -2611,7 +2611,9 @@ fn a_step_that_edits_its_code_fails() -> Result {
     Ok(())
 }
 
-/// a step whose program is not on PATH cannot start, and the build says which program.
+/// a step whose program is not there cannot start, and the build says where it looked: on PATH
+/// for a bare name, and in the project folder for one with a folder in it, as a clone has none
+/// before its environment is set up. once the project folder holds it, the same recipe builds.
 #[test]
 fn a_missing_program_cannot_start() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2627,6 +2629,34 @@ fn a_missing_program_cannot_start() -> Result {
         ),
         "{stderr}"
     );
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("\"no-such-program-here\"", "\"env/bin/step\", \"copy\""),
+    )?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "build.failed");
+    assert_eq!(
+        message,
+        "clean cannot start: the project folder has no env/bin/step"
+    );
+    assert!(
+        help.contains("set up the project's environment so that env/bin/step is there"),
+        "{help}"
+    );
+    assert!(!help.contains("full path"), "{help}");
+    let bin = sandbox.work().join("env").join("bin");
+    fs::create_dir_all(&bin)?;
+    fs::copy(
+        crate::support::recipe_step()?,
+        bin.join(format!("step{}", std::env::consts::EXE_SUFFIX)),
+    )?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     Ok(())
 }
 

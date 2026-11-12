@@ -16,7 +16,7 @@ pub(super) use accept::again;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -865,7 +865,7 @@ impl<'a> Building<'a> {
             &self.context.stop,
             &floor,
         )
-        .map_err(|err| cannot_start(name, program, &err))?;
+        .map_err(|err| cannot_start(name, program, &project.root, &err))?;
         let folder = plan::folder(&self.manifest, name);
         match ran.ended {
             Ended::Exited(0) => Ok(ran),
@@ -1296,14 +1296,34 @@ fn unless_stopped(err: &io::Error, doing: impl FnOnce() -> String) -> Error {
     }
 }
 
-/// the error for the step of `name` that could not start `program`.
-fn cannot_start(name: &str, program: &str, err: &io::Error) -> Error {
-    if err.kind() == io::ErrorKind::NotFound {
-        return Error::new(
-            Kind::BuildFailed,
-            format!("{name} cannot start: no program called {program} was found on PATH"),
-        )
-        .help("install it, or give its full path in run in data.toml");
+/// the error for the step of `name` that could not start `program`, run in `folder`. a program
+/// that is not there is told by how run names it: a bare name is looked for on PATH, one with a
+/// folder in it from `folder`, the project's, and a full path names one place on one machine.
+fn cannot_start(name: &str, program: &str, folder: &Path, err: &io::Error) -> Error {
+    let absolute = Path::new(program).is_absolute();
+    let has_folder = program.contains('/') || (cfg!(windows) && program.contains('\\'));
+    // a script there whose interpreter is missing fails to start with NotFound too
+    let there = (absolute || has_folder) && folder.join(program).is_file();
+    if err.kind() == io::ErrorKind::NotFound && !there {
+        let (message, help) = if absolute {
+            (
+                format!("{name} cannot start: there is no program at {program} on this machine"),
+                "install it there, or change run in data.toml to a program PATH finds or a path from the project folder, since a full path works on one machine only".to_owned(),
+            )
+        } else if has_folder {
+            (
+                format!("{name} cannot start: the project folder has no {program}"),
+                format!(
+                    "a program named with a folder in it runs from the project folder, not from PATH: set up the project's environment so that {program} is there, then run the same command again"
+                ),
+            )
+        } else {
+            (
+                format!("{name} cannot start: no program called {program} was found on PATH"),
+                "install it, or add the folder that holds it to PATH".to_owned(),
+            )
+        };
+        return Error::new(Kind::BuildFailed, message).help(help);
     }
     Error::new(
         Kind::BuildFailed,
@@ -1497,5 +1517,45 @@ mod tests {
         ] {
             assert_eq!(closing(built, &repinned), said, "{built:?}");
         }
+    }
+
+    /// a step whose program is not there gets help for how run names it: a bare name is looked
+    /// for on PATH, a name with a folder in it in the project folder, which setting up the
+    /// project's environment fills, and a full path on this machine alone. none asks for a full
+    /// path in data.toml, which would build on one machine only.
+    #[test]
+    fn a_missing_program_is_told_by_how_run_names_it() {
+        let absolute = if cfg!(windows) {
+            r"C:\tools\prep.exe"
+        } else {
+            "/opt/tools/prep"
+        };
+        let project = Path::new("/no/project/here");
+        let told = |program: &str| {
+            let missing = io::Error::from(io::ErrorKind::NotFound);
+            let error = cannot_start("clean", program, project, &missing);
+            (error.message, error.help.unwrap_or_default().into_string())
+        };
+        assert_eq!(
+            told("prep"),
+            (
+                "clean cannot start: no program called prep was found on PATH".to_owned(),
+                "install it, or add the folder that holds it to PATH".to_owned()
+            )
+        );
+        assert_eq!(
+            told(".venv/bin/python"),
+            (
+                "clean cannot start: the project folder has no .venv/bin/python".to_owned(),
+                "a program named with a folder in it runs from the project folder, not from PATH: set up the project's environment so that .venv/bin/python is there, then run the same command again".to_owned()
+            )
+        );
+        assert_eq!(
+            told(absolute),
+            (
+                format!("clean cannot start: there is no program at {absolute} on this machine"),
+                "install it there, or change run in data.toml to a program PATH finds or a path from the project folder, since a full path works on one machine only".to_owned()
+            )
+        );
     }
 }

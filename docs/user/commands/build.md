@@ -93,6 +93,16 @@ a step runs its `run` words as the program and its arguments, without a shell, s
 - `<build>/in/<name>` holds a copy of each dataset it reads, made from the files `data.lock` pins in the cache, never from the data folder, where you may have changed a file. a file the cache took from the data folder came in only once its bytes there hashed to their pin. the copies are reflinks where the disk clones files and plain copies elsewhere, never hardlinks, and read-only, so a step that writes one anyway changes only its own copy.
 - `<build>/out` is empty, and what the step writes there becomes the dataset.
 
+a program that is not there stops the build with `build.failed`, exit 60, and the error says where it looked. a name with a folder in it is missing from a clone until the project's environment is set up there, as `.venv/bin/python` is before the virtual environment is made, so the help asks for that rather than a full path in `run`, which would work on one machine only and change the recipe's key for everyone (stderr):
+
+```text
+    Running made · .venv/bin/python step.py <build>/in/raw <build>/out
+error: made cannot start: the project folder has no .venv/bin/python
+  help: a program named with a folder in it runs from the project folder, not from PATH: set up the project's environment so that .venv/bin/python is there, then run `fetchloom build` again
+```
+
+a bare name, such as `python3.99`, is looked for on `PATH`, and the help says to install it or add its folder to `PATH`. a full path this machine lacks gets the help to install it there or to name a program `PATH` or the project folder holds.
+
 the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. the step and everything it starts run in a group of their own, a process group on linux and macos and a job object on windows: when the step ends, anything it started and left running is ended too, and ctrl-c ends the whole group. on windows the group also ends when fetchloom does, even when task manager or a cancelled CI job ends it outright. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does and ends the step's group at once; a second one quits as a second ctrl-c does.
 
 while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. this output is from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes clean` on a disk with 329 GiB free, so `--yes` went on past the question and the step stopped at its first look; the line under the error, left out here, says how much was free and where the cache is:
