@@ -123,6 +123,22 @@ unsafe code is forbidden. configured warnings include missing public documentati
 
 run the [full gate](README.md#the-fast-loop) before merging. after dependency changes also run `cargo deny --locked check advisories licenses bans sources`; install `cargo-deny` with `cargo install --locked cargo-deny` only if it is missing.
 
+### windows clippy from linux
+
+CI lints windows with clippy, and code behind `#[cfg(windows)]` compiles nowhere else. clippy needs no linker, so linux can check it for the `x86_64-pc-windows-msvc` target. the build scripts of zstd, liblzma and ring compile C with a windows compiler, which linux lacks, so two stand-ins let them finish: one writes an empty object where `-o` names one, the other an empty library where `-out:` names one, as `lib.exe` would.
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+stand_in=$(mktemp -d)
+printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && : > "$2"; shift; done\n' > "$stand_in/cc"
+printf '#!/bin/sh\nfor arg; do case $arg in -out:*) : > "${arg#-out:}" ;; esac; done\n' > "$stand_in/lib"
+chmod +x "$stand_in/cc" "$stand_in/lib"
+CC_x86_64_pc_windows_msvc="$stand_in/cc" AR_x86_64_pc_windows_msvc="$stand_in/lib" \
+  cargo clippy --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+```
+
+it checks the rust code only: no C is compiled, nothing links and no test runs, so the windows jobs in CI remain the proof.
+
 ## WSL gate
 
 use a linux clone whose `origin` is your windows repository's local path, not GitHub. with that clone at `~/fetchloom`, these commands test its local `main` without a push. fetch the working branch instead when checking an unmerged change.

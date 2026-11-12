@@ -6,7 +6,11 @@ CI checks native behavior, filesystem paths and installed release artifacts befo
 
 [ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
-the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
+the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. no step may turn a failed test into success to get this check green.
+
+github cannot require a check for a direct push to main: both a ruleset and classic branch protection refused a commit whose `ci` had passed on `stage`. so main moves only to a commit whose `ci` passed on another branch first. push it to `stage`, run `gh workflow run ci.yml --ref stage`, and check that run's `ci` result before pushing the same commit to main. branch protection keeps main's history linear, refuses force pushes and deletion, and applies to admins too.
+
+a macos job that ends `cancelled` with `The job was not acquired by Runner of type hosted even after multiple attempts` met a shortage of github's runners, not a code failure; rerun the failed jobs with `gh run rerun <id> --failed`.
 
 ## native tests
 
