@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, skipped, text, zip_of};
+use crate::support::{Result, Sandbox, json, text, zip_of};
 
 /// a folder of two files, one of them in a folder of its own, as a person keeps measurements.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -536,6 +536,8 @@ fn an_import_the_cache_disk_cannot_hold_asks_first() -> Result {
 fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt as _;
+
+    use crate::support::skipped;
 
     let sandbox = Sandbox::new()?;
     let notes = sandbox.folder("notes")?;

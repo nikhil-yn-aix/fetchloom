@@ -2,7 +2,6 @@
 //! request, a pin data.lock keeps current and the unchanged files gone from the data folder.
 
 use std::fs;
-use std::io::Write as _;
 use std::path::PathBuf;
 
 use serde_json::json;
@@ -736,8 +735,10 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
-    use crate::support::Running;
+    use std::io::Write as _;
     use std::os::unix::fs::FileTypeExt as _;
+
+    use crate::support::Running;
     let sandbox = Sandbox::new()?;
     let folder = tree(&sandbox)?;
     let work = sandbox.work();
