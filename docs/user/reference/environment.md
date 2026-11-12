@@ -108,6 +108,8 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | hugging face | `HF_TOKEN`, then one token file: the file `HF_TOKEN_PATH` names, else `token` in `HF_HOME`, else `huggingface/token` in `XDG_CACHE_HOME`, else `~/.cache/huggingface/token` |
 | kaggle | `KAGGLE_API_TOKEN`, a key or a file holding one; `access_token` or `access_token.txt` in `~/.kaggle`, as kagglesdk reads it; then a username and key: `KAGGLE_USERNAME` and `KAGGLE_KEY`, each over the same field of `kaggle.json` in `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux `kaggle` in `XDG_CONFIG_HOME`. a `KAGGLE_API_TOKEN` that is set but unusable skips the `~/.kaggle` token files, as kagglesdk does |
 | zenodo, figshare, osf, dryad | `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`, `DRYAD_TOKEN`; then a key saved by `fetchloom auth login` |
+| github | `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them; then a key saved by `fetchloom auth login github` |
+| gitlab | `GITLAB_TOKEN`; then a key saved by `fetchloom auth login gitlab` |
 | dataverse | `DATAVERSE_API_TOKEN` for the installation `DATAVERSE_URL` names, as pyDataverse reads them; then a key saved for that host |
 | a host's login | the `machine` entry for that host in `.netrc`, or the file `NETRC` names; on windows `_netrc` when `.netrc` does not exist. `default` entries are ignored |
 
@@ -116,7 +118,7 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | `FETCHLOOM_KEYRING` | `0` keeps keys out of the system's credential store; `auth login` then asks before using the [credential-file fallback](../commands/auth.md#signing-in) |
 | `NETRC` | the `.netrc` file to read and to save logins in |
 
-a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, and an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. no key appears in `data.toml`, `data.lock`, logs or `--json` output. recognized credential fields in URL queries and fragments are masked in output and refused in project references. a key holding a character no header can carry, such as a line break, is left out of every request; [`fetchloom auth`](../commands/auth.md#status) warns about it.
+a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, and an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are. no key appears in `data.toml`, `data.lock`, logs or `--json` output. recognized credential fields in URL queries and fragments are masked in output and refused in project references. a key holding a character no header can carry, such as a line break, is left out of every request; [`fetchloom auth`](../commands/auth.md#status) warns about it.
 
 ### AWS keys
 

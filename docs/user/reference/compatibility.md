@@ -102,6 +102,8 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | osf | API v2 and its file storage links | api.osf.io |
 | hugging face | hub API under `/api` and `resolve` links | huggingface.co |
 | kaggle | public API v1 | api.kaggle.com |
+| github releases | REST API: a release by tag, or the latest | api.github.com |
+| gitlab releases | REST API v4: a release by tag, or the newest through its permalink | gitlab.com |
 | s3 buckets | ListObjectsV2 and GetObject, anonymous or with AWS signature version 4, path-style at other services | aws s3 for anonymous reads; signatures against AWS's published examples and a local stand-in; minio, r2, b2, wasabi and ceph from their documentation only |
 | google cloud storage buckets | JSON API v1 and object links, anonymous or with an OAuth 2.0 access token from application default credentials: a service account's signed assertion or a gcloud login's refresh token | storage.googleapis.com for anonymous reads; the token request and the bearer token against google's published OAuth 2.0 flows and a local stand-in |
 | DOIs | doi.org handle API, then the repository it names | doi.org |

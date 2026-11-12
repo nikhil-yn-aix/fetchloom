@@ -413,3 +413,226 @@ fn bytes_that_differ_from_mendeleys_sha256_are_refused() -> Result {
     assert!(!sandbox.work().join("data/oct/rows.csv").exists());
     Ok(())
 }
+
+/// github's answer for jq's release jq-1.8.2 holding `(name, bytes, sha256)` assets with the
+/// digest stated, and each asset's link on github.com sending its download on to storage.
+fn github(assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
+    let listed: Vec<_> = assets
+        .iter()
+        .map(|(name, body, sha256)| {
+            serde_json::json!({
+                "name": name,
+                "size": body.len(),
+                "state": "uploaded",
+                "digest": format!("sha256:{sha256}"),
+                "browser_download_url": format!("https://github.com/jqlang/jq/releases/download/jq-1.8.2/{name}"),
+            })
+        })
+        .collect();
+    let release = serde_json::json!({"tag_name": "jq-1.8.2", "name": "jq 1.8.2", "assets": listed});
+    let mut routes = vec![(
+        "/api.github.com/repos/jqlang/jq/releases/tags/jq-1.8.2".to_owned(),
+        answer(&release)?,
+    )];
+    for (name, body, _) in assets {
+        let stored = format!("/storage/{name}");
+        routes.push((
+            format!("/github.com/jqlang/jq/releases/download/jq-1.8.2/{name}"),
+            reply("302 Found", &[("Location", &stored)], b""),
+        ));
+        routes.push((stored, file(body, &format!("\"{name}\""))));
+    }
+    Routes::start(routes)
+}
+
+/// a pasted release page is pinned at its tag with the SHA-256 github states for each file, and
+/// a teammate's empty cache gets the same bytes from the lock alone.
+#[test]
+fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (rows, notes) = (sha256_hex(ROWS), sha256_hex(NOTES));
+    let routes = github(&[("rows.csv", ROWS, &rows), ("notes.txt", NOTES, &notes)])?;
+    let page = "https://github.com/jqlang/jq/releases/tag/jq-1.8.2";
+    let output = command(&sandbox, &routes, &["add", page, "--as", "jq"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.jq]\nref = \"github:jqlang/jq@jq-1.8.2\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("url = \"https://github.com/jqlang/jq/releases/download/jq-1.8.2/rows.csv\""),
+        "{lock}"
+    );
+    assert_eq!(fs::read(work.join("data/jq/rows.csv"))?, ROWS);
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/jq/notes.txt"))?, NOTES);
+    assert!(
+        routes.targets()[listed..]
+            .iter()
+            .all(|target| !target.starts_with("/api.github.com")),
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// the SHA-256 github states checks the bytes its storage sends: other bytes are never placed.
+#[test]
+fn bytes_that_differ_from_githubs_sha256_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let stated = sha256_hex(NOTES);
+    let routes = github(&[("rows.csv", ROWS, &stated)])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "github:jqlang/jq@jq-1.8.2", "--as", "jq"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(!sandbox.work().join("data/jq/rows.csv").exists());
+    Ok(())
+}
+
+/// without a key github allows 60 requests an hour. once they are used up, the error says so in
+/// plain words and how a key lifts the limit; with a key, it says the key's limit is used up.
+#[test]
+fn githubs_rate_limit_says_plainly_what_a_key_allows() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        "/api.github.com/repos/jqlang/jq/releases/tags/jq-1.8.2".to_owned(),
+        reply(
+            "403 Forbidden",
+            &[
+                ("Content-Type", "application/json"),
+                ("x-ratelimit-limit", "60"),
+                ("x-ratelimit-remaining", "0"),
+            ],
+            br#"{"message":"API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)"}"#,
+        ),
+    )])?;
+    let added = ["add", "github:jqlang/jq@jq-1.8.2"];
+    let output = command(&sandbox, &routes, &added).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert!(
+        stderr.contains("github allows 60 requests an hour without a key, and they are used up"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("GH_TOKEN or GITHUB_TOKEN"), "{stderr}");
+
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "github:jqlang/jq@jq-1.8.2"],
+    )
+    .env("GH_TOKEN", "ghp_test_key_that_is_never_printed")
+    .output()?;
+    let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.rate_limited", "{error}");
+    assert_eq!(
+        error["message"],
+        "github's rate limit for this key is used up"
+    );
+    assert!(!stdout.contains("never_printed") && !stderr.contains("never_printed"));
+    Ok(())
+}
+
+/// gitlab's answer for gitlab-runner's release v19.3.6 holding `(path, bytes, stored)` links,
+/// each at its own address: in an S3 bucket, or on gitlab.com in the project's packages when
+/// `stored` says so. as gitlab.com does, a link's download address there answers a program with a
+/// page that warns of leaving gitlab rather than sending it on to another host.
+fn gitlab(links: &[(&str, &[u8], bool)]) -> Result<Routes> {
+    let release = "/gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.6";
+    let packages =
+        "gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-runner/packages/generic/runner/v19.3.6";
+    let bucket = "gitlab-runner-downloads.s3.amazonaws.com/v19.3.6";
+    let address = |path: &str, stored: bool| {
+        if stored {
+            format!("{packages}/{path}")
+        } else {
+            format!("{bucket}/{path}")
+        }
+    };
+    let listed: Vec<_> = links
+        .iter()
+        .map(|(path, _, stored)| {
+            serde_json::json!({
+                "name": path,
+                "url": format!("https://{}", address(path, *stored)),
+                "direct_asset_url": format!("https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.6/downloads/{path}"),
+                "link_type": "other",
+            })
+        })
+        .collect();
+    let answer_body = serde_json::json!({
+        "name": "v19.3.6",
+        "tag_name": "v19.3.6",
+        "assets": {"count": links.len(), "sources": [], "links": listed},
+    });
+    let mut routes = vec![(
+        "/gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-runner/releases/v19.3.6".to_owned(),
+        answer(&answer_body)?,
+    )];
+    let warning = b"<div class=\"tree-holder\">\n<h2>You are being redirected away from GitLab</h2>\n</div>\n";
+    for (path, body, stored) in links {
+        routes.push((
+            format!("{release}/downloads/{path}"),
+            reply(
+                "200 OK",
+                &[("Content-Type", "text/html; charset=utf-8")],
+                warning,
+            ),
+        ));
+        routes.push((format!("/{}", address(path, *stored)), file(body, "\"v1\"")));
+    }
+    Routes::start(routes)
+}
+
+/// `get` takes a gitlab release with `--select`, its links keep the paths the release gives them,
+/// and each file comes from the link's own address, in a bucket or on gitlab.com, never from the
+/// page gitlab.com shows in its place.
+#[test]
+fn get_downloads_a_gitlab_release_link_at_its_path() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = gitlab(&[
+        ("release.sha256", NOTES, false),
+        ("binaries/rows.csv", ROWS, false),
+        ("binaries/notes.txt", NOTES, true),
+    ])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &[
+            "get",
+            "gitlab:gitlab-org/gitlab-runner@v19.3.6",
+            "--select",
+            "binaries/*",
+            "--dir",
+            "runner",
+        ],
+    )
+    .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let folder = sandbox.work().join("runner");
+    assert_eq!(fs::read(folder.join("binaries/rows.csv"))?, ROWS);
+    assert_eq!(fs::read(folder.join("binaries/notes.txt"))?, NOTES);
+    assert!(!folder.join("release.sha256").exists());
+    Ok(())
+}

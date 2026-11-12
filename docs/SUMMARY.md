@@ -40,6 +40,7 @@
     - [kaggle](user/sources/kaggle.md)
     - [google drive](user/sources/google-drive.md)
     - [dropbox](user/sources/dropbox.md)
+    - [github and gitlab releases](user/sources/releases.md)
     - [cloud buckets](user/sources/buckets.md)
   - [data.toml](user/reference/data-toml.md)
   - [data.lock](user/reference/data-lock.md)

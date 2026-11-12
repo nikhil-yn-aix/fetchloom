@@ -10,6 +10,8 @@ mod drive;
 mod dropbox;
 mod dryad;
 mod figshare;
+mod github;
+mod gitlab;
 mod hf;
 pub(crate) mod kaggle;
 pub(crate) mod local;
@@ -98,6 +100,8 @@ pub(crate) enum Reference {
     Zenodo(zenodo::Record),
     Dryad(dryad::Dataset),
     Mendeley(mendeley::Dataset),
+    GitHub(github::Release),
+    GitLab(gitlab::Release),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -293,6 +297,8 @@ impl Reference {
             "zenodo" => whole(Reference::Zenodo(zenodo::Record::parse(rest)?)),
             "dryad" => whole(Reference::Dryad(dryad::Dataset::parse(rest)?)),
             "mendeley" => whole(Reference::Mendeley(mendeley::Dataset::parse(rest)?)),
+            "github" => whole(Reference::GitHub(github::Release::parse(rest)?)),
+            "gitlab" => whole(Reference::GitLab(gitlab::Release::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -394,6 +400,8 @@ impl Reference {
             Reference::Zenodo(record) => record.resolve(api).await,
             Reference::Dryad(dataset) => dataset.resolve(api).await,
             Reference::Mendeley(dataset) => dataset.resolve(api).await,
+            Reference::GitHub(release) => release.resolve(api).await,
+            Reference::GitLab(release) => release.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -416,6 +424,8 @@ impl fmt::Display for Reference {
             Reference::Zenodo(record) => write!(f, "{record}"),
             Reference::Dryad(dataset) => write!(f, "{dataset}"),
             Reference::Mendeley(dataset) => write!(f, "{dataset}"),
+            Reference::GitHub(release) => write!(f, "{release}"),
+            Reference::GitLab(release) => write!(f, "{release}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -553,6 +563,12 @@ fn link(text: &str) -> Result<Parsed, Error> {
         .or_else(|| {
             mendeley::Dataset::from_link(&url)
                 .map(|dataset| parsed(Reference::Mendeley(dataset), None))
+        })
+        .or_else(|| {
+            github::Release::from_link(&url).map(|release| parsed(Reference::GitHub(release), None))
+        })
+        .or_else(|| {
+            gitlab::Release::from_link(&url).map(|release| parsed(Reference::GitLab(release), None))
         })
         .or_else(|| {
             figshare::Article::from_link(&url)

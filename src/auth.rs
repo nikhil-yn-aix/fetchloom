@@ -34,6 +34,8 @@ pub(crate) enum Account {
     Figshare,
     Osf,
     Dryad,
+    GitHub,
+    GitLab,
     /// one installation: a dataverse key works only on the server that made it. the host, with
     /// its port when that is not 443
     Dataverse(String),
@@ -46,8 +48,7 @@ const PHYSIONET: &str = "physionet.org";
 const HARVARD: &str = "dataverse.harvard.edu";
 
 /// what a person types after `fetchloom auth login`.
-pub(crate) const NAMES: &str =
-    "hf, kaggle, zenodo, figshare, osf, dryad, dataverse, earthdata, physionet or a host name";
+pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, dataverse, earthdata, physionet or a host name";
 
 /// what a refused request needs: the account to sign in to, and a page whose terms the person
 /// must accept first, when a key alone is not enough.
@@ -134,6 +135,8 @@ impl Account {
             "figshare" | "figshare.com" => Account::Figshare,
             "osf" | "osf.io" => Account::Osf,
             "dryad" | "datadryad.org" => Account::Dryad,
+            "github" | "github.com" => Account::GitHub,
+            "gitlab" | "gitlab.com" => Account::GitLab,
             "dataverse" => match host {
                 None => Account::Dataverse(HARVARD.to_owned()),
                 Some(host) => Account::Dataverse(dataverse_host(host).ok_or_else(|| {
@@ -185,6 +188,8 @@ impl Account {
             "api.figshare.com" | "figshare.com" | "ndownloader.figshare.com" => Account::Figshare,
             "api.osf.io" | "osf.io" | "files.osf.io" => Account::Osf,
             "datadryad.org" => Account::Dryad,
+            "api.github.com" => Account::GitHub,
+            "gitlab.com" => Account::GitLab,
             _ => return None,
         })
     }
@@ -198,6 +203,8 @@ impl Account {
             Account::Figshare => "figshare".to_owned(),
             Account::Osf => "osf".to_owned(),
             Account::Dryad => "dryad".to_owned(),
+            Account::GitHub => "github".to_owned(),
+            Account::GitLab => "gitlab".to_owned(),
             Account::Dataverse(host) => format!("dataverse:{host}"),
             Account::Login(host) => format!("login:{host}"),
         }
@@ -270,6 +277,16 @@ impl Account {
                 Step::Open("https://datadryad.org/account".into()),
                 Step::Do("make an API account there if you have none, then get a token; it lasts 10 hours".into()),
             ],
+            Account::GitHub => vec![
+                join("github.com"),
+                Step::Open("https://github.com/settings/personal-access-tokens/new".into()),
+                Step::Do("create a fine-grained token: public repositories need no permissions, a private one read access to its contents".into()),
+            ],
+            Account::GitLab => vec![
+                join("gitlab.com"),
+                Step::Open("https://gitlab.com/-/user_settings/personal_access_tokens".into()),
+                Step::Do("add a token with the read_api scope".into()),
+            ],
             Account::Dataverse(host) => vec![
                 Step::Open(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
                 Step::Do(format!("sign in to {host}, then create or copy the api token there; it works on that server only")),
@@ -341,6 +358,19 @@ impl Account {
                 bearer(token),
                 false,
             ),
+            // only the API, never github.com or the storage a download is sent on to
+            Account::GitHub => (
+                "api.github.com".to_owned(),
+                "authorization",
+                bearer(token),
+                false,
+            ),
+            Account::GitLab => (
+                "gitlab.com".to_owned(),
+                "authorization",
+                bearer(token),
+                false,
+            ),
             Account::Dataverse(host) => (host.clone(), "x-dataverse-key", token.to_owned(), false),
             // a login answers wherever its host is reached, as curl's netrc does: earthdata's
             // archives send a person to urs.earthdata.nasa.gov and back
@@ -405,6 +435,11 @@ impl Account {
             }),
             Account::Osf => ("https://api.osf.io/v2/users/me/".into(), |v| {
                 text(&v["data"]["attributes"]["full_name"])
+            }),
+            // any key may read the limits, an installation's key from a CI run too
+            Account::GitHub => ("https://api.github.com/rate_limit".into(), |_| None),
+            Account::GitLab => ("https://gitlab.com/api/v4/user".into(), |v| {
+                text(&v["username"])
             }),
             Account::Dryad => ("https://datadryad.org/api/v2/test".into(), |v| {
                 text(&v["message"]).map(|said| {
@@ -473,6 +508,10 @@ impl Account {
             Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
             Account::Osf => set("OSF_TOKEN").or_else(|| stored(&self.id())),
             Account::Dryad => set("DRYAD_TOKEN").or_else(|| stored(&self.id())),
+            Account::GitHub => set("GH_TOKEN")
+                .or_else(|| set("GITHUB_TOKEN"))
+                .or_else(|| stored(&self.id())),
+            Account::GitLab => set("GITLAB_TOKEN").or_else(|| stored(&self.id())),
             Account::Dataverse(host) => {
                 let named = var("DATAVERSE_URL")
                     .and_then(|value| value.into_string().ok())
@@ -536,6 +575,8 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
         Account::Figshare,
         Account::Osf,
         Account::Dryad,
+        Account::GitHub,
+        Account::GitLab,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut found: Vec<Credential> = accounts
@@ -584,6 +625,8 @@ pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
         Account::Figshare,
         Account::Osf,
         Account::Dryad,
+        Account::GitHub,
+        Account::GitLab,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut logins: Vec<String> = netrc::read(var)

@@ -59,7 +59,7 @@ fn auth_alone_lists_every_account() -> Result {
     let story = text(&plain.stderr)?;
     assert!(
         story.lines().any(|line| line.starts_with(
-            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, earthdata, physionet"
+            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet"
         )),
         "{story}"
     );
@@ -248,7 +248,7 @@ fn signing_in_without_a_terminal_names_the_scripted_way() -> Result {
             .as_str()
             .is_some_and(|help| help.contains("fetchloom auth login hf --with-token"))
     );
-    let unknown = json(&sandbox.run(&["auth", "login", "github", "--json"])?)?;
+    let unknown = json(&sandbox.run(&["auth", "login", "bitbucket", "--json"])?)?;
     assert!(
         unknown["errors"][0]["help"]
             .as_str()

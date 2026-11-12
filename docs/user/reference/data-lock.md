@@ -156,6 +156,8 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 | dryad | `dryad:<doi>@<version number>` | `https://datadryad.org/api/v2/files/<id>/download` |
 | mendeley data | `mendeley:<id>@<version>` | `https://data.mendeley.com/public-files/datasets/<id>/files/<file id>/file_downloaded` |
 | OSF | `osf:<node or file id>` | the download link with a file version |
+| github release | `github:<owner>/<repo>@<tag>` | the file's download link on github.com, `/releases/download/<tag>/<name>` |
+| gitlab release | `gitlab:<project>@<tag>` | the address the link points to, on gitlab.com or another host |
 | drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
 | dropbox | the shared URL with `dl=1` | the same URL |
 | hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |

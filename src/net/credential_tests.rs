@@ -5,13 +5,15 @@ use super::scripted::{reply, serve};
 use super::*;
 use crate::source::recorded::block_on;
 
-const OWNERS: [(&str, &str); 6] = [
+const OWNERS: [(&str, &str); 8] = [
     ("zenodo.org", "Bearer zenodo-test"),
     ("api.figshare.com", "token figshare-test"),
     ("api.osf.io", "Bearer osf-test"),
     ("huggingface.co", "Bearer hf-test"),
     ("api.kaggle.com", "Bearer kaggle-test"),
     ("datadryad.org", "Bearer dryad-test"),
+    ("api.github.com", "Bearer github-test"),
+    ("gitlab.com", "Bearer gitlab-test"),
 ];
 
 fn net() -> Net {
@@ -23,6 +25,8 @@ fn net() -> Net {
             "HF_TOKEN" => "hf-test",
             "KAGGLE_API_TOKEN" => "kaggle-test",
             "DRYAD_TOKEN" => "dryad-test",
+            "GH_TOKEN" => "github-test",
+            "GITLAB_TOKEN" => "gitlab-test",
             _ => return None,
         };
         Some(OsString::from(token))
@@ -299,6 +303,27 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
             sent(&asked, "authorization"),
             [Some(key.to_owned()), None, None],
             "{start}"
+        );
+    }
+}
+
+/// a github key goes to its API alone: never to github.com, where release files are, nor to the
+/// storage github sends their downloads on to.
+#[test]
+fn a_github_key_never_reaches_github_com_or_its_storage() {
+    let net = net();
+    let client = any_client(&net);
+    for url in [
+        "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz",
+        "https://release-assets.githubusercontent.com/github-production-release-asset/1",
+        "https://objects.githubusercontent.com/github-production-release-asset-2e65be/1",
+        "https://raw.githubusercontent.com/jqlang/jq/master/README.md",
+    ] {
+        let url = Url::parse(url).unwrap();
+        let request = net.request(client, &url, true).build().unwrap();
+        assert!(
+            !request.headers().contains_key(header::AUTHORIZATION),
+            "{url}"
         );
     }
 }

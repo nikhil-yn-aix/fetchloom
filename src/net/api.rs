@@ -272,7 +272,10 @@ fn test_bucket(url: &Url) -> Option<Url> {
 #[cfg(debug_assertions)]
 fn test_source(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
-    if !matches!(host, "datadryad.org" | "data.mendeley.com") {
+    if !matches!(
+        host,
+        "datadryad.org" | "data.mendeley.com" | "api.github.com" | "github.com" | "gitlab.com"
+    ) {
         return None;
     }
     let mut local = local_test_server("FETCHLOOM_TEST_SOURCES")?;

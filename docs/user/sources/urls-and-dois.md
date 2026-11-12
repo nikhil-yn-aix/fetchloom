@@ -18,7 +18,7 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
 | `doi:10.34740/kaggle/dsv/2736749` | follow kaggle's version link to that dataset version |
 
-`github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
+`github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference. a link to a release's page lists its files, as [github and gitlab releases](releases.md) explains.
 
 a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../concepts.md#archives) as from any source.
 

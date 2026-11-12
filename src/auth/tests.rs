@@ -79,6 +79,8 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
             ("FIGSHARE_TOKEN", "f"),
             ("OSF_TOKEN", "o"),
             ("DRYAD_TOKEN", "d"),
+            ("GITHUB_TOKEN", "gh"),
+            ("GITLAB_TOKEN", "gl"),
             ("DATAVERSE_URL", "https://demo.dataverse.org/"),
             ("DATAVERSE_API_TOKEN", "dv"),
         ],
@@ -90,10 +92,12 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
     sent.sort();
     let expected = [
         ("api.figshare.com", "authorization", "token f", false),
+        ("api.github.com", "authorization", "Bearer gh", false),
         ("api.osf.io", "authorization", "Bearer o", false),
         ("datadryad.org", "authorization", "Bearer d", false),
         ("demo.dataverse.org", "x-dataverse-key", "dv", false),
         ("files.osf.io", "authorization", "Bearer o", true),
+        ("gitlab.com", "authorization", "Bearer gl", false),
         ("huggingface.co", "authorization", "Bearer hf_abc", false),
         ("osf.io", "authorization", "Bearer o", true),
         (
@@ -106,6 +110,32 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
     ]
     .map(|(host, header, value, every)| (host.to_owned(), header, value.to_owned(), every));
     assert_eq!(sent, expected);
+}
+
+/// the gh command reads `GH_TOKEN` before `GITHUB_TOKEN`, and so does fetchloom; a key saved by a
+/// sign-in comes after both.
+#[test]
+fn a_github_key_is_found_where_the_gh_command_looks_first() {
+    let home = tempfile::tempdir().unwrap();
+    let found = |pairs: &[(&str, &str)]| {
+        Account::GitHub
+            .find(&machine(home.path(), pairs))
+            .map(|found| found.secret)
+    };
+    assert_eq!(found(&[]), None);
+    assert_eq!(
+        found(&[("GITHUB_TOKEN", "actions")]).as_deref(),
+        Some("actions")
+    );
+    assert_eq!(
+        found(&[("GITHUB_TOKEN", "actions"), ("GH_TOKEN", "person")]).as_deref(),
+        Some("person")
+    );
+    assert_eq!(
+        found(&[("GITHUB_TOKEN", "actions"), ("GH_TOKEN", "")]).as_deref(),
+        Some("actions"),
+        "an empty variable is skipped"
+    );
 }
 
 #[test]
@@ -381,8 +411,10 @@ fn names_people_type_find_their_account() {
         Account::parse("dataverse", Some("https://demo.dataverse.org/")).unwrap(),
         Account::Dataverse("demo.dataverse.org".into())
     );
+    assert_eq!(parse("github"), Account::GitHub);
+    assert_eq!(parse("GitLab"), Account::GitLab);
     assert_eq!(
-        Account::parse("github", None).unwrap_err().kind,
+        Account::parse("bitbucket", None).unwrap_err().kind,
         Kind::Usage
     );
     assert_eq!(
