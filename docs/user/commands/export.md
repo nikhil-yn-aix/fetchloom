@@ -20,7 +20,7 @@ fetchloom export [options] [name]...
 | option | effect |
 |---|---|
 | `--format sha256` | the default: one `<sha256>  <path>` line for each file in the data folder, archive members included, as `sha256sum -c` reads them |
-| `--format links` | one `<link> <sha256>` line for each file downloaded: a plain file, or an archive as one packed file |
+| `--format links` | one `<link> <sha256>` line for each file downloaded: a plain file, or an archive as one packed file, as `fetchloom add -i` and `fetchloom get -i` read it. `wget -i` and `aria2c -i` take the whole line as one link, which the server does not know |
 | `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=` its place below the data folder and `checksum=sha-256=` |
 | `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty` |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
@@ -83,6 +83,15 @@ aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
 
 `out=` puts each file in the folder its dataset is placed in, the one `path` in data.toml names, or the data folder itself for `path = "."`. so `aria2c -i sources.aria2 -d data`, run in the project's folder with `data` the folder `data_dir` names, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
+aria2c writes a file that is already in its folder again under a new name, as `tips.1.csv` beside `tips.csv`, so a second run leaves such copies there. `--check-integrity=true --auto-file-renaming=false` stops that: aria2c then keeps a file whose SHA-256 matches its `checksum=` line, downloads one changed at the same size again, and stops with exit 13 at a file of another size, saying `File data/tips/tips.csv exists, but a control file(*.aria2) does not exist`; delete that file and run it again. the files sync places are read-only, so in a data folder sync filled aria2c cannot open them and stops with exit 15, `Permission denied`, with those options, or writes copies without them. a second run with both options, over the files the first wrote, then the check, from real runs of aria2c 1.37 for a project whose `iris` and `tips` have `path = "raw"`, served from this machine:
+
+```sh
+$ aria2c -q -i sources.aria2 -d data --check-integrity=true --auto-file-renaming=false
+$ sha256sum -c data.sha256
+data/raw/iris.csv: OK
+data/raw/tips.csv: OK
+```
+
 a dataset with `place = false` has no files in the data folder, so `sha256` leaves it out and [says so](#what-it-leaves-out). `links` and `aria2` still list its files, since a recipe's rebuild reads them, and aria2c puts them in the folder `path` would give the dataset, where sync places nothing.
 
 `-o` writes the whole file under a hidden name beside it, flushes it, then gives it its name without replacing anything; a filesystem that cannot do that refuses. the file is UTF-8 with LF line ends on every system; windows powershell 5.1's `>` would write UTF-16 instead.
@@ -135,3 +144,5 @@ a refused link is never shown, in the error or in JSON.
 | `sha256sum -c` says no such file | it ran outside the project's folder | run it where `data.toml` is |
 | `the files inside ... are not known on this machine` | the cache never unpacked that archive, as in a fresh clone | run `fetchloom sync`, or export `--format links` |
 | `data.sha256 already exists` | `-o` never replaces a file without `--force` | choose another name, or add `--force` |
+| `wget -i` or `aria2c -i` asks for a link ending in `%20` and a hash, and gets 404 | they read a whole line of the `links` form as one link | give aria2c the `aria2` form; `fetchloom add -i` and `get -i` read `links` |
+| aria2c leaves `tips.1.csv` beside `tips.csv` | aria2c renames a file already in its folder | run it into an empty folder, or add `--check-integrity=true --auto-file-renaming=false` |

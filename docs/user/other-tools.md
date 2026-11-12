@@ -133,13 +133,13 @@ fetchloom export -o data.sha256
 fetchloom export --format aria2 -o sources.aria2
 ```
 
-then, on any machine with aria2c, in an empty folder holding both files, from the project above. `-d data` names the data folder, since `data.sha256` lists paths from the project's folder; give the folder `data_dir` names in data.toml when it is not `data`, as [export](commands/export.md#what-it-writes) says:
+then, on any machine with aria2c, in a folder holding both files. `-d data` names the data folder, since `data.sha256` lists paths from the project's folder; give the folder `data_dir` names in data.toml when it is not `data`, as [export](commands/export.md#what-it-writes) says. from a real run with the two datasets of the project above served from this machine:
 
 ```sh
-$ aria2c -q -i sources.aria2 -d data --check-integrity=true
+$ aria2c -q -i sources.aria2 -d data --check-integrity=true --auto-file-renaming=false
 $ sha256sum -c data.sha256
 data/raw/iris.csv: OK
 data/raw/tips.csv: OK
 ```
 
-an archive arrives packed; unpack it where `data.sha256` lists its files. [export](commands/export.md) says what each form leaves out. data.toml and data.lock are TOML files that [data.lock](reference/data-lock.md) documents, so any TOML reader can use the pins. then [uninstall](getting-started.md#uninstall) the program.
+the two options make a second run keep each file that hashes right, where aria2c alone writes it again as `iris.1.csv` beside `iris.csv`, as [export](commands/export.md#what-it-writes) shows. the `links` form is for `fetchloom add -i` and `get -i`; wget and aria2c cannot read it. an archive arrives packed; unpack it where `data.sha256` lists its files. [export](commands/export.md) says what each form leaves out. data.toml and data.lock are TOML files that [data.lock](reference/data-lock.md) documents, so any TOML reader can use the pins. then [uninstall](getting-started.md#uninstall) the program.
