@@ -431,8 +431,20 @@ mod tests {
 
     #[test]
     fn bad_patterns_say_why() {
-        for bad in ["", "a\\b", "[abc", "a**b", "[z-a]", "data/", "a//b"] {
-            assert!(Glob::new(bad).is_err(), "{bad}");
+        for (bad, why) in [
+            ("", "cannot be empty"),
+            ("a\\b", "patterns use / between folders"),
+            ("a\tb", "holds the control character"),
+            ("[abc", "has a [ that is never closed"),
+            ("a**b", "has ** inside a name"),
+            ("[z-a]", "has the range z-a, which runs backwards"),
+            ("data/", "has an empty folder name"),
+            ("a//b", "has an empty folder name"),
+        ] {
+            let Err(reason) = Glob::new(bad) else {
+                panic!("{bad:?} was taken");
+            };
+            assert!(reason.contains(why), "{bad:?}: {reason}");
         }
     }
 
