@@ -715,7 +715,9 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::Status(args) => {
-            let outcome = blocking(context, move |context| status::run(context, args.verify));
+            let outcome = blocking(context, Effect::Reads, move |context| {
+                status::run(context, args.verify)
+            });
             finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {
@@ -727,17 +729,25 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::List(args) => {
-            let outcome = blocking(context, move |context| {
+            let outcome = blocking(context, Effect::Reads, move |context| {
                 list::run(context, args.name.as_deref())
             });
             finish(context, name, outcome, started)
         }
         args::Command::Export(args) => {
-            let outcome = blocking(context, move |context| export::run(context, &args));
+            // with -o, export writes a file, and with --force moves the one there aside first
+            let effect = if args.output.is_some() {
+                Effect::Writes
+            } else {
+                Effect::Reads
+            };
+            let outcome = blocking(context, effect, move |context| export::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Push(args) => {
-            let outcome = blocking(context, move |context| push::run(context, &args));
+            let outcome = blocking(context, Effect::Writes, move |context| {
+                push::run(context, &args)
+            });
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
@@ -794,7 +804,9 @@ fn about(context: &Context, banner: &str, text: &str, started: Instant) -> ExitC
 /// `fetchloom` alone: a short status inside a project, and the welcome outside one.
 fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     if let Ok(project) = project::find(&context.output) {
-        let outcome = blocking(context, move |context| status::brief(context, &project));
+        let outcome = blocking(context, Effect::Reads, move |context| {
+            status::brief(context, &project)
+        });
         return finish(context, Some("status"), outcome, started);
     }
     let banner = context
@@ -968,19 +980,50 @@ fn block_on<T>(
     outcome
 }
 
+/// what a command on a blocking thread does to files, which decides what a stop does to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Effect {
+    /// reads alone, so a stop returns at once and leaves the scan to end with the process.
+    Reads,
+    /// writes, so a stop waits for the work to see it and remove what it started. a second
+    /// ctrl-c still ends the run at once.
+    Writes,
+}
+
 fn blocking<T: Send + 'static>(
     context: &Arc<Context>,
+    effect: Effect,
+    command: impl FnOnce(&Context) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    block_on(context, on_its_thread(context, effect, command))
+}
+
+/// runs `command` on a thread that may block, as [`blocking`] says.
+async fn on_its_thread<T: Send + 'static>(
+    context: &Arc<Context>,
+    effect: Effect,
     command: impl FnOnce(&Context) -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
     let owned = Arc::clone(context);
-    block_on(context, async {
-        let task = tokio::task::spawn_blocking(move || command(&owned));
-        tokio::select! {
+    let task = tokio::task::spawn_blocking(move || command(&owned));
+    match effect {
+        Effect::Writes => ended(task.await),
+        Effect::Reads => tokio::select! {
             biased;
             () = context.stop.asked() => Err(Stop::stopped()),
-            outcome = task => outcome.map_err(|err| Error::new(Kind::LocalIo, format!("could not finish the scan: {err}")))?,
-        }
-    })
+            outcome = task => ended(outcome),
+        },
+    }
+}
+
+/// what a command on its own thread returned, or why it ended without returning.
+fn ended<T>(outcome: Result<Result<T, Error>, tokio::task::JoinError>) -> Result<T, Error> {
+    outcome.map_err(|err| {
+        Error::new(
+            Kind::LocalIo,
+            format!("could not finish the command: {err}"),
+        )
+    })?
 }
 
 /// prints how the run ended and turns it into an exit code.
@@ -1227,6 +1270,56 @@ mod tests {
             Ok(())
         });
         assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
+    }
+
+    /// a stop returns from work that only reads at once, while work that writes is waited for
+    /// until it has seen the stop and removed what it started, since the process ends soon after
+    /// and would leave its files behind, as a stopped push left its unfinished copies.
+    #[test]
+    fn a_stop_waits_for_work_that_writes_and_leaves_a_scan_behind() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        for (effect, waits) in [(Effect::Reads, false), (Effect::Writes, true)] {
+            let context = Arc::new(Context::new(Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                },
+                Level::Quiet,
+                false,
+                false,
+            )));
+            context.stop.ask();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let removed = Arc::new(AtomicBool::new(false));
+            let removing = Arc::clone(&removed);
+            let mut running = std::pin::pin!(on_its_thread(&context, effect, move |_| {
+                // the work sees the stop once the test lets it, then removes what it started
+                let _ = released.recv();
+                removing.store(true, Ordering::SeqCst);
+                Err::<(), Error>(Stop::stopped())
+            }));
+            let returned = runtime.block_on(std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(running.as_mut().poll(cx).is_ready())
+            }));
+            assert_eq!(returned, !waits, "{effect:?}");
+            drop(release);
+            if waits {
+                let outcome = runtime.block_on(running);
+                assert!(
+                    removed.load(Ordering::SeqCst),
+                    "returned before the work ended"
+                );
+                assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
+            }
+        }
     }
 
     /// a wait for a host's limit is told in whole seconds, rounded up, with the limit it stated.

@@ -3,6 +3,8 @@
 use std::fs;
 
 use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text};
+#[cfg(unix)]
+use crate::{project::Background, support::wait_until};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -337,4 +339,54 @@ fn processes_sharing_some_files_download_each_once() -> Result {
 #[test]
 fn processes_place_from_a_full_cache_without_downloading() -> Result {
     shared_cache_syncs(false, true)
+}
+
+/// a push stopped with ctrl-c waits for its copies to see the stop and remove the unfinished ones
+/// from the mirror's tmp/, where the run used to end first and leave them there for good, while a
+/// file another push is writing there stays.
+#[cfg(unix)]
+#[test]
+fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
+    let sandbox = Sandbox::new()?;
+    let inputs = sandbox.folder("inputs")?;
+    for at in 0..32_u8 {
+        fs::write(inputs.join(format!("f{at:02}.bin")), vec![at; 256 << 10])?;
+    }
+    let inputs = inputs.display().to_string();
+    let added = sandbox.run(&["add", &inputs, "--as", "inputs", "--yes"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let mirror = sandbox.folder("mirror")?;
+    let tmp = mirror.join("tmp");
+    fs::create_dir_all(&tmp)?;
+    let other = tmp.join(".0123456789abcdef.part");
+    fs::write(&other, b"another push is writing this")?;
+    let unfinished = || -> Result<usize> {
+        let mut count = 0;
+        for entry in fs::read_dir(&tmp)? {
+            let path = entry?.path();
+            if path != other && path.extension().is_some_and(|end| end == "part") {
+                count += 1;
+            }
+        }
+        Ok(count)
+    };
+    let to = mirror.display().to_string();
+    // a push that ends before its stop arrives proves nothing, so it copies again
+    for _ in 0..5 {
+        let mut pushing = Background::start(sandbox.command(&["push", "--to", &to, "--yes"]))?;
+        wait_until("a copy in the mirror's tmp/", || {
+            Ok(unfinished()? > 0 || pushing.child.try_wait()?.is_some())
+        })?;
+        pushing.interrupt()?;
+        let (code, stderr) = pushing.finish()?;
+        if code == Some(0) {
+            fs::remove_dir_all(mirror.join("objects"))?;
+            continue;
+        }
+        assert_eq!(code, Some(130), "{stderr}");
+        assert_eq!(unfinished()?, 0, "{stderr}");
+        assert!(other.exists(), "another push's file stays");
+        return Ok(());
+    }
+    Err("every push ended before its stop arrived".into())
 }
