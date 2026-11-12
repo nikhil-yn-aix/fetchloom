@@ -319,8 +319,10 @@ struct Reader<'a> {
 impl Reader<'_> {
     fn entry(&self, datasets: &dyn TableLike, name: &str, item: &Item) -> Result<Entry, Error> {
         let key_span = datasets.key(name).and_then(Key::span);
-        if !name::is_dataset_name(name) {
-            let error = self.error(key_span, format!("\"{name}\" is not a valid dataset name"));
+        if let Some(problem) = name::dataset_name_problem(name) {
+            let error = self
+                .error(key_span, format!("\"{name}\" is not a valid dataset name"))
+                .detail(problem);
             return Err(match name::dataset_name(name) {
                 Some(suggested) => error.help(format!(
                     "rename it to \"{suggested}\" in data.toml, then run the same command again"
@@ -2767,6 +2769,34 @@ mod tests {
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert!(error.message.contains("not a valid dataset name"));
         assert!(error.help.unwrap().contains("lowercase letters"));
+    }
+
+    #[test]
+    fn a_windows_device_name_is_refused_with_a_usable_one() {
+        for device in ["con", "aux", "nul", "com1", "lpt1"] {
+            let error = fails(&format!("[datasets.{device}]\nref = 'zenodo:1'\n"));
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                format!("\"{device}\" is not a valid dataset name")
+            );
+            assert_eq!(
+                error.details,
+                [
+                    format!("data.toml:1   [datasets.{device}]"),
+                    "windows keeps it for a device, so it cannot be a folder there".to_owned()
+                ]
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    format!(
+                        "rename it to \"{device}-data\" in data.toml, then run the same command again"
+                    )
+                    .as_str()
+                )
+            );
+        }
     }
 
     #[test]

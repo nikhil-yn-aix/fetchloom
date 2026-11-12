@@ -41,7 +41,7 @@ no source can list an import again, so a changed `select` or `exclude`, or `ref 
 
 ## dataset names
 
-names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit.
+names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit. a name windows keeps for a device, `con`, `prn`, `aux`, `nul`, `com1` to `com9` or `lpt1` to `lpt9`, is refused too, since a dataset's name is its folder on every machine that syncs the project. data.toml and data.lock are both checked this way before anything is downloaded or written.
 
 without `--as`, `add` chooses a name from the listing before applying command-line filters, in this order:
 
@@ -60,7 +60,7 @@ warning: iris was taken, so this one is iris-2
 
 to rename a dataset, change its table's name in data.toml, as `[datasets.iris]` to `[datasets.flowers]`, and the `from` and `{iris}` words of any recipe that reads it. the next `fetchloom sync` or `fetchloom lock` moves its pin in data.lock to the new name without asking the source, as long as the table asks for the same `ref`, `select`, `exclude` and `extract` as before, and says so, as in `Renamed iris to flowers in data.lock · its pin stays`; sync then places the files in the new name's folder. a rename together with one of those edits, or a new name that two old names, or two new names that one old name, would answer equally, resolves the new name again, which may pin newer data, as a new dataset does. `sync flowers` or `path flowers` copies the pin to the new name and keeps the old entry, since a run of named datasets changes no other entry, until a sync or lock of every dataset removes it. a recipe renamed with the rest of its table as it was keeps its pinned result the same way, since its key never held its name; a recipe that reads a renamed dataset has a new `from` and `run`, so it needs `fetchloom build`.
 
-an explicitly supplied `--as` name that is taken is refused. a name that breaks the rules above is refused with the rule it breaks, such as its length or the characters it holds, and a suggestion made from it: lowercase, with accents dropped from letters (`ïris` gives `iris`), other characters turned into `-`, at most 40 characters, and `-data` after a name windows keeps for a device, such as `con`. generated names drop accents the same way.
+an explicitly supplied `--as` name that is taken is refused. a name that breaks the rules above is refused with the rule it breaks, such as its length or the characters it holds, and a suggestion made from it: lowercase, with accents dropped from letters (`ïris` gives `iris`), other characters turned into `-`, at most 40 characters, and `-data` after a name windows keeps for a device, such as `con`. generated names are made the same way, so a file `con.csv` gives `con-data`.
 
 ## destination paths
 

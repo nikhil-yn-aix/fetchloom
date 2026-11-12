@@ -1,6 +1,8 @@
-//! `cache gc --inputs`: the cache's copy of raw data that only builds read, freed where a folder
-//! mirror holds a copy that hashes to its name in the same run, against servers on this machine.
+//! a project's inputs, against servers on this machine: the dataset names data.toml and
+//! data.lock may give, and `cache gc --inputs`, which frees the cache's copy of raw data that
+//! only builds read where a folder mirror holds a copy that hashes to its name in the same run.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -243,5 +245,55 @@ fn a_check_after_gc_inputs_takes_the_raw_input_back_from_the_mirror() -> Result 
     );
     assert!(object(&sandbox.cache(), IRIS).is_file());
     assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    Ok(())
+}
+
+/// a dataset's name is its folder on every machine that syncs the project, so a name windows
+/// keeps for a device is refused wherever data.toml or a cloned data.lock gives it, before any
+/// request or write, while the name add makes from a file called that works.
+#[test]
+fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/con.csv", vec![file(b"a,b\n1,2\n", "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let manifest = sandbox.work().join("data.toml");
+    for device in ["con", "aux", "nul", "com1", "lpt1"] {
+        fs::write(
+            &manifest,
+            format!("[datasets.{device}]\nref = \"{}\"\n", server.url),
+        )?;
+        let synced = sandbox.run(&["sync"])?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(50), "{stderr}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error: \"{device}\" is not a valid dataset name\n"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("help: rename it to \"{device}-data\" in data.toml")),
+            "{stderr}"
+        );
+    }
+    assert_eq!(server.requests().len(), 0);
+    assert!(!sandbox.work().join("data.lock").exists());
+    assert!(!sandbox.work().join("data").exists());
+
+    fs::remove_file(&manifest)?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert!(fs::read_to_string(&manifest)?.contains("[datasets.con-data]"));
+    let lock = sandbox.work().join("data.lock");
+    let cloned = fs::read_to_string(&lock)?.replace("name = \"con-data\"", "name = \"con\"");
+    fs::write(&lock, &cloned)?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("data.lock names a dataset \"con\", which is not a valid dataset name"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&lock)?, cloned, "data.lock stays as it was");
     Ok(())
 }

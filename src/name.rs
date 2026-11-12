@@ -53,7 +53,8 @@ pub(crate) fn from_url(url: &Url) -> Option<String> {
 
 /// a dataset name made from free text, such as a title or a file name: lowercase letters,
 /// digits, `-` and `_`, at most 40 characters, ending at a word break when one is near. a letter
-/// with an accent keeps its letter, as `ï` becomes `i`.
+/// with an accent keeps its letter, as `ï` becomes `i`, and a name windows keeps for a device
+/// gets `-data`, as `con` becomes `con-data`.
 pub(crate) fn dataset_name(text: &str) -> Option<String> {
     let mut name = String::with_capacity(text.len());
     for c in plain_letters(text).chars() {
@@ -75,7 +76,16 @@ pub(crate) fn dataset_name(text: &str) -> Option<String> {
         let kept = name.trim_end_matches('-').len();
         name.truncate(kept);
     }
-    (!name.is_empty()).then_some(name)
+    (!name.is_empty()).then(|| unreserved(name))
+}
+
+/// `name`, with `-data` after it where windows keeps it for a device.
+fn unreserved(name: String) -> String {
+    if is_reserved_on_windows(&name) {
+        format!("{name}-data")
+    } else {
+        name
+    }
 }
 
 /// words a cut title should not end on.
@@ -85,7 +95,7 @@ const DANGLING: [&str; 13] = [
 
 /// a dataset name made from a title: at most its first four words and 32 characters, without
 /// a dangling "and" or "of" at the end. a first word too long for that is cut as
-/// [`dataset_name`] cuts any text, at 40 characters.
+/// [`dataset_name`] cuts any text, at 40 characters, and a device name gets `-data` as there.
 pub(crate) fn title_name(title: &str) -> Option<String> {
     let lower = plain_letters(title);
     let words = lower
@@ -108,7 +118,7 @@ pub(crate) fn title_name(title: &str) -> Option<String> {
     if kept.is_empty() {
         return dataset_name(title);
     }
-    Some(kept.join("-"))
+    Some(unreserved(kept.join("-")))
 }
 
 /// a dataset name made from a reference: its last part when that holds a letter, as iris for
@@ -133,7 +143,7 @@ pub(crate) fn is_dataset_name(text: &str) -> bool {
 
 /// why `text` cannot be a dataset name, in plain words, or none when it can be one. a name is
 /// also a folder on every machine that syncs the project, so it keeps to characters every
-/// filesystem stores alike.
+/// filesystem stores alike and is none of the names windows keeps for devices.
 pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
     let count = text.chars().count();
     if count == 0 {
@@ -183,8 +193,11 @@ pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
             format!("it holds {} and {last}", first.join(", "))
         });
     }
-    text.starts_with(['-', '_'])
-        .then(|| "it does not start with a letter or a digit".to_owned())
+    if text.starts_with(['-', '_']) {
+        return Some("it does not start with a letter or a digit".to_owned());
+    }
+    is_reserved_on_windows(text)
+        .then(|| "windows keeps it for a device, so it cannot be a folder there".to_owned())
 }
 
 /// `text` in lowercase with each letter's accents dropped, as `Ï` becomes `i`, and the letters
@@ -811,6 +824,27 @@ mod tests {
             Some("it has 65 characters, and the most is 64")
         );
         assert_eq!(dataset_name_problem(&"a".repeat(64)), None);
+    }
+
+    #[test]
+    fn windows_device_names_are_refused_and_never_generated() {
+        for device in ["con", "aux", "nul", "prn", "com1", "lpt1", "lpt9"] {
+            assert_eq!(
+                dataset_name_problem(device).as_deref(),
+                Some("windows keeps it for a device, so it cannot be a folder there"),
+                "{device}"
+            );
+            let generated = format!("{device}-data");
+            assert_eq!(dataset_name(device), Some(generated.clone()));
+            assert_eq!(title_name(&device.to_uppercase()), Some(generated.clone()));
+            assert_eq!(
+                reference_name(&format!("hf:datasets/org/{device}")),
+                Some(generated)
+            );
+        }
+        for usable in ["console", "com10", "con-data", "auxiliary", "nul_set"] {
+            assert_eq!(dataset_name_problem(usable), None, "{usable}");
+        }
     }
 
     #[test]
