@@ -2,7 +2,9 @@
 
 use std::fs;
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, link_folder, reply, text};
+use crate::support::{
+    Result, Routes, Sandbox, Server, file, json, link_folder, reply, sha256_hex, text, zip_of,
+};
 
 const PATH: &str = "/files/data.csv";
 
@@ -909,11 +911,7 @@ fn a_fragment_key_never_enters_a_project() -> Result {
 }
 
 fn marker_zip() -> Result<Vec<u8>> {
-    use std::io::Write as _;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    zip.start_file("marker.txt", zip::write::SimpleFileOptions::default())?;
-    zip.write_all(b"harmless marker")?;
-    Ok(zip.finish()?.into_inner())
+    zip_of(&[("marker.txt", b"harmless marker")])
 }
 
 #[test]
@@ -1045,7 +1043,7 @@ fn a_mirror_that_sends_fetchloom_elsewhere_names_both_origins() -> Result {
     sandbox.allow(&source.url);
     let added = sandbox.run(&["add", &link])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    let hex = crate::add::sha256_hex(body);
+    let hex = sha256_hex(body);
     let mirror = Routes::start(vec![
         (
             "/m/fetchloom-mirror".to_owned(),

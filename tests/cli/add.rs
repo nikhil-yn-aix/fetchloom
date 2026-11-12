@@ -9,7 +9,7 @@ use crate::project::{partial_bytes, told_a_stop};
 #[cfg(unix)]
 use crate::support::wait_until;
 use crate::support::{
-    Part, Result, Routes, Sandbox, Server, delete_folder, file, json, reply, text,
+    Part, Result, Routes, Sandbox, Server, delete_folder, file, json, reply, sha256_hex, text,
     without_copy_warning,
 };
 
@@ -590,16 +590,6 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     assert!(!stderr.contains("could not be put back"), "{stderr}");
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
     Ok(())
-}
-
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest as _, Sha256};
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        let _ = write!(text, "{byte:02x}");
-    }
-    text
 }
 
 /// ctrl-c during an add's download ends it with the project as it was, says so, and keeps what

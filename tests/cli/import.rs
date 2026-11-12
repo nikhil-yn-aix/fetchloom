@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, text};
+use crate::support::{Result, Sandbox, json, text, zip_of};
 
 /// a folder of two files, one of them in a folder of its own, as a person keeps measurements.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -364,12 +364,7 @@ fn a_lost_pin_of_an_import_is_pinned_again_from_its_files() -> Result {
 
 /// a zip of `pack/a.csv` and `pack/b.csv`.
 fn pack() -> Result<Vec<u8>> {
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in [("pack/a.csv", b"a\n"), ("pack/b.csv", b"b\n")] {
-        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut archive, bytes)?;
-    }
-    Ok(archive.finish()?.into_inner())
+    zip_of(&[("pack/a.csv", b"a\n"), ("pack/b.csv", b"b\n")])
 }
 
 #[test]

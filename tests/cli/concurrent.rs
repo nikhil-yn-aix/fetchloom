@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text};
+use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, sha256_hex, text};
 #[cfg(unix)]
 use crate::{project::Background, support::wait_until};
 
@@ -157,16 +157,6 @@ impl Drop for Syncing {
     }
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    use sha2::{Digest as _, Sha256};
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        let _ = write!(text, "{byte:02x}");
-    }
-    text
-}
-
 /// eight syncs of different projects run at once against one cache, as cluster jobs do. each
 /// project needs files the others need too: every file (`overlapping` false) or its own and its
 /// neighbour's (`overlapping` true). cold, each URL is downloaded once; warm, the cache already
@@ -215,7 +205,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
         sandbox.allow(&server.url);
         servers.push(server);
         if warm {
-            let digest = sha256(body);
+            let digest = sha256_hex(body);
             let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
             fs::create_dir_all(object.parent().ok_or("object needs a parent")?)?;
             fs::write(&object, body)?;
@@ -254,7 +244,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
                     &format!("size = {}", IRIS.len()),
                     &format!("size = {}", bodies[body].len()),
                 )
-                .replace(original_digest, &sha256(&bodies[body]))
+                .replace(original_digest, &sha256_hex(&bodies[body]))
                 .replace(
                     &format!("url = {:?}", original.url),
                     &format!("url = {:?}", servers[body].url),
@@ -315,7 +305,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
         }
     }
     for body in &bodies {
-        let digest = sha256(body);
+        let digest = sha256_hex(body);
         let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
         assert_eq!(fs::read(&object)?, *body);
         assert!(fs::metadata(object)?.permissions().readonly());

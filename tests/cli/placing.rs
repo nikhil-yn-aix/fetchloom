@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, json, reply, text};
+use crate::support::{
+    Part, Result, Sandbox, Server, delete, edit, file, json, reply, text, zip_of,
+};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -2050,18 +2052,12 @@ fn a_new_project_reseals_an_object_made_writable_through_a_link() -> Result {
 
 #[test]
 fn a_later_get_conflict_preserves_earlier_files() -> Result {
-    use std::io::Write as _;
     let sandbox = Sandbox::new()?;
     let original = Server::start("/a.csv", vec![crate::support::file(b"old-a", "\"old\"")])?;
     let fetched = sandbox.run(&["get", &original.url, "--dir", "out"])?;
     assert!(fetched.status.success(), "{}", text(&fetched.stderr)?);
     fs::write(sandbox.work().join("out/b.csv"), b"foreign")?;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, bytes) in [("a.csv", b"new-a"), ("b.csv", b"new-b")] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
-        zip.write_all(bytes)?;
-    }
-    let bytes = zip.finish()?.into_inner();
+    let bytes = zip_of(&[("a.csv", b"new-a"), ("b.csv", b"new-b")])?;
     let archive = Server::start("/files.zip", vec![crate::support::file(&bytes, "\"new\"")])?;
     let output = sandbox.run(&["get", &archive.url, "--dir", "out", "--json"])?;
     assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
@@ -2272,18 +2268,12 @@ fn status_lists_what_sync_removes_as_unneeded_rather_than_blocking() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
-    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
         return Ok(());
     }
     let sandbox = Sandbox::new()?;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, bytes) in [("a.csv", b"first"), ("sub/b.csv", b"other")] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
-        zip.write_all(bytes)?;
-    }
-    let bytes = zip.finish()?.into_inner();
+    let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
     let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
     // a folder the dataset needs that refuses new files, so its second file cannot be placed
     let refusing = sandbox.work().join("data").join("rolled").join("sub");
@@ -2318,18 +2308,12 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
-    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
         return Ok(());
     }
     let sandbox = Sandbox::new()?;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, bytes) in [("a.csv", b"first"), ("sub/b.csv", b"other")] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
-        zip.write_all(bytes)?;
-    }
-    let bytes = zip.finish()?.into_inner();
+    let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
     let archive = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
     let plain = Server::start("/files/c.csv", vec![file(b"c\n", "\"c1\"")])?;
     sandbox.allow(&archive.url);

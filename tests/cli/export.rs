@@ -4,7 +4,7 @@
 use std::fs;
 use std::process::Command;
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, sha256_hex, text, zip_of};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const A: &[u8] = b"a\n";
@@ -12,12 +12,7 @@ const C: &[u8] = b"c\n";
 
 /// a zip of `pack/a.csv` and `pack/b/c.txt`.
 fn pack() -> Result<Vec<u8>> {
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in [("pack/a.csv", A), ("pack/b/c.txt", C)] {
-        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut archive, bytes)?;
-    }
-    Ok(archive.finish()?.into_inner())
+    zip_of(&[("pack/a.csv", A), ("pack/b/c.txt", C)])
 }
 
 /// a server on this machine for iris.csv and pack.zip, with the zip's bytes.
@@ -39,17 +34,6 @@ fn added(sandbox: &Sandbox, routes: &Routes, files: &[&str]) -> Result {
     Ok(())
 }
 
-/// the SHA-256 of `bytes` in hex, as data.lock and export write it.
-pub(crate) fn sha256(bytes: &[u8]) -> String {
-    use sha2::{Digest as _, Sha256};
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        let _ = write!(text, "{byte:02x}");
-    }
-    text
-}
-
 #[test]
 fn sha256_lists_each_placed_file_with_archive_members_for_sha256sum() -> Result {
     let sandbox = Sandbox::new()?;
@@ -63,9 +47,9 @@ fn sha256_lists_each_placed_file_with_archive_members_for_sha256sum() -> Result 
         sums,
         format!(
             "{}  data/iris/iris.csv\n{}  data/pack/a.csv\n{}  data/pack/b/c.txt\n",
-            sha256(IRIS),
-            sha256(A),
-            sha256(C)
+            sha256_hex(IRIS),
+            sha256_hex(A),
+            sha256_hex(C)
         )
     );
     assert_eq!(text(&output.stderr)?, "");
@@ -95,8 +79,8 @@ fn links_and_aria2_name_each_downloaded_file_and_never_an_archive_member() -> Re
         text(&links.stdout)?,
         format!(
             "{url}/iris.csv {}\n{url}/pack.zip {}\n",
-            sha256(IRIS),
-            sha256(&zip)
+            sha256_hex(IRIS),
+            sha256_hex(&zip)
         )
     );
     let aria2 = sandbox.run(&["export", "--format", "aria2", "pack"])?;
@@ -105,7 +89,7 @@ fn links_and_aria2_name_each_downloaded_file_and_never_an_archive_member() -> Re
         text(&aria2.stdout)?,
         format!(
             "{url}/pack.zip\n  out=pack/pack.zip\n  checksum=sha-256={}\n",
-            sha256(&zip)
+            sha256_hex(&zip)
         )
     );
     Ok(())
@@ -136,8 +120,8 @@ fn aria2_puts_each_file_in_the_folder_its_dataset_is_placed_in() -> Result {
         text(&aria2.stdout)?,
         format!(
             "{url}/iris.csv\n  out=raw/iris.csv\n  checksum=sha-256={}\n{url}/pack.zip\n  out=pack.zip\n  checksum=sha-256={}\n",
-            sha256(IRIS),
-            sha256(&zip)
+            sha256_hex(IRIS),
+            sha256_hex(&zip)
         )
     );
     Ok(())
@@ -154,14 +138,14 @@ fn json_lists_placed_files_and_downloaded_ones_with_their_hashes() -> Result {
     assert_eq!(
         result["placed"],
         serde_json::json!([
-            {"dataset": "pack", "path": "data/pack/a.csv", "size": A.len(), "sha256": sha256(A), "unpacked_from": "pack.zip"},
-            {"dataset": "pack", "path": "data/pack/b/c.txt", "size": C.len(), "sha256": sha256(C), "unpacked_from": "pack.zip"},
+            {"dataset": "pack", "path": "data/pack/a.csv", "size": A.len(), "sha256": sha256_hex(A), "unpacked_from": "pack.zip"},
+            {"dataset": "pack", "path": "data/pack/b/c.txt", "size": C.len(), "sha256": sha256_hex(C), "unpacked_from": "pack.zip"},
         ])
     );
     assert_eq!(
         result["sources"],
         serde_json::json!([
-            {"dataset": "pack", "path": "pack.zip", "size": zip.len(), "sha256": sha256(&zip), "url": format!("{}/pack.zip", routes.url)},
+            {"dataset": "pack", "path": "pack.zip", "size": zip.len(), "sha256": sha256_hex(&zip), "url": format!("{}/pack.zip", routes.url)},
         ])
     );
     for gap in ["unlocked", "not_unpacked", "no_link"] {
@@ -209,12 +193,12 @@ fn an_archive_never_unpacked_here_stops_text_and_is_named_in_json() -> Result {
         serde_json::json!(["data/pack/pack.zip"])
     );
     assert_eq!(result["placed"], serde_json::json!([]));
-    assert_eq!(result["sources"][0]["sha256"], sha256(&zip));
+    assert_eq!(result["sources"][0]["sha256"], sha256_hex(&zip));
     let links = run(&["export", "--format", "links"])?;
     assert_eq!(links.status.code(), Some(0), "{}", text(&links.stderr)?);
     assert_eq!(
         text(&links.stdout)?,
-        format!("{}/pack.zip {}\n", routes.url, sha256(&zip))
+        format!("{}/pack.zip {}\n", routes.url, sha256_hex(&zip))
     );
     assert!(!cold.join("objects").exists(), "export makes no cache");
     Ok(())
@@ -269,12 +253,12 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     let url = &routes.url;
     let left_out = "warning: the list leaves out 3 files of flowers: they were imported from a folder on this machine, so no link holds them\n  help: share them through a folder mirror, which `fetchloom push --to <folder>` fills\n";
     for (format, expected) in [
-        ("links", format!("{url}/iris.csv {}\n", sha256(IRIS))),
+        ("links", format!("{url}/iris.csv {}\n", sha256_hex(IRIS))),
         (
             "aria2",
             format!(
                 "{url}/iris.csv\n  out=iris/iris.csv\n  checksum=sha-256={}\n",
-                sha256(IRIS)
+                sha256_hex(IRIS)
             ),
         ),
     ] {
@@ -295,7 +279,7 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     assert_eq!(document["warnings"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         fs::read_to_string(sandbox.work().join("links.txt"))?,
-        format!("{url}/iris.csv {}\n", sha256(IRIS))
+        format!("{url}/iris.csv {}\n", sha256_hex(IRIS))
     );
     Ok(())
 }
@@ -331,7 +315,7 @@ fn a_form_names_each_dataset_it_leaves_out() -> Result {
     assert_eq!(sums.status.code(), Some(0), "{}", text(&sums.stderr)?);
     assert_eq!(
         text(&sums.stdout)?,
-        format!("{}  data/clean/clean.csv\n", sha256(b"done"))
+        format!("{}  data/clean/clean.csv\n", sha256_hex(b"done"))
     );
     assert_eq!(
         text(&sums.stderr)?,
@@ -413,7 +397,7 @@ fn output_writes_the_file_whole_and_replaces_one_only_with_force() -> Result {
     let sandbox = Sandbox::new()?;
     let (routes, _) = server()?;
     added(&sandbox, &routes, &["iris.csv"])?;
-    let expected = format!("{}  data/iris/iris.csv\n", sha256(IRIS));
+    let expected = format!("{}  data/iris/iris.csv\n", sha256_hex(IRIS));
     let sums = sandbox.work().join("sums.txt");
     let written = sandbox.run(&["export", "-o", "sums.txt"])?;
     assert_eq!(written.status.code(), Some(0), "{}", text(&written.stderr)?);
@@ -477,7 +461,7 @@ fn a_ctrl_c_past_the_exports_mark_lets_it_write_the_file() -> Result {
     );
     assert_eq!(
         fs::read_to_string(sandbox.work().join("sums.txt"))?,
-        format!("{}  data/iris/iris.csv\n", sha256(IRIS))
+        format!("{}  data/iris/iris.csv\n", sha256_hex(IRIS))
     );
     Ok(())
 }

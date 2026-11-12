@@ -6,7 +6,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use crate::support::{Result, Sandbox, Server, file, text};
+use crate::support::{Result, Sandbox, Server, file, sha256_hex, text};
 
 /// the advice for a lock from a newer fetchloom, after `fetchloom --json <command>`.
 fn newer(command: &str) -> String {
@@ -249,28 +249,19 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
 /// made from iris, written as fetchloom writes them: the table's text, the part's path below the
 /// project and the part's text.
 fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
-    use sha2::{Digest as _, Sha256};
-    let hex = |bytes: &[u8]| {
-        Sha256::digest(bytes)
-            .iter()
-            .fold(String::new(), |mut text, byte| {
-                let _ = write!(text, "{byte:02x}");
-                text
-            })
-    };
     let mut tree = String::new();
     for (path, bytes) in files {
-        let _ = writeln!(tree, "{path}\t{}\t{}", bytes.len(), hex(bytes));
+        let _ = writeln!(tree, "{path}\t{}\t{}", bytes.len(), sha256_hex(bytes));
     }
     let part_text = format!("path\tsize\tsha256\n{tree}");
-    let listed = hex(part_text.as_bytes());
+    let listed = sha256_hex(part_text.as_bytes());
     let part = format!("data.lock.d/{name}.{}.tsv.zst", &listed[..12]);
     let bytes: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
     let table = format!(
         "\n[[dataset]]\nname = \"{name}\"\nfrom = [\n  {{ name = \"iris\", content = \"sha256:{}\" }},\n]\nrun = [\"python3\", \"clean.py\", \"{{iris}}\", \"{{out}}\"]\ncode = []\nkey = \"sha256:{}\"\nlocked = \"2026-11-10T00:00:00Z\"\ntree = \"sha256:{}\"\nfiles_in = [\"{part}\"]\nfile_count = {}\nfile_bytes = {bytes}\nfiles_sha256 = \"sha256:{listed}\"\n",
-        hex(b"iris"),
-        hex(b"key"),
-        hex(tree.as_bytes()),
+        sha256_hex(b"iris"),
+        sha256_hex(b"key"),
+        sha256_hex(tree.as_bytes()),
         files.len(),
     );
     (table, part, part_text)

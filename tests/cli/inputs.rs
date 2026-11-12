@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::build::{build, building_in, with};
 use crate::project::{IRIS, PATH};
 use crate::recipes::{WRITE, object, unplace};
-use crate::support::{Result, Sandbox, Server, edit, file, json, text};
+use crate::support::{Result, Sandbox, Server, edit, file, json, text, zip_of};
 
 /// a project in the sandbox's work folder with iris from `server`, set to `place = false`, and
 /// the recipe [`WRITE`] built from it, then pushed with what it is made from into a folder
@@ -319,16 +319,6 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
     Ok(())
 }
 
-/// a zip of `members`, each a path and its bytes.
-fn zipped(members: &[(&str, &[u8])]) -> Result<Vec<u8>> {
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in members {
-        archive.start_file(*path, zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut archive, bytes)?;
-    }
-    Ok(archive.finish()?.into_inner())
-}
-
 /// a file name windows or a fat disk cannot store is pinned and placed here as it is, with one
 /// warning for each dataset naming its files that have one, imported, downloaded or unpacked.
 #[cfg(unix)]
@@ -339,7 +329,7 @@ fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Resul
     for name in ["what?.csv", "con.txt", "fine.csv"] {
         fs::write(odd.join(name), b"x\n")?;
     }
-    let zip = zipped(&[("pack/star*.csv", b"y\n"), ("pack/fine.csv", b"z\n")])?;
+    let zip = zip_of(&[("pack/star*.csv", b"y\n"), ("pack/fine.csv", b"z\n")])?;
     let server = Server::start("/pack.zip", vec![file(&zip, "\"z\"")])?;
     sandbox.allow(&server.url);
     for (link, warning) in [
@@ -371,7 +361,7 @@ fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Resul
 #[test]
 fn members_left_under_an_old_name_ask_to_finish_the_rename() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip = zipped(&[("a1.wav", b"1"), ("a2.wav", b"2")])?;
+    let zip = zip_of(&[("a1.wav", b"1"), ("a2.wav", b"2")])?;
     let server = Server::start("/glob-000000.zip", vec![file(&zip, "\"g\"")])?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url, "--as", "glob"])?;
@@ -421,7 +411,7 @@ fn a_clash_between_two_archives_names_both() -> Result {
     let sandbox = Sandbox::new()?;
     let fold = sandbox.folder("fold")?;
     for (shard, bytes) in [("fold-000000.zip", b"0\n"), ("fold-000001.zip", b"1\n")] {
-        fs::write(fold.join(shard), zipped(&[("train/0000.txt", bytes)])?)?;
+        fs::write(fold.join(shard), zip_of(&[("train/0000.txt", bytes)])?)?;
     }
     let output = sandbox.run(&["add", "../fold"])?;
     let stderr = text(&output.stderr)?;

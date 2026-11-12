@@ -8,7 +8,7 @@ use std::process::Output;
 
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
-use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
+use crate::support::{Result, Sandbox, Server, delete, edit, file, json, ok, reply, text, zip_of};
 
 const PATH: &str = "/files/dataset.zip";
 /// the tree python computed over the files in tests/fixtures/archives/python.zip.
@@ -30,11 +30,6 @@ fn fixture(name: &str) -> Result<Vec<u8>> {
         .join("tests/fixtures/archives")
         .join(name);
     Ok(fs::read(path)?)
-}
-
-fn ok(output: &Output) -> Result {
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
 }
 
 /// the folder holds exactly the archive's files, and nothing else.
@@ -160,16 +155,11 @@ fn extract_false_keeps_the_zip_as_it_is() -> Result {
 /// are left out, told once, and the one real top folder goes, as for the zip made elsewhere.
 #[test]
 fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
-    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for (path, bytes) in [
+    let bytes = zip_of(&[
         ("recordings/a.wav", &b"RIFF"[..]),
         ("recordings/.DS_Store", b"finder"),
         ("__MACOSX/recordings/._a.wav", b"appledouble"),
-    ] {
-        zip.start_file(path, zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut zip, bytes)?;
-    }
-    let bytes = zip.finish()?.into_inner();
+    ])?;
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/finder.zip", vec![file(&bytes, "\"f1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -223,10 +213,10 @@ fn a_clash_beside_a_zip_names_the_options_of_the_add() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = sandbox.folder("clash")?;
     fs::write(folder.join("notes.txt"), b"mine")?;
-    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    zip.start_file("notes.txt", zip::write::SimpleFileOptions::default())?;
-    std::io::Write::write_all(&mut zip, b"theirs")?;
-    fs::write(folder.join("bundle.zip"), zip.finish()?.into_inner())?;
+    fs::write(
+        folder.join("bundle.zip"),
+        zip_of(&[("notes.txt", b"theirs")])?,
+    )?;
     let refused = sandbox.run(&["add", "../clash"])?;
     let stderr = text(&refused.stderr)?;
     assert_eq!(refused.status.code(), Some(50), "{stderr}");
@@ -984,15 +974,10 @@ fn inner_step(path: &str, folder: &str) -> String {
 /// how to unpack it beside itself.
 #[test]
 fn a_zip_inside_a_zip_says_once_how_to_unpack_it() -> Result {
-    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for (path, bytes) in [
+    let bytes = zip_of(&[
         ("bundle/inner.zip", &b"PK\x05\x06"[..]),
         ("bundle/README.txt", b"hi"),
-    ] {
-        zip.start_file(path, zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut zip, bytes)?;
-    }
-    let bytes = zip.finish()?.into_inner();
+    ])?;
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/nested.zip", vec![file(&bytes, "\"n1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
@@ -1379,7 +1364,7 @@ fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
         )?;
         ok(&sandbox.run(&["sync"])?)?;
         let object = |bytes: &[u8]| {
-            let hex = crate::add::sha256_hex(bytes);
+            let hex = crate::support::sha256_hex(bytes);
             sandbox
                 .cache()
                 .join("objects")
@@ -1454,12 +1439,7 @@ mod split {
     ];
 
     fn scans_zip() -> Result<Vec<u8>> {
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (path, bytes) in SCANS {
-            zip.start_file(path, zip::write::SimpleFileOptions::default())?;
-            std::io::Write::write_all(&mut zip, bytes)?;
-        }
-        Ok(zip.finish()?.into_inner())
+        crate::support::zip_of(&SCANS)
     }
 
     /// `bytes` cut into as many parts as `names`, of nearly one size, each written to
@@ -1474,7 +1454,7 @@ mod split {
     }
 
     fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
-        let digest = crate::add::sha256_hex(bytes);
+        let digest = crate::support::sha256_hex(bytes);
         cache.join("objects").join(&digest[..2]).join(&digest[2..])
     }
 

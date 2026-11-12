@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::build::{build, building_in, runs, with};
-use crate::export::sha256;
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Sandbox, Server, delete, file, json, text};
+use crate::support::{Result, Sandbox, Server, delete, file, json, sha256_hex, text, zip_of};
 
 /// a recipe that makes `clean` from iris: the file clean.csv, holding `done`.
 pub(crate) const WRITE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\n";
@@ -56,7 +55,7 @@ fn warned(output: &std::process::Output, warning: &str) -> Result<usize> {
 
 /// the cached object holding `bytes`, in the cache at `cache`.
 pub(crate) fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
-    let hex = sha256(bytes);
+    let hex = sha256_hex(bytes);
     cache.join("objects").join(&hex[..2]).join(&hex[2..])
 }
 
@@ -362,18 +361,12 @@ fn a_put_back_file_names_what_leaves_it_out() -> Result {
 /// since the cache holds all the build reads, and the build then needs no network.
 #[test]
 fn status_counts_an_archive_whose_kept_files_the_cache_holds() -> Result {
-    use std::io::Write as _;
     let sandbox = Sandbox::new()?;
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in [
+    let zipped = zip_of(&[
         ("set/a.csv", &b"a,1\n"[..]),
         ("set/b.csv", b"b,2\n"),
         ("set/labels.csv", b"file,label\n"),
-    ] {
-        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
-        archive.write_all(bytes)?;
-    }
-    let zipped = archive.finish()?.into_inner();
+    ])?;
     let server = Server::start("/files/set.zip", vec![file(&zipped, "\"z1\"")])?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url, "--as", "set"])?;
@@ -432,7 +425,7 @@ fn a_result_only_a_folder_mirror_holds_is_synced_from_it() -> Result {
     let mirror = sandbox.folder("mirror")?;
     fs::write(mirror.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
     for bytes in [IRIS, b"done".as_slice()] {
-        let hex = sha256(bytes);
+        let hex = sha256_hex(bytes);
         let fan = mirror.join("objects").join(&hex[..2]);
         fs::create_dir_all(&fan)?;
         fs::write(fan.join(&hex[2..]), bytes)?;

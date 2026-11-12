@@ -5,8 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::export::sha256;
-use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, sha256_hex, text};
 
 /// git in `folder`, as a person with a name runs it, without the machine's git settings. none
 /// when git is not installed.
@@ -313,7 +312,7 @@ fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Resul
         let file = format!(
             "version.csv · {} B · sha256 {}",
             bytes.len(),
-            &sha256(bytes)[..12]
+            &sha256_hex(bytes)[..12]
         );
         assert!(told.contains(&file), "{told}");
     }
@@ -324,7 +323,7 @@ fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Resul
 
     succeeded(&run(&sandbox, &["lock", "--theirs", "version"])?)?;
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-    assert!(lock.contains(&sha256(b"3,right\n")), "{lock}");
+    assert!(lock.contains(&sha256_hex(b"3,right\n")), "{lock}");
     assert_eq!(server.requests().len(), asked, "a merge asks no server");
     Ok(())
 }
@@ -468,7 +467,7 @@ fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
     assert_eq!(merge["from_theirs"], serde_json::json!(["beta"]));
     succeeded(&run(&sandbox, &["lock", "--theirs", "labels"])?)?;
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-    assert!(lock.contains(&sha256(b"wolf")), "{lock}");
+    assert!(lock.contains(&sha256_hex(b"wolf")), "{lock}");
     Ok(())
 }
 

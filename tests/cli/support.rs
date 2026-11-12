@@ -386,6 +386,33 @@ pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
 }
 
+/// fails the test unless `output` exited 0, showing its stderr.
+pub(crate) fn ok(output: &Output) -> Result {
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+/// the SHA-256 of `bytes` in hex, as data.lock and export write it.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
+/// a zip of `entries`, each a path and its bytes, with the options most tools write.
+pub(crate) fn zip_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (path, bytes) in entries {
+        archive.start_file(*path, zip::write::SimpleFileOptions::default())?;
+        archive.write_all(bytes)?;
+    }
+    Ok(archive.finish()?.into_inner())
+}
+
 pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }

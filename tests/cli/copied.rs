@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::build::{build, building_in, runs};
-use crate::export::sha256;
 use crate::project::{IRIS, PATH, added};
-use crate::support::{Result, Sandbox, Server, delete, edit, file, json, text};
+use crate::support::{Result, Sandbox, Server, delete, edit, file, json, sha256_hex, text};
 
 /// a recipe that makes `clean` by copying iris, so the data folder holds iris's bytes twice.
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
@@ -70,7 +69,7 @@ fn look(path: &Path) -> Result<(Vec<u8>, SystemTime)> {
 
 /// where a cache or a mirror keeps the object holding `bytes`, below `root`.
 fn object(root: &Path, bytes: &[u8]) -> PathBuf {
-    let hex = sha256(bytes);
+    let hex = sha256_hex(bytes);
     root.join("objects").join(&hex[..2]).join(&hex[2..])
 }
 

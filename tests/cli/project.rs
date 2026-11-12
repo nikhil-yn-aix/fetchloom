@@ -3,10 +3,11 @@
 
 use std::fs;
 
-use crate::export::sha256;
 #[cfg(unix)]
 use crate::support::wait_until;
-use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
+use crate::support::{
+    Result, Sandbox, Server, delete, edit, file, json, reply, sha256_hex, text, zip_of,
+};
 
 pub(crate) const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 pub(crate) const PATH: &str = "/files/iris.csv";
@@ -48,7 +49,7 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     assert_eq!(dataset["folder"], "data/iris");
     assert_eq!(dataset["locked_files"][0]["path"], "iris.csv");
     assert_eq!(dataset["locked_files"][0]["size"], IRIS.len());
-    assert_eq!(dataset["locked_files"][0]["sha256"], sha256(IRIS));
+    assert_eq!(dataset["locked_files"][0]["sha256"], sha256_hex(IRIS));
     assert_eq!(dataset["locked_files"][0]["url"], server.url.as_str());
     assert!(dataset.get("title").is_some(), "{dataset}");
     assert_eq!(
@@ -1018,7 +1019,7 @@ fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     };
     let pinned = |name: &str| -> Result<bool> {
         let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-        Ok(lock.contains(&format!("name = \"{name}\"")) && lock.contains(&sha256(IRIS)))
+        Ok(lock.contains(&format!("name = \"{name}\"")) && lock.contains(&sha256_hex(IRIS)))
     };
 
     rename("iris", "flowers")?;
@@ -1715,7 +1716,10 @@ fn many_differences(sandbox: &Sandbox) -> Result {
     );
     for (path, sha256) in (0..25)
         .map(|index| (format!("a/file{index:02}.csv"), "0".repeat(64)))
-        .chain(std::iter::once(("b/kept.csv".to_owned(), sha256(b"kept"))))
+        .chain(std::iter::once((
+            "b/kept.csv".to_owned(),
+            sha256_hex(b"kept"),
+        )))
         .chain(std::iter::once(("c/only.csv".to_owned(), "1".repeat(64))))
     {
         writeln!(
@@ -2573,9 +2577,9 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
     let pinned = fs::read_to_string(work.join("data.lock"))?;
     let grown = pinned
         .replace("size = 11,", "size = 2147483648,")
-        .replace(&sha256(b"eleven byte"), &sha256(b"two gibibytes"));
+        .replace(&sha256_hex(b"eleven byte"), &sha256_hex(b"two gibibytes"));
     assert_eq!(grown.matches("2147483648").count(), 1, "{grown}");
-    assert!(grown.contains(&sha256(b"two gibibytes")), "{grown}");
+    assert!(grown.contains(&sha256_hex(b"two gibibytes")), "{grown}");
     fs::write(work.join("data.lock"), &grown)?;
     delete(&work.join("data/huge/huge.bin"))?;
     let sync = sandbox.command(&["sync"]);
@@ -2791,10 +2795,7 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     use crate::support::Routes;
 
     let sandbox = Sandbox::new()?;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    zip.start_file("train.csv", zip::write::SimpleFileOptions::default())?;
-    std::io::Write::write_all(&mut zip, b"id,y\n1,0\n")?;
-    let zipped = zip.finish()?.into_inner();
+    let zipped = zip_of(&[("train.csv", b"id,y\n1,0\n")])?;
     let objects: [(&str, &[u8]); 3] = [
         ("kag/test.csv", b"id\n3\n"),
         ("kag/train.csv", b"id,y\n9,9\n"),

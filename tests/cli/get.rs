@@ -6,7 +6,7 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, file, json, link_folder, partial_files, reply, text,
+    Part, Result, Sandbox, Server, file, json, link_folder, partial_files, reply, text, zip_of,
 };
 
 const IRIS: &[u8] =
@@ -368,10 +368,7 @@ fn output_beneath_a_file_names_the_file_in_the_way() -> Result {
 #[test]
 fn output_keeps_an_archive_packed() -> Result {
     let sandbox = Sandbox::new()?;
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    archive.start_file("iris.csv", zip::write::SimpleFileOptions::default())?;
-    std::io::Write::write_all(&mut archive, IRIS)?;
-    let bytes = archive.finish()?.into_inner();
+    let bytes = zip_of(&[("iris.csv", IRIS)])?;
     let server = Server::start("/iris.zip", vec![file(&bytes, "\"z1\"")])?;
     let output = sandbox.run(&["get", &server.url, "-o", "packed/iris.zip"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
@@ -2020,12 +2017,7 @@ fn a_folder_reached_through_a_link_is_not_filled_twice() -> Result {
     if !link_folder(&one, &sandbox.work().join("two")) {
         return Ok(());
     }
-    let zipped = |bytes: &[u8]| -> Result<Vec<u8>> {
-        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        archive.start_file("data.csv", zip::write::SimpleFileOptions::default())?;
-        std::io::Write::write_all(&mut archive, bytes)?;
-        Ok(archive.finish()?.into_inner())
-    };
+    let zipped = |bytes: &[u8]| -> Result<Vec<u8>> { zip_of(&[("data.csv", bytes)]) };
     let first = Server::start("/one.zip", vec![file(&zipped(IRIS)?, "\"one\"")])?;
     let second = Server::start("/two.zip", vec![file(&zipped(WINE)?, "\"two\"")])?;
     let output = sandbox.run(&["--json", "get", &first.url, &second.url])?;

@@ -3,11 +3,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
-use crate::add::sha256_hex as sha256;
 use crate::caps::shown;
-use crate::support::{Result, Routes, Sandbox, delete, edit, file, json, reply, text};
+use crate::support::{
+    Result, Routes, Sandbox, delete, edit, file, json, ok, reply, sha256_hex, text,
+};
 
 pub(crate) const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
 
@@ -22,11 +22,6 @@ pub(crate) const MEMBERS: [(&str, &[u8]); 5] = [
         b"long path\n",
     ),
 ];
-
-fn ok(output: &Output) -> Result {
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
-}
 
 /// a source serving one csv file and one zip, and a project in the sandbox's work folder that
 /// pins both, synced once there so the sandbox's cache holds them.
@@ -63,7 +58,7 @@ fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
         .flatten()
     {
         let bytes = fs::read(record?.path())?;
-        let hex = sha256(&bytes);
+        let hex = sha256_hex(&bytes);
         let to = root.join("trees").join(&hex[..2]);
         fs::create_dir_all(&to)?;
         fs::write(to.join(&hex[2..]), bytes)?;
@@ -392,7 +387,7 @@ fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
     ok(&sandbox.run(&["add", "../flowers"])?)?;
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
-    let hex = sha256(sepals);
+    let hex = sha256_hex(sepals);
     let object = root.join("objects").join(&hex[..2]).join(&hex[2..]);
     delete(&object)?;
     let (folder, cache) = cold(&sandbox, "cold")?;
@@ -456,7 +451,7 @@ fn a_damaged_mirror_copy_is_told_and_the_source_gives_the_file() -> Result {
     let source = project(&sandbox)?;
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
-    let hex = sha256(IRIS);
+    let hex = sha256_hex(IRIS);
     let copy = root.join("objects").join(&hex[..2]).join(&hex[2..]);
     edit(&copy, &IRIS.to_ascii_uppercase())?;
     let asked = source.requests().len();
@@ -610,7 +605,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     let source = project(&sandbox)?;
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
-    let hex = sha256(IRIS);
+    let hex = sha256_hex(IRIS);
     delete(&root.join("objects").join(&hex[..2]).join(&hex[2..]))?;
     let asked = source.requests().len();
     let catalogs = Routes::start(Vec::new())?;
@@ -741,7 +736,7 @@ fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
     mirror_of(&sandbox, &root)?;
     fs::remove_dir_all(root.join("trees"))?;
     let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
-    let hex = sha256(&zip);
+    let hex = sha256_hex(&zip);
     fs::create_dir_all(root.join("objects").join(&hex[..2]))?;
     fs::write(root.join("objects").join(&hex[..2]).join(&hex[2..]), &zip)?;
     let (folder, cache) = cold(&sandbox, "cold")?;

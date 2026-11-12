@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use crate::support::{
-    Result, Sandbox, Server, delete, delete_folder, file, json, text, without_copy_warning,
+    Result, Sandbox, Server, delete, delete_folder, file, json, ok, text, without_copy_warning,
+    zip_of,
 };
 
 /// the pets the curator keeps, in one zip whose files share the folder `pets-v1`.
@@ -19,23 +20,9 @@ const PETS: [(&str, &[u8]); 4] = [
     ("pets-v1/labels.csv", b"file,label\n"),
 ];
 
-fn zipped(entries: &[(&str, &[u8])]) -> Result<Vec<u8>> {
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in entries {
-        archive.start_file(*path, zip::write::SimpleFileOptions::default())?;
-        archive.write_all(bytes)?;
-    }
-    Ok(archive.finish()?.into_inner())
-}
-
-fn ok(output: &std::process::Output) -> Result {
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
-}
-
 /// a project with the dataset pets, added from a server that answers once.
 fn pets(sandbox: &Sandbox) -> Result<Server> {
-    let server = Server::start("/files/pets.zip", vec![file(&zipped(&PETS)?, "\"p1\"")])?;
+    let server = Server::start("/files/pets.zip", vec![file(&zip_of(&PETS)?, "\"p1\"")])?;
     ok(&sandbox.run(&["add", &server.url])?)?;
     Ok(server)
 }
@@ -71,7 +58,7 @@ fn set(sandbox: &Sandbox) -> Result<PathBuf> {
             ("images/y.png", b"y"),
             ("labels.csv", b"file,label\n"),
         ];
-        fs::write(folder.join(format!("{split}.zip")), zipped(&entries)?)?;
+        fs::write(folder.join(format!("{split}.zip")), zip_of(&entries)?)?;
     }
     ok(&sandbox.run(&["add", "../set"])?)?;
     Ok(sandbox.work().join("data").join("set"))
@@ -296,11 +283,11 @@ fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
     let folder = sandbox.folder("uneven")?;
     fs::write(
         folder.join("a.zip"),
-        zipped(&[("x.png", b"x"), ("notes.md", b"n")])?,
+        zip_of(&[("x.png", b"x"), ("notes.md", b"n")])?,
     )?;
     fs::write(
         folder.join("b.zip"),
-        zipped(&[("y.png", b"y"), ("z.png", b"z")])?,
+        zip_of(&[("y.png", b"y"), ("z.png", b"z")])?,
     )?;
     ok(&sandbox.run(&["add", "../uneven"])?)?;
     let manifest = sandbox.work().join("data.toml");

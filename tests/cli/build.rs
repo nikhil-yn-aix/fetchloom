@@ -9,9 +9,10 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use crate::export::sha256;
 use crate::project::{IRIS, PATH, added};
-use crate::support::{Result, Running, Sandbox, Server, file, json, text, wait_until};
+use crate::support::{
+    Result, Running, Sandbox, Server, file, json, sha256_hex, text, wait_until, zip_of,
+};
 
 /// a recipe that makes `clean` from iris with clean.py.
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
@@ -37,22 +38,23 @@ pub(crate) const CODE: &[u8] = b"import sys\nprint(sys.argv)\n";
 /// from fetchloom's own code: the JSON of the scheme, each input's content, the run, each code
 /// file's hash and the variables.
 pub(crate) fn pin_clean(sandbox: &Sandbox, code: &[u8], env: &[(&str, &str)]) -> Result {
-    let content = sha256(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256(IRIS)).as_bytes());
+    let content =
+        sha256_hex(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256_hex(IRIS)).as_bytes());
     let pairs: Vec<String> = env
         .iter()
         .map(|(name, value)| format!("[\"{name}\",\"{value}\"]"))
         .collect();
-    let key = sha256(
+    let key = sha256_hex(
         format!(
             "{{\"scheme\":\"fetchloom-recipe-1\",\"from\":[[\"iris\",\"sha256:{content}\"]],\"run\":[\"python3\",\"clean.py\",\"{{iris}}\",\"{{out}}\"],\"code\":[[\"clean.py\",\"sha256:{}\"]],\"env\":[{}]}}",
-            sha256(code),
+            sha256_hex(code),
             pairs.join(",")
         )
         .as_bytes(),
     );
-    let tree = format!("clean.csv\t4\t{}\n", sha256(b"done"));
+    let tree = format!("clean.csv\t4\t{}\n", sha256_hex(b"done"));
     let part_text = format!("path\tsize\tsha256\n{tree}");
-    let listed = sha256(part_text.as_bytes());
+    let listed = sha256_hex(part_text.as_bytes());
     let part = format!("data.lock.d/clean.{}.tsv.zst", &listed[..12]);
     fs::create_dir_all(sandbox.work().join("data.lock.d"))?;
     fs::write(
@@ -70,8 +72,8 @@ pub(crate) fn pin_clean(sandbox: &Sandbox, code: &[u8], env: &[(&str, &str)]) ->
     };
     let table = format!(
         "\n[[dataset]]\nname = \"clean\"\nfrom = [\n  {{ name = \"iris\", content = \"sha256:{content}\" }},\n]\nrun = [\"python3\", \"clean.py\", \"{{iris}}\", \"{{out}}\"]\ncode = [\n  {{ path = \"clean.py\", sha256 = \"{}\" }},\n]\n{env}key = \"sha256:{key}\"\nlocked = \"2026-11-10T00:00:00Z\"\ntree = \"sha256:{}\"\nfiles_in = [\"{part}\"]\nfile_count = 1\nfile_bytes = 4\nfiles_sha256 = \"sha256:{listed}\"\n",
-        sha256(code),
-        sha256(tree.as_bytes()),
+        sha256_hex(code),
+        sha256_hex(tree.as_bytes()),
     );
     let lock = sandbox.work().join("data.lock");
     fs::write(&lock, format!("{}{table}", fs::read_to_string(&lock)?))?;
@@ -574,7 +576,7 @@ fn build_pins_and_places_a_result() -> Result {
     );
     let placed = sandbox.work().join("data").join("clean").join("iris.csv");
     assert_eq!(fs::read(&placed)?, IRIS);
-    let tree = sha256(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256(IRIS)).as_bytes());
+    let tree = sha256_hex(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256_hex(IRIS)).as_bytes());
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
     assert!(lock.contains("name = \"clean\""), "{lock}");
     assert!(
@@ -656,7 +658,7 @@ fn mirror_holding(root: &Path, bytes: &[&[u8]]) -> Result {
     fs::create_dir_all(root)?;
     fs::write(root.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
     for bytes in bytes {
-        let hex = sha256(bytes);
+        let hex = sha256_hex(bytes);
         let fan = root.join("objects").join(&hex[..2]);
         fs::create_dir_all(&fan)?;
         fs::write(fan.join(&hex[2..]), bytes)?;
@@ -666,7 +668,7 @@ fn mirror_holding(root: &Path, bytes: &[&[u8]]) -> Result {
 
 /// the object of `bytes` in the sandbox's cache.
 fn object(sandbox: &Sandbox, bytes: &[u8]) -> PathBuf {
-    let hex = sha256(bytes);
+    let hex = sha256_hex(bytes);
     sandbox
         .cache()
         .join("objects")
@@ -1145,13 +1147,7 @@ fn inputs_come_from_pins_not_the_data_folder() -> Result {
 
 /// a zip of two files, with `images/x.png` inside.
 fn zipped() -> Result<Vec<u8>> {
-    use std::io::Write as _;
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (path, bytes) in [("images/x.png", &b"x"[..]), ("labels.csv", b"file,label\n")] {
-        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
-        archive.write_all(bytes)?;
-    }
-    Ok(archive.finish()?.into_inner())
+    zip_of(&[("images/x.png", b"x"), ("labels.csv", b"file,label\n")])
 }
 
 /// the paths of the files below `folder`, sorted.
@@ -2796,7 +2792,7 @@ fn a_left_out_result_retires_its_older_files() -> Result {
     assert_eq!(fs::read(&placed)?, b"one");
 
     pin_again(&work, &second)?;
-    let hex = sha256(b"two");
+    let hex = sha256_hex(b"two");
     crate::support::delete(
         &sandbox
             .cache()
@@ -2844,7 +2840,7 @@ fn path_and_export_answer_a_built_result() -> Result {
         text(&exported.stderr)?
     );
     assert!(
-        text(&exported.stdout)?.contains(&format!("{}  data/clean/iris.csv", sha256(IRIS))),
+        text(&exported.stdout)?.contains(&format!("{}  data/clean/iris.csv", sha256_hex(IRIS))),
         "{}",
         text(&exported.stdout)?
     );
@@ -2948,7 +2944,7 @@ fn gc_keeps_a_pinned_result() -> Result {
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     let gc = sandbox.run(&["cache", "gc", "--now"])?;
     assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
-    let made = sha256(b"made");
+    let made = sha256_hex(b"made");
     let object = sandbox
         .cache()
         .join("objects")

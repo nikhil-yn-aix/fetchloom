@@ -3,20 +3,13 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Output;
 
 use serde_json::Value;
 
-use crate::add::sha256_hex as sha256;
 use crate::build::{CODE, pin_clean, with_recipe};
 use crate::caps::shown;
 use crate::mirrors::{IRIS, MEMBERS, cold, holds_the_project, project};
-use crate::support::{Result, Sandbox, Server, edit, file, json, text};
-
-fn ok(output: &Output) -> Result {
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
-}
+use crate::support::{Result, Sandbox, Server, edit, file, json, ok, sha256_hex, text};
 
 /// the names of the files below `folder` of the mirror at `root`, each checked to hash to its
 /// name, as a reader checks it.
@@ -31,7 +24,7 @@ fn named(root: &Path, folder: &str) -> Result<Vec<String>> {
                 fan.file_name().to_string_lossy(),
                 file.file_name().to_string_lossy()
             );
-            assert_eq!(sha256(&fs::read(file.path())?), name, "{name}");
+            assert_eq!(sha256_hex(&fs::read(file.path())?), name, "{name}");
             names.push(name);
         }
     }
@@ -43,7 +36,7 @@ fn named(root: &Path, folder: &str) -> Result<Vec<String>> {
 fn pinned() -> Vec<String> {
     let mut hashes: Vec<String> = std::iter::once(IRIS)
         .chain(MEMBERS.iter().map(|(_, bytes)| *bytes))
-        .map(sha256)
+        .map(sha256_hex)
         .collect();
     hashes.sort();
     hashes
@@ -139,7 +132,7 @@ fn a_push_writes_each_file_once_and_skips_it_next_time() -> Result {
     assert_eq!(named(&root, "trees")?.len(), 1);
     assert_eq!(fs::read_dir(root.join("tmp"))?.count(), 0);
     assert_eq!(source.requests().len(), asked, "no server is asked");
-    let hex = sha256(IRIS);
+    let hex = sha256_hex(IRIS);
     edit(
         &root.join("objects").join(&hex[..2]).join(&hex[2..]),
         b"damaged",
@@ -206,7 +199,7 @@ fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
         .arg(&root)
         .output()?;
     ok(&output)?;
-    let dropped = sha256(b"x,y\n1,2\n3,4\n");
+    let dropped = sha256_hex(b"x,y\n1,2\n3,4\n");
     let mut kept = pinned();
     kept.retain(|hash| *hash != dropped);
     assert_eq!(named(&root, "objects")?, kept);
@@ -229,7 +222,7 @@ fn a_split_archive_is_pushed_as_its_files() -> Result {
         .command(&["--yes", "push", "--to"])
         .arg(&root)
         .output()?)?;
-    let mut members: Vec<String> = MEMBERS.iter().map(|(_, bytes)| sha256(bytes)).collect();
+    let mut members: Vec<String> = MEMBERS.iter().map(|(_, bytes)| sha256_hex(bytes)).collect();
     members.sort();
     assert_eq!(named(&root, "objects")?, members);
     assert_eq!(named(&root, "trees")?.len(), 1);
@@ -611,7 +604,7 @@ fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
         text.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
     )?;
     // the result as a build would leave it in the cache
-    let done = sha256(b"done");
+    let done = sha256_hex(b"done");
     let fan = sandbox.cache().join("objects").join(&done[..2]);
     fs::create_dir_all(&fan)?;
     fs::write(fan.join(&done[2..]), b"done")?;
@@ -621,7 +614,7 @@ fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
         ok(&command.args(args).arg("--to").arg(&root).output()?)?;
         named(&root, "objects")
     };
-    let iris = sha256(crate::project::IRIS);
+    let iris = sha256_hex(crate::project::IRIS);
     assert_eq!(pushed("plain", &[])?, std::slice::from_ref(&done));
     let mut both = vec![iris.clone(), done];
     both.sort();
@@ -665,7 +658,7 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
     assert_eq!(error["fix"], Value::Null);
     assert!(!root.exists());
     // the result as a build would leave it in the cache
-    let hex = sha256(b"done");
+    let hex = sha256_hex(b"done");
     let fan = sandbox.cache().join("objects").join(&hex[..2]);
     fs::create_dir_all(&fan)?;
     fs::write(fan.join(&hex[2..]), b"done")?;
@@ -675,7 +668,7 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
         .output()?;
     ok(&pushed)?;
     assert_eq!(json(&pushed)?["result"]["copied"], 2);
-    let mut expected = vec![sha256(crate::project::IRIS), hex];
+    let mut expected = vec![sha256_hex(crate::project::IRIS), hex];
     expected.sort();
     assert_eq!(named(&root, "objects")?, expected);
     // a clone that never built is told to build the recipe before anything downloads, since no
