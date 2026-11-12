@@ -75,6 +75,15 @@ class ReleaseChecks(unittest.TestCase):
         self.check_all(lambda assets, names, lines: lines.append("not a checksum"), False)
 
 
+class ThirdPartyLicenses(unittest.TestCase):
+    def test_the_notices_accept_exactly_the_licenses_deny_allows(self):
+        import tomllib
+
+        allowed = tomllib.loads((ROOT / "deny.toml").read_text(encoding="utf-8"))["licenses"]["allow"]
+        accepted = tomllib.loads((ROOT / "about.toml").read_text(encoding="utf-8"))["accepted"]
+        self.assertEqual(sorted(accepted), sorted(allowed))
+
+
 class GateDocumentation(unittest.TestCase):
     def test_local_gate_lists_the_linux_release_and_python_checks(self):
         required = [

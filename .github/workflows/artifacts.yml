@@ -219,6 +219,18 @@ jobs:
           $dlls
           if (-not ($dlls -match '^kernel32\.dll$')) { throw 'could not read the dlls fetchloom.exe imports' }
           if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw 'fetchloom.exe loads the C runtime from a DLL' }
+      - &about
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-about@0.9.3
+      # the licenses of the crates the six release binaries are built from, which most of them ask
+      # to travel with every copy. --frozen reads only the crates cargo fetched, so every job
+      # writes the same bytes
+      - &licenses
+        name: write the third-party licenses
+        run: |
+          cargo fetch --locked
+          cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES
       # the same files pack into the same bytes: entries in a fixed order, every time set to the
       # commit's, owners as numbers and, for gzip, a header that holds no name or time
       - &package
@@ -227,7 +239,7 @@ jobs:
           name="fetchloom-$VERSION-${{ matrix.target }}"
           mkdir -p ".release/$name" dist
           cp "target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }}" \
-            LICENSE NOTICE README.md ".release/$name/"
+            LICENSE NOTICE README.md THIRD-PARTY-LICENSES ".release/$name/"
           cd .release
           if [ "$RUNNER_OS" = macOS ]; then
             stamp=$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
@@ -259,6 +271,7 @@ jobs:
           ln -s fetchloom "$root/usr/bin/fl"
           install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
           install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
+          install -Dm644 THIRD-PARTY-LICENSES "$root/usr/share/doc/fetchloom/THIRD-PARTY-LICENSES"
           mkdir -p "$root/DEBIAN"
           # dpkg sorts 0.1.0~rc.1 before 0.1.0 and 0.1.0-rc.1 after it. the file keeps Cargo's
           # spelling, since a release upload renames a ~ in a file name to a dot
@@ -283,6 +296,10 @@ jobs:
           case "$contents" in
             *' ./usr/bin/fl -> fetchloom'*) ;;
             *) echo "::error::the debian package lacks /usr/bin/fl as a link to fetchloom"; exit 1 ;;
+          esac
+          case "$contents" in
+            *' ./usr/share/doc/fetchloom/THIRD-PARTY-LICENSES'*) ;;
+            *) echo "::error::the debian package lacks the third-party licenses"; exit 1 ;;
           esac
           sudo dpkg -i "$deb"
           trap 'sudo dpkg -r fetchloom' EXIT
@@ -439,6 +456,8 @@ jobs:
       - *cache
       - *compile
       - *libraries
+      - *about
+      - *licenses
       - *package
       - *wheel
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -447,6 +466,7 @@ jobs:
           path: |
             dist/*
             target/${{ matrix.target }}/release/fetchloom
+            THIRD-PARTY-LICENSES
           if-no-files-found: error
           retention-days: 1
 

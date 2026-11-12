@@ -8,7 +8,8 @@ description = "put the exact data a project needs onto any machine with one comm
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+# release builds write THIRD-PARTY-LICENSES first; maturin leaves it out where it is absent
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSES"]
 authors = [{ name = "Nikhil Y N" }, { name = "KairosLab India Private Limited" }]
 keywords = ["data", "datasets", "reproducibility", "research"]
 classifiers = [

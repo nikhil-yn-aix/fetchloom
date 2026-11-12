@@ -14,7 +14,7 @@ ignore = [
 
 [licenses]
 # exactly the licenses the dependency tree needs. a crate that offers a choice is taken under one
-# of these.
+# of these. about.toml accepts the same list for the release's THIRD-PARTY-LICENSES.
 allow = [
     "Apache-2.0",
     "BSD-3-Clause",

@@ -1,0 +1,25 @@
+# what `cargo about generate` collects into THIRD-PARTY-LICENSES for a release: the licenses
+# deny.toml allows, for the crates the binaries of the six release targets are built from. a
+# crate that offers a choice is taken under the first license here it allows, so MIT comes first
+# for its short text.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "bzip2-1.0.6",
+]
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-msvc",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-musl",
+]
+# build scripts and tests end up in no binary
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

@@ -1,0 +1,20 @@
+third-party licenses for fetchloom
+
+the fetchloom executable is built from the crates listed below. each license text follows the
+crates it covers.
+{{#each licenses}}
+{{#unless (and (eq (len used_by) 1) (eq used_by.[0].crate.name "fetchloom"))}}
+
+================================================================================
+{{{name}}} ({{{id}}})
+
+used by:
+{{#each used_by}}
+{{#unless (eq crate.name "fetchloom")}}
+- {{{crate.name}}} {{{crate.version}}}
+{{/unless}}
+{{/each}}
+
+{{{text}}}
+{{/unless}}
+{{/each}}

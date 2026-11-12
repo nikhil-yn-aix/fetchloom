@@ -58,13 +58,13 @@ the archives are packed so the same files give the same bytes. the build job exp
 
 | artifact | contents |
 |---|---|
-| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE and README.md in a matching top-level folder |
+| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE, README.md and THIRD-PARTY-LICENSES in a matching top-level folder |
 | `fetchloom-0.1.0-aarch64-pc-windows-msvc.zip` | same layout for arm64 windows |
-| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE and README.md in a matching folder |
+| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE, README.md and THIRD-PARTY-LICENSES in a matching folder |
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
 | `fetchloom-0.1.0-x86_64-apple-darwin.tar.gz` | same layout for x86_64 macos |
 | `fetchloom-0.1.0-aarch64-apple-darwin.tar.gz` | same layout for arm64 macos |
-| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license and notice in `/usr/share/doc/fetchloom` |
+| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license, notice and third-party licenses in `/usr/share/doc/fetchloom` |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |
@@ -73,6 +73,13 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `fetchloom-0.1.0-py3-none-macosx_11_0_arm64.whl` | same for arm64 macos |
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
+
+THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from [about.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.toml), which accepts the licenses deny.toml allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
+
+```sh
+cargo fetch --locked
+cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES
+```
 
 a pre-release such as 0.1.0-rc.1 keeps that spelling in the archive and debian package file names. its wheels carry pep 440's spelling, 0.1.0rc1, as maturin writes it, with alpha and beta shortened to a and b. its debian packages record 0.1.0~rc.1 as their version, which dpkg sorts before 0.1.0, so the release replaces the pre-release on upgrade.
 

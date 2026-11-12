@@ -162,3 +162,4 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 |---|---|---|
 | use Apache-2.0 | permit use, modification and redistribution with explicit patent terms | [LICENSE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE) |
 | distribute NOTICE | preserve attribution and the project-name notice; the license grants no trademark rights beyond describing origin | [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE) |
+| ship THIRD-PARTY-LICENSES with every release package | every license deny.toml allows but Zlib asks that its text or notice travel with copies, binary ones included; cargo-about collects them over exactly that list | [releasing](engineering/releasing.md#artifacts), [about.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.toml) |

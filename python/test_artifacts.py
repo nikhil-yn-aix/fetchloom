@@ -23,6 +23,21 @@ VERSION = '0.1.0'
 COMMIT = 'a' * 40
 
 
+def write_wheel(path, binary, recorded=VERSION, notices=True):
+    """a wheel as maturin writes it, holding `binary`, and the third-party licenses when
+    `notices`."""
+    info = f'fetchloom-{recorded}.dist-info'
+    metadata = f'Name: fetchloom\nVersion: {recorded}\nRequires-Python: >=3.10\n'
+    with zipfile.ZipFile(path, 'w') as archive:
+        if notices:
+            metadata += 'License-File: THIRD-PARTY-LICENSES\n'
+            archive.writestr(f'{info}/licenses/THIRD-PARTY-LICENSES', 'crate notices\n')
+        archive.writestr(f'{info}/METADATA', metadata)
+        archive.writestr('fetchloom/__init__.py', '')
+        archive.writestr('fetchloom/py.typed', '')
+        archive.writestr(f'fetchloom-{recorded}.data/scripts/fetchloom', binary)
+
+
 class InventoryTests(unittest.TestCase):
     def make(self, root, version=VERSION, wheel_version=VERSION):
         packages, proofs = root / 'dist', root / 'proofs'
@@ -117,6 +132,26 @@ class PackageContentTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check_machine(binary, 'aarch64-unknown-linux-musl')
 
+    def test_an_archive_carries_the_third_party_licenses(self):
+        folder = f'fetchloom-{VERSION}-x86_64-unknown-linux-musl'
+        named = ['fetchloom', 'LICENSE', 'NOTICE', 'README.md']
+        for names, complete in [(named, False), (named + ['THIRD-PARTY-LICENSES'], True)]:
+            with self.subTest(complete=complete), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / 'release.tar.gz'
+                with tarfile.open(path, 'w:gz') as archive:
+                    for name in names:
+                        member = tarfile.TarInfo(f'{folder}/{name}')
+                        member.size = len(name)
+                        member.mode = 0o755
+                        archive.addfile(member, io.BytesIO(name.encode()))
+                if complete:
+                    unpack(path, 'x86_64-unknown-linux-musl', VERSION, root / 'unpacked')
+                    self.assertEqual((root / 'unpacked/THIRD-PARTY-LICENSES').read_bytes(), b'THIRD-PARTY-LICENSES')
+                else:
+                    with self.assertRaises(AssertionError):
+                        unpack(path, 'x86_64-unknown-linux-musl', VERSION, root / 'unpacked')
+
     def test_wheel_must_bundle_the_tested_binary_and_typed_helper(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -124,17 +159,12 @@ class PackageContentTests(unittest.TestCase):
             binary.write_bytes(b'checked binary')
             for wrong in [False, True]:
                 wheel = root / 'package.whl'
-                with zipfile.ZipFile(wheel, 'w') as archive:
-                    archive.writestr('fetchloom-0.1.0.dist-info/METADATA', 'Name: fetchloom\nVersion: 0.1.0\nRequires-Python: >=3.10\n')
-                    archive.writestr('fetchloom/__init__.py', '')
-                    archive.writestr('fetchloom/py.typed', '')
-                    archive.writestr('fetchloom-0.1.0.data/scripts/fetchloom', b'other binary' if wrong else binary.read_bytes())
+                write_wheel(wheel, b'other binary' if wrong else binary.read_bytes())
                 if wrong:
                     with self.assertRaises(AssertionError):
                         inspect_wheel(wheel, VERSION, binary)
                 else:
                     inspect_wheel(wheel, VERSION, binary)
-
 
     def test_a_pre_release_wheel_records_python_spelling_of_its_version(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -142,12 +172,18 @@ class PackageContentTests(unittest.TestCase):
             binary = root / 'fetchloom'
             binary.write_bytes(b'checked binary')
             wheel = root / 'package.whl'
-            with zipfile.ZipFile(wheel, 'w') as archive:
-                archive.writestr('fetchloom-0.1.0rc1.dist-info/METADATA', 'Name: fetchloom\nVersion: 0.1.0rc1\nRequires-Python: >=3.10\n')
-                archive.writestr('fetchloom/__init__.py', '')
-                archive.writestr('fetchloom/py.typed', '')
-                archive.writestr('fetchloom-0.1.0rc1.data/scripts/fetchloom', binary.read_bytes())
+            write_wheel(wheel, binary.read_bytes(), '0.1.0rc1')
             inspect_wheel(wheel, '0.1.0-rc.1', binary)
+
+    def test_a_wheel_carries_the_third_party_licenses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fetchloom'
+            binary.write_bytes(b'checked binary')
+            wheel = root / 'package.whl'
+            write_wheel(wheel, binary.read_bytes(), notices=False)
+            with self.assertRaises(AssertionError):
+                inspect_wheel(wheel, VERSION, binary)
 
 
 class VersionTests(unittest.TestCase):

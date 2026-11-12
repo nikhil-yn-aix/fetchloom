@@ -8,11 +8,14 @@ import zipfile
 from check_artifacts import archive_name
 from ci_journey import ROOT, digest, require
 
+# the files every archive carries beside the executable, as the checkout has them
+SHIPPED = ["LICENSE", "NOTICE", "README.md", "THIRD-PARTY-LICENSES"]
+
 
 def unpack(archive, target, version, destination):
     program = "fetchloom.exe" if "windows" in target else "fetchloom"
     folder = f"fetchloom-{version}-{target}"
-    expected = {f"{folder}/{name}" for name in [program, "LICENSE", "NOTICE", "README.md"]}
+    expected = {f"{folder}/{name}" for name in [program, *SHIPPED]}
     destination.mkdir(parents=True, exist_ok=True)
     files = {}
     if archive.suffix == ".zip":
@@ -73,7 +76,7 @@ def main():
     destination = Path(".release/artifact-bin") / args.target
     binary = unpack(args.dist / archive_name(args.target, args.version), args.target, args.version, destination)
     check_machine(binary, args.target)
-    for name in ["LICENSE", "NOTICE", "README.md"]:
+    for name in SHIPPED:
         require(digest(destination / name) == digest(ROOT / name), f"archive changed {name}")
     require(digest(binary) == digest(args.built), "archive binary differs from the checked release build")
     subprocess.run([sys.executable, "python/ci_journey.py", "--binary", str(binary.resolve()),

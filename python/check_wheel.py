@@ -23,6 +23,9 @@ def inspect_wheel(wheel, version, binary):
         require(fields['Name'] == 'fetchloom' and fields['Version'] == wheel_version(version), "wrong wheel identity")
         require(fields['Requires-Python'] == '>=3.10', "wheel changed the Python floor")
         require('fetchloom/py.typed' in packed.namelist() and 'fetchloom/__init__.py' in packed.namelist(), "wheel omitted its helper")
+        notices = metadata[0].removesuffix('METADATA') + 'licenses/THIRD-PARTY-LICENSES'
+        require('THIRD-PARTY-LICENSES' in fields.get_all('License-File', []) and notices in packed.namelist(),
+                "wheel omitted the third-party licenses")
         programs = [name for name in packed.namelist() if name.endswith('/scripts/' + binary.name)]
         require(len(programs) == 1, "wheel has no unique executable")
         require(hashlib.sha256(packed.read(programs[0])).hexdigest() == digest(binary), "wheel rebuilt or omitted the checked executable")
