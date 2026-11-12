@@ -59,6 +59,8 @@ pub(crate) struct Output {
     stopping: Arc<AtomicBool>,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
     report_color: bool,
+    /// every bar made, so a first ctrl-c redraws each at once to say it is stopping.
+    drawn: Mutex<Vec<indicatif::WeakProgressBar>>,
     /// the last closing line told, such as `Added iris`, and whether a ctrl-c that let the run
     /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
     /// a ctrl-c comes, so that line is told once more at the end.
@@ -178,6 +180,7 @@ impl Output {
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
             report_color: Style::stdout_colored(),
+            drawn: Mutex::new(Vec::new()),
             closing: Mutex::new((None, false)),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
@@ -508,16 +511,22 @@ impl Output {
 
     /// a bar for one download, hidden unless a person is watching the terminal.
     pub(crate) fn bar(&self, verb: &'static str, message: String) -> Bar {
-        match &self.bars {
-            Some(bars) => Bar::add(
-                bars,
-                verb,
-                message,
-                (self.style.color, self.style.unicode),
-                self.stopping.clone(),
-            ),
-            None => Bar::hidden(),
+        let Some(bars) = &self.bars else {
+            return Bar::hidden();
+        };
+        let bar = Bar::add(
+            bars,
+            verb,
+            message,
+            (self.style.color, self.style.unicode),
+            self.stopping.clone(),
+        );
+        if let Some(weak) = bar.weak() {
+            let mut drawn = self.drawn.lock().unwrap_or_else(PoisonError::into_inner);
+            drawn.retain(|bar| bar.upgrade().is_some());
+            drawn.push(weak);
         }
+        bar
     }
 
     /// a wait for another program, which a person may sit through for a while: on a terminal a
@@ -841,6 +850,15 @@ impl Output {
     pub(crate) fn stopping(&self) {
         self.stopping.store(true, Ordering::Relaxed);
         self.heard("Stopping", "(press ctrl-c again to quit at once)");
+        // each bar says so now, not at its next tick, which a busy machine can put off
+        let drawn = self
+            .drawn
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for bar in drawn.iter().filter_map(indicatif::WeakProgressBar::upgrade) {
+            bar.tick();
+        }
     }
 
     /// says that a first ctrl-c was heard once the run had marked its work as finishing, so it

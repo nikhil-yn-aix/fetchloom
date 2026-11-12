@@ -19,8 +19,10 @@ const SETTLE: Duration = Duration::from_secs(3);
 /// [`STEADY`] has passed.
 const REACH: u32 = 60;
 const STEADY: Duration = Duration::from_secs(30);
-/// how long a download receives nothing before its bar says so instead of showing a fading rate.
-const STALL: Duration = Duration::from_secs(5);
+/// how long a download receives nothing before its bar drops a time left that no longer holds,
+/// and then before it says it receives nothing instead of showing a fading rate.
+const STILL: Duration = Duration::from_secs(1);
+const STALL: Duration = Duration::from_secs(2);
 /// how far into a transfer its rate starts over, once, so bytes that arrive at once when it
 /// begins, as those a server sent while this run checked what an earlier run kept, are no speed.
 const RERATE: Duration = Duration::from_secs(1);
@@ -55,6 +57,9 @@ struct Moved {
     /// [`RERATE`] into it.
     started: AtomicU64,
     rerated: AtomicBool,
+    /// whether the download waits for the disk to take what arrived, so its silence is the
+    /// disk's rather than the network's.
+    behind: AtomicBool,
 }
 
 /// a download's next try, as its bar tells it.
@@ -76,6 +81,7 @@ impl Moved {
             retry: Mutex::new(None),
             started: AtomicU64::new(0),
             rerated: AtomicBool::new(false),
+            behind: AtomicBool::new(false),
         }
     }
 
@@ -185,9 +191,21 @@ impl Bar {
         }
     }
 
+    /// the bar as drawn, to redraw it without keeping it.
+    pub(super) fn weak(&self) -> Option<indicatif::WeakProgressBar> {
+        self.drawn.as_ref().map(ProgressBar::downgrade)
+    }
+
+    /// whether the download waits for the disk to take the bytes that arrived.
+    pub(crate) fn behind(&self, behind: bool) {
+        self.moved.behind.store(behind, Ordering::Relaxed);
+    }
+
     /// a transfer of `total` bytes that goes on from `resumed`, which it does not rate.
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.drawn {
+            // the answer is news, before the wait for it ends, so no frame between calls it quiet
+            self.moved.now();
             self.moved
                 .retry
                 .lock()
@@ -281,20 +299,20 @@ fn style(
                 // unpacking and checking read local files, whose pauses mean nothing
                 let quiet = (verb == "Downloading").then(|| moved.quiet());
                 let stopping = moved.stopping.load(Ordering::Relaxed);
-                let amount = match moved.retrying().filter(|_| !stopping) {
-                    // a server that refused a try answered at once, so no stall is told
-                    Some(next) if done > 0 => format!("{} · {next}", counted(done, total)),
-                    Some(next) => next,
-                    None => measure(
-                        done,
-                        total,
-                        state.per_sec(),
-                        state.elapsed(),
-                        state.eta(),
-                        quiet,
-                        stopping,
-                    ),
-                };
+                let behind = quiet.filter(|_| moved.behind.load(Ordering::Relaxed));
+                let amount = waiting(done, total, moved.retrying(), behind)
+                    .filter(|_| !stopping)
+                    .unwrap_or_else(|| {
+                        measure(
+                            done,
+                            total,
+                            state.per_sec(),
+                            state.elapsed(),
+                            state.eta(),
+                            quiet,
+                            stopping,
+                        )
+                    });
                 let width = usize::from(console::Term::stderr().size().1);
                 let line = render(&name, &heading, &bar, &amount, width, color);
                 let _ = out.write_str(&super::shown(&line, unicode));
@@ -432,18 +450,45 @@ fn measure(
         }
     }
     let settled = done > 0 && rate > 0.0 && elapsed >= SETTLE;
-    let foreseen =
-        settled && total.is_some() && (elapsed >= STEADY || left <= elapsed.saturating_mul(REACH));
+    // a download that just went quiet still has a rate, but no time left it can keep to
+    let still = quiet.is_some_and(|quiet| quiet >= STILL);
+    let foreseen = settled
+        && !still
+        && total.is_some()
+        && (elapsed >= STEADY || left <= elapsed.saturating_mul(REACH));
     if settled {
         parts.push(units::speed(rate));
         if foreseen {
             parts.push(format!("{} left", units::seconds(left)));
         }
     }
-    if elapsed >= MOMENT && !foreseen {
+    if elapsed >= MOMENT && !foreseen && !still {
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
+}
+
+/// what a download's bar says while it waits on something other than the server's bytes: the
+/// try it makes next after one failed, as `next_try` says it, which a server that refused one
+/// answered at once, or the disk, which has been `behind` for that long taking what arrived.
+fn waiting(
+    done: u64,
+    total: Option<u64>,
+    retry: Option<String>,
+    behind: Option<Duration>,
+) -> Option<String> {
+    let what = match (retry, behind) {
+        (Some(next), _) => next,
+        (None, Some(quiet)) if quiet >= STALL && !every_byte_in(done, total) => {
+            format!("waiting for the disk · {}", units::seconds(quiet))
+        }
+        _ => return None,
+    };
+    Some(if done > 0 {
+        format!("{} · {what}", counted(done, total))
+    } else {
+        what
+    })
 }
 
 /// how far a bar got: `done` of `total` when it is known.
@@ -811,6 +856,71 @@ mod tests {
         );
     }
 
+    /// a terminal that keeps what bars draw on it.
+    #[derive(Debug, Default, Clone)]
+    struct Drawn(Arc<Mutex<Vec<String>>>);
+
+    impl TermLike for Drawn {
+        fn width(&self) -> u16 {
+            100
+        }
+        fn move_cursor_up(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_down(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_right(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_left(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn write_line(&self, line: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(line.to_owned());
+            Ok(())
+        }
+        fn write_str(&self, text: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(text.to_owned());
+            Ok(())
+        }
+        fn clear_line(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn flush(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// a first ctrl-c redraws every bar at once to say it is stopping, rather than at its next
+    /// tick, which a busy machine once put off for 6 s while the bar kept saying `9 s left`.
+    #[test]
+    fn a_stop_shows_on_every_bar_at_once() {
+        let style = super::super::Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut output =
+            super::super::Output::new(style, super::super::Level::Normal, false, false);
+        let screen = Drawn::default();
+        output.bars = Some(MultiProgress::with_draw_target(
+            ProgressDrawTarget::term_like(Box::new(screen.clone())),
+        ));
+        let bar = output.bar("Downloading", "mid.bin".to_owned());
+        if let Some(drawn) = &bar.drawn {
+            drawn.disable_steady_tick();
+        }
+        bar.start(Some(1000), 0);
+        bar.advance(452);
+        screen.0.lock().unwrap().clear();
+        output.stopping();
+        let drawn = screen.0.lock().unwrap().join("\n");
+        assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
+    }
+
     /// a transfer's time counts from its start, not from when its bar appeared, as when the
     /// bar waited for the server or checked what an earlier run kept, so its rate settles over
     /// this run's transfer alone; and the rate starts over once, a second in, leaving out the
@@ -1133,11 +1243,59 @@ mod tests {
                 512.0,
                 12 * second,
                 6 * second,
-                Some(4 * second),
+                Some(2 * second),
+                false
+            ),
+            "1.0/4.0 KiB · no data for 2 s",
+            "two seconds of nothing is a stall to tell"
+        );
+        assert_eq!(
+            measure(
+                1024,
+                Some(4096),
+                512.0,
+                12 * second,
+                second / 2,
+                Some(second + second / 2),
+                false
+            ),
+            "1.0/4.0 KiB · 512 B/s",
+            "a second of nothing drops a time left it cannot keep to"
+        );
+        assert_eq!(
+            measure(
+                1024,
+                Some(4096),
+                512.0,
+                12 * second,
+                6 * second,
+                Some(second / 2),
                 false
             ),
             "1.0/4.0 KiB · 512 B/s · 6 s left",
-            "a gap of a few seconds is ordinary"
+            "a gap of a moment is ordinary"
+        );
+    }
+
+    /// a download whose disk is behind taking what arrived says it waits for the disk, not
+    /// that no data came, which would send a person to check the network.
+    #[test]
+    fn a_download_held_by_the_disk_says_so() {
+        let second = Duration::from_secs(1);
+        let mib = 1024 * 1024;
+        assert_eq!(
+            waiting(680 * mib, Some(800 * mib), None, Some(3 * second)).as_deref(),
+            Some("680.0/800.0 MiB · waiting for the disk · 3 s")
+        );
+        assert_eq!(
+            waiting(680 * mib, Some(800 * mib), None, Some(second)),
+            None,
+            "a moment behind is ordinary"
+        );
+        assert_eq!(waiting(680 * mib, Some(800 * mib), None, None), None);
+        assert_eq!(
+            waiting(0, None, Some("try 2 of 5".to_owned()), Some(3 * second)).as_deref(),
+            Some("try 2 of 5")
         );
     }
 

@@ -564,6 +564,7 @@ impl<'a> Watch<'a> {
                 wait,
                 ref limit,
             } => self.bar().retrying(next, of, wait, limit.clone()),
+            Event::Behind(behind) => self.bar().behind(behind),
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);
                 self.count(self.held.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes);

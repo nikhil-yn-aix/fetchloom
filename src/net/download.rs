@@ -173,6 +173,9 @@ pub(crate) enum Event {
     Bytes(u64),
     /// every byte is in, and the disk keeps the file now.
     Arrived,
+    /// the disk is behind taking the bytes that arrived, so the download waits for it, or no
+    /// longer does.
+    Behind(bool),
     /// a try failed, and try `next` of at most `of` goes out after `wait`, once the rate limit of
     /// the host `limit` names resets when it names one.
     Retrying {
@@ -396,6 +399,7 @@ impl Reach {
             | Event::WebPage { .. }
             | Event::Encoded(_)
             | Event::Arrived
+            | Event::Behind(_)
             | Event::Retrying { .. } => {}
         }
     }
@@ -1056,9 +1060,21 @@ impl Net {
                         break Err(Failure::Final(err));
                     }
                     batch.push(chunk);
-                    // a closed channel means the writer failed, and its own error says why
-                    if batch.full() && batch.flush(sender).await.is_err() {
-                        break Ok(None);
+                    if batch.full() {
+                        // a writer with every slot taken is the disk falling behind, which the
+                        // bar tells apart from a server that sends nothing
+                        let behind = sender.capacity() == 0;
+                        if behind {
+                            let _ = on(Event::Behind(true));
+                        }
+                        let flushed = batch.flush(sender).await;
+                        if behind {
+                            let _ = on(Event::Behind(false));
+                        }
+                        // a closed channel means the writer failed, and its own error says why
+                        if flushed.is_err() {
+                            break Ok(None);
+                        }
                     }
                     // waiting on this machine, for the rate cap, the writer or an answer to a
                     // question, is no silence from the server
