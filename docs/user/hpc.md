@@ -35,7 +35,7 @@ keep the code in git. if scratch deletes old files, `fetchloom status` shows wha
 
 ## many jobs at once
 
-jobs that share one `FETCHLOOM_CACHE` can run fetchloom at the same time; each file downloads once. download on the login node before you submit, so jobs only read:
+jobs that share one `FETCHLOOM_CACHE` can run fetchloom at the same time; each file downloads once. download on the login node before you submit, so jobs only read. a login node is shared, and `FETCHLOOM_RESOURCES=lean` keeps a sync there to 2 requests at once and a small memory budget, as [resources](resources.md) says:
 
 ```sh
 fetchloom sync --locked
