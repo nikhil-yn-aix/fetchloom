@@ -429,6 +429,8 @@ impl<'a> Loop<'a> {
     ) -> Result<Placement, Error> {
         let packed = self.packed_in(manifest, lock, &placing);
         let nested = placing.nested();
+        let files = units::count(placing.files() as u64, "file", "files");
+        let _placing = self.context.output.lasting("Placing", files);
         let placement = placing.apply(
             &self.context.output,
             &self.context.work,
