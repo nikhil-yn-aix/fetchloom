@@ -543,6 +543,7 @@ impl Net {
         let mut redirects = 0;
         let mut name = None;
         let mut first_origin = true;
+        let mut asked_signed = false;
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             wire.proxies
@@ -583,6 +584,7 @@ impl Net {
             pace::Paces::heard(ticket, limits, Instant::now());
             if let Some(located) = located
                 && signer.is_none()
+                && !asked_signed
                 && matches!(
                     response.status(),
                     StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
@@ -598,6 +600,7 @@ impl Net {
                     .map_err(Failure::Final)?
                 {
                     tracing::debug!(url = %Shown(&hop), "S3 refused the request without a key, so it goes again signed");
+                    asked_signed = true;
                     continue;
                 }
             }

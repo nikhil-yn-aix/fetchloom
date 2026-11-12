@@ -131,8 +131,9 @@ impl Signing {
     ///
     /// # Errors
     ///
-    /// what getting the keys found wrong, such as a `credential_process` that failed or gave
-    /// keys that expired, or `interrupted` once `stop` asks; the request is then not sent at all.
+    /// what reading the AWS settings or getting the keys found wrong, such as a
+    /// `credential_process` that failed or gave keys that expired, or `interrupted` once `stop`
+    /// asks; the request is then not sent at all.
     pub(crate) async fn signer(
         &self,
         located: Option<&Located>,
@@ -147,10 +148,11 @@ impl Signing {
             if !state.refused.contains(&located.bucket) {
                 return Ok(None);
             }
-            let Some(Ok(Some(identity))) = state.found.get(&located.bucket.endpoint) else {
-                return Ok(None);
+            let identity = match state.found.get(&located.bucket.endpoint) {
+                Some(Ok(Some(identity))) => identity.clone(),
+                Some(Err(error)) => return Err(error.clone()),
+                Some(Ok(None)) | None => return Ok(None),
             };
-            let identity = identity.clone();
             let region = located
                 .region
                 .clone()
@@ -290,6 +292,8 @@ mod tests {
         ("AWS_SESSION_TOKEN", "session-secret"),
     ];
 
+    const KEYS_HALF: [(&str, &str); 1] = [("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEWXYZ")];
+
     fn signing(listed: &[&str], pairs: &'static [(&'static str, &'static str)]) -> Signing {
         let listed = listed
             .iter()
@@ -402,6 +406,17 @@ mod tests {
             .unwrap();
         assert!(!keyless.refused(&located, None).unwrap());
         assert!(signer(&keyless, &located).is_none());
+        // keys that could not be read fail each later request too, which never goes without one
+        let half = self::signing(&["s3://lab-raw"], &KEYS_HALF);
+        let located = half
+            .locate(&url("https://lab-raw.s3.amazonaws.com/a.csv"))
+            .unwrap();
+        let refused = half.refused(&located, None).unwrap_err();
+        let later = block_on(half.signer(Some(&located), UNIX_EPOCH, &Stop::default()));
+        assert_eq!(
+            later.err().map(|error| error.message),
+            Some(refused.message)
+        );
     }
 
     #[test]
