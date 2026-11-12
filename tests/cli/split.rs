@@ -195,9 +195,12 @@ fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
     )
 }
 
+/// a cut download whose tag cannot prove its version starts over whole through the binary.
+/// `net::headers::tests::malformed_entity_tags_cannot_prove_a_version` holds every malformed tag;
+/// an unquoted one and a weak one stand for them here.
 #[test]
 fn malformed_tags_cannot_splice_versions() -> Result {
-    for tag in ["", "v1", "w/\"v1\"", "\"v1\", \"v2\"", "\"unfinished"] {
+    for tag in ["v1", "w/\"v1\""] {
         check_a_replacement_is_whole(format!("ETag: {tag}\r\n"))?;
     }
     Ok(())
