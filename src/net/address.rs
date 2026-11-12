@@ -70,10 +70,10 @@ impl Allowed {
             .iter()
             .map(|origin| format!("\"{origin}\""))
             .collect();
-        let file = self.file.as_deref().map_or_else(
-            || "the settings file".to_owned(),
-            |path| path.display().to_string(),
-        );
+        let file = self
+            .file
+            .as_deref()
+            .map_or_else(|| "the settings file".to_owned(), crate::units::path);
         format!(
             "put `allowed_origins = [{}]` in {file}, or set {variable} for one run",
             quoted.join(", ")

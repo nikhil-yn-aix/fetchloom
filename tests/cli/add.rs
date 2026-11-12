@@ -725,8 +725,9 @@ fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
     Ok(())
 }
 
-/// the first add says it started a project, and where. in the home folder, where a project would
-/// take in every folder below, it asks first, and with nobody to ask it refuses unless --yes.
+/// the first add says it started a project, and where, the home folder as `~`. in the home
+/// folder, where a project would take in every folder below, it asks first, and with nobody to
+/// ask it refuses unless --yes.
 #[test]
 fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -760,6 +761,8 @@ fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> 
         text(&approved.stderr)?
     );
     assert!(home.join("data.toml").is_file());
+    let stderr = text(&approved.stderr)?;
+    assert!(stderr.contains("    Started a project in ~\n"), "{stderr}");
     Ok(())
 }
 

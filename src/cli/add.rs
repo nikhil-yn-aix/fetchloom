@@ -2009,7 +2009,7 @@ fn tell_started(work: &Loop<'_>, starting: bool) {
     if starting {
         work.context.output.step(
             "Started",
-            &format!("a project in {}", work.project.root.display()),
+            &format!("a project in {}", units::path(&work.project.root)),
         );
     }
 }

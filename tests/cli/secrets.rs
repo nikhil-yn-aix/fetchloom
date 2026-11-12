@@ -216,12 +216,14 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
 }
 
 /// the settings file fetchloom reads in `sandbox`, as `fetchloom settings` names it.
+/// the settings file as a help names it, below the home folder as `~/…`.
 fn settings_file(sandbox: &Sandbox) -> Result<String> {
     let document = json(&sandbox.run(&["--json", "settings"])?)?;
     let path = document["result"]["file"]["path"]
         .as_str()
         .ok_or("settings names no file")?;
-    Ok(path.to_owned())
+    let below = std::path::Path::new(path).strip_prefix(sandbox.folder("home")?)?;
+    Ok(format!("~{}{}", std::path::MAIN_SEPARATOR, below.display()))
 }
 
 /// the line a refusal adds when `trusted` is another origin on `host`, the refused link's host.

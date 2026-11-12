@@ -36,7 +36,7 @@ $ fetchloom add -i links.txt
      Pinned tips, new in data.lock: https://raw.githubusercontent.com/mwaskom/seaborn-data/master/tips.csv · 1 file · 9.5 KiB
      Placed data/iris · 1 file linked to the cache
      Placed data/tips · 1 file linked to the cache
-    Started a project in /home/me/paper
+    Started a project in ~/paper
       Added iris, its files are in data/iris
       Added tips, its files are in data/tips
   hint: scripts can find each with `fetchloom path <name>`
