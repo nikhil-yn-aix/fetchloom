@@ -1486,7 +1486,7 @@ fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
 /// a hugging face or kaggle id one typo from a public dataset of the same owner, which its source
 /// answers as it answers a private one, gets the command meant rather than a sign-in, from one
 /// request to the source's own list of the owner's datasets, and exits 10 as an id the source
-/// does not have. `--json` asks nothing more, so it still says to sign in.
+/// does not have. `--json` asks the same, and gives the guess as help but never as a fix.
 #[cfg(debug_assertions)]
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant() -> Result {
@@ -1521,14 +1521,15 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
     assert_eq!(hub.requests().len(), 2);
     assert_eq!(kaggle.requests().len(), 2);
     let output = add(&["--json", "add", "hf:datasets/scikit-learn/irsi"])?;
-    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stdout)?);
-    let help = json(&output)?["errors"][0]["help"].clone();
-    assert!(
-        help.as_str()
-            .is_some_and(|help| help.contains("sign in with `fetchloom auth login hf`")),
-        "{help}"
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let error = json(&output)?["errors"][0].clone();
+    assert_eq!(error["kind"], "reference.unresolved", "{error}");
+    assert_eq!(
+        error["help"], "did you mean `fetchloom --json add hf:datasets/scikit-learn/iris`?",
+        "{error}"
     );
-    assert_eq!(hub.requests().len(), 3, "--json asks nothing more");
+    assert!(error["fix"].is_null(), "{error}");
+    assert_eq!(hub.requests().len(), 4);
     Ok(())
 }
 
