@@ -215,6 +215,14 @@ fn challenge(headers: &HeaderMap) -> Option<String> {
     Some(scheme.trim_end_matches(',').to_ascii_lowercase())
 }
 
+/// the host of `url` as `NO_PROXY` lists it, an IPv6 address without its brackets.
+fn bare_host(url: &Url) -> String {
+    match url.host() {
+        Some(Host::Ipv6(ip)) => ip.to_string(),
+        _ => url.host_str().unwrap_or_default().to_owned(),
+    }
+}
+
 /// whether `url` names this machine: a loopback address, or `localhost`.
 fn is_loopback(url: &Url) -> bool {
     match url.host() {
@@ -270,13 +278,24 @@ impl Net {
 
     /// whether a saved credential may go with a request for `url`: over https, or over plain
     /// http to this machine or to an origin `allowed_origins` lists, a network a person vouched
-    /// for. anywhere else plain http would show the credential to everyone on the way.
+    /// for, when no proxy carries it. anywhere else plain http would show the credential to
+    /// everyone on the way, and a proxy reads a plain http request whole.
     pub(super) fn carries(&self, url: &Url) -> bool {
         match url.scheme() {
             "https" => true,
-            "http" => is_loopback(url) || self.typed.allows(url),
+            "http" => {
+                self.vouched(url)
+                    && self
+                        .wire()
+                        .is_ok_and(|wire| wire.proxies.carrier(url).is_none())
+            }
             _ => false,
         }
+    }
+
+    /// whether `url` is on this machine or an origin `allowed_origins` lists.
+    fn vouched(&self, url: &Url) -> bool {
+        is_loopback(url) || self.typed.allows(url)
     }
 
     /// the saved credential for the host and port of `url`, when one may go with a request on
@@ -389,9 +408,17 @@ impl Net {
             ),
         );
         if !self.carries(url) {
-            return Some(error.help(
-                "fetchloom sends a key over plain http only to this machine or to an origin allowed_origins lists, since anyone on the way could read it there: ask the site for an https link",
-            ));
+            let proxy = self
+                .vouched(url)
+                .then(|| self.wire().ok()?.proxies.carrier(url));
+            return Some(error.help(match proxy.flatten() {
+                Some(proxy) => format!(
+                    "a proxy, here {}, reads a plain http request whole, so fetchloom sends no key through one: add {} to NO_PROXY to send the request straight there, or ask the site for an https link",
+                    proxy.shown,
+                    bare_host(url)
+                ),
+                None => "fetchloom sends a key over plain http only to this machine or to an origin allowed_origins lists, since anyone on the way could read it there: ask the site for an https link".to_owned(),
+            }));
         }
         let way = challenge(headers);
         let account = Account::Login(named.clone());

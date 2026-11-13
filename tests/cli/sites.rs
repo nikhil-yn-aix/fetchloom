@@ -4,7 +4,9 @@
 #![cfg(debug_assertions)]
 
 use crate::auth::with_stdin;
-use crate::support::{Part, Result, Routes, Running, Sandbox, Server, file, json, reply, text};
+use crate::support::{
+    Part, Proxy, Result, Routes, Running, Sandbox, Server, file, json, reply, text,
+};
 
 /// the host and port of a server on this machine, as `auth login` takes it.
 fn host_of(server: &Routes) -> String {
@@ -90,6 +92,75 @@ fn a_token_goes_to_its_own_host_and_never_after_a_redirect_leaves_it() -> Result
         site.targets()
     );
     assert_eq!(heard(&other, "authorization"), [None]);
+    Ok(())
+}
+
+/// a proxy reads a plain http request whole, so neither a saved token nor a `.netrc` login goes
+/// to a site on this machine through one; `NO_PROXY` sends the request straight there.
+#[test]
+fn no_key_goes_over_plain_http_through_a_proxy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let proxy = Proxy::start()?;
+    let csv = || file(b"a,b\n", "\"v1\"");
+    let site = Routes::start(vec![("/data.csv".to_owned(), csv())])?;
+    let lab = Routes::start(vec![("/data.csv".to_owned(), csv())])?;
+    let refused = |challenge: &str| {
+        reply(
+            "401 Unauthorized",
+            &[("WWW-Authenticate", challenge), ("Content-Length", "0")],
+            b"",
+        )
+    };
+    site.turns("/data.csv", vec![refused("Bearer realm=\"lab\"")]);
+    lab.turns("/data.csv", vec![refused("Basic realm=\"lab\"")]);
+    sign_in_with_token(&sandbox, &host_of(&site), "t-proxied")?;
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", &host_of(&lab), "--with-token"]),
+        "ada:pw-proxied\n",
+    )?;
+    assert!(login.status.success(), "{}", text(&login.stderr)?);
+    let mut asked = Vec::new();
+    for (server, dir) in [(&site, "one"), (&lab, "two")] {
+        let link = format!("{}/data.csv", server.url);
+        let proxied = sandbox
+            .command(&["--json", "get", &link, "--dir", "proxied"])
+            .env("HTTP_PROXY", &proxy.url)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .output()?;
+        assert_eq!(
+            proxied.status.code(),
+            Some(40),
+            "{}",
+            text(&proxied.stdout)?
+        );
+        let error = &json(&proxied)?["errors"][0];
+        assert_eq!(error["kind"], "auth.required");
+        assert_eq!(
+            error["help"],
+            format!(
+                "a proxy, here {}, reads a plain http request whole, so fetchloom sends no key through one: add 127.0.0.1 to NO_PROXY to send the request straight there, or ask the site for an https link",
+                proxy.url
+            )
+        );
+        asked.push(format!("get {link} http/1.1"));
+        assert_eq!(proxy.asked(), asked);
+        let straight = sandbox
+            .command(&["get", &link, "--dir", dir])
+            .env("HTTP_PROXY", &proxy.url)
+            .env("NO_PROXY", "127.0.0.1")
+            .output()?;
+        assert!(straight.status.success(), "{}", text(&straight.stderr)?);
+        assert_eq!(proxy.asked(), asked);
+    }
+    assert_eq!(
+        heard(&site, "authorization"),
+        [None, Some("bearer t-proxied".to_owned())]
+    );
+    assert_eq!(
+        heard(&lab, "authorization"),
+        [None, Some("basic ywrhonb3lxbyb3hpzwq=".to_owned())]
+    );
     Ok(())
 }
 
