@@ -29,8 +29,24 @@ fn openneuro(words: &str, first: usize) -> String {
     url.to_string()
 }
 
+/// ENA's count of the public runs of `study`, which search asks before it keeps the study.
+fn runs(study: &str) -> String {
+    format!(
+        "https://www.ebi.ac.uk/ena/portal/api/filereportcount?accession={study}&result=read_run&format=json"
+    )
+}
+
+/// the captured ENA studies, each with runs to add.
+fn with_runs(recorded: Recorded) -> Recorded {
+    ["SRP455996", "SRP630995", "SRP266745"]
+        .iter()
+        .fold(recorded, |recorded, study| {
+            recorded.on(&runs(study), 200, br#"{"count":"1"}"#.to_vec())
+        })
+}
+
 fn recorded() -> Recorded {
-    Recorded::default()
+    with_runs(Recorded::default())
         .fixture(HF, "search/hf.json")
         .fixture(KAGGLE, "search/kaggle.json")
         .fixture(ZENODO, "search/zenodo.json")
@@ -40,6 +56,29 @@ fn recorded() -> Recorded {
         // dandi has no dandiset for iris
         .on(DANDI, 200, br#"{"results":[]}"#.to_vec())
         .fixture(&openneuro("iris", 3), "search/openneuro.json")
+}
+
+/// EBI's search also finds studies that hold only sequences or analyses, which add cannot add, so
+/// a study ENA counts no public runs for is left out; one whose count fails stays, for add to try.
+#[test]
+fn ena_leaves_out_studies_without_public_runs() {
+    let words = "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=influenza&size=3&format=json&fields=name%2Cdescription";
+    let recorded = Recorded::default()
+        .on(
+            words,
+            200,
+            br#"{"entries":[{"acc":"ERP021368","fields":{"name":[],"description":["Identification of Influenza virus subtype"]}},{"acc":"ERP010958","fields":{"name":[],"description":["MinION nanopore sequencing of an influenza genome"]}},{"acc":"SRP431668","fields":{"name":[],"description":["Influenza A virus Raw sequence reads"]}}]}"#.to_vec(),
+        )
+        .on(&runs("ERP021368"), 200, br#"{"count":"0"}"#.to_vec())
+        .on(&runs("ERP010958"), 200, br#"{"count":"2"}"#.to_vec())
+        .on(&runs("SRP431668"), 500, Vec::new());
+    let found = block_on(search(&recorded, "influenza", &[Catalog::Ena], Some(3))).unwrap();
+    let references: Vec<String> = found
+        .candidates
+        .iter()
+        .map(|candidate| candidate.reference.to_string())
+        .collect();
+    assert_eq!(references, ["ena:ERP010958", "ena:SRP431668"]);
 }
 
 /// a search without `--source` leaves out ENA and dandi, whose specialist archives answer slowly,
@@ -512,7 +551,7 @@ fn chosen_catalogs_alone_are_asked() {
 
 #[test]
 fn a_limit_asks_each_catalog_for_that_many() {
-    let api = Recorded::default()
+    let api = with_runs(Recorded::default())
         .on(
             "https://huggingface.co/api/datasets?search=iris&limit=1&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private",
             200,

@@ -40,4 +40,4 @@ a report that holds fewer runs than ENA counted for the accession is refused, an
 
 ENA's file server can take half a minute to start sending a file, small ones too, as ENA's own documentation warns of downloads under load. fetchloom waits for the answer as long as `FETCHLOOM_TIMEOUT` allows after connecting, then tries again.
 
-`fetchloom search <words> --source ena` finds ENA's studies through EBI's search, the most relevant first, as `ena:SRP455996`; adding one adds every run in it. a [search](../commands/search.md) without `--source` leaves ENA out, since EBI is often slow to answer words it has not seen of late.
+`fetchloom search <words> --source ena` finds ENA's studies through EBI's search, the most relevant first, as `ena:SRP455996`; adding one adds every run in it. a study ENA counts no public runs for is left out, since there is nothing to add. a [search](../commands/search.md) without `--source` leaves ENA out, since EBI is often slow to answer words it has not seen of late.

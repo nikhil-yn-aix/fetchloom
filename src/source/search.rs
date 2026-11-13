@@ -585,8 +585,9 @@ struct StudyFields {
     description: Vec<String>,
 }
 
-/// the studies EBI's search finds in ENA, the most relevant first. a study names every run in
-/// it, and EBI's search gives no size or downloads.
+/// the studies EBI's search finds in ENA, the most relevant first, but those ENA counts no public
+/// runs for, which add would refuse. a study names every run in it, and EBI's search gives no
+/// size or downloads.
 async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
     let words = plain_words(words);
     if words.is_empty() {
@@ -603,11 +604,21 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
     )?;
     let response = api.get(&url).await?;
     let studies: Studies = super::json(&url, &response)?;
+    let studies: Vec<Study> = studies.entries.into_iter().take(limit).collect();
+    // EBI's search also finds studies that hold only sequences or analyses, and its answer names
+    // no runs, so each study's runs are counted as add counts them
+    let counts = together(
+        studies
+            .iter()
+            .map(|study| -> Counting<'_> { Box::pin(public_runs(api, &study.acc)) })
+            .collect(),
+    )
+    .await;
     studies
-        .entries
         .into_iter()
-        .take(limit)
-        .map(|study| {
+        .zip(counts)
+        .filter(|(_, runs)| *runs != Some(0))
+        .map(|(study, _)| {
             let fields = study.fields;
             let title = fields
                 .name
@@ -625,6 +636,52 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
             })
         })
         .collect()
+}
+
+/// a count of runs under way.
+type Counting<'a> = Pin<Box<dyn Future<Output = Option<u64>> + Send + 'a>>;
+
+#[derive(Deserialize)]
+struct Counted {
+    count: String,
+}
+
+/// how many public runs ENA counts for `study`, in one try, or none when it does not say: a
+/// study whose count fails stays for add to try, and a slow count never holds up the search.
+async fn public_runs(api: &impl Api, study: &str) -> Option<u64> {
+    let url = query(
+        "https://www.ebi.ac.uk/ena/portal/api/filereportcount",
+        &[
+            ("accession", study),
+            ("result", "read_run"),
+            ("format", "json"),
+        ],
+    )
+    .ok()?;
+    let response = api.get_once(&url).await.ok()?;
+    let counted: Counted = super::json(&url, &response).ok()?;
+    counted.count.trim().parse().ok()
+}
+
+/// what each of `asking` gives, all of them run at once, in their order.
+async fn together<T>(mut asking: Vec<Pin<Box<dyn Future<Output = T> + Send + '_>>>) -> Vec<T> {
+    let mut given: Vec<Option<T>> = asking.iter().map(|_| None).collect();
+    poll_fn(|context| {
+        for (future, answer) in asking.iter_mut().zip(given.iter_mut()) {
+            if answer.is_none()
+                && let Poll::Ready(value) = future.as_mut().poll(context)
+            {
+                *answer = Some(value);
+            }
+        }
+        if given.iter().all(Option::is_some) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+    given.into_iter().flatten().collect()
 }
 
 /// NCBI's E-utilities, which search GEO and summarize what they find.
