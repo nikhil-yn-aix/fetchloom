@@ -11,6 +11,7 @@ write for a researcher retrieving data or a contributor opening the code for the
 - open each page with one plain sentence about its subject. cut announcements about the document itself.
 - describe current behavior. keep pending code and publishing work in [roadmap](roadmap.md).
 - keep facts with their owning component and link from other pages. link text names its destination.
+- in developer pages, name a code file by its path from the repository root, such as `src/cli/sync.rs`, without a link; the [code map](architecture/codemap.md) says what each file holds.
 - README.md is also the description pypi and crates.io show, without the repository around it, so its links are absolute github links; a python test refuses a relative one.
 - attach conditions to measurements and link claims to source, tests or recorded results.
 
@@ -68,4 +69,4 @@ a pull request title says what changed. its body explains what and why in two or
 
 ## existing checks
 
-cargo configures rust and clippy lints, including missing public-documentation warnings. CLI tests compare an option sentence with help and snapshot program output. markdown transcripts are not otherwise executed. CI runs typos with narrow exclusions for raw fixtures and generated files. vale and comment-prose checks are not configured. [engineering](engineering/README.md) lists the available checks.
+cargo configures rust and clippy lints, including missing public-documentation warnings. CLI tests snapshot program output, and `tests/cli/docs.rs` holds the docs to the binary and the code: options, shell examples, settings, JSON results and the code map, as [select narrowly](engineering/building-and-testing.md#select-narrowly) lists. markdown transcripts are not otherwise executed. CI runs typos with narrow exclusions for raw fixtures and generated files. vale and comment-prose checks are not configured. [engineering](engineering/README.md) lists the available checks.

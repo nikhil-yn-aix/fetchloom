@@ -1,10 +1,6 @@
 # decisions
 
-these choices keep byte identity, recoverable storage and the command interface consistent across platforms.
-
-## purpose
-
-research code can outlive the dataset version it used. keep input identities beside that code so collaborators can retrieve the same published bytes without repeating browser downloads and folder renames. a lock cannot restore bytes that every host and cache has lost; long-term preservation still requires someone to retain the data.
+these choices keep byte identity, recoverable storage and the command interface consistent across platforms. research code can outlive the dataset version it used, so fetchloom keeps input identities beside that code, and collaborators retrieve the same published bytes without repeating browser downloads and folder renames. a lock cannot restore bytes that every host and cache has lost; long-term preservation still needs someone to keep the data.
 
 ## implementation
 

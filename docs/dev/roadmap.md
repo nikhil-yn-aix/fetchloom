@@ -1,6 +1,6 @@
 # roadmap
 
-pending work covers features deferred past 0.1.0, speed work measured and left out of it, remaining measurements and publishing tested releases.
+what is left to do, from features deferred past 0.1.0 to publishing the first release. shipped work is described where it lives, not here.
 
 ## features
 
@@ -24,5 +24,5 @@ both were measured and left out of 0.1.0 for a reason other than speed.
 ## publishing
 
 1. check that a source install from the default branch builds the release. exercise binaries, installers and wheels with the maintainer and two or three researchers on real projects before publishing 0.1.0 through the [release workflow](engineering/releasing.md).
-2. after the first crates.io release, replace the `CARGO_REGISTRY_TOKEN` secret with crates.io trusted publishing for [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml).
+2. after the first crates.io release, replace the `CARGO_REGISTRY_TOKEN` secret with crates.io trusted publishing for `.github/workflows/publish.yml`.
 3. sign the windows binaries, and sign and notarize the macos ones, which needs the owner's apple developer id and a windows code-signing certificate, as [releasing](engineering/releasing.md) says. defender's ransomware rule blocked an unsigned release executable on a managed windows machine, and a macos binary downloaded in a browser carries the quarantine flag.
