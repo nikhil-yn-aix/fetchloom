@@ -196,14 +196,7 @@ an archive cut into parts is pinned as its parts, each an ordinary file, with `u
 - between that path and the counter comes `.`, `.part`, `.part-`, `.part_` or `.part.`. a counter is digits or lowercase letters, at least two of them, though one digit may follow a `part`.
 - counters sort by length, then as text, and follow one numbering from the first part: zero-padded numbers from 0 or 1, growing past their width as 7-Zip's `.1000` follows `.999`; letters from all `a`s, of one width; or GNU split's own, two characters until the first would be the alphabet's last, which then stays as two more follow, so `9000` follows `89` and `zaaa` follows `yz`.
 
-with `extract = false`, or a part missing, no part carries `unpacks_to` and each is a plain file. rar volumes and zips spanned over `.z01` files are no cut of the bytes and stay packed. the cache keeps what a split archive unpacked to under the key its parts give, the SHA-256 of `fetchloom parts`, a line break, then for each part in order its SHA-256 in hex, a space, its size and a line break, so parts that changed, or one more part, never find the record of other parts. for `headers.zip.00` to `.02`, these bytes hash to `d8efb6b636f926170ecc1d70df2e6fd62103f9360a5fcf9ae118e38de147fd1f`, the name of its record under `unpacked/`:
-
-```text
-fetchloom parts
-8bb11984d17650386b7085dc6c010d62e8bb8a17f6209b9177a19aa80373fde4 262144
-3f47d2ea3ee9bacb5e04f7d8af1b4040bea0e47fe825ed10e72270b516eb3906 262144
-46dbe106e1dfdeab8bfc04d7d8175a352731fa9076ad855b52d95dd017749dc9 242241
-```
+with `extract = false`, or a part missing, no part carries `unpacks_to` and each is a plain file. rar volumes and zips spanned over `.z01` files are no cut of the bytes and stay packed. the cache keeps what a split archive unpacked to under a key its parts give together, so parts that changed, or one more part, never find the record of other parts, as [archives](../../dev/architecture/archives.md#split-archives) describes.
 
 ## the tree hash
 
