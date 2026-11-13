@@ -982,7 +982,8 @@ fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
 }
 
 /// a query or fragment may hold a secret under a name no list knows, and a notebook keeps the
-/// errors it printed, so a retry hint never repeats a link that has either.
+/// errors it printed, so a retry hint never repeats a link that has either. each of the four runs
+/// is refused once, which takes windows about 2 s.
 #[test]
 fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
     const SENTINEL: &str = "s3ntinel";

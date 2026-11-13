@@ -148,6 +148,8 @@ fn what_a_system_makes_is_left_out_and_counted() {
     }
 }
 
+/// 5 MiB of random bytes in each family, past the 4 MiB the ratio waits for, so the check runs
+/// and lets a modest expansion through. building the 7z at test time takes most of its time.
 #[test]
 fn large_archives_with_modest_expansion_unpack() {
     let mut bytes = vec![0; 5 << 20];
@@ -172,6 +174,8 @@ fn found(bytes: &[u8], pattern: &[u8]) -> Vec<usize> {
 }
 
 /// the parts may be cut anywhere, in a zip inside a local header or its central directory too.
+/// one part a byte puts a cut inside every header and field: hundreds of part files, which take
+/// a few seconds where making a file costs as much as on windows.
 #[test]
 fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
     let files: &[(&str, &[u8])] = &[
@@ -211,7 +215,8 @@ fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
 }
 
 /// the ratio counts each byte of every part once: a split archive within it unpacks, and rereads
-/// of a zip's shared data cannot raise the count past the parts' total.
+/// of a zip's shared data cannot raise the count past the parts' total. each family holds 5 MiB,
+/// past the 4 MiB the ratio waits for; building the 7z at test time takes most of its time.
 #[test]
 fn the_ratio_counts_every_part_once() {
     let mut rng = fastrand::Rng::with_seed(7);
