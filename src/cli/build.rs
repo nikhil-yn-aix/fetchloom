@@ -1,11 +1,6 @@
-//! `fetchloom build`: runs the recipes in data.toml, each step after the datasets it is made
-//! from, takes in what each step wrote, pins it in data.lock and places it in the data folder.
-//! `--dry-run` says what the build would do with each step, and runs nothing.
-//!
-//! a build takes data.lock, relocks the sources its steps read and pins each result in memory,
-//! then writes data.lock once, after every step: a step that fails or is stopped leaves
-//! data.lock, data.lock.d and the data folder as they were, while the results of the steps
-//! before it stay in the cache, so a build run again reuses them.
+//! `fetchloom build`: runs the recipes in data.toml, each after the datasets it is made from,
+//! pinning and placing what each wrote. data.lock is written once, after every step, so a step
+//! that fails or is stopped leaves data.lock and the data folder as they were.
 
 mod accept;
 mod preview;
@@ -60,14 +55,12 @@ pub(super) enum Report {
     Previewed(Previewed),
 }
 
-/// what a build did.
 #[derive(Default, Serialize)]
 pub(super) struct Built {
     project: PathBuf,
     /// the recipes named, or every recipe when none was.
     selected: Vec<String>,
-    /// the datasets whose pins changed: pinned for the first time, pinned to other files, or
-    /// no longer pinned.
+    /// the datasets whose pins changed: new, moved to other files, or dropped.
     datasets: Vec<String>,
     lock_changed: bool,
     /// each recipe the selected ones need, in the order the build took them.
@@ -89,11 +82,9 @@ struct Done {
     tree: Option<String>,
     files: u64,
     bytes: u64,
-    /// how the files it made when it ran again differ from the ones data.lock pins for its key,
-    /// when it ran for a pin.
+    /// how a rerun's files differ from those data.lock pins for its key, when it ran for a pin.
     check: Option<Compared>,
-    /// the tree of the files it made that differ from data.lock's, which the state keeps for
-    /// `--accept`.
+    /// the tree of a rerun that differs from data.lock's, which the state keeps for `--accept`.
     candidate: Option<String>,
     /// the log of its output, below the project, when it ran.
     log: Option<String>,
@@ -107,13 +98,11 @@ struct Done {
 enum Did {
     /// it ran, and data.lock pins what it made.
     Ran,
-    /// a build of the same key made its result before, and the cache holds all of it, so it
-    /// did not run.
+    /// an earlier build of the same key left its whole result in the cache, so it did not run.
     Reused,
     /// data.lock pins its result as building it now would make, and the cache holds it.
     UpToDate,
-    /// data.lock pins its result as building it now would make, and a mirror gave the cache
-    /// what it lacked of it, so it did not run.
+    /// up to date in data.lock, with a mirror giving the cache what it lacked, so it did not run.
     Fetched,
     /// data.lock pins the files a rebuild of it made that differed from the ones pinned before,
     /// as `--accept` asked.
@@ -345,9 +334,8 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// runs every step again from the inputs data.lock pins and compares what each makes with
-    /// the result data.lock pins for it, going on past a step that differs and stopping at one
-    /// that fails. data.lock and the data folder stay as they are.
+    /// runs every step again from the inputs data.lock pins and compares each result with its pin,
+    /// going on past one that differs and stopping at one that fails; it never writes data.lock.
     async fn check(&mut self) -> Result<(), Error> {
         for name in self.recipes.clone() {
             let done = self
@@ -377,9 +365,8 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// runs the step of the recipe `name` again from the inputs data.lock pins and compares what
-    /// it makes with its pin. a rebuild that matches enters the cache as the pinned result, and
-    /// one that differs is kept for `--accept`.
+    /// runs the step of `name` again from the inputs data.lock pins: a rebuild that matches enters
+    /// the cache as the pinned result, and one that differs is kept for `--accept`.
     async fn check_step(&mut self, name: &str) -> Result<Done, Error> {
         let output = &self.context.output;
         let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, name)?
@@ -447,11 +434,9 @@ impl<'a> Building<'a> {
         Ok(done)
     }
 
-    /// puts in the cache everything a build of the recipes, or with `--check` a check of them,
-    /// needs, mirrors first, and runs nothing: the datasets each step that would run reads, the
-    /// pinned results a build would take as they are and, for a build, what placing its datasets
-    /// needs. the sources the build pins anew are written to data.lock, so a later build needs no
-    /// network for them either. it ends with that later build, as `args` asks for it.
+    /// puts in the cache everything a build of the recipes, or with `--check` a check, needs,
+    /// mirrors first, running nothing. the sources it pins anew go into data.lock, so the build its
+    /// last line names, as `args` asks, needs no network either.
     async fn prepare(&mut self, args: &args::Build) -> Result<(), Error> {
         let check = args.check;
         let output = &self.context.output;
@@ -538,10 +523,8 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// puts in the cache what placing the fetched datasets of the build needs that the data
-    /// folder lacks, as the build places them once its steps are done, such as a dataset only
-    /// steps that do not run read. results stay out: a step that runs makes its own, and
-    /// [`Building::prepare`] fetched the others.
+    /// puts in the cache what placing the build's fetched datasets needs that the data folder
+    /// lacks, as for a dataset only skipped steps read; results are left to steps and `prepare`.
     async fn ready_to_place(&self) -> Result<(), Error> {
         let fetched = Lock {
             datasets: self
@@ -569,7 +552,6 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// `error`, with what the build did so far beside it for `--json`.
     /// the build's last look for a stop, right before it writes data.lock: a stop asked by then
     /// leaves data.lock and the data folder as they were, and one asked later lets it finish.
     fn last_look(&self) -> Result<(), Error> {
@@ -580,11 +562,8 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// builds the recipe `name`: up to date when data.lock pins what building it now would make
-    /// and the cache holds it, fetched when a mirror holds what the cache lacks of it, reused
-    /// when an earlier build of its key made a result the cache holds whole, and otherwise run. a
-    /// pin whose key is still the recipe's keeps its files: other files a step makes for it are
-    /// kept for a person to choose, and data.lock stays as it is.
+    /// builds the recipe `name` as [`course`] decides. a pin whose key is still the recipe's keeps
+    /// its files: other files a step makes for it are kept for a person to choose.
     async fn step(&mut self, name: &str) -> Result<Done, Error> {
         let project = self.work.project;
         let output = &self.context.output;
@@ -675,9 +654,8 @@ impl<'a> Building<'a> {
         Ok(done)
     }
 
-    /// the result of the recipe `name`, keyed `key`, as data.lock pins it, told as up to date
-    /// when the cache holds it or as fetched when a mirror gave what the cache lacked of it, as
-    /// [`course`] decides. none when the step must run or may be reused.
+    /// the result of `name`, keyed `key`, as data.lock pins it, up to date or fetched from a mirror
+    /// as [`course`] decides; none when the step must run or may be reused.
     async fn as_pinned(&self, name: &str, key: Sha256) -> Result<Option<Done>, Error> {
         let cache = &self.work.cache;
         let output = &self.context.output;
@@ -710,8 +688,7 @@ impl<'a> Building<'a> {
     }
 
     /// keeps `candidate`, a rebuild of `name` that differs from data.lock, in the state for
-    /// `--accept`, in place of any kept before. the project joins the cache's list, so `cache gc`
-    /// reads the state and keeps its files.
+    /// `--accept`, in place of any before, registering the project so `cache gc` keeps its files.
     fn keep(&self, name: &str, candidate: Candidate) -> Result<(), Error> {
         let project = self.work.project;
         let (mut state, _) = project.state();
@@ -721,10 +698,8 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// puts in the cache the files of `sources`, fetched datasets a step reads, as
-    /// [`Loop::ready`] does. when that fails, the error names each placed file of theirs linked to
-    /// a cache copy someone changed, as a sync's does, since that is why their pinned bytes had to
-    /// be fetched again.
+    /// puts in the cache the files of `sources`, fetched datasets a step reads, as [`Loop::ready`]
+    /// does; its error names placed files linked to a changed cache copy, the reason to refetch.
     async fn ready(&self, sources: &BTreeSet<&str>) -> Result<(), Error> {
         let Err(error) = self.work.ready(&self.manifest, &self.lock, sources).await else {
             return Ok(());
@@ -753,9 +728,8 @@ impl<'a> Building<'a> {
             .fold(error, Error::detail))
     }
 
-    /// takes the files of `files`, the result data.lock pins for `name`, that the cache lacks
-    /// from the data folder where it holds their pinned bytes, else asks the mirrors for them, and
-    /// says whether the cache holds all of them now.
+    /// takes the files of `name`'s pinned result the cache lacks from the data folder, else the
+    /// mirrors, and says whether the cache holds all of `files` now.
     async fn fetched(&self, name: &str, files: &[Member]) -> Result<bool, Error> {
         let cache = &self.work.cache;
         let lacked: Vec<crate::mirror::Wanted> = files
@@ -775,9 +749,8 @@ impl<'a> Building<'a> {
         Ok(whole(cache, files))
     }
 
-    /// runs `step` in a folder of its own and takes in what it wrote, as the result of `key`.
-    /// with `expected`, the tree data.lock pins for that key, a result of other files enters the
-    /// cache without a record, so no build reuses it.
+    /// runs `step` in a folder of its own and takes in its result for `key`. a result other than
+    /// `expected`, the tree data.lock pins, enters the cache unrecorded, so no build reuses it.
     fn make(&self, step: &Step, key: Sha256, expected: Option<Sha256>) -> Result<Made, Error> {
         let name = &step.name;
         let cache = &self.work.cache;
@@ -940,7 +913,6 @@ impl<'a> Building<'a> {
             .unwrap_or_default()
     }
 
-    /// pins in the lock being built the result `tree` of `step`, keyed `key`, holding `members`.
     fn pin(&mut self, step: &Step, key: Sha256, tree: Sha256, members: Vec<Member>) {
         pin(&mut self.lock, step, key, tree, members);
     }
@@ -1014,9 +986,8 @@ impl<'a> Building<'a> {
     }
 }
 
-/// the last line of a build whose steps that did more than find their result are `built`, of
-/// which `repinned` holds those whose pin in data.lock changed. the others made exactly the files
-/// data.lock pinned, as a step run again for a pin the cache lost does.
+/// the last line of a build whose steps that did more than find their result are `built`, those
+/// in `repinned` pinned anew; the others made just the files data.lock pinned.
 fn closing(built: &[&str], repinned: &[String]) -> String {
     let (pinned, matched): (Vec<&str>, Vec<&str>) = built
         .iter()
@@ -1042,8 +1013,7 @@ fn closing(built: &[&str], repinned: &[String]) -> String {
     }
 }
 
-/// pins in `lock` the result `tree` of `step`, keyed `key`, holding `members`. a pin keeps when
-/// it was made while its key and tree stay.
+/// pins `tree` of `step` in `lock`, keeping when the pin was made while its key and tree stay.
 fn pin(lock: &mut Lock, step: &Step, key: Sha256, tree: Sha256, members: Vec<Member>) {
     let timestamp = match lock.result(&step.name) {
         Some(old) if old.key == key && old.tree == tree => old.timestamp.clone(),
@@ -1081,9 +1051,8 @@ fn forget(project: &Project, names: &[String]) -> Result<(), Error> {
     project.write_state(&state)
 }
 
-/// fails with `lock.outdated` unless data.lock, `read`, pins every dataset of `scope` as data.toml
-/// asks: each fetched one for its entry and each recipe's result as building it now would make.
-/// `instead` is the other way out the help names, such as "build without --check".
+/// fails with `lock.outdated` unless `read` pins every dataset of `scope` as data.toml asks, each
+/// recipe as building it now would make; `instead` is the help's other way out.
 fn pinned_as_asked(
     project: &Project,
     manifest: &Manifest,
@@ -1146,9 +1115,8 @@ fn whole(cache: &Cache, files: &[Member]) -> bool {
         .all(|file| cache.find(&file.sha256, Some(file.size)).is_some())
 }
 
-/// what a build does with the step of a recipe whose key it knows, before it asks a mirror or
-/// runs anything. a build and its dry run both take this decision, so the dry run says what the
-/// build then does.
+/// what a build does with a step whose key it knows, before asking a mirror or running anything,
+/// a decision its dry run shares, so the dry run says what the build then does.
 enum Course<'l> {
     /// data.lock pins this key, and the cache holds every file of it: up to date.
     Held(&'l Derived),
@@ -1206,9 +1174,8 @@ fn sized(members: &[Member]) -> String {
     )
 }
 
-/// the files of the dataset `name` as a step reads them: a result as data.lock pins it, or a
-/// fetched dataset's files laid out as its folder holds them, each archive by the files it
-/// unpacked to.
+/// the files of `name` as a step reads them: a result as data.lock pins it, or a fetched dataset
+/// laid out as its folder holds it, each archive by the files it unpacked to.
 fn input_files(
     manifest: &Manifest,
     lock: &Lock,
@@ -1298,9 +1265,8 @@ fn unless_stopped(err: &io::Error, doing: impl FnOnce() -> String) -> Error {
     }
 }
 
-/// the error for the step of `name` that could not start `program`, run in `folder`. a program
-/// that is not there is told by how run names it: a bare name is looked for on PATH, one with a
-/// folder in it from `folder`, the project's, and a full path names one place on one machine.
+/// the error for the step of `name` that could not start `program` in `folder`, told by how run
+/// names it: a bare name from PATH, a name with a folder from `folder`, a full path one machine's.
 fn cannot_start(name: &str, program: &str, folder: &Path, err: &io::Error) -> Error {
     let absolute = Path::new(program).is_absolute();
     let has_folder = program.contains('/') || (cfg!(windows) && program.contains('\\'));
@@ -1494,8 +1460,7 @@ mod tests {
         assert_eq!(shown(""), "''");
     }
 
-    /// a build's last line says which results it pinned anew and which made exactly what
-    /// data.lock already pinned, as a step run again for a pin the cache lost does.
+    /// as a step run again for a pin the cache lost makes what data.lock already pinned.
     #[test]
     fn the_last_line_tells_new_pins_from_results_that_match() {
         let repinned = ["clean".to_owned(), "tidy".to_owned()];
@@ -1520,10 +1485,8 @@ mod tests {
         }
     }
 
-    /// a step whose program is not there gets help for how run names it: a bare name is looked
-    /// for on PATH, a name with a folder in it in the project folder, which setting up the
-    /// project's environment fills, and a full path on this machine alone. none asks for a full
-    /// path in data.toml, which would build on one machine only.
+    /// a bare name from PATH, one with a folder from the project folder that set-up fills, a full
+    /// path from this machine alone; no help asks for a full path, which builds on one machine.
     #[test]
     fn a_missing_program_is_told_by_how_run_names_it() {
         let absolute = if cfg!(windows) {
@@ -1560,9 +1523,8 @@ mod tests {
         );
     }
 
-    /// a rebuild that differs is told without a guess at why: the help names another version of
-    /// what a step uses beside the time and random numbers, then `status -v` to compare the
-    /// files, and `--accept` last, for one step and for several.
+    /// told without a guess at why: the help names another version of what a step uses beside the
+    /// time and random numbers, then `status -v`, and `--accept` last, for one step and several.
     #[test]
     fn a_differing_rebuild_is_compared_before_it_is_accepted() {
         let manifest = Manifest::parse("").unwrap();

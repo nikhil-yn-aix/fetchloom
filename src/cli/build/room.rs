@@ -1,6 +1,5 @@
-//! the room a build's steps may take on the disk holding the cache, said before any runs, with a
-//! question when that disk has less free above the `build_floor` setting, and a refusal when it
-//! has less than the floor itself, which would stop the first step at once.
+//! the room a build's steps may take on the cache's disk, said before any runs: a question when
+//! that leaves less free than the `build_floor` setting, a refusal when less is free already.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -13,10 +12,8 @@ use crate::space::{self, Needs};
 use crate::units;
 
 impl Building<'_> {
-    /// says how much the steps a build, or with `check` a check, would run may take on the disk
-    /// holding the cache, and asks first when that disk has less free above the floor: `--yes`
-    /// answers yes, and with no one to ask the build stops with `unconfirmed` before anything runs.
-    /// with less than the floor free already, it stops with `local.io`, `--yes` or not.
+    /// says what the steps a build, or with `check` a check, would run may take, asking first when
+    /// that passes the free space above the floor, and refusing below the floor, `--yes` or not.
     pub(super) fn room(&self, check: bool) -> Result<(), Error> {
         let running = self.running(check)?;
         if running.is_empty() {
@@ -72,10 +69,8 @@ impl Building<'_> {
         })
     }
 
-    /// the steps a build, or with `check` a check, would run, as far as the cache tells before
-    /// any does: every one for a check; else each that [`course`] does not find held or built
-    /// before, and each after one that runs. a mirror may yet give a pinned result's files, so
-    /// this errs on more.
+    /// the steps a build, or with `check` a check, would run, as far as the cache tells: every one
+    /// for a check, else those [`course`] finds unheld and unbuilt and all after, erring on more.
     fn running(&self, check: bool) -> Result<Vec<Step>, Error> {
         let cache = &self.work.cache;
         let mut running: Vec<Step> = Vec::new();
@@ -101,9 +96,8 @@ impl Building<'_> {
         Ok(running)
     }
 
-    /// what `step` may take: the files of the fetched datasets it reads that the cache lacks,
-    /// counted once in a build, as `fetched` records, what it reads in all, and the result
-    /// data.lock pinned for it last.
+    /// what `step` may take: the files of its fetched datasets the cache lacks, once a build as
+    /// `fetched` records, what it reads in all, and its result as data.lock last pinned it.
     fn needs(&self, step: &Step, fetched: &mut BTreeSet<String>) -> Needs {
         let cache = &self.work.cache;
         let size = |files: &[crate::cache::Member]| {
@@ -203,9 +197,8 @@ fn fits(peak: u64, floor: u64, free: Option<u64>) -> Fits {
     }
 }
 
-/// the error for a disk holding the cache at `cache` that has `free` bytes free, less than
-/// `floor`, so the floor would stop the first step at once: no answer gets past it, only room
-/// made on that disk or a floor someone lowers on purpose.
+/// the error for the cache's disk at `cache` with `free` bytes, less than `floor`: no answer gets
+/// past it, only room made on that disk or a floor someone lowers on purpose.
 fn below(floor: u64, free: u64, cache: &Path) -> Error {
     Error::new(
         Kind::LocalIo,
@@ -232,10 +225,8 @@ fn besides(unknown: &[&str]) -> String {
 mod tests {
     use super::{Fits, besides, fits};
 
-    /// steps that may take more than is free above the floor get a question a person may answer,
-    /// since the room errs on more and the floor still stops a step that would pass it. less than
-    /// the floor free already gets none: the floor would stop the first step at once. a disk
-    /// that does not say what is free is never short.
+    /// a question a person may answer, since the room errs on more and the floor still stops a
+    /// step; below the floor already, none, and a disk that does not say is never short.
     #[test]
     fn no_answer_lets_a_step_run_below_the_floor() {
         for (peak, free, fit) in [
@@ -250,7 +241,6 @@ mod tests {
         }
     }
 
-    /// the steps whose results are not known yet are named with a verb that agrees with them.
     #[test]
     fn what_the_steps_write_agrees_with_how_many_they_are() {
         assert_eq!(besides(&[]), "");

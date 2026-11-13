@@ -1,7 +1,5 @@
-//! `fetchloom build --dry-run`: what a build would do with each step, and the command of each step
-//! that would or may run. each step is decided by [`course`], the decision the build itself
-//! takes, against the cache as the build would find it at that step, so the dry run says what
-//! the build then does. it runs, fetches and writes nothing, and asks no web mirror.
+//! `fetchloom build --dry-run`: what a build would do with each step, decided by [`course`] as the
+//! build decides it, and each command that would or may run, running, fetching and asking nothing.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsString;
@@ -44,9 +42,8 @@ pub(in crate::cli) struct Previewed {
 struct Planned {
     name: String,
     action: Action,
-    /// the key of the result building it now would make, `sha256:` and its hash, once data.lock
-    /// pins every dataset it reads, all its code is there and no step before it must run first
-    /// to tell.
+    /// the key building it now would make, `sha256:` and its hash, once data.lock pins every input,
+    /// all its code is there and no step before it must run first.
     key: Option<String>,
     /// why it would or may run: what moved since data.lock's result of it was built, or that
     /// its pinned result is nowhere a build looks.
@@ -85,9 +82,8 @@ enum Action {
     WouldFetch,
     /// a build of the same key left a result the cache holds whole, which the build pins.
     WouldReuse,
-    /// what it does is known only once the build learns something first: the result of a step
-    /// before it that runs, a dataset it pins anew since data.toml changed, or whether a web
-    /// mirror holds its pinned result.
+    /// known only once the build learns something first: a result of a step before it that runs, a
+    /// dataset it pins anew, or whether a web mirror holds its pinned result.
     MayRun,
     /// data.lock pins its result as building it now would make, and the cache holds it.
     UpToDate,
@@ -209,9 +205,8 @@ impl<'a> Ahead<'a> {
         files.iter().all(|file| self.holds(file))
     }
 
-    /// where the files of `files` the cache lacks would come from, as a build takes them: from
-    /// the data folder where `lock` places them and they hold the pinned bytes, then from each
-    /// mirror in order.
+    /// where the files of `files` the cache lacks would come from, as a build takes them: the data
+    /// folder where `lock` places them and they hold the pinned bytes, then each mirror in order.
     fn found(&self, files: &[Member], lock: &Lock) -> Found {
         let lacking: Vec<&Member> = files.iter().filter(|file| !self.holds(file)).collect();
         let wanted: Vec<Wanted> = lacking
@@ -257,12 +252,8 @@ impl<'a> Ahead<'a> {
         self.added.extend(files.iter().map(|file| file.sha256));
     }
 
-    /// adds what a build puts in the cache before it runs `step`: every file of the fetched
-    /// datasets it reads, and each archive it downloads to unpack a file the cache lacks.
-    ///
-    /// # Errors
-    ///
-    /// the refusals of [`plan::inputs`], which the build would meet there too.
+    /// adds what a build puts in the cache before running `step`: the files of datasets it reads
+    /// and any archive it downloads for a missing file, failing as [`plan::inputs`] would there.
     fn readied(&mut self, manifest: &Manifest, lock: &Lock, step: &Step) -> Result<(), Error> {
         let sources = Lock {
             datasets: lock
@@ -292,11 +283,8 @@ impl<'a> Ahead<'a> {
     }
 }
 
-/// what a build of `closure` would do with each recipe in it, in the order it takes them, each
-/// decided by [`course`] with data.lock as the build would hold it then: each result a step
-/// before pinned, and the files it put in the cache. a dataset the build pins anew and the result
-/// of a step that runs for a key data.lock does not pin are known only once the build has them,
-/// so each step that reads one may run.
+/// what a build of `closure` would do with each recipe, in order, each decided by [`course`] with
+/// data.lock as the build would hold it then; a step reading what the build learns first may run.
 fn foresee(
     project: &Project,
     manifest: &Manifest,
@@ -404,10 +392,9 @@ fn pinned_anew(manifest: &Manifest, lock: &Lock, name: &str) -> bool {
         })
 }
 
-/// the line of `step`, which waits on `waits`, the datasets of `now` the build learns only as
-/// it goes: what moved, then the steps it waits on that no change names. a step with nothing
-/// moved whose pinned result is in the cache or on a folder mirror runs again only if a result
-/// it reads changes.
+/// the line of `step`, waiting on `waits` and on `now`, what the build learns as it goes: what
+/// moved, then the steps no change names. with nothing moved and its pinned result at hand, it
+/// says it runs again only if a result it reads changes.
 fn waiting(
     ahead: &Ahead<'_>,
     now: &Lock,
@@ -676,9 +663,8 @@ mod tests {
             .collect()
     }
 
-    /// a pinned result the cache lacks runs again where no mirror could give it, as offline,
-    /// where no web mirror is asked; with a web mirror it may run, since only asking it tells.
-    /// a copy in the data folder comes first, as the build takes it from there.
+    /// it runs again where no mirror can give it, as offline, and may run with a web mirror, which
+    /// only asking tells; a copy in the data folder comes first, as the build takes it there.
     #[test]
     fn a_result_only_a_web_mirror_could_give_may_run() {
         let (_root, project, manifest, lock) = project();
@@ -711,10 +697,8 @@ mod tests {
         }
     }
 
-    /// a step that reads what a step running for a new key makes may run, with no key until
-    /// then: again only if that changes while its own pinned result is here, and with what keeps
-    /// it from being up to date otherwise. so may a step reading a dataset data.toml moved past
-    /// its pin, which the build pins anew first.
+    /// it has no key until then and says it runs again only if that changes while its pinned
+    /// result is here, else what keeps it stale; so does one reading a dataset moved past its pin.
     #[test]
     fn a_step_reading_what_the_build_learns_first_may_run() {
         let (_root, project, _, lock) = project();

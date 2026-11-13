@@ -1,6 +1,5 @@
-//! `fetchloom build --accept`: pins the rebuild a build kept of a recipe, the files it made that
-//! differ from what data.lock pins for the same key, without running anything, and places it.
-//! it chooses which files a result holds, so only a person runs it: no error names it as a fix.
+//! `fetchloom build --accept`: pins and places the rebuild a build kept of a recipe, running
+//! nothing. it chooses which files a result holds, so only a person runs it: no error suggests it.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -19,13 +18,9 @@ use crate::project::manifest::Manifest;
 use crate::project::state::{Candidate, State};
 use crate::recipe::Step;
 
-/// pins the kept rebuild of each recipe `names` asks for, or of every recipe with one when it
-/// names none, then places them. nothing changes unless every one of them can be pinned.
-///
-/// # Errors
-///
-/// `usage` when a recipe has no kept rebuild, or one whose key or pin is not data.lock's now, or
-/// whose files the cache no longer holds.
+/// pins and places the kept rebuild of each recipe `names` asks for, or of every one with one,
+/// changing nothing unless all can be pinned. `usage` refuses a missing rebuild, one whose key or
+/// pin is not data.lock's now, or one whose files the cache no longer holds.
 pub(super) async fn accept(
     context: &Context,
     project: &Project,
@@ -104,9 +99,8 @@ fn wanted(manifest: &Manifest, state: &State, names: &[String]) -> Result<Vec<St
     Ok(wanted)
 }
 
-/// the recipe `name` as it stands now and its kept rebuild, once the rebuild answers it: its key
-/// is the one the recipe makes now, data.lock still pins the result it was kept beside, and the
-/// cache holds its files.
+/// the recipe `name` as it stands and its kept rebuild, once the rebuild answers it: its key is the
+/// recipe's now, data.lock still pins what it was kept beside, and the cache holds its files.
 fn checked<'s>(
     project: &Project,
     manifest: &Manifest,
