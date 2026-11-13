@@ -157,8 +157,8 @@ fn sent(response: &reqwest::Response) -> Option<&Sent> {
     }
 }
 
-/// the request goes again with it, and later requests for that container carry it from the
-/// start. every request asks for azure's version.
+/// the refused request goes again with the SAS, and later requests for that container carry it
+/// from the start. every request asks for azure's version.
 #[test]
 fn a_sas_goes_to_a_listed_container_once_it_refused_a_request_without_one() {
     let (local, asked) = blob_host("shared%3d");

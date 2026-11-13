@@ -21,7 +21,6 @@ const ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 const VERSION: &str = "2018-02-01";
 /// how long the service may take to open a connection: it is on this machine's own network.
 const CONNECT: Duration = Duration::from_secs(5);
-/// the largest answer the service may send.
 const LARGEST_ANSWER: usize = 64 << 10;
 /// how long a token lives when the answer does not say: azure's tokens live an hour or more.
 const LIFETIME: Duration = Duration::from_hours(1);

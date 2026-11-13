@@ -156,7 +156,7 @@ mod tests {
         );
     }
 
-    /// the values sign in order, parted by commas.
+    /// names match whatever their case, and the values sign sorted, parted by commas.
     #[test]
     fn a_repeated_parameter_signs_its_values_together() {
         let url = Url::parse("https://lab.blob.core.windows.net/raw?include=b&comp=list&Include=a")
