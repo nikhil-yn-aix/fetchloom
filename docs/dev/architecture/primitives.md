@@ -22,6 +22,7 @@ these modules contain small value types and policies used by more than one compo
 | [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
 | [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | stable failure kinds and explanations | `Kind`, `Error`, `FileFailure`, `name`, `exit_code`, `advice` |
 | [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | shared cancellation | `Stop`, `ask`, `asked`, `is_asked`, `check` |
+| [suggested.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/suggested.rs) | the fetchloom command a help or hint names, after `-C` and the folder the run works in when it was given `-C`, so it finds the same project from any folder | `command`, `set_directory` |
 | [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs) | atomic counters independent of output | `Work`, `Counts`, `add`, `counts` |
 
 ## how it works

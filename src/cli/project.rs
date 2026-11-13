@@ -16,7 +16,6 @@ use super::args;
 use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
 use super::sync::{self as engine, Given, Loop, Scope, Upgrade};
-pub(crate) use super::typed::command;
 use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
@@ -30,6 +29,7 @@ use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project, git};
 use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
+pub(crate) use crate::suggested::command;
 use crate::units;
 
 /// what a project command did, or with `--dry-run` would do, as `--json` prints it.

@@ -24,7 +24,7 @@ pub(crate) fn unlisted() -> Error {
     )
     .help(format!(
         "run `{}` where the files are",
-        crate::cli::command("add <folder> --as <name>")
+        crate::suggested::command("add <folder> --as <name>")
     ))
 }
 
@@ -37,8 +37,8 @@ pub(crate) fn changed(name: &str) -> Error {
     )
     .help(format!(
         "put datasets.{name} back as it was, or run `{}`, then `{}` where the files are",
-        crate::cli::command(&format!("remove {name}")),
-        crate::cli::command(&format!("add <folder> --as {name}"))
+        crate::suggested::command(&format!("remove {name}")),
+        crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -51,7 +51,7 @@ pub(crate) fn unpinned(name: &str) -> Error {
     )
     .help(format!(
         "restore data.lock from git, or run `{}` where the files are",
-        crate::cli::command(&format!("add <folder> --as {name}"))
+        crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -63,8 +63,8 @@ pub(crate) fn no_newer(name: &str) -> Error {
     )
     .help(format!(
         "to pin other files, run `{}`, then `{}` where they are",
-        crate::cli::command(&format!("remove {name}")),
-        crate::cli::command(&format!("add <folder> --as {name}"))
+        crate::suggested::command(&format!("remove {name}")),
+        crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
 }
 
@@ -82,8 +82,8 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
     )
     .help(format!(
         "copy them to {folder} by hand, then run `{}`, or run `{}` where they are",
-        crate::cli::command("sync"),
-        crate::cli::command(&format!("add <folder> --as {name}"))
+        crate::suggested::command("sync"),
+        crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
 }
 

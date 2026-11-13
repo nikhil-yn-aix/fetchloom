@@ -45,7 +45,7 @@ use crate::units;
 use crate::work::Work;
 
 use typed::{TYPED, command_line, moved_command};
-pub(crate) use typed::{changes_lock, command, harmless, runs};
+pub(crate) use typed::{changes_lock, harmless, runs};
 pub(in crate::cli) use typed::{meant, shell_word};
 
 /// how long retries to one host stay quiet after the line that told one, so downloads that lost
@@ -615,10 +615,13 @@ pub(crate) fn run() -> ExitCode {
     }
     let name = args.command.as_ref().map(args::Command::name);
     let _command = tracing::debug_span!("command", name).entered();
-    if let Some(folder) = &global.directory
-        && let Err(err) = std::env::set_current_dir(folder)
-    {
-        return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
+    if let Some(folder) = &global.directory {
+        if let Err(err) = std::env::set_current_dir(folder) {
+            return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
+        }
+        // the folder as the system names it, which a pasted command finds from any folder
+        let worked_in = std::env::current_dir().unwrap_or_else(|_| folder.clone());
+        crate::suggested::set_directory(shell_word(&worked_in.to_string_lossy()).into_owned());
     }
     match Threads::read(&var) {
         Ok(threads) => context.threads = threads,

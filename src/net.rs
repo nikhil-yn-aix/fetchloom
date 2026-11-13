@@ -144,7 +144,7 @@ impl Offline {
         format!(
             "{} to pin it. `{}` reuses a file fetched before",
             self.retry(),
-            crate::cli::command("get <link> --offline")
+            crate::suggested::command("get <link> --offline")
         )
     }
 

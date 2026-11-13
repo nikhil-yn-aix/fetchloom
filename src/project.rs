@@ -811,7 +811,7 @@ fn unmerged(name: &str, text: &str) -> Option<Error> {
         .detail(format!("{name}:{}", line + 1))
         .help(format!(
             "run `{}`, which merges both sides without downloading",
-            crate::cli::command("lock")
+            crate::suggested::command("lock")
         )),
     )
 }

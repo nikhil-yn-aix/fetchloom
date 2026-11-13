@@ -10,22 +10,6 @@ use crate::net;
 /// suggests a corrected command line. tests that never `run` leave it unset.
 pub(super) static TYPED: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
 
-/// a command a help names, with `-C` and the folder the run worked in when the run was given `-C`,
-/// so it finds the same project from whatever folder a person runs it in.
-pub(crate) fn command(words: &str) -> String {
-    static DIRECTORY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    // the run changed into the folder -C named, so only the command line still says it did
-    let directory = DIRECTORY.get_or_init(|| {
-        let typed = args::read().ok()?.global.directory?;
-        let folder = std::env::current_dir().unwrap_or(typed);
-        Some(super::shell_word(&folder.to_string_lossy()).into_owned())
-    });
-    match directory {
-        Some(directory) => format!("fetchloom -C {directory} {words}"),
-        None => format!("fetchloom {words}"),
-    }
-}
-
 /// whether `command`, as help quotes it, is a whole command line fetchloom accepts, which a script
 /// handed it as the next step can run. `fetchloom add` alone is not one.
 pub(crate) fn runs(command: &str) -> bool {

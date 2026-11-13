@@ -23,6 +23,7 @@ mod settings;
 mod source;
 mod space;
 mod stop;
+mod suggested;
 mod threads;
 mod units;
 mod volume;
