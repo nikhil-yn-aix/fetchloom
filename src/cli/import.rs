@@ -81,15 +81,10 @@ pub(super) async fn import_held(
     let net = Arc::new(context.net());
     if dry_run {
         let supplying = supplied.is_some();
-        let name = if supplying || args.name.is_some() {
+        let name = if supplying {
             own
         } else {
-            free_name(
-                &context.output,
-                own,
-                &|name| manifest.datasets.contains_key(name),
-                AS,
-            )?
+            new_name(&context.output, manifest, args, own)?
         };
         let work = Loop::new(context, project, net, cache).telling(&name);
         let found = (&walked, shown, supplying);
@@ -106,39 +101,122 @@ pub(super) async fn import_held(
     // the walk's list of files is read for the last time above; freed here, it stays out of the
     // peak of placing them
     drop(walked);
-    if let Some(name) = supplied {
+    let report = if let Some(name) = supplied {
         let work = Loop::new(context, project, net, cache).telling(&name);
         let imported = Imported {
             name: &name,
             source: &source,
             files: copied.files,
         };
-        return supply(&work, adding, old, imported, (shown, &told), here).await;
-    }
-    // the same files imported again under their own name change nothing, as the same link does
-    if args.name.is_none() && same_import(manifest, old.as_ref(), &own, &source, &copied.files) {
+        supply(&work, adding, old, imported, (shown, &told), here).await
+    } else if args.name.is_none()
+        && same_import(manifest, old.as_ref(), &own, &source, &copied.files)
+    {
+        // the same files imported again under their own name change nothing, as the same link does
         let work = Loop::new(context, project, net, cache).telling(&own);
         context.output.step("Imported", &format!("{own} · {told}"));
-        return already_imported(&work, adding, old, &own, here).await;
-    }
-    let name = if args.name.is_some() {
-        own
+        already_imported(&work, adding, old, &own, here).await
     } else {
-        free_name(
-            &context.output,
-            own,
-            &|name| manifest.datasets.contains_key(name),
-            AS,
-        )?
+        let name = new_name(&context.output, manifest, args, own)?;
+        context.output.step("Imported", &format!("{name} · {told}"));
+        let work = Loop::new(context, project, net, cache).telling(&name);
+        let imported = Imported {
+            name: &name,
+            source: &source,
+            files: copied.files,
+        };
+        import_new(&work, adding, old, imported, here, starting).await
+    }?;
+    warn_in_git(&context.output, &project.root, (&start, shown));
+    Ok(report)
+}
+
+/// the name a new import takes: the one `--as` gives, or `own`, with the next number when
+/// data.toml has it.
+fn new_name(
+    output: &Output,
+    manifest: &Manifest,
+    args: &Add,
+    own: String,
+) -> Result<String, Error> {
+    if args.name.is_some() {
+        return Ok(own);
+    }
+    free_name(
+        output,
+        own,
+        &|name| manifest.datasets.contains_key(name),
+        AS,
+    )
+}
+
+/// warns when `start`, the files an import read, is in the git work tree the project at `root` is
+/// in, where `git add .` takes raw data into the repository, or git has it already.
+fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
+    let real = |path: &Path| std::fs::canonicalize(path).ok();
+    let Some((top, root)) = Project::repository(root).and_then(real).zip(real(root)) else {
+        return;
     };
-    context.output.step("Imported", &format!("{name} · {told}"));
-    let work = Loop::new(context, project, net, cache).telling(&name);
-    let imported = Imported {
-        name: &name,
-        source: &source,
-        files: copied.files,
+    // a path below `folder`, with `/` between its names, as git writes one
+    let slashed = |folder: &Path| {
+        let names: Option<Vec<&str>> = start
+            .strip_prefix(folder)
+            .ok()?
+            .iter()
+            .map(std::ffi::OsStr::to_str)
+            .collect();
+        names
+            .filter(|names| !names.is_empty())
+            .map(|names| names.join("/"))
     };
-    import_new(&work, adding, old, imported, here, starting).await
+    let Some(inside) = slashed(&top) else {
+        return;
+    };
+    let Some(known) = std::env::var_os("PATH")
+        .and_then(|path| crate::project::git::find(Some(&path), &top))
+        .and_then(|git| crate::project::git::known(&git, &top, &[&inside]))
+    else {
+        return;
+    };
+    // .gitignore beside data.toml, or at the top for a folder outside the project
+    let (holder, place) = match slashed(&root) {
+        Some(below) => (below, "the project"),
+        None => (inside, "the repository"),
+    };
+    let mut pattern = String::from("/");
+    for c in holder.chars() {
+        // a pattern reads these as wildcards or an escape
+        if matches!(c, '*' | '?' | '[' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    if start.is_dir() {
+        pattern.push('/');
+    }
+    let ignore = format!("add {pattern} to .gitignore");
+    let (said, help) = if !known.tracked.is_empty() {
+        let named = if shown.starts_with('~') || shown.contains(':') {
+            start.display().to_string()
+        } else {
+            shown.to_owned()
+        };
+        (
+            format!("git tracks {shown}, so a commit keeps its files in the repository"),
+            format!(
+                "run `git rm -r --cached {}`, then delete it or {ignore}",
+                super::shell_word(&named)
+            ),
+        )
+    } else if !known.untracked.is_empty() {
+        (
+            format!("{shown} is still in {place}, and git will take it"),
+            format!("delete it, or {ignore}"),
+        )
+    } else {
+        return;
+    };
+    output.warn_with(Warning::GitImportInTree, &said, &help);
 }
 
 /// files of a folder copied into the cache, pinned for the dataset `name` as data.toml's `source`

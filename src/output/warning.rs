@@ -43,6 +43,8 @@ pub(crate) enum Warning {
     ExportLeftOut,
     /// git does not have code a recipe runs.
     GitCodeUntracked,
+    /// files an import read are in the git work tree, where a commit takes or keeps them.
+    GitImportInTree,
     /// git does not have lists in data.lock.d that data.lock names.
     GitLockPartUntracked,
     /// an import left out links or special files, which fetchloom never follows.
@@ -133,6 +135,7 @@ impl Warning {
             Warning::DownloadWebPage => "download.web_page",
             Warning::ExportLeftOut => "export.left_out",
             Warning::GitCodeUntracked => "git.code_untracked",
+            Warning::GitImportInTree => "git.import_in_tree",
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
             Warning::ImportSkipped => "import.skipped",
             Warning::LicenseRestricted => "license.restricted",
@@ -210,6 +213,7 @@ mod tests {
             DownloadWebPage,
             ExportLeftOut,
             GitCodeUntracked,
+            GitImportInTree,
             GitLockPartUntracked,
             ImportSkipped,
             LicenseRestricted,

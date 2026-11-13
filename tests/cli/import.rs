@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, text, zip_of};
+use crate::support::{Result, Sandbox, json, text, warned, zip_of};
 
 /// a folder of two files, one of them in a folder of its own.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -466,6 +466,55 @@ fn data_already_in_the_data_folder_is_moved_out_first() -> Result {
     let added = sandbox.run(&["add", "./raw"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     assert_eq!(fs::read(work.join("data/raw/visits.csv"))?, b"id\n1\n");
+    Ok(())
+}
+
+/// raw data imported from inside the git work tree stays where `git add .` takes it into the
+/// repository, so the import says so, names the commands that keep it out, and says nothing once
+/// .gitignore leaves it out.
+#[test]
+fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("flowers"))?;
+    fs::write(work.join("flowers/sepals.csv"), b"length\n5.1\n")?;
+    fs::create_dir_all(work.join("tracked"))?;
+    fs::write(work.join("tracked/petals.csv"), b"length\n1.4\n")?;
+    crate::merge::ok(&sandbox, &["add", "tracked"])?;
+    let run = |args: &[&str]| -> Result<serde_json::Value> {
+        let mut command = sandbox.command(args);
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(name);
+            }
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        json(&output)
+    };
+    let untracked = run(&["--json", "add", "./flowers"])?;
+    assert_eq!(untracked["warnings"][0]["kind"], "git.import_in_tree");
+    assert_eq!(
+        warned(&untracked),
+        [
+            "./flowers is still in the project, and git will take it; delete it, or add /flowers/ to .gitignore"
+        ]
+    );
+    let tracked = run(&["--json", "add", "./tracked"])?;
+    assert_eq!(
+        warned(&tracked),
+        [
+            "git tracks ./tracked, so a commit keeps its files in the repository; run `git rm -r --cached ./tracked`, then delete it or add /tracked/ to .gitignore"
+        ]
+    );
+    let mut ignore = fs::read_to_string(work.join(".gitignore"))?;
+    ignore.push_str("/flowers/\n");
+    fs::write(work.join(".gitignore"), ignore)?;
+    let ignored = run(&["--json", "add", "./flowers"])?;
+    assert_eq!(warned(&ignored), Vec::<String>::new());
     Ok(())
 }
 

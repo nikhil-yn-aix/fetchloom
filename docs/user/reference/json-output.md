@@ -123,6 +123,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `download.web_page` | a link meant for a data file answered with a web page |
 | `export.left_out` | the list `export` wrote leaves out files no link holds, as `result.left_out` says |
 | `git.code_untracked` | git does not have code a recipe runs; `details` names the files |
+| `git.import_in_tree` | files an import read are in the git work tree, where `git add .` takes them, or git tracks them already; `help` names the commands that keep them out |
 | `git.lock_part_untracked` | git does not have lists in `data.lock.d` that data.lock names, so a clone cannot read data.lock; `details` names them |
 | `import.skipped` | an import left out links or special files, which fetchloom never follows; `details` names them |
 | `license.restricted` | a dataset's license does not allow some uses, which the message names |

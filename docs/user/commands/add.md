@@ -85,6 +85,15 @@ the files are copied into the cache and hashed as they are copied, as many at on
   hint: scripts can find it with `fetchloom path flowers`
 ```
 
+the folder stays where it was. inside a git repository, where `git add .` would commit the raw data, maybe to a public remote, the import warns, `git.import_in_tree` in `--json`, unless .gitignore leaves the folder out already:
+
+```text
+warning: ./flowers is still in the project, and git will take it
+  help: delete it, or add /flowers/ to .gitignore
+```
+
+when git tracks the folder already, the warning says `git tracks ./flowers, so a commit keeps its files in the repository` and its help starts with `git rm -r --cached ./flowers`, which takes it out of git's index and leaves its files.
+
 a folder of many files takes a moment to pin and place after `Imported`, so a terminal shows `Pinning flowers` and then `Placing 20,000 files`, each with its time once it lasts a second.
 
 below the folder, `.git`, `.hg`, `.svn` and `.fetchloom` are left out unseen. files a system writes by itself are left out too, and one `Skipped` line names them: finder's `.DS_Store`, `._` files and `__MACOSX`, the `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems` and `.Trash-<uid>` folders of removable disks, and windows' `Thumbs.db`, `ehthumbs.db`, `desktop.ini`, `$RECYCLE.BIN` and `System Volume Information`. links and special files, such as named pipes, are left out with a warning and never followed. names are checked as an archive's members are, before anything is copied: a name with a control character or a `\`, one longer than 4096 bytes, one this machine cannot store, or two names that are one on disks that ignore case or unicode composition, stop the import with `source.invalid`, exit 10. `--select` and `--exclude` match the paths below the folder, and a select pattern that keeps nothing is a usage error. a folder holding more files than [`most_files`](../reference/environment.md) is refused before it is all read. archives in the folder unpack as a downloaded dataset's do.
