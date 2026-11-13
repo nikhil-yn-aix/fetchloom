@@ -166,7 +166,7 @@ class Mermaid(Folder):
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
-        names = ("add_mermaid", "write_redirects", "export_agents")
+        names = ("color_transcripts", "add_mermaid", "write_redirects", "export_agents")
         with patch.object(build_site.subprocess, "run", side_effect=lambda *a, **k: steps.append("zensical")) as run, \
              patch.object(build_site.shutil, "rmtree", side_effect=lambda *a, **k: steps.append("clean")), \
              patch.object(build_site, "redirects", return_value=[]), \

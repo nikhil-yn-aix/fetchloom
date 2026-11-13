@@ -35,6 +35,8 @@ each color has one meaning, named by a `Tone` in `src/output/style.rs`:
 | `fail` | failure | red | `#f25c6a` | `#bf213a` |
 | `accent` | anything the user types, and choice numbers | cyan | `#ee7a4c` | `#b44f26` |
 
+the documentation site draws the transcripts its pages show with the same tones: `python/transcript.py` follows `verb_color`, `difference` and the setup, ticker, warning, error, hint and next lines here, so a verb or rule that changes here changes there too.
+
 `Theme::detect` picks the theme: full-color terminals (`COLORTERM=truecolor` or `24bit`, `WT_SESSION`, or `TERM_PROGRAM` of vscode, iTerm.app, WezTerm or ghostty) get dark, or light when `COLORFGBG` ends in 7 or 15; every other terminal gets ansi, its own sixteen colors. `theme=` in `FETCHLOOM_COLORS` overrides the choice.
 
 subjects are bold and supporting facts are dim. `FETCHLOOM_COLORS` replaces any tone's color for the run. it is read once, when `Output` starts; an entry it cannot read keeps the default and becomes one warning. color code asks for a tone through `toned`, `tinted` or `accent`, never a fixed color.

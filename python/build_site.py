@@ -13,6 +13,8 @@ import sys
 import tarfile
 import urllib.request
 
+import transcript
+
 ROOT = Path(__file__).resolve().parents[1]
 # site_dir in zensical.toml
 SITE = ROOT / "site"
@@ -135,9 +137,19 @@ def add_mermaid(site, cache):
     (folder / "mermaid.LICENSE.txt").write_bytes(licence)
 
 
+def color_transcripts(site):
+    """every page with fetchloom's output drawn in the colors the cli gives it."""
+    for page in site.rglob("*.html"):
+        text = page.read_text(encoding="utf-8")
+        colored = transcript.colored(text)
+        if colored != text:
+            page.write_text(colored, encoding="utf-8")
+
+
 def main():
     shutil.rmtree(SITE, ignore_errors=True)
     subprocess.run([sys.executable, "-m", "zensical", "build", "--clean", "--strict"], cwd=ROOT, check=True)
+    color_transcripts(SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")
     write_redirects(SITE, redirects(ROOT))
     export_agents(ROOT, SITE)
