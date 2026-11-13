@@ -20,6 +20,14 @@ const PORTAL: &str = "https://www.ebi.ac.uk/ena/portal/api";
 /// say which it has, and what tells a run under controlled access.
 const FIELDS: &str = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,sra_ftp,sra_md5,sra_bytes,study_title";
 
+/// the fields that tell a search which kinds of file a run has, and whether it is under
+/// controlled access.
+const OFFERED: &str = "run_accession,fastq_ftp,submitted_ftp,submitted_format";
+
+/// the runs a search reads of a study: PRJNA172563 lists 10 under controlled access before its
+/// first public one, and ENA sends 100, some 13 KiB, as fast as it sends 10.
+const SAMPLED: usize = 100;
+
 /// which of a run's files a reference means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Files {
@@ -188,6 +196,22 @@ impl Accession {
         Ok(rows)
     }
 
+    /// what a search offers for these runs, from ENA's report of the first [`SAMPLED`] in one
+    /// try: the runs themselves when one has FASTQ files, as add takes by default, else their
+    /// submitted files when one has some, else nothing, as add would refuse them.
+    pub(super) async fn offered(&self, api: &impl Api) -> Result<Option<Accession>, Error> {
+        let mut url = self.url("filereport")?;
+        url.set_query(Some(&format!(
+            "accession={}&result=read_run&fields={OFFERED}&format=json&limit={SAMPLED}",
+            self.id
+        )));
+        let rows: Vec<Row> = self.answer(&api.get_once(&url).await?)?;
+        Ok([Files::Fastq, Files::Submitted]
+            .into_iter()
+            .find(|files| rows.iter().any(|row| row.has(*files)))
+            .map(|files| self.with(files)))
+    }
+
     /// reads an answer of ENA's portal API, which refuses an accession it does not take with a
     /// 400.
     fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
@@ -320,7 +344,7 @@ struct Found {
 impl Found {
     fn add(&mut self, accession: &Accession, row: &Row) -> Result<(), Error> {
         let (entries, md5s, sizes) = row.of(accession.files);
-        if row.submitted_format.contains("PROTECTED") || entries.starts_with("Protected") {
+        if row.protected(accession.files) {
             self.protected += 1;
             if let Some(archive) = row.submitted_ftp.split("Go to ").nth(1) {
                 let archive = archive.trim().trim_end_matches('.');
@@ -513,6 +537,16 @@ impl Row {
             ),
             Files::Sra => (&self.sra_ftp, &self.sra_md5, &self.sra_bytes),
         }
+    }
+
+    /// whether the run is under controlled access, so its files of this kind are not public.
+    fn protected(&self, files: Files) -> bool {
+        self.submitted_format.contains("PROTECTED") || self.of(files).0.starts_with("Protected")
+    }
+
+    /// whether the run has public files of this kind for add to list.
+    fn has(&self, files: Files) -> bool {
+        !self.protected(files) && !self.of(files).0.trim().is_empty()
     }
 }
 

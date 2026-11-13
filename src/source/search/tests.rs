@@ -29,24 +29,28 @@ fn openneuro(words: &str, first: usize) -> String {
     url.to_string()
 }
 
-/// ENA's count of the public runs of `study`, which search asks before it keeps the study.
-fn runs(study: &str) -> String {
+/// the first runs of `study` in ENA's file report, which search reads to tell which of their
+/// files add would take.
+fn files(study: &str) -> String {
     format!(
-        "https://www.ebi.ac.uk/ena/portal/api/filereportcount?accession={study}&result=read_run&format=json"
+        "https://www.ebi.ac.uk/ena/portal/api/filereport?accession={study}&result=read_run&fields=run_accession,fastq_ftp,submitted_ftp,submitted_format&format=json&limit=100"
     )
 }
 
-/// the captured ENA studies, each with runs to add.
-fn with_runs(recorded: Recorded) -> Recorded {
+/// a run with FASTQ files, as ENA's file report gave SRP455996's on 2026-11-13.
+const FASTQ_RUN: &[u8] = br#"[{"run_accession":"SRR25703980","fastq_ftp":"ftp.sra.ebi.ac.uk/vol1/fastq/SRR257/080/SRR25703980/SRR25703980.fastq.gz","submitted_ftp":"","submitted_format":""}]"#;
+
+/// the captured ENA studies, each with a run of FASTQ files to add.
+fn with_files(recorded: Recorded) -> Recorded {
     ["SRP455996", "SRP630995", "SRP266745"]
         .iter()
         .fold(recorded, |recorded, study| {
-            recorded.on(&runs(study), 200, br#"{"count":"1"}"#.to_vec())
+            recorded.on(&files(study), 200, FASTQ_RUN.to_vec())
         })
 }
 
 fn recorded() -> Recorded {
-    with_runs(Recorded::default())
+    with_files(Recorded::default())
         .fixture(HF, "search/hf.json")
         .fixture(KAGGLE, "search/kaggle.json")
         .fixture(ZENODO, "search/zenodo.json")
@@ -58,27 +62,142 @@ fn recorded() -> Recorded {
         .fixture(&openneuro("iris", 3), "search/openneuro.json")
 }
 
-/// EBI's search also finds studies that hold only sequences or analyses, which add cannot add, so
-/// a study ENA counts no public runs for is left out; one whose count fails stays, for add to try.
+/// EBI's search also finds studies add cannot add as they are, so the first runs of each in ENA's
+/// file report decide what search offers: FASTQ as `ena:<id>`, only submitted files as
+/// `ena:submitted/<id>`, and neither, as no runs, runs with no files yet or runs all under
+/// controlled access, nothing. a study whose report fails stays for add to try.
 #[test]
-fn ena_leaves_out_studies_without_public_runs() {
-    let words = "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=influenza&size=3&format=json&fields=name%2Cdescription";
+fn ena_offers_each_study_by_the_files_add_would_take() {
+    let words = "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=influenza&size=7&format=json&fields=name%2Cdescription";
+    let studies = [
+        "ERP021368",
+        "ERP010958",
+        "SRP431668",
+        "SRP036297",
+        "PRJNA172563",
+        "SRP455996",
+        "SRP500000",
+    ]
+    .map(|study| {
+        format!(r#"{{"acc":"{study}","fields":{{"name":[],"description":["{study}"]}}}}"#)
+    });
+    let protected = r#"{"run_accession":"SRR036297","fastq_ftp":"","submitted_ftp":"Protected file(s). Go to dbGap","submitted_format":"PROTECTED"}"#;
     let recorded = Recorded::default()
         .on(
             words,
             200,
-            br#"{"entries":[{"acc":"ERP021368","fields":{"name":[],"description":["Identification of Influenza virus subtype"]}},{"acc":"ERP010958","fields":{"name":[],"description":["MinION nanopore sequencing of an influenza genome"]}},{"acc":"SRP431668","fields":{"name":[],"description":["Influenza A virus Raw sequence reads"]}}]}"#.to_vec(),
+            format!(r#"{{"entries":[{}]}}"#, studies.join(",")).into_bytes(),
         )
-        .on(&runs("ERP021368"), 200, br#"{"count":"0"}"#.to_vec())
-        .on(&runs("ERP010958"), 200, br#"{"count":"2"}"#.to_vec())
-        .on(&runs("SRP431668"), 500, Vec::new());
-    let found = block_on(search(&recorded, "influenza", &[Catalog::Ena], Some(3))).unwrap();
+        // sequences alone, with no runs
+        .on(&files("ERP021368"), 200, b"[\n\n]".to_vec())
+        // nanopore runs ENA made no FASTQ from
+        .on(
+            &files("ERP010958"),
+            200,
+            br#"[{"run_accession":"ERR974981","fastq_ftp":"","submitted_ftp":"ftp.sra.ebi.ac.uk/vol1/run/ERR974/ERR974981/all_2d_reads.fasta.tar.gz","submitted_format":"OXFORDNANOPORE_NATIVE"}]"#.to_vec(),
+        )
+        .on(
+            &files("SRP431668"),
+            200,
+            br#"[{"run_accession":"SRR24113501","fastq_ftp":"","submitted_ftp":"","submitted_format":""}]"#.to_vec(),
+        )
+        .on(&files("SRP036297"), 200, format!("[{protected}]").into_bytes())
+        // controlled runs first, then public ones, as PRJNA172563's report lists them
+        .on(
+            &files("PRJNA172563"),
+            200,
+            format!(
+                "[{protected},{}]",
+                std::str::from_utf8(&FASTQ_RUN[1..FASTQ_RUN.len() - 1]).unwrap()
+            )
+            .into_bytes(),
+        )
+        .on(&files("SRP455996"), 200, FASTQ_RUN.to_vec())
+        .on(&files("SRP500000"), 500, Vec::new());
+    let found = block_on(search(&recorded, "influenza", &[Catalog::Ena], Some(7))).unwrap();
     let references: Vec<String> = found
         .candidates
         .iter()
         .map(|candidate| candidate.reference.to_string())
         .collect();
-    assert_eq!(references, ["ena:ERP010958", "ena:SRP431668"]);
+    assert_eq!(
+        references,
+        [
+            "ena:submitted/ERP010958",
+            "ena:PRJNA172563",
+            "ena:SRP455996",
+            "ena:SRP500000"
+        ]
+    );
+}
+
+/// the check of ENA's studies runs within the grace the search already gives, never past it: a
+/// study whose report is not back when the grace ends is offered as found, and ENA's matches
+/// stay however slow the reports are.
+#[test]
+fn ena_reports_end_with_the_grace() {
+    use std::time::Duration;
+
+    /// answers EBI's search after `answered`, never a file report, and the rest at once.
+    struct Unreported {
+        recorded: Recorded,
+        answered: Duration,
+    }
+    impl Api for Unreported {
+        async fn get(&self, url: &url::Url) -> Result<crate::net::Response, Error> {
+            if url.path().starts_with("/ena/portal/api/") {
+                std::future::pending::<()>().await;
+            }
+            if url.path().starts_with("/ebisearch/") {
+                tokio::time::sleep(self.answered).await;
+            }
+            self.recorded.get(url).await
+        }
+    }
+    let seconds = Duration::from_secs;
+    for (catalogs, answered, took) in [
+        // ENA alone is waited for, then its reports have the grace of a named site
+        (&[Catalog::Ena][..], seconds(30), seconds(40)),
+        // ENA answers a second before the grace zenodo's answer began ends
+        (
+            &[Catalog::Zenodo, Catalog::Ena][..],
+            seconds(9),
+            seconds(10),
+        ),
+    ] {
+        let api = Unreported {
+            recorded: recorded(),
+            answered,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let (result, elapsed) = runtime.block_on(async {
+            let start = tokio::time::Instant::now();
+            let searched =
+                tokio::time::timeout(seconds(3600), search(&api, "iris", catalogs, Some(LIMIT)));
+            let result = searched
+                .await
+                .expect("the search waited for ENA's reports")
+                .unwrap();
+            (result, start.elapsed())
+        });
+        let ena: Vec<String> = result
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.source == "ENA")
+            .map(|candidate| candidate.reference.to_string())
+            .collect();
+        assert_eq!(
+            ena,
+            ["ena:SRP455996", "ena:SRP630995", "ena:SRP266745"],
+            "{catalogs:?}"
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert_eq!(elapsed, took, "{catalogs:?}");
+    }
 }
 
 /// a search without `--source` leaves out ENA and dandi, whose specialist archives answer slowly,
@@ -551,7 +670,7 @@ fn chosen_catalogs_alone_are_asked() {
 
 #[test]
 fn a_limit_asks_each_catalog_for_that_many() {
-    let api = with_runs(Recorded::default())
+    let api = with_files(Recorded::default())
         .on(
             "https://huggingface.co/api/datasets?search=iris&limit=1&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private",
             200,

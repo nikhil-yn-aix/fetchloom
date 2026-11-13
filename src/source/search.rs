@@ -123,8 +123,18 @@ impl Catalog {
     }
 }
 
-/// a catalog's search under way, which ends with the catalog's place among those asked.
-type Asking<'a> = Pin<Box<dyn Future<Output = (usize, Result<Vec<Candidate>, Error>)> + Send + 'a>>;
+/// a catalog's search under way, or a check of one of its matches, which ends with the catalog's
+/// place among those asked.
+type Asking<'a> = Pin<Box<dyn Future<Output = (usize, Asked)> + Send + 'a>>;
+
+/// what a catalog's search, or a check of one of its matches, gave.
+enum Asked {
+    /// the catalog's matches.
+    Found(Result<Vec<Candidate>, Error>),
+    /// the reference to offer for the match at this place in the catalog's list, or none for one
+    /// add would refuse; a check that fails leaves the match as found.
+    Checked(usize, Result<Option<Reference>, Error>),
+}
 
 /// the matches each catalog keeps when nobody asks for another number.
 pub(crate) const LIMIT: usize = 3;
@@ -144,7 +154,8 @@ const NAMED_GRACE: Duration = Duration::from_secs(10);
 
 /// asks the sites [`Catalog::asked`] picks for `catalogs` together for `limit` matches each,
 /// taking turns in rank order, with exact names moved to the front; with no `limit`, each gives
-/// [`LIMIT`] and [`MOST`] of them are shown.
+/// [`LIMIT`] and [`MOST`] of them are shown. ENA's studies are checked within the same grace for
+/// the files add would take.
 pub(crate) async fn search(
     api: &impl Api,
     words: &str,
@@ -157,11 +168,12 @@ pub(crate) async fn search(
         .iter()
         .enumerate()
         .map(|(place, &catalog)| -> Asking<'_> {
-            Box::pin(async move { (place, catalog.find(api, words, limit).await) })
+            Box::pin(async move { (place, Asked::Found(catalog.find(api, words, limit).await)) })
         })
         .collect();
     let mut answers: Vec<Option<Result<Vec<Candidate>, Error>>> =
         asked.iter().map(|_| None).collect();
+    let mut offered = HashMap::new();
     let grace = if catalogs.is_empty() {
         GRACE
     } else {
@@ -170,7 +182,7 @@ pub(crate) async fn search(
     let mut late = None;
     while !asking.is_empty() {
         tokio::select! {
-            (place, answer) = poll_fn(|context| {
+            (place, given) = poll_fn(|context| {
                 for at in 0..asking.len() {
                     if let Poll::Ready(answered) = asking[at].as_mut().poll(context) {
                         drop(asking.swap_remove(at));
@@ -178,10 +190,19 @@ pub(crate) async fn search(
                     }
                 }
                 Poll::Pending
-            }) => {
-                answers[place] = Some(answer);
-                late.get_or_insert_with(|| Instant::now() + grace);
-            }
+            }) => match given {
+                Asked::Found(answer) => {
+                    if let Ok(found) = &answer {
+                        asking.extend(checks(api, place, found));
+                    }
+                    answers[place] = Some(answer);
+                    late.get_or_insert_with(|| Instant::now() + grace);
+                }
+                Asked::Checked(at, Ok(reference)) => {
+                    offered.insert((place, at), reference);
+                }
+                Asked::Checked(_, Err(_)) => {}
+            },
             () = tokio::time::sleep_until(late.unwrap_or_else(Instant::now)), if late.is_some() => {
                 break;
             }
@@ -190,7 +211,7 @@ pub(crate) async fn search(
     let mut result = Search::default();
     let mut first_error = None;
     let mut lists = Vec::new();
-    for (catalog, answer) in asked.into_iter().zip(answers) {
+    for (place, (catalog, answer)) in asked.into_iter().zip(answers).enumerate() {
         let source = catalog.label();
         match answer {
             None => result.warnings.push(format!(
@@ -199,7 +220,7 @@ pub(crate) async fn search(
                 grace.as_secs(),
                 catalog.name()
             )),
-            Some(Ok(candidates)) => lists.push(candidates.into_iter()),
+            Some(Ok(candidates)) => lists.push(offer(candidates, place, &mut offered).into_iter()),
             Some(Err(error)) => {
                 result
                     .warnings
@@ -228,6 +249,52 @@ pub(crate) async fn search(
         .candidates
         .sort_by_key(|candidate| !exact(candidate, &wanted));
     Ok(result)
+}
+
+/// a check of each of `found`, the matches of the catalog at `place`, that add might refuse as
+/// they are: ENA's studies, whose files ENA's report tells. each asks once, as many at once as
+/// the network lets one host take.
+fn checks<'a>(api: &'a impl Api, place: usize, found: &[Candidate]) -> Vec<Asking<'a>> {
+    found
+        .iter()
+        .enumerate()
+        .filter_map(|(at, candidate)| match &candidate.reference {
+            Reference::Ena(study) => {
+                let study = study.clone();
+                let checking: Asking<'a> = Box::pin(async move {
+                    let offered = study.offered(api).await;
+                    (
+                        place,
+                        Asked::Checked(at, offered.map(|offered| offered.map(Reference::Ena))),
+                    )
+                });
+                Some(checking)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// the `found` matches of the catalog at `place` with the references their checks `offered`: one
+/// whose check found nothing to add is left out, and one never checked, or whose check failed or
+/// was not back when the grace ended, stays as found.
+fn offer(
+    found: Vec<Candidate>,
+    place: usize,
+    offered: &mut HashMap<(usize, usize), Option<Reference>>,
+) -> Vec<Candidate> {
+    found
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, mut candidate)| match offered.remove(&(place, at)) {
+            Some(Some(reference)) => {
+                candidate.reference = reference;
+                Some(candidate)
+            }
+            Some(None) => None,
+            None => Some(candidate),
+        })
+        .collect()
 }
 
 /// keeps `most` of the `ranked` matches in their order, each with its rank in its catalog: every
@@ -585,9 +652,9 @@ struct StudyFields {
     description: Vec<String>,
 }
 
-/// the studies EBI's search finds in ENA, the most relevant first, but those ENA counts no public
-/// runs for, which add would refuse. a study names every run in it, and EBI's search gives no
-/// size or downloads.
+/// the studies EBI's search finds in ENA, the most relevant first, each naming every run in it.
+/// EBI's search also finds studies of sequences or analyses alone, and names no runs, so
+/// [`search`] checks each before it is offered. EBI's search gives no size or downloads.
 async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
     let words = plain_words(words);
     if words.is_empty() {
@@ -604,21 +671,11 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
     )?;
     let response = api.get(&url).await?;
     let studies: Studies = super::json(&url, &response)?;
-    let studies: Vec<Study> = studies.entries.into_iter().take(limit).collect();
-    // EBI's search also finds studies that hold only sequences or analyses, and its answer names
-    // no runs, so each study's runs are counted as add counts them
-    let counts = together(
-        studies
-            .iter()
-            .map(|study| -> Counting<'_> { Box::pin(public_runs(api, &study.acc)) })
-            .collect(),
-    )
-    .await;
     studies
+        .entries
         .into_iter()
-        .zip(counts)
-        .filter(|(_, runs)| *runs != Some(0))
-        .map(|(study, _)| {
+        .take(limit)
+        .map(|study| {
             let fields = study.fields;
             let title = fields
                 .name
@@ -636,52 +693,6 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
             })
         })
         .collect()
-}
-
-/// a count of runs under way.
-type Counting<'a> = Pin<Box<dyn Future<Output = Option<u64>> + Send + 'a>>;
-
-#[derive(Deserialize)]
-struct Counted {
-    count: String,
-}
-
-/// how many public runs ENA counts for `study`, in one try, or none when it does not say: a
-/// study whose count fails stays for add to try, and a slow count never holds up the search.
-async fn public_runs(api: &impl Api, study: &str) -> Option<u64> {
-    let url = query(
-        "https://www.ebi.ac.uk/ena/portal/api/filereportcount",
-        &[
-            ("accession", study),
-            ("result", "read_run"),
-            ("format", "json"),
-        ],
-    )
-    .ok()?;
-    let response = api.get_once(&url).await.ok()?;
-    let counted: Counted = super::json(&url, &response).ok()?;
-    counted.count.trim().parse().ok()
-}
-
-/// what each of `asking` gives, all of them run at once, in their order.
-async fn together<T>(mut asking: Vec<Pin<Box<dyn Future<Output = T> + Send + '_>>>) -> Vec<T> {
-    let mut given: Vec<Option<T>> = asking.iter().map(|_| None).collect();
-    poll_fn(|context| {
-        for (future, answer) in asking.iter_mut().zip(given.iter_mut()) {
-            if answer.is_none()
-                && let Poll::Ready(value) = future.as_mut().poll(context)
-            {
-                *answer = Some(value);
-            }
-        }
-        if given.iter().all(Option::is_some) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    })
-    .await;
-    given.into_iter().flatten().collect()
 }
 
 /// NCBI's E-utilities, which search GEO and summarize what they find.
