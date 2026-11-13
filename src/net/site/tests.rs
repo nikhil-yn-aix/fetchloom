@@ -244,13 +244,70 @@ fn the_runs_own_cookies_join_the_saved_ones_and_win_by_name() {
         cookie("pref", "/data", false, None),
     ];
     let saved: Vec<&Cookie> = saved.iter().collect();
-    let alone = cookie_header(&saved, None).unwrap();
+    let alone = cookie_header(&saved, &[]).unwrap();
     assert!(alone.is_sensitive());
     assert_eq!(alone, "pref=pref-value; session=session-value");
-    let jar = HeaderValue::from_static("session=renewed; csrf=1");
+    let kept = HeaderValue::from_static("session=renewed; csrf=1");
     assert_eq!(
-        cookie_header(&saved, Some(&jar)).unwrap(),
+        cookie_header(&saved, &[&kept]).unwrap(),
         "pref=pref-value; session=renewed; csrf=1"
+    );
+    // the site's own jar wins over the run's shared one, which another host filled
+    let shared = HeaderValue::from_static("csrf=2; region=eu");
+    assert_eq!(
+        cookie_header(&saved, &[&kept, &shared]).unwrap(),
+        "pref=pref-value; session=renewed; csrf=1; region=eu"
+    );
+}
+
+/// a cookie a signed-in site sets, a renewed session among them, stays in a jar of the site's
+/// own: the site's own requests send it in place of the saved cookie of its name, and the run's
+/// shared jar, which reqwest adds to any request without a cookie header, never holds it.
+#[test]
+fn a_cookie_a_signed_in_site_sets_stays_with_the_site() {
+    use reqwest::cookie::CookieStore as _;
+
+    let saved = Site::new(
+        "data.lab",
+        Vec::new(),
+        vec![cookie("session", "/", false, None)],
+        "the cookies".to_owned(),
+        String::new(),
+    )
+    .unwrap();
+    let net = net(vec![saved, token("api.lab", "t-1")]);
+    let cookies = &net.wire().unwrap().cookies;
+    let set = |cookie: &'static str, url: &str| {
+        let value = HeaderValue::from_static(cookie);
+        cookies.set_cookies(&mut std::iter::once(&value), &Url::parse(url).unwrap());
+    };
+    set(
+        "session=s-new; Domain=data.lab; Path=/",
+        "https://data.lab/files/1",
+    );
+    set("lb=a; Path=/", "https://api.lab/x");
+    set("pref=1; Path=/", "https://mirror.lab/x");
+    for url in [
+        "https://data.lab/files/2",
+        "http://data.lab/files/2",
+        "https://data.lab:8443/x",
+        "https://files.data.lab/x",
+        "https://api.lab/y",
+    ] {
+        assert_eq!(cookies.cookies(&Url::parse(url).unwrap()), None, "{url}");
+    }
+    assert_eq!(
+        cookies.cookies(&Url::parse("https://mirror.lab/y").unwrap()),
+        Some(HeaderValue::from_static("pref=1"))
+    );
+    assert_eq!(
+        sent(&net, "https://data.lab/files/2", &header::COOKIE).as_deref(),
+        Some("session=s-new")
+    );
+    // a site with no saved cookie sends the ones it set
+    assert_eq!(
+        sent(&net, "https://api.lab/y", &header::COOKIE).as_deref(),
+        Some("lb=a")
     );
 }
 

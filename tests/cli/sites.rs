@@ -572,6 +572,99 @@ fn saved_cookies(sandbox: &Sandbox, host: &str, expires: i64) -> Result {
     Ok(())
 }
 
+/// the target and cookie of each request `server` took, a check that asks nothing left out.
+fn cookies_by_target(server: &Routes) -> Vec<(String, Option<String>)> {
+    server
+        .requests()
+        .iter()
+        .filter_map(|head| {
+            let target = head.lines().next()?.split(' ').nth(1)?.to_owned();
+            let cookie = head.lines().find_map(|line| {
+                let (field, value) = line.split_once(':')?;
+                (field == "cookie").then(|| value.trim().to_owned())
+            });
+            Some((target, cookie))
+        })
+        .collect()
+}
+
+/// a cookie a signed-in site sets, as a renewed session, goes back to the site where its saved
+/// credential may go and nowhere else: not to another port of its host, which plain http
+/// reaches, nor through a proxy to a host its domain covers.
+#[test]
+fn a_cookie_a_signed_in_site_sets_goes_only_where_its_credential_may() -> Result {
+    let sandbox = Sandbox::new()?;
+    let moved = |location: &str, cookie: Option<&str>| {
+        let mut headers = vec![("Location", location), ("Content-Length", "0")];
+        headers.extend(cookie.map(|cookie| ("Set-Cookie", cookie)));
+        reply("302 Found", &headers, b"")
+    };
+    let other = Routes::start(vec![("/file.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let elsewhere = format!("{}/file.csv", other.url);
+    let site = Routes::start(vec![
+        (
+            "/renew".to_owned(),
+            moved("/again", Some("session=s-new; Path=/")),
+        ),
+        ("/again".to_owned(), moved(&elsewhere, None)),
+    ])?;
+    saved_cookies(&sandbox, &host_of(&site), 4_000_000_000)?;
+    sandbox.allow(&other.url);
+    let output = sandbox.run(&["get", &format!("{}/renew", site.url), "-o", "one.csv"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        cookies_by_target(&site),
+        [
+            ("/renew".to_owned(), Some("session=s-old".to_owned())),
+            ("/again".to_owned(), Some("session=s-new".to_owned()))
+        ]
+    );
+    assert_eq!(cookies_by_target(&other), [("/file.csv".to_owned(), None)]);
+    let proxy = Routes::start(vec![
+        (
+            "http://data.lab/renew".to_owned(),
+            moved(
+                "http://files.data.lab/file.csv",
+                Some("session=s-new; Domain=data.lab; Path=/"),
+            ),
+        ),
+        (
+            "http://files.data.lab/file.csv".to_owned(),
+            file(b"c,d\n", "\"v2\""),
+        ),
+    ])?;
+    let cookies = [
+        "# Netscape HTTP Cookie File\n".to_owned(),
+        line("data.lab", "/", false, 4_000_000_000, "session", "s-old"),
+    ]
+    .concat();
+    std::fs::write(sandbox.work().join("cookies.txt"), cookies)?;
+    let login = sandbox.run(&[
+        "auth",
+        "login",
+        "data.lab:80",
+        "--cookies",
+        "cookies.txt",
+        "--yes",
+    ])?;
+    assert!(login.status.success(), "{}", text(&login.stderr)?);
+    let proxied = sandbox
+        .command(&["get", "http://data.lab/renew", "-o", "two.csv"])
+        .env("HTTP_PROXY", &proxy.url)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .output()?;
+    assert!(proxied.status.success(), "{}", text(&proxied.stderr)?);
+    assert_eq!(
+        cookies_by_target(&proxy),
+        [
+            ("http://data.lab/renew".to_owned(), None),
+            ("http://files.data.lab/file.csv".to_owned(), None)
+        ]
+    );
+    Ok(())
+}
+
 #[test]
 fn expired_cookies_are_named_with_the_command_that_takes_them_again() -> Result {
     let sandbox = Sandbox::new()?;

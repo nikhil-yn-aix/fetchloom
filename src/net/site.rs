@@ -2,7 +2,7 @@
 //! and port. it goes over https, or over plain http only to this machine or an origin
 //! `allowed_origins` lists, and only while a request stays on its first origin.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 
 use reqwest::StatusCode;
@@ -109,12 +109,26 @@ fn path_matches(cookie: &str, request: &str) -> bool {
             && (cookie.ends_with('/') || request[cookie.len()..].starts_with('/'))
 }
 
+/// how a run finds the saved credentials, once the first request needs them.
+type Find = Box<dyn FnOnce() -> Vec<Site> + Send>;
+
 /// every website's saved credential, looked for when the first request needs one.
-pub(crate) struct Sites(LazyLock<Vec<Site>, Box<dyn FnOnce() -> Vec<Site> + Send>>);
+pub(crate) struct Sites(Arc<LazyLock<Vec<Site>, Find>>);
 
 impl Default for Sites {
     fn default() -> Sites {
-        Sites(LazyLock::new(Box::new(Vec::new)))
+        Sites(Arc::new(LazyLock::new(Box::new(Vec::new))))
+    }
+}
+
+impl Sites {
+    /// the run's cookie store, which keeps the cookies a site with a saved credential sets in a
+    /// jar of that site's own.
+    pub(super) fn cookies(&self) -> super::cookies::Cookies {
+        let sites = Arc::clone(&self.0);
+        super::cookies::Cookies::by_site(move |url| {
+            sites.iter().find(|site| site.is_for(url)).map(Site::named)
+        })
     }
 }
 
@@ -235,22 +249,30 @@ fn is_loopback(url: &Url) -> bool {
     }
 }
 
-/// the cookie header for `cookies` with the run's own `jar` cookies for the same link, which
-/// win over a saved one of the same name since the site set them since. none when the result
-/// cannot be a header.
-fn cookie_header(cookies: &[&Cookie], jar: Option<&HeaderValue>) -> Option<HeaderValue> {
-    let jar = jar
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let set: Vec<&str> = jar
-        .split(';')
-        .map(str::trim)
-        .filter(|pair| !pair.is_empty())
-        .collect();
-    let named = |name: &str| {
-        set.iter()
-            .any(|pair| pair.split_once('=').map_or(*pair, |(first, _)| first) == name)
+/// the cookie header for `cookies` with the run's own cookies for the same link, `run`: each
+/// header's cookies win by name over those of the headers after it, and all of them over a
+/// saved one, since the site set them since. none when the result cannot be a header.
+fn cookie_header(cookies: &[&Cookie], run: &[&HeaderValue]) -> Option<HeaderValue> {
+    let name = |pair: &str| {
+        pair.split_once('=')
+            .map_or(pair, |(first, _)| first)
+            .to_owned()
     };
+    let mut set: Vec<&str> = Vec::new();
+    for value in run {
+        for pair in value
+            .to_str()
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+        {
+            if !set.iter().any(|kept| name(kept) == name(pair)) {
+                set.push(pair);
+            }
+        }
+    }
+    let named = |wanted: &str| set.iter().any(|pair| name(pair) == wanted);
     let mut ordered: Vec<&&Cookie> = cookies.iter().collect();
     // longer paths first, as RFC 6265 orders them
     ordered.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
@@ -272,7 +294,7 @@ impl Net {
         mut self,
         find: impl FnOnce() -> Vec<Site> + Send + 'static,
     ) -> Net {
-        self.sites = Sites(LazyLock::new(Box::new(find)));
+        self.sites = Sites(Arc::new(LazyLock::new(Box::new(find))));
         self
     }
 
@@ -308,8 +330,8 @@ impl Net {
     }
 
     /// the headers a website's saved credential adds to a request for `url` on its
-    /// `first_origin`: its own, and a cookie header with its cookies that apply and the run's
-    /// own cookies for the link.
+    /// `first_origin`: its own, and a cookie header with its cookies that apply, the ones the
+    /// site set this run, which go nowhere else, and the run's shared ones for the link.
     pub(super) fn site_headers(
         &self,
         url: &Url,
@@ -325,12 +347,12 @@ impl Net {
             .iter()
             .filter(|cookie| cookie.applies(url, now))
             .collect();
-        if !cookies.is_empty() {
-            let jar = self
-                .wire()
-                .ok()
-                .and_then(|wire| wire.cookies.snapshot(url).0);
-            if let Some(value) = cookie_header(&cookies, jar.as_ref()) {
+        let jar = self.wire().ok().map(|wire| &wire.cookies);
+        let kept = jar.and_then(|jar| jar.kept(&site.named(), url));
+        if !cookies.is_empty() || kept.is_some() {
+            let shared = jar.and_then(|jar| jar.snapshot(url).0);
+            let run: Vec<&HeaderValue> = kept.iter().chain(&shared).collect();
+            if let Some(value) = cookie_header(&cookies, &run) {
                 headers.push((header::COOKIE, value));
             }
         }

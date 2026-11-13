@@ -353,13 +353,18 @@ enum Lane {
 
 impl Wire {
     /// the proxies, once the settings are known to name proxies, and no client yet.
-    fn new(typed: &address::Typed, offline: bool, connect: Duration) -> Result<Wire, Error> {
+    fn new(
+        typed: &address::Typed,
+        offline: bool,
+        connect: Duration,
+        cookies: cookies::Cookies,
+    ) -> Result<Wire, Error> {
         let proxies = address::Proxies::read(&|name| std::env::var_os(name))?;
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Wire {
             clients: std::array::from_fn(|_| OnceLock::new()),
-            cookies: Arc::default(),
+            cookies: Arc::new(cookies),
             typed: typed.clone(),
             offline,
             connect,
@@ -465,7 +470,10 @@ impl Net {
     /// not be made stays an error, since nothing about a retry would differ.
     fn wire(&self) -> Result<&Wire, Error> {
         self.wire
-            .get_or_init(|| Wire::new(&self.typed, self.offline.enabled(), self.connect))
+            .get_or_init(|| {
+                let cookies = self.sites.cookies();
+                Wire::new(&self.typed, self.offline.enabled(), self.connect, cookies)
+            })
             .as_ref()
             .map_err(Clone::clone)
     }
