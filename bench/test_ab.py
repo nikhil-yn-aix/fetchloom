@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 import tempfile
@@ -55,6 +56,19 @@ class PairedTests(unittest.TestCase):
         self.assertIsNone(result["ratios"]["memory"])
         self.assertEqual(result["metrics"]["cpu"]["n_available_pairs"], 0)
 
+    def test_values_past_what_a_float_holds_are_unavailable(self):
+        # an int past 1.8e308 makes math.isfinite overflow, as a ratio past e**709 makes math.exp
+        self.assertIsNone(ab.number(10 ** 400))
+        self.assertEqual(ab.number(10 ** 300), 10 ** 300)
+        self.assertIsNone(ab.exponent(1000))
+        self.assertEqual(ab.exponent(0), 1)
+        # a ratio of 1e600 has a log, but no float can hold the ratio itself
+        rows = [r for n in range(1, 11) for r in (row("fetchloom", n, 1e-300), row("fetchloom+aa", n, 1e300))]
+        [result] = ab.compare(rows)
+        wall = result["metrics"]["wall"]
+        self.assertAlmostEqual(wall["log_ratio_median"], math.log(1e300) - math.log(1e-300))
+        self.assertIsNone(wall["bootstrap_95_median_ratio"])
+
     def test_constant_effect_has_exact_interval_and_threshold(self):
         rows = [r for n in range(1, 11) for r in (row("fetchloom", n, 2), row("fetchloom+aa", n, 1))]
         [result] = ab.compare(rows)
@@ -105,6 +119,21 @@ class PairedTests(unittest.TestCase):
             data = json.loads(output.read_text())
             self.assertEqual(data["threshold"], .05)
             self.assertEqual(data["results"][0]["metrics"]["wall"]["n_log_pairs"], 1)
+
+
+    def test_cli_reports_unreadable_results_as_a_usage_error_and_writes_json_only_when_asked(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            missing = subprocess.run([sys.executable, str(Path(ab.__file__)), str(root)], capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 2)
+            self.assertIn(f"ab.py: error: [Errno 2] No such file or directory: '{root / 'runs.jsonl'}'", missing.stderr)
+            (root / "runs.jsonl").write_text(json.dumps(row("fetchloom", 1)) + "\n" + json.dumps(row("fetchloom+aa", 1, .9)) + "\n")
+            result = subprocess.run([sys.executable, str(Path(ab.__file__)), str(root), "--resamples", "100"],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["runs.jsonl"])
 
 
 class InputTests(unittest.TestCase):

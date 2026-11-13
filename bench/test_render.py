@@ -1,7 +1,23 @@
+import contextlib
+import io
+import json
+from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
-class RenderTests(unittest.TestCase):
+import render
+
+
+class Quiet(unittest.TestCase):
+    """keeps the line each render prints, which says where it wrote."""
+
+    def setUp(self):
+        self.printed = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
+
+
+class RenderTests(Quiet):
     def test_failed_runs_do_not_lower_median(self):
         import render
         summary = render.summarize([
@@ -149,7 +165,7 @@ class RenderTests(unittest.TestCase):
             shutil.rmtree(root)
 
 
-class CampaignTests(unittest.TestCase):
+class CampaignTests(Quiet):
     def write_live(self, root, chunk, service="huggingface", ref="dataset-one", size=4, quick=False):
         import json
         folder = root / chunk
@@ -220,6 +236,129 @@ class CampaignTests(unittest.TestCase):
             (report / "docs" / "dev" / "performance").mkdir(parents=True)
             with self.assertRaisesRegex(ValueError, "conditions"):
                 render.render(root, report)
+
+
+def lab_row(**changes):
+    return dict(dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4", tool="fetchloom", quick=True,
+                     count=1, file_size=4, status="passed", wall_seconds=1, round=1), **changes)
+
+
+class LoadResultsTests(Quiet):
+    def campaign(self, root, rows, meta):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        if meta is not None:
+            (root / "meta.json").write_text(json.dumps(meta))
+
+    def test_results_that_cannot_be_read_as_one_campaign_are_refused(self):
+        live = dict(kind="live", quick=True, datasets=[dict(service="zenodo", bytes=3, expected_sha256={"a": "1"})])
+        live_row = dict(kind="live", service="zenodo", tool="fetchloom", round=1, quick=True, count=1, file_size=3,
+                        status="passed", files={"a": "1"})
+        cases = [
+            ("no runs", None, None, "no runs.jsonl found"),
+            ("a list for metadata", [lab_row()], [], "invalid campaign metadata"),
+            ("another kind", [lab_row()], dict(kind="native", quick=True), "invalid campaign metadata"),
+            ("quick unsaid", [lab_row()], dict(kind="lab"), "invalid campaign metadata"),
+            ("a service twice", [live_row], dict(live, datasets=live["datasets"] * 2), "live metadata repeats a service"),
+            ("a full run in a smoke campaign", [lab_row(quick=False)], dict(kind="lab", quick=True), "mixed benchmark conditions in"),
+            ("no tool", [{k: v for k, v in lab_row().items() if k != "tool"}], dict(kind="lab", quick=True), "a measured row has no tool"),
+            ("a round twice", [lab_row(), lab_row()], dict(kind="lab", quick=True), "duplicate measured row"),
+            ("no reference", [dict(live_row, service="kaggle")], live, "live metadata has no reference dataset for kaggle"),
+            ("other bytes", [dict(live_row, files={"a": "2"})], live, "live checked bytes do not match metadata for zenodo"),
+        ]
+        for case, rows, meta, said in cases:
+            with self.subTest(case), tempfile.TemporaryDirectory() as folder:
+                if rows is not None:
+                    self.campaign(Path(folder), rows, meta)
+                with self.assertRaisesRegex(ValueError, said):
+                    render.load_results(Path(folder))
+
+    def test_skips_and_comparisons_of_a_live_campaign_are_kept_apart_from_its_timings(self):
+        meta = dict(kind="live", quick=True, datasets=[dict(service="zenodo", bytes=3, expected_sha256={"a": "1"})])
+        rows = [dict(kind="live", service="zenodo", tool="fetchloom", round=1, quick=True, count=1, file_size=3,
+                     status="passed", wall_seconds=1, files={"a": "1"}),
+                dict(kind="live", service="figshare", quick=True, status="skipped", reason="the service did not answer"),
+                dict(kind="comparison", service="zenodo", round=1, comparison=dict(status="identical"))]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.campaign(root / "live", rows, meta)
+            loaded, metas = render.load_results(root)
+            self.assertEqual((loaded, metas), (rows, [meta]))
+            (root / "report/docs/dev/performance").mkdir(parents=True)
+            render.render(root, root / "report")
+            page = (root / "report/docs/dev/performance/benchmarks.md").read_text()
+        self.assertIn("- figshare skipped: the service did not answer", page)
+        self.assertIn('- zenodo round 1: `identical`; differences: `{"status": "identical"}`', page)
+
+
+class PageTests(Quiet):
+    def render(self, rows, meta):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        (root / "meta.json").write_text(json.dumps(meta))
+        (root / "report/docs/dev/performance").mkdir(parents=True)
+        render.render(root, root / "report")
+        page = root / "report/docs/dev/performance/benchmarks.md"
+        self.assertEqual(self.printed.getvalue(), f"wrote {page} and {root / 'report/docs/assets/bench'}\n")
+        return page.read_text()
+
+    def test_the_conditions_name_the_machine_the_binary_and_each_network(self):
+        meta = dict(kind="lab", quick=False, cpu_affinity=[2, 3], nginx_cpu_affinity={"41": [4]},
+                    fetchloom_binary=dict(path="/home/fl/bin/fetchloom", sha256="a" * 64), filesystems={"ext4": "ext4 rw"},
+                    network_profiles=dict(lan=[0, 0, None], far=[150, 1, 50]))
+        page = self.render([lab_row(quick=False), lab_row(quick=False, round=0, warmup=True, status="failed")], meta)
+        self.assertIn("- measured CPUs: `[2, 3]`; nginx threads: `{'41': [4]}`", page)
+        self.assertIn(f"- supplied executable: `/home/fl/bin/fetchloom`; SHA-256: `{'a' * 64}`", page)
+        self.assertIn('- recorded `unknown`: lab run on `{"ext4": "ext4 rw"}`', page)
+        self.assertIn("| lan | 0 ms | 0% | unlimited |\n| far | 150 ms | 1% | 50 Mbit/s |", page)
+        self.assertIn("1 warmup commands failed; their records remain in runs.jsonl.", page)
+        self.assertNotIn("smoke-test", page)
+
+    def test_runs_that_differ_show_their_range_and_one_case_keeps_one_size(self):
+        import xml.etree.ElementTree as ET
+        self.render([lab_row(), lab_row(round=2, wall_seconds=2)], dict(kind="lab", quick=True))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        lines = ET.parse(cards / "s1-lan-ext4.svg").findall(".//{http://www.w3.org/2000/svg}line")
+        self.assertEqual(len(lines), 1)
+        self.printed.truncate(0)
+        self.printed.seek(0)
+        with self.assertRaisesRegex(ValueError, r"mixed benchmark conditions for \('s1', 'lan', 'ext4'\)"):
+            self.render([lab_row(), lab_row(round=2, count=2)], dict(kind="lab", quick=True))
+
+    def test_a_resume_without_a_byte_count_says_so(self):
+        page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
+        self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)
+
+    def test_the_command_renders_its_results_into_this_repository(self):
+        with mock.patch.object(render, "render") as rendered, mock.patch.object(sys, "argv", ["render.py", "results"]):
+            render.main()
+        rendered.assert_called_once_with(Path("results").resolve(), Path(render.__file__).resolve().parent.parent)
+
+
+class WordingTests(unittest.TestCase):
+    def test_numbers_read_as_people_say_them(self):
+        self.assertEqual([render.seconds(value) for value in (None, .0042, 2.5, 90)], ["n/a", "4 ms", "2.50 s", "1.50 min"])
+        self.assertEqual([render.size(value) for value in (None, 512, 1536, 3 * 1024 ** 5)], ["n/a", "512 B", "1.5 KiB", "3072 TiB"])
+        self.assertEqual([render.ratio(*pair) for pair in ((2, None), (2, 0), (1.02, 1), (3, 1.5))], ["n/a", "n/a", "even (<5%)", "2.00x"])
+        self.assertEqual([render.times(value) for value in (12.4, 1.6, 3.0)], ["12\u00d7", "1.6\u00d7", "3\u00d7"])
+
+    def test_a_verdict_needs_a_measured_fetchloom_and_a_rival(self):
+        def summary(median, failures=0):
+            return dict(median=median, failures=failures)
+
+        for summaries, verdict in [
+            ({"fetchloom": summary(1), "curl": summary(2)}, "2\u00d7 faster"),
+            ({"fetchloom": summary(2), "curl": summary(1)}, "2\u00d7 slower"),
+            ({"fetchloom": summary(1), "curl": summary(1.02)}, "even"),
+            ({"fetchloom": summary(1, failures=1), "curl": summary(2)}, None),
+            ({"fetchloom": summary(1), "curl": summary(2, failures=1)}, None),
+            ({"fetchloom": summary(None), "curl": summary(2)}, None),
+        ]:
+            with self.subTest(verdict=verdict, summaries=summaries):
+                self.assertEqual(render.verdict(summaries), verdict)
+        self.assertEqual(render.no_bar(dict(failures=0, timeouts=0)), "skipped")
 
 
 if __name__ == "__main__":

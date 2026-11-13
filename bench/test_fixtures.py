@@ -61,5 +61,72 @@ class CacheIdentityTests(unittest.TestCase):
         self.assertEqual(archives[0]["sha256"], archives[1]["sha256"])
 
 
+class CaseTests(unittest.TestCase):
+    def test_a_smoke_run_keeps_a_large_enough_file_to_interrupt(self):
+        [resume] = fixtures.case_specs(["home"], ["s7"], True)
+        [large] = fixtures.case_specs(["home"], ["s1"], True)
+        # at 100 mbit/s, 2 MiB would be done long before the stop at 10 s
+        self.assertEqual((resume["base"], resume["size"], large["size"]), ("s1", 256 * 1024 * 1024, 2 * 1024 * 1024))
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+            built = fixtures.build(dict(resume, size=8), 17)
+        self.assertEqual(built["key"], "17-quick-home-s1-interrupt")
+
+    def test_the_zip_holds_each_file_stored_and_dated_alike_so_its_bytes_repeat(self):
+        import zipfile
+        [spec] = fixtures.case_specs(["lan"], ["s4"], True)
+        spec = dict(spec, count=3, size=16)
+        built = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+                case = fixtures.build(spec, 17)
+                [archive] = case["files"]
+                with zipfile.ZipFile(Path(case["server_dir"]) / archive["name"]) as packed:
+                    entries = [(info.filename, info.compress_type, info.date_time, info.external_attr >> 16)
+                               for info in packed.infolist()]
+            built.append(archive)
+        self.assertEqual(archive["name"], "members.zip")
+        self.assertEqual(entries, [(f"file-0000{index}.bin", zipfile.ZIP_STORED, (2020, 1, 1, 0, 0, 0), 0o644) for index in range(3)])
+        self.assertEqual([item["name"] for item in case["members"]], [name for name, *_ in entries])
+        self.assertEqual(built[0]["sha256"], built[1]["sha256"])
+
+
+class PreparationTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        server = self.root / "www" / "case"
+        server.mkdir(parents=True)
+        files = []
+        for name in ["a.bin", "b.bin"]:
+            (server / name).write_bytes(name.encode())
+            files.append(dict(name=name, sha256=fixtures.sha256(server / name), size=5, url=f"https://lab.flb/case/{name}"))
+        self.case = dict(key="case", files=files, members=[], server_dir=str(server), fixture_signature={})
+
+    def prepare(self, tool):
+        with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "run_group") as run:
+            fixtures.prepare_native(dict(self.case), self.root / "fetchloom", [tool])
+        return run
+
+    def test_a_prepared_project_is_kept_while_its_inputs_and_harness_stay(self):
+        (self.root / "fetchloom").write_bytes(b"build")
+        self.assertTrue(self.prepare("fetchloom").called)
+        self.assertFalse(self.prepare("fetchloom").called)
+        (self.root / "fetchloom").write_bytes(b"another build")
+        self.assertTrue(self.prepare("fetchloom").called)
+
+    def test_dvc_and_datalad_must_download_what_they_were_prepared_with(self):
+        dvc = [call.args[0] for call in self.prepare("dvc").call_args_list]
+        self.assertLess(dvc.index(["dvc", "push", "-r", "stage"]), dvc.index(["dvc", "remote", "add", "-d", "lab", "https://lab.flb/dvc/case"]))
+        self.assertIn(["dvc", "remote", "modify", "lab", "verify", "true"], dvc)
+        # the copy dvc pushed is gone, so a measured pull fetches every file
+        self.assertFalse((self.root / "prepared/case/dvc/data").exists())
+        datalad = self.prepare("datalad").call_args_list
+        addurl = next(call for call in datalad if call.args[0][:3] == ["git", "annex", "addurl"])
+        self.assertEqual(addurl.kwargs["input"], "https://lab.flb/case/a.bin data/a.bin\nhttps://lab.flb/case/b.bin data/b.bin\n")
+        self.assertEqual(datalad[-1].args[0], ["git", "annex", "drop", "--force", "--all"])
+        self.assertFalse(self.prepare("dvc").called)
+
+
 if __name__ == "__main__":
     unittest.main()

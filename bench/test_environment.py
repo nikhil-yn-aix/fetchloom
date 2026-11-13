@@ -92,7 +92,8 @@ class DurableCurlTests(unittest.TestCase):
             self.assertEqual(tool.prepared_as, "curl")
             work = root / "work"
             tool.prepare(case, work)
-            subprocess.run(tool.command(case, work), cwd=work, env=tool.env(work), check=True)
+            ran = subprocess.run(tool.command(case, work), cwd=work, env=tool.env(work), check=True, capture_output=True, text=True)
+            self.assertEqual(ran.stdout, "data/input.bin: OK\n")
             lines = (work / "command.sh").read_text().splitlines()
             self.assertEqual(lines[-1], "sync -f data")
             self.assertTrue(lines[-2].startswith("sha256sum -c"), lines)

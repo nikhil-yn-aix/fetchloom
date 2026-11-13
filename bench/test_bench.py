@@ -1,9 +1,16 @@
+import argparse
+import errno
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import fixtures
 import lab
+import tools
 
 
 class LabPathTests(unittest.TestCase):
@@ -471,6 +478,149 @@ class VariantTests(unittest.TestCase):
             self.assertEqual(lean.env(work)["FETCHLOOM_EXP_LEAN"], "1")
             self.assertEqual(lean.env(work)["FETCHLOOM_CACHE"], plain.env(work)["FETCHLOOM_CACHE"])
             self.assertNotIn("FETCHLOOM_EXP_LEAN", plain.env(work))
+
+
+def stand_in(path, program):
+    """``path`` as an executable python script running ``program``."""
+    path.write_text(f"#!{sys.executable}\n{program}")
+    path.chmod(0o755)
+    return path
+
+
+class ToolTests(unittest.TestCase):
+    FILES = [dict(name=f"file-0000{index}.bin", sha256="0" * 64, size=1, url=f"https://lab.flb/key/file-0000{index}.bin")
+             for index in range(2)]
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.work = Path(folder.name)
+
+    def lines(self, adapter, scenario, files=None, members=()):
+        adapter("unused").command(dict(id=scenario, files=files or self.FILES[:1], members=list(members)), self.work)
+        return (self.work / "command.sh").read_text().splitlines()
+
+    def test_a_version_the_tool_cannot_give_is_the_reason_why(self):
+        class Missing(tools.Tool):
+            name = "no-such-benchmark-tool"
+
+        self.assertEqual(Missing("unused").version(), "[Errno 2] No such file or directory: 'no-such-benchmark-tool'")
+        failing = stand_in(self.work / "failing", "raise SystemExit(3)\n")
+
+        class Failing(tools.Tool):
+            name = str(failing)
+
+        self.assertEqual(Failing("unused").version(), f"Command '['{failing}', '--version']' returned non-zero exit status 3.")
+        fetchloom = stand_in(self.work / "fetchloom", "print('fetchloom 0.1.0')\n")
+        self.assertEqual(tools.Fetchloom(fetchloom).version(), "fetchloom 0.1.0")
+        (self.work / "bin").mkdir()
+        stand_in(self.work / "bin/python", "print(' 1.8.2 ')\n")
+        with mock.patch.object(lab, "VENV", self.work):
+            self.assertEqual(tools.Pooch("unused").version(), "1.8.2")
+
+    def test_each_downloader_fetches_every_file_and_resumes_the_interrupted_one(self):
+        curl = self.lines(tools.Curl, "s1", self.FILES)[2].split()
+        # one transfer each, one after another in a single parallel curl
+        self.assertEqual(curl.count("--next"), 1)
+        self.assertEqual(curl.count("--output"), 2)
+        # each continues the file the interrupted first attempt left, and only then
+        resumed = self.lines(tools.Curl, "s7")[2].split()
+        self.assertEqual(resumed[resumed.index("-C") + 1], "-")
+        self.assertIn("-c", self.lines(tools.Wget, "s7")[2].split())
+        for adapter, flag in [(tools.Curl, "-C"), (tools.Wget, "-c")]:
+            with self.subTest(adapter.name):
+                self.assertNotIn(flag, self.lines(adapter, "s1")[2].split())
+
+    def test_the_zip_is_unpacked_and_each_member_checked_where_its_tool_puts_it(self):
+        zipped = [dict(name="members.zip", sha256="0" * 64, size=1, url="https://lab.flb/key/members.zip")]
+        members = [dict(name="file-00000.bin", sha256="1" * 64)]
+        for adapter in (tools.Curl, tools.Wget, tools.Aria2c):
+            with self.subTest(adapter.name):
+                self.assertEqual(self.lines(adapter, "s4", zipped, members)[-1], "unzip -q data/members.zip -d data")
+        case = dict(id="s4", files=zipped, members=members)
+        self.assertEqual(tools.Fetchloom("unused").outputs(case, self.work),
+                         [(self.work / "project/data/f00000/file-00000.bin", "1" * 64)])
+        self.assertEqual(tools.Pooch("unused").outputs(case, self.work),
+                         [(self.work / "cache/pooch/unpacked/file-00000.bin", "1" * 64)])
+        plain = dict(id="s1", files=self.FILES, members=[])
+        self.assertEqual(tools.Pooch("unused").outputs(plain, self.work),
+                         [(self.work / "cache/pooch" / item["name"], item["sha256"]) for item in self.FILES])
+        self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
+                         [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
+
+    def test_a_second_project_is_set_up_after_the_untimed_first(self):
+        populated = []
+
+        class Probe(tools.Tool):
+            name = "probe"
+
+            def populate(self, scenario, workdir):
+                populated.append(scenario["id"])
+                (workdir / "project" / scenario["id"]).write_text("")
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        with mock.patch.object(tools.lab, "run_group") as run:
+            Probe("unused").prepare(dict(id="s5"), self.work)
+        # the cache comes from an untimed run of s2, then a project of its own takes s5's files
+        self.assertEqual(populated, ["s2", "s5"])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(sorted(path.name for path in (self.work / "first-project").iterdir()), ["s2"])
+        self.assertEqual(sorted(path.name for path in (self.work / "project").iterdir()), ["s5"])
+
+
+class LabHelperTests(unittest.TestCase):
+    def test_cpu_lists_name_available_cpus(self):
+        self.assertEqual(lab.cpu_list(" ", available=[3, 1]), (1, 3))
+        with self.assertRaisesRegex(ValueError, "no CPUs are available"):
+            lab.cpu_list("", available=[])
+        with mock.patch.object(lab.os, "sched_getaffinity", return_value={0, 1}):
+            self.assertEqual(lab.cpu_choice("0-1"), (0, 1))
+            with self.assertRaisesRegex(argparse.ArgumentTypeError, r"CPUs are not available: \[5\]"):
+                lab.cpu_choice("1,5")
+
+    def test_a_group_left_behind_is_killed_then_given_up_on(self):
+        clock = iter(range(0, 100))
+        with mock.patch.object(lab.time, "monotonic", side_effect=lambda: next(clock)), \
+             mock.patch.object(lab.time, "sleep"), mock.patch.object(lab.os, "killpg") as kill:
+            lab.end_group(4242)
+        # probed until the deadline, killed, then probed for five seconds more
+        self.assertEqual(kill.call_args_list[1], mock.call(4242, lab.signal.SIGKILL))
+        self.assertTrue(all(call == mock.call(4242, 0) for call in kill.call_args_list[2:]))
+        with mock.patch.object(lab.os, "killpg", side_effect=[None, ProcessLookupError]) as kill, \
+             mock.patch.object(lab.time, "sleep"):
+            lab.end_group(4242)
+        self.assertEqual(kill.call_args_list, [mock.call(4242, 0), mock.call(4242, lab.signal.SIGKILL)])
+
+    def test_a_group_whose_command_ran_past_its_time_is_still_reaped(self):
+        # the group is gone by the time it is killed, as when its command ended on its own
+        with mock.patch.object(lab.os, "killpg", side_effect=ProcessLookupError), self.assertRaises(subprocess.TimeoutExpired):
+            lab.run_group([sys.executable, "-c", "import time; time.sleep(.3)"], timeout=.05)
+
+    def test_commands_write_scratch_files_under_the_lab_once_it_has_a_scratch_folder(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)), \
+             mock.patch.object(lab.subprocess, "run") as run:
+            lab.call(["ip", "link"])
+            self.assertNotIn("env", run.call_args.kwargs)
+            (Path(folder) / "scratch").mkdir()
+            lab.call(["ip", "link"])
+            self.assertEqual(run.call_args.kwargs["env"]["TMPDIR"], str(Path(folder) / "scratch"))
+            self.assertEqual(run.call_args.args[0], ["ip", "link"])
+
+    def test_the_lab_refuses_to_run_without_root(self):
+        with mock.patch.object(lab.os, "geteuid", return_value=1000), \
+             self.assertRaisesRegex(SystemExit, "the lab needs root for namespaces, mounts and drop_caches"):
+            lab.require_root()
+
+    def test_the_lab_writes_out_its_root_and_the_test_filesystems_mounted_under_it(self):
+        root = Path("/srv/fl-bench")
+        with mock.patch.object(lab, "ROOT", root), mock.patch.object(lab.os.path, "ismount", side_effect=lambda path: path.name == "xfs"):
+            self.assertEqual(lab.filesystems(), [root, root / "fs" / "xfs"])
+        # syncfs of no file fails as the kernel says, and touches no filesystem
+        with self.assertRaises(OSError) as raised:
+            lab._syncfs(-1)
+        self.assertEqual(raised.exception.errno, errno.EBADF)
 
 
 if __name__ == "__main__":

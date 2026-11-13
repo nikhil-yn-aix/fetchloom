@@ -1,9 +1,11 @@
+import argparse
 import contextlib
 import io
 import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from unittest import mock
 
 import lab
 import run
+import tools
 
 
 USAGE = SimpleNamespace(ru_utime=1, ru_stime=2)
@@ -233,6 +236,265 @@ class ManyVariantTests(unittest.TestCase):
                     self.assertEqual(len(set(order["tools"])), 13)
                 snapshots.append(meta["orders"])
             self.assertEqual(*snapshots)
+
+
+class HelperTests(unittest.TestCase):
+    def test_a_deadline_is_a_finite_positive_number_of_seconds(self):
+        self.assertEqual(run.positive_seconds("2.5"), 2.5)
+        for given in ["soon", None, 10 ** 400, float("inf"), float("nan"), 0, -1]:
+            with self.subTest(given=given), self.assertRaisesRegex(ValueError, "finite positive number of seconds"):
+                run.positive_seconds(given)
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "finite positive number of seconds"):
+            run.seconds_choice("0")
+
+    def test_lists_name_each_choice_once(self):
+        self.assertEqual(run.csv_choices("lan,far", ("lan", "far", "poor")), ["lan", "far"])
+        for given in ["lan,lan", "lan,moon"]:
+            with self.subTest(given), self.assertRaisesRegex(argparse.ArgumentTypeError, "choose distinct comma-separated values from lan,far"):
+                run.csv_choices(given, ("lan", "far"))
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "a variant needs a lowercase label"):
+            run.variant_choice("Lean:FETCHLOOM_EXP_A=1")
+
+    def test_the_access_log_counts_every_request_and_the_bytes_of_measured_files(self):
+        lines = ['{"request": "GET /key/a.bin HTTP/1.1", "bytes": 10}', "", '{"request": "-", "bytes": 3}',
+                 '{"request": "GET /key/a.bin?x=1 HTTP/2.0", "bytes": 5}', '{"request": "HEAD /other HTTP/1.1", "bytes": 0}']
+        self.assertEqual(run.parse_access(lines, {"/key/a.bin"}), dict(requests=4, bytes_served=18, file_bytes_served=15))
+
+    def test_free_space_still_moving_after_every_try_is_its_last_reading(self):
+        with mock.patch.object(lab, "flush") as flush, mock.patch.object(run, "free_bytes", side_effect=range(100)), \
+             mock.patch.object(run.time, "sleep"):
+            self.assertEqual(run.settled_free_bytes("/lab", attempts=3), 3)
+        flush.assert_called_once_with("/lab")
+
+    def test_the_repository_head_falls_back_to_windows_git_and_then_to_unavailable(self):
+        commands = []
+
+        def output(argv, **_):
+            commands.append(argv)
+            if argv[0] == "wslpath":
+                return "C:\\fetchloom\n"
+            raise subprocess.CalledProcessError(128, argv)
+
+        with mock.patch.object(run.shutil, "which", return_value="/usr/bin/wslpath"), \
+             mock.patch.object(run.subprocess, "check_output", side_effect=output):
+            self.assertEqual(run.repo_head(), "unavailable")
+        self.assertEqual([argv[0] for argv in commands], ["wslpath", "git", "git.exe"])
+        self.assertEqual(commands[-1], ["git.exe", "-C", "C:\\fetchloom", "rev-parse", "HEAD"])
+
+    def test_the_package_inventory_says_what_is_installed_missing_or_unreadable(self):
+        listed = "curl\tinstalled\t8.5.0\nwget\tconfig-files\t1.21\n"
+        with mock.patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, listed, "")):
+            self.assertEqual(run.native_versions(("curl", "wget", "aria2")),
+                             ["curl\t8.5.0", "wget\tnot installed", "aria2\tnot installed"])
+        with mock.patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", " locked \n")):
+            self.assertEqual(run.native_versions(("curl",)), ["native package inventory unavailable: locked"])
+        with mock.patch.object(run.subprocess, "run", side_effect=FileNotFoundError(2, "No such file or directory", "dpkg-query")):
+            self.assertEqual(run.native_versions(("curl",)),
+                             ["native package inventory unavailable: [Errno 2] No such file or directory: 'dpkg-query'"])
+
+    def test_an_executable_that_changes_while_it_is_hashed_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            binary = Path(folder, "fetchloom")
+            binary.write_bytes(b"build")
+            real = Path.stat
+
+            def stat(path, **options):
+                # the second look sees the file rewritten in place
+                found = real(path, **options)
+                return found if not stat.seen else os.stat_result((*found[:6], found[6] + 1, *found[7:]))
+
+            stat.seen = False
+            self.assertEqual(run.binary_identity(binary), dict(path=str(binary.resolve()), sha256=run.fixtures.sha256(binary), size=5))
+
+            def changing(path, **options):
+                result = stat(path, **options)
+                stat.seen = True
+                return result
+
+            with mock.patch.object(Path, "stat", changing), self.assertRaisesRegex(RuntimeError, "measured executable changed"):
+                run.binary_identity(binary)
+
+    def test_the_recorded_command_keeps_each_file_it_wrote(self):
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            (work / "command.sh").write_text("set -eu\n")
+            (work / "urls.txt").write_text("https://lab.flb/a\n")
+            self.assertEqual(run.exact_command(["bash", work / "command.sh"], work),
+                             {"argv": ["bash", str(work / "command.sh")], "command.sh": "set -eu\n", "urls.txt": "https://lab.flb/a\n"})
+
+    @unittest.skipUnless(Path("/proc/self/stat").is_file(), "reads process groups from /proc")
+    def test_a_process_group_lists_each_of_its_processes(self):
+        child = "import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\nprint('ready', flush=True)\ntime.sleep(30)\n"
+        # a group of its own inside this session, so its group and its session differ
+        process = subprocess.Popen([sys.executable, "-c", child], process_group=0, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline(), "ready\n")
+            members = run.group(process.pid)
+            self.assertIn(process.pid, members)
+            self.assertEqual(len(members), 2)
+            self.assertNotIn(os.getpid(), members)
+        finally:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            process.stdout.close()
+
+    def test_a_run_without_gnu_time_is_refused_before_it_starts(self):
+        with mock.patch.object(run, "TIME", "/no/such/time"), mock.patch.object(run.os, "posix_spawn") as spawn, \
+             self.assertRaisesRegex(RuntimeError, "/no/such/time is missing; install GNU time"):
+            run.measure(["true"], ".", {}, "/no/such/log", 30)
+        spawn.assert_not_called()
+
+    @unittest.skipUnless(os.access(run.TIME, os.X_OK), "GNU time")
+    def test_a_command_killed_by_a_signal_reports_that_signal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder, "run.log")
+            result = run.measure(["sh", "-c", "kill -9 $$"], folder, dict(os.environ), log, 30)
+        self.assertEqual((result["exit_code"], result["timeout"]), (-9, False))
+
+
+class OneRunTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        (self.root / "www").mkdir()
+        self.work = self.root / "fs" / "ext4" / "work"
+        self.case = dict(id="s1", profile="lan", quick=True, count=1, size=4, key="key", server_dir=str(self.root / "www"),
+                         members=[], files=[dict(name="a.bin", size=4, url="https://lab.flb/key/a.bin", sha256="0" * 64)])
+
+    def one_run(self, tool, measured, case=None):
+        with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "forget_connections"), \
+             mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "flush"), \
+             mock.patch.object(run, "measure", side_effect=measured), \
+             mock.patch.object(run, "settled_free_bytes", return_value=10), \
+             mock.patch.object(run, "free_bytes", return_value=4), mock.patch.object(run.time, "sleep"):
+            return run.one_run(tool, case or self.case, self.work, self.root, 1, False, 30)
+
+    def test_a_resume_adds_both_attempts_and_needs_the_first_to_be_stopped(self):
+        class Downloader(tools.Tool):
+            name = "downloader"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+            def outputs(self, scenario, workdir):
+                return []
+
+        attempts = iter([dict(wall_seconds=10, user_seconds=1, sys_seconds=2, maxrss_bytes=7, exit_code=130, timeout=False,
+                              interruption_sent=False),
+                         dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, exit_code=0, timeout=False,
+                              interruption_sent=False)])
+
+        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None):
+            # a listing of the folder costs bytes too, but is no part of the file
+            access = self.root / "access.jsonl"
+            access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "bytes": 3}\n'
+                                                   '{"request": "GET /key/ HTTP/1.1", "bytes": 100}\n')
+            return next(attempts)
+
+        row = self.one_run(Downloader("unused"), measured, dict(self.case, id="s7", profile="home"))
+        self.assertEqual((row["wall_seconds"], row["user_seconds"], row["sys_seconds"], row["maxrss_bytes"]), (3, 5, 10, 7))
+        self.assertEqual(row["first_attempt"]["exit_code"], 130)
+        self.assertEqual(row["resume_command"]["argv"], ["true"])
+        self.assertEqual(row["download_ratio"], 6 / 4)
+        self.assertEqual(row["checks"], ["no expected outputs", "first attempt ended before the prescribed interruption"])
+        self.assertEqual(row["status"], "failed")
+
+    def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
+        class Dvc(tools.Tool):
+            name = "dvc"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+            def outputs(self, scenario, workdir):
+                return []
+
+        store = self.root / "www/dvc/key/files/md5/90"
+        store.mkdir(parents=True)
+        (store / "0150983cd24fb0d6963f7d28e17f72").write_bytes(b"abc")
+        (store / "abc.dir").write_bytes(b"[]")
+
+        def measured(*args, **kwargs):
+            (self.root / "access.jsonl").write_text(
+                '{"request": "GET /dvc/key/files/md5/90/0150983cd24fb0d6963f7d28e17f72 HTTP/1.1", "bytes": 3}\n'
+                '{"request": "GET /dvc/key/files/md5/90/abc.dir HTTP/1.1", "bytes": 2}\n')
+            return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+        row = self.one_run(Dvc("unused"), measured)
+        self.assertEqual((row["requests"], row["bytes_served"], row["file_bytes_served"]), (2, 5, 3))
+
+    def test_a_run_that_breaks_is_a_failed_row_with_its_reason_and_preparation_log(self):
+        class Broken(tools.Tool):
+            name = "broken"
+
+            def prepare(self, scenario, workdir):
+                (workdir / "prepare.log").write_text("cloning\n")
+                raise RuntimeError("the clone failed")
+
+        row = self.one_run(Broken("unused"), lambda *args, **kwargs: None)
+        self.assertEqual((row["status"], row["error"]), ("failed", "RuntimeError: the clone failed"))
+        self.assertEqual((self.root / "ext4-lan-s1-1-broken-prepare.log").read_text(), "cloning\n")
+        self.assertEqual(json.loads((self.root / "runs.jsonl").read_text()), row)
+
+
+class MainPreparationTests(unittest.TestCase):
+    def test_a_client_that_cannot_be_prepared_is_a_failed_row_in_every_round(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "owned.json").write_text("{}")
+            case = dict(id="s2", base="s2", profile="lan", quick=True, count=1, size=3, key="sample", members=[], files=[])
+            argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4", "--profiles", "lan",
+                    "--scenarios", "s2", "--quick", "--out", str(root / "results")]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
+                 mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
+                 mock.patch.object(lab, "pin_server", return_value={}), \
+                 mock.patch.object(run, "metadata", return_value=dict(commands={}, orders=[], cases=[])), \
+                 mock.patch.object(run.os.path, "ismount", return_value=True), \
+                 mock.patch.object(run.fixtures, "build", return_value=case), \
+                 mock.patch.object(run.fixtures, "prepare_native", side_effect=RuntimeError("lock failed")), \
+                 mock.patch.object(run, "one_run", side_effect=AssertionError("a run was measured")), \
+                 contextlib.redirect_stdout(io.StringIO()) as shown:
+                self.assertEqual(run.main(), 1)
+            rows = [json.loads(line) for line in (root / "results/runs.jsonl").read_text().splitlines()]
+        self.assertEqual([(row["round"], row["warmup"], row["status"], row["error"]) for row in rows],
+                         [(0, True, "failed", "native preparation failed: lock failed"),
+                          (1, False, "failed", "native preparation failed: lock failed")])
+        self.assertIn("recorded 2 failed runs (including warmups)", shown.getvalue())
+
+
+class MainRefusalTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name).resolve()
+        (self.root / "owned.json").write_text("{}")
+
+    def refused(self, *arguments, mounted=True):
+        argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
+                "--profiles", "lan", "--scenarios", "s2", "--out", str(self.root / "results"), *arguments]
+        said = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", self.root), \
+             mock.patch.object(lab, "require_root"), mock.patch.object(run.os.path, "ismount", return_value=mounted), \
+             mock.patch.object(lab, "exclusive"), mock.patch.object(lab, "pin_server", side_effect=AssertionError("the lab was used")), \
+             contextlib.redirect_stderr(said), self.assertRaises(SystemExit) as stopped:
+            run.main()
+        self.assertEqual(stopped.exception.code, 2)
+        return said.getvalue().splitlines()[-1]
+
+    def test_a_campaign_that_cannot_be_measured_as_asked_never_starts(self):
+        self.assertEqual(self.refused("--rounds", "0"), "run.py: error: rounds and timeout must be positive")
+        self.assertEqual(self.refused("--out", "/elsewhere"), f"run.py: error: write results under {self.root}; copy them out after measurement")
+        self.assertEqual(self.refused("--variant", "a:FETCHLOOM_EXP_A=1", "--variant", "a:FETCHLOOM_EXP_B=1"),
+                         "run.py: error: each variant needs its own label")
+        self.assertEqual(self.refused("--scenarios", "s3", "--profiles", "home"),
+                         "run.py: error: no cases match these scenario/profile combinations")
+        self.assertEqual(self.refused(mounted=False), "run.py: error: ext4 is not mounted")
+        (self.root / "results").mkdir(exist_ok=True)
+        (self.root / "results/runs.jsonl").write_text("")
+        self.assertEqual(self.refused(), "run.py: error: output already contains runs; use a new directory")
+        (self.root / "owned.json").unlink()
+        self.assertEqual(self.refused(), "run.py: error: run lab.py setup first")
 
 
 if __name__ == "__main__":
