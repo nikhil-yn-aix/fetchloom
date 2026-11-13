@@ -1,10 +1,6 @@
 //! `fetchloom push`: the files data.lock pins, copied from this machine's cache into a folder
-//! mirror as mirrors are read, with the lists of what their archives unpack to, so a teammate's
-//! sync, a machine without a network or a reviewer can take them from there. it writes the
-//! mirror, and the cache to take in a file it lacks: from the data folder when that holds the
-//! pinned bytes, else downloaded as a sync downloads it, the mirrors asked first. it never
-//! changes the project or builds: a recipe's result the cache lacks is named with the build
-//! that makes it.
+//! mirror with the lists of what their archives unpack to. it writes only the mirror, and the cache
+//! for a file it lacks, taken in as a sync would; it never changes the project or builds.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -46,8 +42,7 @@ pub(super) struct Report {
     /// the files those datasets need on the mirror, each once, and their bytes.
     objects: u64,
     bytes: u64,
-    /// the files of those the push set out to write, as the mirror lacked them or held a damaged
-    /// copy, and their bytes.
+    /// the files the push set out to write, lacked or damaged on the mirror, and their bytes.
     planned: u64,
     planned_bytes: u64,
     /// the files written, and their bytes.
@@ -80,8 +75,7 @@ struct Ask {
 struct Changes {
     copy: Vec<Copied>,
     trees: Vec<Copied>,
-    /// the pinned files a push would download first, since neither the cache nor the data
-    /// folder holds what it needs of them.
+    /// pinned files a push would download first, held by neither the cache nor the data folder.
     download: Vec<Fetch>,
     /// the archives among `download`, as `<dataset>/<path>`, which are unpacked once they are
     /// in. the files of one this machine never unpacked are not counted.
@@ -260,11 +254,8 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     Ok(report)
 }
 
-/// the folder to push to, as `--to` names it, else the `push_to` setting.
-///
-/// # Errors
-///
-/// `usage` when neither names one, or `--to` names a web address.
+/// the folder to push to, as `--to` names it, else the `push_to` setting; `usage` when neither
+/// names one, or `--to` names a web address.
 fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     let Some(to) = &args.to else {
         let push_to = &context.settings.push_to;
@@ -300,10 +291,9 @@ fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     }
 }
 
-/// `target` as an absolute path without `.` or `..`: the folder the system reaches through it.
-/// unix keeps `..` in an absolute path, and a link before it makes that path reach another folder
-/// than the same path without both, so the part up to the last `..` is resolved as the system
-/// resolves it.
+/// `target` as an absolute path without `.` or `..`, the folder the system reaches: on unix a link
+/// before a `..` reaches another folder than the path without both, so the part up to the last `..`
+/// is resolved as the system resolves it.
 fn reached(target: PathBuf) -> PathBuf {
     let absolute = std::path::absolute(&target).unwrap_or(target);
     let parts: Vec<Component<'_>> = absolute.components().collect();
@@ -318,9 +308,8 @@ fn reached(target: PathBuf) -> PathBuf {
     }
 }
 
-/// the datasets a push sends: those `names` gives, else every dataset sync places. with
-/// `inputs`, also what those are made from, all the way down, and with no names what every
-/// recipe is made from.
+/// the datasets a push sends: `names`, else every dataset sync places, with `inputs` also what
+/// those are made from, all the way down, and with no names what every recipe is made from.
 fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> {
     let roots: Vec<&str> = if names.is_empty() {
         manifest
@@ -342,12 +331,9 @@ fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> 
     chosen.into_iter().map(str::to_owned).collect()
 }
 
-/// what pushing `datasets` from `cache` into the folder `target` needs, what the mirror there
-/// holds of it already, looked at once a file, and what neither the mirror nor the cache holds.
-///
-/// # Errors
-///
-/// a folder that cannot take a push, and a mirror that cannot be looked in.
+/// what pushing `datasets` into the folder `target` needs, what the mirror holds of it already, one
+/// look a file, and what neither the mirror nor the cache holds; fails for a folder that cannot
+/// take a push or a mirror that cannot be looked in.
 fn plan(
     context: &Context,
     manifest: &Manifest,
@@ -395,17 +381,10 @@ fn plan(
     })
 }
 
-/// moves from `planned.lacked` to `planned.taking` the files the data folder holds, which the
-/// push takes into the cache once it may write. a `dry_run` counts only what the push would take:
-/// a file the project's state vouches for, unread, or one that hashes to its pin. a push counts
-/// any file the state does not say holds other bytes that has the pinned size, unread, since
-/// taking it reads and checks it. what is left, and the archives whose files are not known, a
-/// push downloads first.
-///
-/// # Errors
-///
-/// `offline.missing` with the build to run, when the cache lacks a file of a recipe's result,
-/// which no download brings; `project.invalid` for a pin no bytes can have; and a stop.
+/// moves to `planned.taking` the files of `planned.lacked` the data folder holds: a `dry_run` only
+/// those vouched for or hashing to their pin, a push any of the pinned size the state does not
+/// record as other bytes, since taking checks it. fails with `offline.missing` naming the build for
+/// a lacking result's file, or `project.invalid` for a pin no bytes can have.
 fn settle(
     context: &Context,
     project: &Project,
@@ -444,8 +423,7 @@ fn settle(
     }
 }
 
-/// the datasets whose files `planned` lacks or whose archives' files it does not know, which a
-/// push downloads first.
+/// the datasets a push downloads first: those with files `planned` lacks or unknown archives.
 fn fetching(planned: &Planned) -> BTreeSet<&str> {
     planned
         .lacked
@@ -457,14 +435,9 @@ fn fetching(planned: &Planned) -> BTreeSet<&str> {
         .collect()
 }
 
-/// downloads into the cache what a push lacks of the fetched datasets `names`, as a sync
-/// downloads it: the data folder and the mirrors are asked first, each file is checked against
-/// its pin, and an archive whose files are not known is unpacked. each download is told.
-///
-/// # Errors
-///
-/// offline, or in mirror-only mode, what no mirror holds, with what to do on the next push; a
-/// download that fails; and a stop.
+/// downloads into the cache what a push lacks of the fetched datasets `names`, as a sync does,
+/// asking the data folder and mirrors first; fails offline or mirror-only for what no mirror holds,
+/// for a failed download, or at a stop.
 fn fetch(
     context: &Context,
     project: &Project,
@@ -499,14 +472,9 @@ fn mispinned(cache: &Cache, lock: &Lock, lacked: &[&Needed]) -> Option<Error> {
         })
 }
 
-/// takes into the cache the files `planned.taking` names, from the data folder, each only when
-/// its bytes there hash to its pin. one the data folder held other bytes of after all is
-/// downloaded instead, as any file the cache lacks.
-///
-/// # Errors
-///
-/// a failure to write the cache or to download, a stop, and `offline.missing` naming the build
-/// for a file of a recipe's result the data folder held other bytes of.
+/// takes the files `planned.taking` names into the cache from the data folder, each only when its
+/// bytes hash to its pin, else downloads it; a result's file held with other bytes fails with
+/// `offline.missing` naming the build.
 fn take(
     context: &Context,
     project: &Project,
@@ -676,8 +644,7 @@ fn object(digest: Sha256, size: u64) -> Item {
     }
 }
 
-/// where in `needed` the files are that the mirror lacks, as `there` says, and the cache lacks
-/// too, looked up a few at once.
+/// where in `needed` the files are that the mirror, as `there` says, and the cache both lack.
 fn lacking(context: &Context, cache: &Cache, needed: &[Needed], there: &[There]) -> Vec<usize> {
     let looked: Vec<(usize, &Needed)> = needed
         .iter()
@@ -737,9 +704,8 @@ fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
     )
 }
 
-/// the error for files a push still lacks once it fetched them, `lacked`, and the archives whose
-/// files it still does not know, `unknown`, as when something took them from the cache
-/// meanwhile: the next push fetches them again.
+/// the error for files, `lacked`, and archives of unknown files, `unknown`, a push still lacks
+/// after fetching them, as when something took them meanwhile; the next push fetches them again.
 fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
     let lines: Vec<String> = unknown
         .iter()
@@ -755,9 +721,8 @@ fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
         .help("run the push again, which downloads them")
 }
 
-/// the datasets of `datasets` that ask before they are pushed: one fetched from a source that
-/// wanted an account or accepted terms or did not say, and a recipe's result made from one.
-/// `access` is a hint from the source, never a licence check.
+/// the datasets that ask before they are pushed: one whose source wanted an account or accepted
+/// terms or did not say, and a result made from one. `access` is a hint, never a licence check.
 fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String]) -> Vec<Asking> {
     datasets
         .iter()
@@ -791,8 +756,7 @@ fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String]) -> Vec<Asking> 
         .collect()
 }
 
-/// how much an access asks of a reader: an account most, then accepted terms, then a source
-/// that did not say.
+/// how much an access asks: an account most, then accepted terms, then a source that did not say.
 fn strictness(access: Access) -> u8 {
     match access {
         Access::Login => 3,
@@ -802,14 +766,9 @@ fn strictness(access: Access) -> u8 {
     }
 }
 
-/// asks before copying the files of datasets whose sources wanted an account or accepted terms,
-/// or did not say, since anyone who can read the mirror gets them without either. `--yes`
-/// answers; without a person to ask, the push stops before writing, with no command to run, as
-/// only a person may agree.
-///
-/// # Errors
-///
-/// `unconfirmed` when nobody said yes.
+/// asks before copying the files of datasets whose sources wanted an account or accepted terms, or
+/// did not say, since a mirror's readers get them without either. `--yes` answers; with no one to
+/// ask, the push stops with `unconfirmed` and no command to run, as only a person may agree.
 fn ask(context: &Context, planned: &Planned) -> Result<(), Error> {
     if planned.asks.is_empty() || context.yes {
         return Ok(());
@@ -857,13 +816,8 @@ fn ask(context: &Context, planned: &Planned) -> Result<(), Error> {
     }
 }
 
-/// asks, once a push fetched what it lacked and planned again, about the datasets the first plan
-/// did not ask about, `asked` naming those it did, as when something changed the mirror
-/// meanwhile, so no dataset is pushed without its question.
-///
-/// # Errors
-///
-/// `unconfirmed` when nobody said yes.
+/// asks about the datasets the second plan adds beside `asked`, those the first plan asked about,
+/// so no dataset is pushed without its question; `unconfirmed` when nobody said yes.
 fn ask_again(context: &Context, planned: &mut Planned, asked: &[String]) -> Result<(), Error> {
     let (earlier, fresh): (Vec<Asking>, Vec<Asking>) = std::mem::take(&mut planned.asks)
         .into_iter()
@@ -911,14 +865,9 @@ fn reasons(asks: &[Asking]) -> String {
     reasons.join("; ")
 }
 
-/// writes what `planned` found the mirror lacks: its files first, a few at once, then the lists
-/// of what archives unpack to, so a reader never finds a list before the files it names. says
-/// whether it started the mirror, and what writing each file gave, in the order of
-/// `planned.needed` without what was there.
-///
-/// # Errors
-///
-/// the first file that could not be written; those written before it keep their names.
+/// writes what `planned` found the mirror lacks, files before lists so no list comes before its
+/// files, and says whether it started the mirror and what each write gave, in `planned.needed`
+/// order. the first write that fails ends it; files written before keep their names.
 fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, Vec<Put>), Error> {
     let root = &planned.target;
     let (mut target, started) =
@@ -1019,8 +968,7 @@ fn put_files(
     put.map_err(|failed| failed_put(failed, files, target.root()))
 }
 
-/// writes the lists of what archives unpack to, `lists`, rendered from the cache's records of
-/// them, as [`Target::put_all`] does.
+/// writes `lists`, rendered from the cache's records, as [`Target::put_all`] does.
 fn put_lists(
     context: &Context,
     cache: &Cache,
@@ -1159,8 +1107,7 @@ enum Outcome<'a> {
     DryRun,
 }
 
-/// what `planned` comes to, as it ended: what it set out to write, and what it wrote, or with a
-/// dry run what it would write.
+/// the report of `planned` as it ended: what it set out to write and wrote, or would write.
 fn report(planned: &Planned, outcome: Outcome<'_>) -> Report {
     let dry_run = matches!(outcome, Outcome::DryRun);
     let mut report = Report::empty(planned.target.clone(), dry_run);
@@ -1345,8 +1292,7 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
     ));
 }
 
-/// the lines of a dry run: what a push would take from the data folder, write, find there and
-/// ask about.
+/// the lines of a dry run: what a push would take in, write, find there and ask about.
 fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
     let output = &context.output;
     let target = planned.target.display();
@@ -1432,8 +1378,7 @@ fn everything(datasets: &[String]) -> String {
     }
 }
 
-/// the names of datasets as a person reads them in a sentence: the first few, then how many
-/// more.
+/// dataset names as a person reads them in a sentence: the first few, then how many more.
 fn named(names: &[&str]) -> String {
     const FEW: usize = 5;
     if names.len() <= FEW + 1 {
@@ -1560,8 +1505,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         assert_eq!(selected(&manifest, &[], true).len(), 5);
     }
 
-    /// a recipe's result goes by the files data.lock pins for it, and the cache lacking one says
-    /// to build it, which only a person may run.
+    /// a result's file the cache lacks says to build it, which only a person may run.
     #[test]
     fn a_result_goes_by_the_files_data_lock_pins_for_it() {
         let files = vec![member("a.csv", b"a"), member("b.csv", b"b")];
@@ -1600,7 +1544,6 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
     }
 
-    /// a result asks first when anything it is made from does, as strictly as the strictest.
     #[test]
     fn a_result_asks_as_strictly_as_what_it_is_made_from() {
         let manifest = manifest();
@@ -1628,8 +1571,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         assert!(asking(&manifest, &public, &["report".to_owned()]).is_empty());
     }
 
-    /// a list the cache stopped recording after the push planned is missing, with what to run,
-    /// not a failure of the disk: the next push fetches it again.
+    /// losing a list after the push planned is no disk failure, since the next push fetches it.
     #[test]
     fn a_list_the_cache_lost_is_missing_with_what_to_run() {
         let digest = crate::digest::sha256(b"images.zip");
@@ -1661,9 +1603,8 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
     }
 
-    /// a file push read back other bytes from points at the disk, `integrity.mismatch`; one
-    /// something else put in its place in the mirror is a local problem, `local.io`, with what to
-    /// stop, since no disk fault caused it.
+    /// bytes read back wrong point at the disk, `integrity.mismatch`; a file something else put in
+    /// its place is `local.io`, with what to stop, since no disk fault caused it.
     #[test]
     fn a_replaced_file_is_told_apart_from_bytes_the_disk_changed() {
         let needed = Needed {
@@ -1704,8 +1645,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         }
     }
 
-    /// the question says why each dataset asks, grouped as a person reads it, and a result by
-    /// what it is made from.
+    /// reasons are grouped as a person reads them, and a result's come from what it is made from.
     #[test]
     fn the_question_says_why_each_dataset_asks() {
         let told = [
