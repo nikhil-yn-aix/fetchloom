@@ -111,6 +111,7 @@ every change measured with the current harness, one row each: what it gained whe
 | push | staging shards only for large pushes, with compact-name retry | musl 100,000 files: time 0.732, peak RSS 1.042 [1.024, 1.050] | dropped, memory regression | [conditional shards](#conditional-mirror-staging-shards-2026-11-12) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | push | push's files made in `tmp/` and renamed out of it by one thread each, behind a lock, or by fewer workers, to stop the kernel spinning on those folders' locks | cpu 0.42 to 0.97, wall 1.07 to 2.65 | dropped, wall time | [pinnacle pass](#pushs-spinning) |
+| push | a push of 500 files or more writes them in 16 folders below the mirror's `tmp/`, by the first digit of their hash, measured this time on cpu | ext4: 100,000 files cpu 0.543 and wall 0.743 [0.708, 0.779] beside an a/a arm at 1.046; 10,000 cpu 0.526, wall 0.770; 1,000 cpu 0.517, wall 0.852; 500 cpu 0.615, wall 0.868; tmpfs cpu 0.83 to 0.87, wall 0.905 to 0.974; peak memory flat on ext4, 1.03 to 1.04 on tmpfs at 100,000 files, mimalloc's huge pages, 0.974 without them; under 500 files unchanged, where the folders cost 2 to 7% | kept | [pinnacle pass](#folders-below-a-mirrors-tmp) |
 | build | memoized immutable recipe-input contents, three versions | 4,000-recipe status ratios 0.0140 glibc and 0.0092 musl, but no-reuse controls slowed about 1% | dropped, control time | [recipe inputs](#memoizing-recipe-input-contents-2026-11-12) |
 | build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -1728,3 +1729,28 @@ setup: a musl release build of ea549486 with the switch, measured beside 4 busy 
 after those rounds, the per-file store held 1,590,000 files taking 6.70 GB, the shards 32 files taking 0.60 GB. `cache gc --now` over a million records beside the 10,000-file cache, 2 runs each: when every record's file is held, 15.7 s per file and 4.4 to 4.6 s in shards, which find nothing to rewrite; when none is, 56.0 to 57.5 s per file, removing each, and 11.1 s in shards, removing them, 8.4 s of it system time, about what two failed lookups a record, its file and its unpacked tree, cost.
 
 kept: bytes 0.75 of the per-file store's at every size, 32 files for any number of links, and every case faster. the memory is the index, 9 to 10 bytes a record, 8 for its entry and 1 to 2 for its group, in each shard a run reads, which a run touching 10,000 links beside a million reads whole. an `add` still writes 137 MB more than a cold sync of the same 100,000 files for 37 MB of records: each flush during the download writes the shards' last pages again.
+
+### folders below a mirror's `tmp/`
+
+[push's spinning](#pushs-spinning) found a push of 100,000 small files to a folder mirror on ext4 spending 30.2 of its 32.7 s of cpu in the kernel, its workers spinning on the lock of `tmp/`, where each made its file. spreading those files over 16 folders below `tmp/` was tried twice before and dropped, for 50-file pushes 1.046 and for peak memory 1.042, its cpu never recorded. measured on cpu, as asked this time, with each item's temporary file in `tmp/<the first digit of its hash>/`, the 16 folders checked by `prepare` as the others are, and the sweep looking in them without following a link:
+
+| push | filesystem | pairs | cpu | wall | a/a wall | peak memory |
+|---|---|---:|---|---|---|---|
+| 100,000 files | ext4 | 8 | 0.543 [0.524, 0.558] | 0.743 [0.708, 0.779] | 1.046 [0.977, 1.112] | 0.999 [0.967, 1.038] |
+| 10,000 | ext4 | 8 | 0.526 | 0.770 [0.763, 0.778] | 0.999 [0.994, 1.010] | 0.997 |
+| 1,000 | ext4 | 8 | 0.517 | 0.852 [0.797, 0.895] | 1.007 [0.961, 1.030] | 1.005 |
+| 500 | ext4 | 12 | 0.615 | 0.868 [0.843, 0.897] | 1.003 [0.943, 1.013] | 1.005 |
+| 100 | ext4 | 12 | | 1.027 [1.017, 1.044] | 1.020 [1.000, 1.035] | 1.000 |
+| 50 | ext4 | 12 | | 1.031 [1.020, 1.037] | 0.993 [0.985, 1.002] | 1.002 |
+| 10 | ext4 | 12 | | 1.074 [1.060, 1.086] | 1.007 [1.001, 1.013] | 0.998 |
+| 100,000 files | tmpfs | 12 | 0.869 [0.867, 0.878] | 0.905 [0.900, 0.909] | 0.995 [0.994, 1.007] | 1.038 [1.011, 1.068] |
+| 10,000 | tmpfs | 10 | 0.871 | 0.911 [0.895, 0.923] | 1.001 [0.990, 1.011] | 1.001 |
+| 1,000 | tmpfs | 10 | 0.870 | 0.963 [0.942, 0.981] | 1.009 [0.975, 1.031] | 1.001 |
+| 500 | tmpfs | 12 | 0.833 | 0.974 [0.967, 0.986] | 0.994 [0.985, 1.001] | 1.000 |
+| 100 | tmpfs | 12 | | 1.024 [1.003, 1.044] | 1.001 [0.983, 1.018] | 0.993 |
+| 50 | tmpfs | 12 | | 1.008 [0.971, 1.053] | 0.968 [0.945, 1.008] | 0.999 |
+| 10 | tmpfs | 12 | | 1.043 [1.015, 1.073] | 1.001 [0.961, 1.032] | 1.000 |
+
+the small pushes' cpu is below the 10 ms the kernel counts in. making the 16 folders costs a push of 100 files or fewer 2 to 7%, so a push of fewer than 500 files, `SHARD_FROM`, keeps the one folder and is unchanged; 500 was the smallest size measured to gain on both filesystems. the memory on tmpfs is mimalloc's huge pages: with `MIMALLOC_ALLOW_THP=0` in both arms, 8 pairs, the folders' peak memory was 0.974 of the one folder's, and with them 1.030 [0.981, 1.070]; the arms without huge pages took 0.857 and 0.835 of the base's peak.
+
+setup: musl release builds of ea549486 and 7b2248cb with the switch on, measured beside 4 busy training processes as above, a fresh mirror each run in the filesystem's run folder. made plain with the 500-file threshold, against its parent, 6 pairs each: ext4 100,000 files 0.755 [0.741, 0.763], cpu 0.535; 500 files 0.877, cpu 0.615; 10 files 1.002 beside an a/a arm at 1.006; tmpfs 100,000 files 0.917, cpu 0.878, and 10 files 1.029 beside an a/a arm at 1.066. kept: on ext4, where the spinning was found, cpu 0.52 to 0.62 with every wall time faster, past the bar of cpu 0.80 at wall 1.02; on tmpfs cpu 0.83 to 0.87, short of 0.80, with wall 0.905 to 0.974.

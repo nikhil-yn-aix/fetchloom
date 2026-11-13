@@ -263,6 +263,11 @@ pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
 /// the folder a push writes files in before they take their names.
 const TMP: &str = "tmp";
 
+/// a push of this many files or more writes them in 16 folders below `tmp/`, by the first digit
+/// of their hash, since in one folder every writer waits on its lock, and the kernel spins
+/// meanwhile; fewer files pay more for making the folders than they save.
+const SHARD_FROM: usize = 500;
+
 /// how long a killed push's unfinished file stays in `tmp/` before a later push removes it.
 const STALE: Duration = Duration::from_hours(24);
 
@@ -496,6 +501,10 @@ pub(crate) struct Target {
     /// never stopped itself, so a file left unfinished by a stop is still removed.
     placer: Placer,
     stop: std::sync::Arc<Stop>,
+    /// how many files make a push write them in the folders below `tmp/`, [`SHARD_FROM`].
+    shard_from: usize,
+    /// whether this push writes them there, as [`Target::prepare`] decided.
+    sharded: bool,
 }
 
 impl Target {
@@ -507,6 +516,8 @@ impl Target {
             root: root.to_path_buf(),
             placer: Placer::in_named_folder(root),
             stop,
+            shard_from: SHARD_FROM,
+            sharded: false,
         };
         if state == State::Mirror {
             return Ok((target, false));
@@ -531,7 +542,7 @@ impl Target {
         self.placer
             .check_folders(&self.root.join(TMP).join(MARKER), true)?;
         let line = format!("{MARKER_LINE}\n");
-        let mut temp = self.temporary()?;
+        let mut temp = self.temporary(None)?;
         temp.file()?.write_all(line.as_bytes())?;
         flush(temp.file()?)?;
         temp.close();
@@ -558,11 +569,15 @@ impl Target {
         crate::project::sync_directory(&self.root)
     }
 
-    /// makes `tmp/` and the folders `items` go in, each checked once through the mirror's top, so
-    /// a link among them fails it, never followed.
+    /// makes `tmp/`, the folders below it when `items` are many, and the folders `items` go in,
+    /// each checked once through the mirror's top, so a link among them fails it, never followed.
     pub(crate) fn prepare(&mut self, items: &[Item]) -> io::Result<()> {
+        self.sharded = items.len() >= self.shard_from;
         let tmp = self.root.join(TMP).join(MARKER);
-        let names = std::iter::once(tmp).chain(
+        let shards = (0..16)
+            .filter(|_| self.sharded)
+            .map(|shard| self.root.join(TMP).join(format!("{shard:x}")).join(MARKER));
+        let names = std::iter::once(tmp).chain(shards).chain(
             items
                 .iter()
                 .map(|item| place(&self.root, item.folder, &item.digest)),
@@ -689,7 +704,8 @@ impl Target {
         there: There,
         batch: Option<&Batch>,
     ) -> Result<Written<'_>, Fault> {
-        let mut temp = self.temporary().map_err(Fault::Mirror)?;
+        let shard = self.sharded.then(|| item.digest.hex()[..1].to_owned());
+        let mut temp = self.temporary(shard.as_deref()).map_err(Fault::Mirror)?;
         #[cfg(debug_assertions)]
         held(&self.stop);
         let file = temp.file().map_err(Fault::Mirror)?;
@@ -733,20 +749,33 @@ impl Target {
         self.publish(&mut written.temp, &item, written.there)
     }
 
-    /// removes unfinished push files in `tmp/` a day older than `now`, and nothing else there.
+    /// removes unfinished push files in `tmp/` and the folders below it a day older than `now`,
+    /// and nothing else there; a link in place of such a folder is never followed.
     pub(crate) fn sweep(&self, now: SystemTime) {
         let Ok(entries) = fs::read_dir(self.root.join(TMP)) else {
             return;
         };
         for entry in entries.flatten() {
-            let unfinished = entry.file_name().to_str().is_some_and(is_unfinished);
-            let old = entry
-                .metadata()
-                .and_then(|found| found.modified())
-                .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > STALE));
-            if unfinished && old {
-                let _ = self.placer.delete_file(&entry.path());
+            let shard = entry.file_name().to_str().is_some_and(is_shard)
+                && entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if !shard {
+                self.sweep_one(&entry, now);
+            } else if let Ok(inner) = fs::read_dir(entry.path()) {
+                for entry in inner.flatten() {
+                    self.sweep_one(&entry, now);
+                }
             }
+        }
+    }
+
+    fn sweep_one(&self, entry: &fs::DirEntry, now: SystemTime) {
+        let unfinished = entry.file_name().to_str().is_some_and(is_unfinished);
+        let old = entry
+            .metadata()
+            .and_then(|found| found.modified())
+            .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > STALE));
+        if unfinished && old {
+            let _ = self.placer.delete_file(&entry.path());
         }
     }
 
@@ -766,13 +795,12 @@ impl Target {
         Ok(())
     }
 
-    /// a new read-only file in `tmp/`, named `.<16 hex digits>.part`.
-    fn temporary(&self) -> io::Result<Temporary<'_>> {
+    /// a new read-only file in `tmp/`, or in its folder `shard`, named `.<16 hex digits>.part`.
+    fn temporary(&self, shard: Option<&str>) -> io::Result<Temporary<'_>> {
+        let folder = self.root.join(TMP);
+        let folder = shard.map_or_else(|| folder.clone(), |shard| folder.join(shard));
         loop {
-            let path = self
-                .root
-                .join(TMP)
-                .join(format!(".{:016x}.part", fastrand::u64(..)));
+            let path = folder.join(format!(".{:016x}.part", fastrand::u64(..)));
             match self.placer.create_file(&path, true) {
                 Ok(file) => {
                     return Ok(Temporary {
@@ -820,6 +848,11 @@ impl Drop for Temporary<'_> {
 }
 
 /// whether `name` is that of a file a push writes in `tmp/` before it takes its own.
+/// whether `name` is one of the folders below `tmp/` a large push writes in.
+fn is_shard(name: &str) -> bool {
+    matches!(name.as_bytes(), [b'0'..=b'9' | b'a'..=b'f'])
+}
+
 fn is_unfinished(name: &str) -> bool {
     name.strip_prefix('.')
         .and_then(|name| name.strip_suffix(".part"))
@@ -1316,17 +1349,33 @@ pub(crate) mod tests {
 
     /// a mirror at `mirror` in a new folder, opened for writing, with the folders for `items`.
     fn target(folder: &Path, items: &[Item]) -> Target {
+        sharded_from(folder, items, SHARD_FROM)
+    }
+
+    /// [`target`], writing below `tmp/` from `shard_from` files.
+    fn sharded_from(folder: &Path, items: &[Item], shard_from: usize) -> Target {
         let (mut target, _) = Target::open(&folder.join("mirror"), Arc::default()).unwrap();
+        target.shard_from = shard_from;
         target.prepare(items).unwrap();
         target
     }
 
-    /// what the mirror at `root` holds in `tmp/`, which is nothing once a push is done.
+    /// the files the mirror at `root` holds in `tmp/` and its folders, none once a push is done.
     fn unfinished(root: &Path) -> Vec<PathBuf> {
-        fs::read_dir(root.join(TMP))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect()
+        let mut found = Vec::new();
+        for entry in fs::read_dir(root.join(TMP)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.extend(
+                    fs::read_dir(&path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+            } else {
+                found.push(path);
+            }
+        }
+        found
     }
 
     /// files without a marker may be anything, or an unmounted disk's, so their folder is refused.
@@ -1476,6 +1525,15 @@ pub(crate) mod tests {
     /// files named `items`, each holding the bytes `contents` gives, written by a push into a new
     /// mirror in `folder`.
     fn put_all(folder: &Path, contents: &[Vec<u8>]) -> (Target, Result<Vec<Put>, Failed>) {
+        put_all_from(folder, contents, SHARD_FROM)
+    }
+
+    /// [`put_all`], writing below `tmp/` from `shard_from` files.
+    fn put_all_from(
+        folder: &Path,
+        contents: &[Vec<u8>],
+        shard_from: usize,
+    ) -> (Target, Result<Vec<Put>, Failed>) {
         let items: Vec<(Item, There)> = contents
             .iter()
             .map(|bytes| (item(bytes), There::Absent))
@@ -1485,7 +1543,7 @@ pub(crate) mod tests {
             .map(|bytes| (crate::digest::sha256(bytes), bytes.as_slice()))
             .collect();
         let only: Vec<Item> = items.iter().map(|(item, _)| *item).collect();
-        let target = target(folder, &only);
+        let target = sharded_from(folder, &only, shard_from);
         let source = |item: &Item| Ok(io::Cursor::new(bytes[&item.digest]));
         let put = target.put_all(&items, Threads::default(), &source, &|_| {}, &|_| {});
         (target, put)
@@ -1547,6 +1605,41 @@ pub(crate) mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(is_unfinished)
         }));
+    }
+
+    /// a push of many files writes each in the folder below `tmp/` its hash's first digit names,
+    /// so its writers do not all wait on one folder, and names them all from there.
+    #[test]
+    fn a_large_push_writes_below_tmp_by_hash() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = many();
+        BETWEEN.set(Between::Kill);
+        let (target, put) = put_all_from(folder.path(), &contents, 2);
+        BETWEEN.set(Between::Nothing);
+        assert!(put.is_err());
+        let left = unfinished(&target.root);
+        assert_eq!(left.len(), contents.len());
+        for path in &left {
+            let digest = crate::digest::sha256(&fs::read(path).unwrap());
+            let shard = path.parent().unwrap();
+            assert_eq!(shard.parent().unwrap(), target.root.join(TMP));
+            assert_eq!(
+                shard.file_name().unwrap(),
+                &digest.hex()[..1],
+                "{}",
+                path.display()
+            );
+        }
+        target.sweep(SystemTime::now() + STALE + Duration::from_secs(60));
+        assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
+        let folder = tempfile::tempdir().unwrap();
+        let (target, put) = put_all_from(folder.path(), &contents, 2);
+        assert_eq!(put.unwrap(), vec![Put::Copied; contents.len()]);
+        for bytes in &contents {
+            let name = place(&target.root, OBJECTS, &crate::digest::sha256(bytes));
+            assert_eq!(&fs::read(name).unwrap(), bytes);
+        }
+        assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
     /// what pushing one file gives when `between` happens between writing it and reading it
@@ -1730,6 +1823,24 @@ pub(crate) mod tests {
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
 
+    /// a link planted in place of a folder below `tmp/` is refused before a large push writes.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_below_tmp_is_refused() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[]);
+        let outside = folder.path().join("home");
+        fs::create_dir(&outside).unwrap();
+        fs::create_dir(root.join(TMP)).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join(TMP).join("7")).unwrap();
+        let (mut target, _) = Target::open(&root, Arc::default()).unwrap();
+        target.shard_from = 1;
+        let made = target.prepare(&[item(b"pinned bytes")]).unwrap_err();
+        assert!(made.to_string().contains("is a link"), "{made}");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
     /// a stop leaves no file named, and nothing half written behind.
     #[test]
     fn an_interrupted_push_names_nothing() {
@@ -1773,6 +1884,38 @@ pub(crate) mod tests {
         assert!(!old.exists());
         assert!(young.exists());
         assert!(other.exists());
+    }
+
+    /// the folders below `tmp/` are swept as `tmp/` is, and a link in place of one is not followed.
+    #[test]
+    fn old_unfinished_files_below_tmp_are_swept() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = target(folder.path(), &[]);
+        let shard = target.root.join(TMP).join("c");
+        fs::create_dir(&shard).unwrap();
+        let outside = folder.path().join("home");
+        fs::create_dir(&outside).unwrap();
+        let (old, young, away) = (
+            shard.join(".0123456789abcdef.part"),
+            shard.join(".fedcba9876543210.part"),
+            outside.join(".0123456789abcdef.part"),
+        );
+        let now = SystemTime::now();
+        for (path, age) in [(&old, 2), (&young, 0), (&away, 2)] {
+            fs::write(path, b"unfinished").unwrap();
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(age * 24 * 60 * 60))
+                .unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, target.root.join(TMP).join("d")).unwrap();
+        target.sweep(now);
+        assert!(!old.exists());
+        assert!(young.exists());
+        assert!(away.exists());
     }
 
     #[test]
