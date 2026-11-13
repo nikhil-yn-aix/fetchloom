@@ -60,7 +60,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 ## offline and CI
 
-- prepare online with `fetchloom sync --json`. then `fetchloom --offline sync --json`, or `FETCHLOOM_OFFLINE=1`, uses only the cache, the data folder and folder mirrors; a file none holds exits 20 with `offline.missing`. search, and a dataset data.lock does not pin yet, need the network.
+- prepare online with `fetchloom sync --json`. then `fetchloom --offline sync --json`, or `FETCHLOOM_OFFLINE=1`, uses only the cache, the data folder and folder mirrors; a file none holds exits 20 with `offline.missing`. search needs the network, and so does a dataset data.lock does not pin yet, unless it is a link an earlier `get` or `add` on this machine downloaded.
 - in CI, set `FETCHLOOM_CACHE` to a folder the CI cache keeps, keyed on a hash of `data.lock`, run `fetchloom sync --locked --yes --json`, then `fetchloom cache gc --now` before the cache is saved. `--locked` fails with `lock.outdated` rather than change data.lock; `fetchloom sync --locked --verify --yes --json` also hashes every placed file.
 - a job's keys come from the CI system's secrets, in the source's own variables such as `HF_TOKEN` or `KAGGLE_API_TOKEN`. never write a key into data.toml, code, a command or the repository.
 - in a container or a hosted notebook, set `FETCHLOOM_CACHE` to a folder that lasts, since the default can be read-only or lost with the session.
