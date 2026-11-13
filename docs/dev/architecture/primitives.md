@@ -46,7 +46,8 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 | async runtime | up to four workers, reduced by the thread cap |
 | archive readers | up to `min(4, ceil(logical CPUs / 4))`; an explicit cap counts only readers with an archive still pending before sharing the budget with their writers |
 | archive writers | up to eight per archive, no more than logical CPUs; zero writer budget stores on the reader |
-| placement, object lookup and survey hashing | up to eight workers, no more than logical CPUs, with at most one per 64 items |
+| placement, object lookup and the survey's hashing of racy or doubted files | up to eight workers, no more than logical CPUs, with at most one per 64 items |
+| `--verify` reading placed files | the larger of one worker per 64 files and one per 4 MiB, within the same bounds, as [verification workers](placing.md#verification-workers) says |
 | cache verification | logical CPU count, reduced by the cap |
 | large fallback copies outside linux | uncapped copies overlap reads and writes with three reusable 1 MiB buffers; a cap avoids a reader thread per placement worker |
 
@@ -77,7 +78,7 @@ to add a setting:
 
 `Volume` learns hardlink support only when an operation needs the answer. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
 
-`Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. a refusal a sign-in could lift carries `auth::Need`, the account to sign in to, set by `Error::needs`, so `error` names `auth`'s types while `auth` returns `Error`. `Stop` shares a `tokio::sync::watch` channel carrying a boolean. `ask` uses `send_replace(true)`, `is_asked` reads the current value synchronously, and `asked` subscribes and waits asynchronously for it to become true.
+`Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. a refusal a sign-in could lift carries `auth::Need`, the account to sign in to, set by `Error::needs`, so `error` names `auth`'s types while `auth` returns `Error`. `Stop` shares a `tokio::sync::watch` channel carrying a boolean, beside flags for a run that marked its work as finishing with `Stop::finish`. `ask` sets the boolean under the watch's lock with `send_if_modified`, unless the run is past that mark, which then finishes anyway; `is_asked` reads the current value synchronously, and `asked` subscribes and waits asynchronously for it to become true. what a first ctrl-c does, `Stop::hear`, is in [CLI](cli.md#invariants-and-traps).
 
 ## invariants and traps
 
