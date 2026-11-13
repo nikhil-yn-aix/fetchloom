@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 from pathlib import Path
+import re
 import sys
 import tarfile
 import tempfile
@@ -204,6 +205,27 @@ class Twill(Folder):
         self.write(site / "index.html", build_site.WORDMARK)
         with self.assertRaisesRegex(ValueError, "src/output.rs has no TWILL"):
             add_twill(root, site)
+
+
+def luminance(color):
+    """the relative luminance WCAG 2 gives a #rrggbb color."""
+    channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    red, green, blue = [c / 12.92 if c <= .03928 else ((c + .055) / 1.055) ** 2.4 for c in channels]
+    return .2126 * red + .7152 * green + .0722 * blue
+
+
+class Colors(unittest.TestCase):
+    def test_every_text_color_of_the_site_reads_on_its_paper(self):
+        """WCAG AA for small text, 4.5 to 1, in the light colors and the dark ones."""
+        css = (build_site.ROOT / build_site.STYLESHEET).read_text(encoding="utf-8")
+        for scheme in ("default", "slate"):
+            block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)[1]
+            colors = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block))
+            paper = luminance(colors["paper"])
+            for name in ("ink", "muted", "accent", "done", "warn", "fail"):
+                with self.subTest(scheme=scheme, name=name):
+                    lighter, darker = sorted((luminance(colors[name]), paper), reverse=True)
+                    self.assertGreaterEqual((lighter + .05) / (darker + .05), 4.5)
 
 
 class Build(unittest.TestCase):
