@@ -524,6 +524,7 @@ fn test_source(url: &Url) -> Option<Url> {
         host,
         "datadryad.org"
             | "data.mendeley.com"
+            | "huggingface.co"
             | "api.github.com"
             | "github.com"
             | "gitlab.com"

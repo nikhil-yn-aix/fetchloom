@@ -1,0 +1,16 @@
+version = 1
+
+[[dataset]]
+name = "iris"
+ref = "hf:datasets/scikit-learn/iris"
+spec = "sha256:7b8f44bcd53566e24cae7ede363a6698e4370a908c8553d00e0467db7fdbbb4a"
+resolved = "hf:datasets/scikit-learn/iris@0bda0ce801be0fa2f464ff845a9d5ceae99aad7d"
+license = "cc0-1.0"
+access = "public"
+locked = "2026-11-13T20:44:29Z"
+files = [
+  { path = ".gitattributes", size = 1566, sha256 = "c16b7ce3cc1b9e89f2da9d83012ae183208eaf99ae6c2b138c91ef551fe15861", url = "https://huggingface.co/datasets/scikit-learn/iris/resolve/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/.gitattributes" },
+  { path = "Iris.csv", size = 5107, sha256 = "600ac44f23c2e6e0ae37daac8ceb2baba4df963efa580eb31b3b576b28e34c55", url = "https://huggingface.co/datasets/scikit-learn/iris/resolve/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/Iris.csv" },
+  { path = "README.md", size = 1660, sha256 = "6926d2afbdc9e1f695f22f33a9351c3bd302ebbac6e7f66f066d013a8b0e713d", url = "https://huggingface.co/datasets/scikit-learn/iris/resolve/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/README.md" },
+  { path = "database.sqlite", size = 10240, sha256 = "c1846e201082f0cce70db9ccff8304e97dd63e6069c798328c0958bb92f66062", url = "https://huggingface.co/datasets/scikit-learn/iris/resolve/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/database.sqlite" },
+]

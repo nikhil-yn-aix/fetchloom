@@ -460,3 +460,121 @@ fn collect_rust(folder: &Path, found: &mut Vec<PathBuf>) -> Result {
     }
     Ok(())
 }
+
+/// the home page shows a real add of hugging face's iris and a teammate's sync, recorded with the
+/// hub's answers in docs-site/home. given those answers, and files of the sizes the hub listed,
+/// fetchloom still prints every line a terminal keeps, all but how long the work took. the run
+/// was recorded on linux, where each file links to the cache.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+#[test]
+fn the_home_page_shows_what_fetchloom_prints() -> Result {
+    use crate::support::{Routes, file, reply, text};
+
+    let recorded = repository().join("docs-site/home");
+    let read = |name: &str| fs::read_to_string(recorded.join(name));
+    let lock: toml::Table = read("data.lock")?.parse()?;
+    let dataset = lock["dataset"]
+        .as_array()
+        .and_then(|datasets| datasets.first())
+        .ok_or("data.lock pins no dataset")?;
+    let (repo, commit) = dataset["resolved"]
+        .as_str()
+        .and_then(|resolved| resolved.strip_prefix("hf:datasets/"))
+        .and_then(|resolved| resolved.split_once('@'))
+        .ok_or("the recorded dataset is not one of hugging face's")?;
+    let answer = |body: &str| {
+        let length = body.len().to_string();
+        reply(
+            "200 OK",
+            &[
+                ("Content-Type", "application/json"),
+                ("Content-Length", length.as_str()),
+            ],
+            body.as_bytes(),
+        )
+    };
+    let hub = Routes::start(vec![
+        (
+            format!(
+                "/api/datasets/{repo}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
+            ),
+            answer(&read("revision.json")?),
+        ),
+        (
+            format!("/api/datasets/{repo}/tree/{commit}?recursive=true"),
+            answer(&read("tree.json")?),
+        ),
+    ])?;
+    let mut served = Vec::new();
+    for pinned in dataset["files"].as_array().ok_or("no files")? {
+        let path = pinned["path"].as_str().ok_or("a file without a path")?;
+        let size = pinned["size"].as_integer().ok_or("a file without a size")?;
+        served.push((
+            format!("/huggingface.co/datasets/{repo}/resolve/{commit}/{path}"),
+            file(&vec![b'.'; usize::try_from(size)?], "\"v1\""),
+        ));
+    }
+    let files = Routes::start(served)?;
+    let sandbox = Sandbox::new()?;
+    let run = |folder: &Path, transcript: &str, cache: &Path| -> Result {
+        let shown = read(transcript)?;
+        let (typed, said) = shown.split_once('\n').ok_or("an empty transcript")?;
+        let words: Vec<&str> = typed
+            .strip_prefix("$ fetchloom ")
+            .ok_or("not a fetchloom command")?
+            .split(' ')
+            .collect();
+        let output = sandbox
+            .command_in(folder, &words)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_SOURCES", &files.url)
+            .env("FETCHLOOM_CACHE", cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert_eq!(
+            kept(&stderr),
+            kept(said),
+            "{transcript} is not what fetchloom prints now: record the run again, as building and testing says"
+        );
+        Ok(())
+    };
+    let mine = sandbox.folder("home/iris-study")?;
+    if crate::merge::git(&sandbox, &mine, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    run(&mine, "add.txt", &sandbox.cache())?;
+    let theirs = sandbox.folder("teammate/iris-study")?;
+    crate::merge::git(&sandbox, &theirs, &["init", "-q"])?;
+    for name in ["data.toml", "data.lock", ".gitignore"] {
+        fs::copy(mine.join(name), theirs.join(name))?;
+    }
+    run(&theirs, "sync.txt", &sandbox.folder("teammate-cache")?)?;
+    Ok(())
+}
+
+/// the lines of `text` a terminal keeps once its bars clear, those of work under way left out, with
+/// the time a line says its work took, as `in 214 ms`, as `in [time]`.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+fn kept(text: &str) -> String {
+    let took = |rest: &str| {
+        rest.split_once(' ').is_some_and(|(number, unit)| {
+            matches!(unit, "ms" | "s")
+                && !number.is_empty()
+                && number.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+    };
+    let under_way = |line: &str| {
+        line.get(..11)
+            .map(str::trim_start)
+            .is_some_and(|verb| verb.ends_with("ing") && !verb.contains(' '))
+    };
+    text.lines()
+        .filter(|line| !under_way(line))
+        .map(|line| match line.rsplit_once(" in ") {
+            Some((before, rest)) if took(rest) => format!("{before} in [time]"),
+            _ => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

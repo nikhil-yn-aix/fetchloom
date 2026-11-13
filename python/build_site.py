@@ -1,6 +1,7 @@
 """build the documentation site and its agent exports without deployment credentials."""
 
 import base64
+from datetime import datetime
 import hashlib
 import html
 import json
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 import urllib.request
 
 import transcript
@@ -27,6 +29,11 @@ MERMAID = ("https://registry.npmjs.org/@mermaid-js/tiny/-/tiny-12.3.0.tgz",
 # the pin of src/output.rs: a line each for its head, its shaft and its point, as a terminal draws
 # them, each beside its ascii
 PIN = re.compile(r"const PIN: \[\(&str, &str\); \d+\] = \[(.*?)\];", re.S)
+# a real run the home page shows: each command's transcript, the data.lock the add wrote, and the
+# hub's answers, which tests/cli/docs.rs replays to hold the transcripts to what fetchloom prints
+RECORDED = "docs-site/home"
+# where the home page's label goes: the figure naming the file of data.lock it shows
+LABEL = re.compile(r'<figure class="fl-label" data-file="([^"]+)">')
 STYLESHEET = "docs-site/theme/assets/stylesheets/fetchloom.css"
 MOVED = """<!doctype html>
 <html lang="en">
@@ -205,6 +212,66 @@ def add_pin(root, site):
     (images / "favicon.svg").write_text(drawn(lines, 18, 4.4, square=True, inside=colors) + "\n", encoding="utf-8")
 
 
+def label(recorded, path):
+    """the home page's label for the file at ``path`` in the dataset data.lock pins: where it came
+    from, when it was locked, its size, licence and SHA-256, in eight groups of eight."""
+    lock = tomllib.loads((recorded / "data.lock").read_text(encoding="utf-8"))
+    for dataset in lock.get("dataset", []):
+        for pinned in dataset.get("files", []):
+            if pinned["path"] != path:
+                continue
+            ref, _, commit = dataset["resolved"].rpartition("@")
+            locked = datetime.fromisoformat(dataset["locked"].replace("Z", "+00:00"))
+            groups = "".join(f"<span>{pinned['sha256'][i:i + 8]}</span>" for i in range(0, 64, 8))
+            rows = [("File", f"{pinned['path']}, {pinned['size']:,} bytes"),
+                    ("From", f"{ref} at {commit[:7]}"),
+                    ("Locked", f"{locked.day} {locked:%B %Y}"),
+                    ("License", dataset.get("license", "none stated"))]
+            shown = "".join(f"<dt>{name}</dt><dd>{html.escape(value)}</dd>" for name, value in rows)
+            return (f'<figure class="fl-label"><p class="fl-label-file">data.lock</p>'
+                    f'<p class="fl-label-name">{html.escape(dataset["name"])}</p><dl>{shown}'
+                    f'<dt>SHA&#8209;256</dt><dd class="fl-hash">{groups}</dd></dl>')
+    raise ValueError(f"{RECORDED}/data.lock pins no {path}")
+
+
+def runs(recorded):
+    """each recorded transcript by the command it starts with, without the lines of work under way
+    that a terminal draws as a bar and replaces."""
+    found = {}
+    for path in sorted(recorded.glob("*.txt")):
+        typed, _, said = path.read_text(encoding="utf-8").partition("\n")
+        kept = [line for line in said.rstrip("\n").split("\n")
+                if not (transcript.verb_line(line) or ("",))[0] in transcript.WORK]
+        found[typed] = "\n".join([typed, *kept])
+    return found
+
+
+def add_home(root, site):
+    """the home page's label and transcripts, made from the run recorded in docs-site/home: the
+    label from data.lock, each transcript from the output of the command a block of the page shows,
+    in fetchloom's colors, a line to a line, so a narrow screen wraps each under its text as a
+    narrow terminal does. ValueError when the page has no label or no transcript it recorded."""
+    recorded = root / RECORDED
+    home = site / "index.html"
+    page = home.read_text(encoding="utf-8")
+    page, labels = LABEL.subn(lambda match: label(recorded, html.unescape(match[1])), page)
+    known = runs(recorded)
+    shown = []
+
+    def run(match):
+        typed = html.unescape(match["body"]).strip("\n")
+        if typed not in known:
+            return match[0]
+        shown.append(typed)
+        lines = "".join(f'<span class="fl-line">{line}</span>' for line in transcript.render(known[typed]).split("\n"))
+        return ('<div class="language-text highlight fl-transcript fl-run"><pre><span></span>'
+                f"<code>{lines}</code></pre></div>")
+    page = transcript.BLOCK.sub(run, page)
+    if not labels or not shown:
+        raise ValueError("the home page has no label or no recorded run to show")
+    home.write_text(page, encoding="utf-8")
+
+
 def color_transcripts(site):
     """every page with fetchloom's output drawn in the colors the cli gives it."""
     for page in site.rglob("*.html"):
@@ -217,6 +284,7 @@ def color_transcripts(site):
 def main():
     shutil.rmtree(SITE, ignore_errors=True)
     subprocess.run([sys.executable, "-m", "zensical", "build", "--clean", "--strict"], cwd=ROOT, check=True)
+    add_home(ROOT, SITE)
     color_transcripts(SITE)
     add_pin(ROOT, SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")

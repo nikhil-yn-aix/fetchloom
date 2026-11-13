@@ -1,0 +1,5 @@
+$ fetchloom sync
+Downloading 4 files · 18.1 KiB
+ Downloaded 4 files · 18.1 KiB in 122 ms
+     Placed data/iris · 4 files linked to the cache
+     Synced 1 dataset into data

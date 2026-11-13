@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import build_site
-from build_site import add_mermaid, add_pin, export_agents, page_url, redirects, write_redirects
+from build_site import add_home, add_mermaid, add_pin, export_agents, page_url, redirects, write_redirects
 import check_site
 
 PAGES = "https://nikhil-yn-aix.github.io/fetchloom/"
@@ -202,6 +202,60 @@ class Pin(Folder):
         self.assertEqual(build_site.pin(build_site.ROOT)[0], "\u25cf")
 
 
+class Home(Folder):
+    LOCK = """version = 1
+
+[[dataset]]
+name = "iris"
+ref = "hf:datasets/scikit-learn/iris"
+resolved = "hf:datasets/scikit-learn/iris@0bda0ce801be0fa2f464ff845a9d5ceae99aad7d"
+license = "cc0-1.0"
+locked = "2026-11-03T20:44:29Z"
+files = [
+  { path = "README.md", size = 1660, sha256 = "6926d2afbdc9e1f695f22f33a9351c3bd302ebbac6e7f66f066d013a8b0e713d", url = "https://x/README.md" },
+  { path = "Iris.csv", size = 5107, sha256 = "600ac44f23c2e6e0ae37daac8ceb2baba4df963efa580eb31b3b576b28e34c55", url = "https://x/Iris.csv" },
+]
+"""
+
+    def source(self):
+        """a repository with a recorded add and sync, and the data.lock the add wrote."""
+        root = self.folder()
+        self.write(root / "docs-site/home/data.lock", self.LOCK)
+        self.write(root / "docs-site/home/add.txt",
+                   "$ fetchloom add iris\n  Resolving iris\n   Resolved iris · 2 files\n      Added iris, its files are in data/iris\n")
+        self.write(root / "docs-site/home/sync.txt", "$ fetchloom sync\n     Synced 1 dataset into data\n")
+        return root
+
+    def page(self, site, label='<figure class="fl-label" data-file="Iris.csv">'):
+        block = '<div class="language-text highlight"><pre><span></span><code>{}\n</code></pre></div>'
+        self.write(site / "index.html", f"{label}<figcaption>pinned</figcaption></figure>"
+                                        + block.format("$ fetchloom add iris") + block.format("$ fetchloom sync")
+                                        + block.format("$ fetchloom status"))
+
+    def test_the_label_and_transcripts_come_from_the_recorded_run(self):
+        root, site = self.source(), self.folder()
+        self.page(site)
+        add_home(root, site)
+        page = (site / "index.html").read_text(encoding="utf-8")
+        for shown in ('<p class="fl-label-name">iris</p>', "<dd>Iris.csv, 5,107 bytes</dd>",
+                      "<dd>hf:datasets/scikit-learn/iris at 0bda0ce</dd>", "<dd>3 November 2026</dd>",
+                      "<dd>cc0-1.0</dd>", "<span>600ac44f</span><span>23c2e6e0</span>",
+                      "<figcaption>pinned</figcaption>", '<span class="fl-done">Synced</span>',
+                      '<span class="fl-line">   <span class="fl-done">Resolved</span>'):
+            self.assertIn(shown, page)
+        self.assertNotIn("Resolving", page)
+        self.assertNotIn("README.md", page)
+        self.assertIn("$ fetchloom status\n</code>", page, "a command the run did not record stays as written")
+
+    def test_a_home_page_without_its_label_or_runs_is_refused(self):
+        root = self.source()
+        for label in ("<figure>", '<figure class="fl-label" data-file="missing.csv">'):
+            site = self.folder()
+            self.page(site, label)
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                add_home(root, site)
+
+
 def luminance(color):
     """the relative luminance WCAG 2 gives a #rrggbb color."""
     channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
@@ -248,7 +302,7 @@ class Colors(unittest.TestCase):
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
-        names = ("color_transcripts", "add_pin", "add_mermaid", "write_redirects", "export_agents")
+        names = ("add_home", "color_transcripts", "add_pin", "add_mermaid", "write_redirects", "export_agents")
         with patch.object(build_site.subprocess, "run", side_effect=lambda *a, **k: steps.append("zensical")) as run, \
              patch.object(build_site.shutil, "rmtree", side_effect=lambda *a, **k: steps.append("clean")), \
              patch.object(build_site, "redirects", return_value=[]), \

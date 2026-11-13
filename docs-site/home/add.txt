@@ -1,0 +1,9 @@
+$ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+  Resolving hf:datasets/scikit-learn/iris
+   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
+Downloading 4 files · 18.1 KiB
+ Downloaded 4 files · 18.1 KiB in 214 ms
+    Started a project in ~/iris-study
+    Ignored data/ in .gitignore, since its files come from data.lock
+      Added iris, its files are in data/iris
+  hint: scripts can find it with `fetchloom path iris`
