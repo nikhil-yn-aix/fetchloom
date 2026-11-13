@@ -52,7 +52,7 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | stream declared large members with spare writer budget | large gzip 0.754 glibc, 0.759 musl; 4.0625 MiB-member control 0.856 and 0.885; highest musl RSS 88.6 MiB | kept | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
 | archives | lean against default: 2 local workers | sync of a zip of 10,000 files: time 2.095 glibc, 2.031 musl; peak memory 0.934 glibc, 0.870 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | archives | max against default: default's workers and memory | the same zip: time 1.018 glibc, 0.992 musl; peak memory 0.934 glibc, 1.000 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
-| archives | a sync's drop of unpacked archives looks only at the archives it may drop, each member once across projects, on the workers, and reads only the kept rebuilds of each project's state | sync of a zip of 10,000 files that 20 projects share 2.09 to 0.18 s, 0.086 [0.085, 0.086]; one project's zip 0.802, tar.gz 0.822; the cache report beside 100,000 files 0.834; peak memory up to 5.6 MiB more | kept | [pinnacle pass](#dropping-unpacked-archives) |
+| archives | a sync's drop of unpacked archives looks only at the archives it may drop, each member once across projects, on the workers, and reads only the kept rebuilds of each project's state | sync of a zip of 10,000 files that 20 projects share 2.09 to 0.18 s, 0.086 [0.085, 0.086]; one project's zip 0.802, tar.gz 0.822; the cache report beside 100,000 files 0.834; the zip's peak memory 4 to 9% more | kept | [pinnacle pass](#dropping-unpacked-archives) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -118,6 +118,7 @@ every change measured with the current harness, one row each: what it gained whe
 | process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept on windows, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
 | process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
 | process | none: the release candidate 7daf4747 against a8f9dad7 on commands of a few milliseconds | glibc `help` 1.030 and 1.036 [1.032, 1.041] in a second batch, `--version` 1.020 and 1.016 [1.011, 1.021], a settled sync of 3 files 1.010 and 1.017 [1.011, 1.022], 0.04 to 0.1 ms; a copy of a8f9dad7 against itself 1.000 to 1.005; musl flat | recorded, not chased: glibc only, 4 to 8% more startup instructions in a binary 1.5 MB larger | [tiny commands at the release](#tiny-commands-at-the-release-candidate-2026-11-13) |
+| process | none: the pinnacle pass's four kept changes together, its last commit against 8580a81e | cold sync of 10,000 small files 0.881, of 100,000 0.906; zip 0.804, tar.gz 0.830, a zip 20 projects share 0.086; no-op of 100,000 files 0.823, status 0.839, `status --verify` 0.895; `cache verify` 0.377, cold on ext4 0.793; cache report 0.399; `add`, `get`, `path`, push and a few large files within 0.97 to 1.02; peak memory 0.84 to 1.09 | recorded | [the whole branch](#the-whole-branch) |
 
 ## final benchmark on the linux lab, 2026-11-09
 
@@ -1558,7 +1559,7 @@ once a sync has placed an archive's files, it drops the archive's own bytes unle
 | sync of a tar.gz of 10,000 files | 12 | 0.822 [0.809, 0.834] | 0.997 [0.977, 1.014] | 1.031 | 1.025 [0.975, 1.092] |
 | `--json cache` beside 100,000 placed files | 12 | 0.834 [0.830, 0.839] | 1.000 [0.992, 1.013] | 0.867 | 1.000 [0.999, 1.000] |
 
-the base medians were 2.094 s and 102.5 MiB, 0.297 s and 132.8 MiB, 0.356 s and 125.1 MiB, 0.811 s and 146.9 MiB; the cache report's row comes from an earlier build of the same switch. the members' checks on the workers cost the memory: checked on one thread the three syncs gave 0.115, 1.015 and 1.019 at 0.98 to 1.01 of the peak, on two workers 0.098, 0.876 and 0.898 at 0.99 to 1.01. kept on the run's workers, `FETCHLOOM_THREADS` capping them, for at most 5.6 MiB more at a peak of 133 MiB.
+the base medians were 2.094 s and 102.5 MiB, 0.297 s and 132.8 MiB, 0.356 s and 125.1 MiB, 0.811 s and 146.9 MiB; the cache report's row comes from an earlier build of the same switch. the members' checks on the workers cost the memory: checked on one thread the three syncs gave 0.115, 1.015 and 1.019 at 0.98 to 1.01 of the peak, on two workers 0.098, 0.876 and 0.898 at 0.99 to 1.01. kept on the run's workers, `FETCHLOOM_THREADS` capping them. the zip's peak is the cost: 1.042 here, and 1.085 [1.049, 1.106] in 16 pairs of [the whole branch](#the-whole-branch) beside an a/a arm at 1.034, so 5 to 11 MiB at a peak of 129 to 133 MiB, inside the default's budget; two workers would keep it flat for 0.876 on the zip.
 
 ### reading the whole state
 
@@ -1645,3 +1646,38 @@ a first push of 100,000 small files to a folder mirror on ext4 took 7.0 to 7.4 s
 | 2 workers | 1.782, 0.448 | 1.738, 0.418 | 1.903, 0.636 | 1.943, 0.620 |
 
 8 to 12 pairs a cell; the a/a arms sat at 0.988 to 1.011 in wall time. dropped: none holds the wall time. the conditional staging shards [measured before](#conditional-mirror-staging-shards-2026-11-12) spread the made files over 16 folders and were faster at 100,000 files, 0.732, but cost peak memory; their cpu was not recorded.
+
+### the whole branch
+
+the four kept changes together: a musl release build of the pass's last commit against one of 8580a81e, each arm its own binary, with a byte-identical copy of 8580a81e's at another path as the a/a arm, in the same rounds. tmpfs ran 8 pairs while the merge gate built and tested on cores 0–11, and the second tmpfs batch 16 pairs on a quiet half; ext4 ran 6.
+
+| case | pairs | wall | a/a wall | cpu | peak memory | a/a peak memory |
+|---|---:|---|---|---|---|---|
+| cold sync, 10,000 small files | 16 | 0.881 [0.864, 0.888] | 1.008 [0.983, 1.020] | 0.997 | 1.011 | 1.006 |
+| cold sync, 100,000 small files | 8 | 0.906 [0.854, 0.919] | 0.990 [0.978, 1.050] | 0.996 | 0.973 | 1.001 |
+| cold sync, a few large files | 16 | 0.985 [0.928, 1.006] | 0.996 [0.938, 1.006] | 1.001 | 1.023 [0.903, 1.075] | 0.987 |
+| sync of a zip of 10,000 files | 16 | 0.804 [0.775, 0.815] | 1.002 [0.983, 1.021] | 1.037 | 1.085 [1.049, 1.106] | 1.034 |
+| sync of a tar.gz of 10,000 files | 16 | 0.830 [0.813, 0.840] | 0.998 [0.984, 1.019] | 1.026 | 1.038 [1.020, 1.057] | 0.968 |
+| sync of a zip 20 projects share | 8 | 0.086 [0.085, 0.088] | 1.002 [0.991, 1.010] | 0.188 | 1.065 [1.022, 1.149] | 1.075 |
+| `add` of a 10,000-file listing | 8 | 0.977 [0.948, 1.007] | 0.995 [0.925, 1.056] | 0.989 | 0.984 | 1.019 |
+| 512 MiB `get` | 8 | 1.000 [0.998, 1.002] | 0.998 [0.997, 1.003] | 1.000 | 0.985 | 1.028 |
+| settled sync, 10,000 files | 8 | 0.888 [0.874, 0.906] | 0.994 [0.979, 1.010] | 1.000 | 1.056 [1.010, 1.065] | 1.004 |
+| settled sync, 100,000 files | 8 | 0.823 [0.806, 0.835] | 1.003 [0.992, 1.040] | 0.887 | 0.842 | 0.999 |
+| `--json status`, 10,000 files | 8 | 0.912 [0.903, 0.927] | 1.011 [0.995, 1.023] | 1.000 | 1.002 | 1.000 |
+| `--json status`, 100,000 files | 8 | 0.839 [0.789, 0.873] | 1.007 [0.932, 1.029] | 0.886 | 0.849 | 1.002 |
+| `--json status --verify`, 100,000 files | 8 | 0.895 [0.882, 0.918] | 1.006 [0.986, 1.066] | 0.965 | 0.970 | 0.999 |
+| `cache verify`, 10,000 objects | 8 | 0.469 [0.460, 0.484] | 0.992 [0.976, 1.005] | 1.000 | 0.921 | 0.999 |
+| `cache verify`, 100,000 objects | 8 | 0.377 [0.372, 0.397] | 1.020 [0.998, 1.027] | 1.013 | 0.967 | 0.999 |
+| `--json cache` beside 100,000 files | 8 | 0.399 [0.395, 0.403] | 0.998 [0.977, 1.005] | 0.815 | 0.878 | 1.000 |
+| push of 10,000 files | 8 | 0.972 [0.959, 0.981] | 0.996 [0.984, 1.002] | 0.995 | 0.999 | 1.000 |
+| push of 100,000 files | 8 | 0.970 [0.964, 0.974] | 1.000 [0.981, 1.015] | 0.998 | 0.989 | 1.004 |
+| `path` beside 100,000 files | 8 | 1.000 [0.949, 1.120] | 1.007 [0.859, 1.124] | | 1.005 | 1.001 |
+| ext4: cold sync, 10,000 small files | 6 | 0.945 [0.908, 1.035] | 1.011 [0.960, 1.031] | 0.990 | 1.077 [0.988, 1.200] | 1.027 |
+| ext4: `add` of a 10,000-file listing | 6 | 0.981 [0.965, 1.063] | 0.998 [0.983, 1.019] | 0.999 | 1.031 | 1.003 |
+| ext4: push of 10,000 files | 6 | 0.977 [0.950, 1.052] | 0.995 [0.955, 1.006] | 0.985 | 0.980 | 1.001 |
+| ext4: settled sync, 100,000 files | 6 | 0.819 [0.729, 0.853] | 1.018 [0.989, 1.300] | 0.883 | 0.857 | 1.018 |
+| ext4: `--json status`, 100,000 files | 6 | 0.835 [0.824, 1.065] | 1.001 [0.972, 1.030] | 0.891 | 0.854 | 1.000 |
+| ext4, cold: `cache verify`, 100,000 objects | 6 | 0.793 [0.783, 0.912] | 1.003 [0.996, 1.179] | 1.007 | 0.926 | 1.005 |
+| ext4, cold: `status --verify`, 100,000 files | 6 | 0.973 [0.968, 1.025] | 1.002 [0.999, 1.007] | 0.975 | 0.970 | 1.003 |
+
+the base medians ran from 5.3 ms for `path` to 8.2 s for the cold sync of 100,000 files, and 12.9 to 232.7 MiB. nothing is slower than its a/a arm's spread. the peaks that rose are the archive syncs', from the drop's members checked on the workers, and the 10,000-file no-op's 2 MiB from the block-wise read; the first tmpfs batch, beside the gate, read the zip's peak at 1.118 [1.025, 1.187] and a few large files' at 1.134 [0.938, 1.198], which 16 quieter pairs put at 1.085 and 1.023, the latter inside its a/a arm's spread.
