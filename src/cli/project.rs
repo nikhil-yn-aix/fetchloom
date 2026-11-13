@@ -16,6 +16,7 @@ use super::args;
 use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
 use super::sync::{self as engine, Given, Loop, Scope, Upgrade};
+pub(crate) use super::typed::command;
 use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
@@ -167,22 +168,6 @@ pub(super) fn committed(project: &Project) -> &'static str {
         (true, false) => "data.toml, data.lock and data.lock.d",
         (false, true) => "data.toml, data.lock and .gitignore",
         (false, false) => "data.toml and data.lock",
-    }
-}
-
-/// a command a help names, with `-C` and the folder the run worked in when the run was given `-C`,
-/// so it finds the same project from whatever folder a person runs it in.
-pub(crate) fn command(words: &str) -> String {
-    static DIRECTORY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    // the run changed into the folder -C named, so only the command line still says it did
-    let directory = DIRECTORY.get_or_init(|| {
-        let typed = args::read().ok()?.global.directory?;
-        let folder = std::env::current_dir().unwrap_or(typed);
-        Some(super::shell_word(&folder.to_string_lossy()).into_owned())
-    });
-    match directory {
-        Some(directory) => format!("fetchloom -C {directory} {words}"),
-        None => format!("fetchloom {words}"),
     }
 }
 

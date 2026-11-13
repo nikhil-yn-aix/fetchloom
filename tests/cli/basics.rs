@@ -739,8 +739,8 @@ fn json_at_a_terminal_escapes_what_could_steer_it() -> Result {
 
 /// a mistyped command, option or dataset name exits 2, changes nothing and suggests the line
 /// typed with that one word fixed. `cli::usage::tests` guesses each word and
-/// `cli::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines; these
-/// rows check what the binary prints, in text and in json.
+/// `cli::typed::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines;
+/// these rows check what the binary prints, in text and in json.
 #[test]
 fn a_typo_suggests_the_line_typed_with_one_word_fixed() -> Result {
     let sandbox = Sandbox::new()?;
