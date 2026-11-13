@@ -359,6 +359,7 @@ fn parts(
         .collect();
     let any_title = given.iter().any(|title| !title.is_empty());
     let shared = room("");
+    let more = console::measure_text_width(output.more());
     let mut plan = (false, None);
     for downloads in [true, false] {
         let facts_width = widest(facts(&cells, downloads).iter().map(String::as_str));
@@ -368,10 +369,10 @@ fn parts(
                 plan = (downloads, Some(TITLE_MOST));
                 break;
             }
-            Some(room) if any_title && room > facts_width + gap + TITLE_LEAST => {
+            Some(room) if any_title && room >= facts_width + gap + more + TITLE_LEAST => {
                 plan = (
                     downloads,
-                    Some((room - facts_width - gap - 1).min(TITLE_MOST)),
+                    Some((room - facts_width - gap - more).min(TITLE_MOST)),
                 );
                 break;
             }
@@ -663,6 +664,74 @@ mod tests {
             "{}",
             wide[1].title
         );
+    }
+
+    /// `search iris` with `LC_ALL=C` at 100 columns: a title cut with `...` still fits beside
+    /// its facts, so no row drops its title to put its size on a line of its own.
+    #[test]
+    fn a_cut_title_leaves_room_for_the_ellipsis_in_use() {
+        let candidate = |reference: &str, title: &str, size, downloads| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "zenodo",
+            size: Some(size),
+            downloads: Some(downloads),
+            note: None,
+        };
+        let candidates = vec![
+            candidate(
+                "hf:datasets/scikit-learn/iris",
+                "scikit-learn/iris",
+                18_534,
+                12_000,
+            ),
+            candidate("kaggle:uciml/iris", "Iris Species", 3687, 959_000),
+            candidate(
+                "zenodo:23233774",
+                "IRIS: ICESat-2 River Surface Slope, a global river slope dataset",
+                1_181_116_006,
+                2400,
+            ),
+        ];
+        for unicode in [true, false] {
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                Level::Quiet,
+                false,
+                false,
+            );
+            for width in 90..=110 {
+                let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
+                let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
+                for shown in &parts {
+                    let line = format!(
+                        "{:column$}  {}  {}",
+                        shown.reference, shown.title, shown.facts
+                    );
+                    assert!(!shown.below, "{unicode} {width}: {line:?}");
+                    assert!(
+                        LIST_LEAD + console::measure_text_width(&line) < width,
+                        "{unicode} {width}: {line:?}"
+                    );
+                }
+                assert!(
+                    parts[1].title.starts_with("Iris Species"),
+                    "{unicode} {width}"
+                );
+                assert!(
+                    parts[2].title.trim_end().ends_with(output.more()),
+                    "{unicode} {width}: {:?}",
+                    parts[2].title
+                );
+            }
+        }
     }
 
     #[test]

@@ -596,7 +596,12 @@ impl Output {
 
     /// free text from a source, such as a title, cut to fit one line of the story.
     pub(crate) fn clip(&self, text: &str, most: usize) -> String {
-        units::clip(text, most, self.style.more())
+        units::clip(text, most, self.more())
+    }
+
+    /// what ends a text cut short: `…`, or `...` on a terminal that shows only ascii.
+    pub(crate) fn more(&self) -> &'static str {
+        self.style.more()
     }
 
     /// the width of the terminal a person watches the story on, or none for a pipe or a file.

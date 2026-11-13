@@ -76,14 +76,14 @@ with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same ro
       Chose kaggle:uciml/iris
 ```
 
-without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 110-column terminal with `TERM=dumb`, shortened:
+without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 100-column terminal with `TERM=dumb`, shortened:
 
 ```text
   Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
       Found 12 datasets for "iris"; add one by its id:
-            hf:datasets/scikit-learn/iris                                            18.1 KiB   11k downloads
-            kaggle:uciml/iris                    Iris Species                         3.6 KiB  964k downloads
-            zenodo:23233774                      IRIS: ICESat-2 River Surface...      1.1 GiB  2.4k downloads
+            hf:datasets/scikit-learn/iris                                    18.1 KiB
+            kaggle:uciml/iris                            Iris Species         3.6 KiB
+            zenodo:23233774                              IRIS: ICESat-2...    1.1 GiB
 error: "iris" is not a link or an id, and fetchloom will not guess which dataset you mean
   help: run it again with one of these, such as `fetchloom add hf:datasets/scikit-learn/iris`
 ```
