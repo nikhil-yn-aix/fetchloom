@@ -485,22 +485,36 @@ fn s3_says_a_link_expired_in_two_ways() {
 }
 
 /// semantic scholar answers without a key, so these run in CI's live job: one paper and one small
-/// search, a few seconds apart.
+/// search, a few seconds apart. the pool every program without a key shares is often busy, and a
+/// run it turns away says so and checks nothing.
 #[test]
 #[ignore = "asks semantic scholar's API"]
 fn live_semantic_scholar_paper_and_search() {
     let (net, _work) = crate::source::recorded::live(Vec::new());
+    let busy = |error: &Error| {
+        let turned_away = error.kind == Kind::NetworkRateLimited;
+        if turned_away {
+            eprintln!("skipped: {}", error.message);
+        }
+        turned_away
+    };
     let paper = Reference::parse("s2:DOI:10.1371/journal.pcbi.1003285")
         .unwrap()
         .reference;
-    let listing = block_on(paper.resolve(&net)).unwrap();
+    let listing = match block_on(paper.resolve(&net)) {
+        Err(error) if busy(&error) => return,
+        listing => listing.unwrap(),
+    };
     assert_eq!(
         listing.title.as_deref(),
         Some("Ten Simple Rules for Reproducible Computational Research")
     );
     assert_eq!(listing.license.as_deref(), Some("CC-BY"));
     let words = ["attention", "is", "all", "you", "need"].map(str::to_owned);
-    let found = block_on(search(&net, &words, 3)).unwrap();
+    let found = match block_on(search(&net, &words, 3)) {
+        Err(error) if busy(&error) => return,
+        found => found.unwrap(),
+    };
     assert_eq!(found[0].reference.to_string(), "s2:CorpusId:13756489");
 }
 
