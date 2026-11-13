@@ -67,7 +67,7 @@ pub(super) async fn add_list_held(
             &net,
             &cache,
             listings.iter_mut().collect(),
-            extract,
+            (extract, args.web_page),
         )
         .await
         .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
@@ -87,7 +87,7 @@ pub(super) async fn add_list_held(
         &list,
         found,
         &mut lines,
-        extract,
+        (extract, args.web_page),
     )?;
     // each dataset added gets one last line, so what it pinned and placed is told only with -v
     let work = names
@@ -152,7 +152,7 @@ fn new_datasets(
     list: &List,
     found: Vec<(Listing, Listed)>,
     lines: &mut [FromLine],
-    extract: bool,
+    (extract, web_page): (bool, bool),
 ) -> Result<NewDatasets, Error> {
     let sources = Sources::new(&adding.manifest, old);
     let mut taken: HashSet<String> = adding.manifest.datasets.keys().cloned().collect();
@@ -198,6 +198,7 @@ fn new_datasets(
                 select: &listed.select,
                 exclude: &[],
                 extract,
+                web_page,
             })
             .collect();
         let text = manifest::with_datasets(&text, &added)?;
@@ -474,7 +475,7 @@ mod tests {
                 &list,
                 found,
                 &mut lines,
-                true,
+                (true, false),
             )
             .unwrap();
             let reads = manifest::tests::reads() - before;

@@ -531,6 +531,7 @@ impl Net {
             held: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
+            page: fetch.page,
         };
         let mut fetched = self.claim_and_download(&private, cache, None, on).await?;
         if fetched.name.is_none() && !name.is_empty() {

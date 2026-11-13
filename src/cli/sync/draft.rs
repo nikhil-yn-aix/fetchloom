@@ -25,6 +25,8 @@ pub(super) struct Draft {
     reference: String,
     spec: String,
     extract: bool,
+    /// whether a web page is the data the entry asks for.
+    web_page: bool,
     /// where the entry's patterns were written, for the help of an error.
     patterns: Patterns,
     /// what the listing resolved to and says about the dataset, as data.lock records them.
@@ -152,6 +154,7 @@ impl Draft {
             reference: source.reference.clone(),
             spec: lock::spec(source),
             extract: source.extract,
+            web_page: source.web_page,
             patterns: written(entry),
             resolved: listing.resolved.to_string(),
             title: listing.title,
@@ -256,6 +259,7 @@ impl Draft {
             reference: source.reference.clone(),
             spec: lock::spec(source),
             extract: source.extract,
+            web_page: source.web_page,
             patterns: written(entry),
             resolved: locked.resolved.clone(),
             title: locked.title.clone(),
@@ -314,6 +318,7 @@ impl Draft {
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 unpack: whole[index],
+                page: self.web_page,
                 ..source::fetch_plan(&remote.url)
             };
             let job = Job {

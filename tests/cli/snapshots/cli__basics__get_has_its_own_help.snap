@@ -38,6 +38,9 @@ options:
                            more
       --no-extract         keep zip, 7z and tar archives packed instead of
                            unpacking them
+      --web-page           keep the web page a link answers with as the file.
+                           without it, a page where a file was expected is
+                           refused
   -n, --dry-run            show what would change on disk without changing it.
                            sources may still be asked what a link holds
 

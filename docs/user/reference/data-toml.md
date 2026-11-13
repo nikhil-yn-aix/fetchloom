@@ -27,6 +27,7 @@ path = "measurements"
 | `select` | keep files matching any of these patterns | all files; for a `ref` that links one file or folder inside a dataset, that file or everything below that folder |
 | `exclude` | drop files matching any of these patterns | none |
 | `extract` | unpack recognized archive names | `true` |
+| `web_page` | pin the web page a link answers with as the file, where a page is otherwise refused; see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) | `false` |
 | `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |

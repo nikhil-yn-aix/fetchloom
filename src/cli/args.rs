@@ -659,12 +659,12 @@ impl Command {
     }
 
     /// whether a script may run the command as the next step a help names: one that deletes,
-    /// overwrites or repins what a person keeps, runs project code or signs in is their choice,
-    /// unless `--dry-run` only shows it.
+    /// overwrites or repins what a person keeps, runs project code, signs in or takes a web page
+    /// for data is their choice, unless `--dry-run` only shows it.
     pub(crate) fn harmless(&self) -> bool {
         match self {
-            Command::Add(_)
-            | Command::Status(_)
+            Command::Add(add) => !add.web_page || add.dry.dry_run,
+            Command::Status(_)
             | Command::List(_)
             | Command::Path(_)
             | Command::Push(_)
@@ -682,7 +682,7 @@ impl Command {
                     || lock.dry.dry_run
             }
             Command::Export(export) => !export.force,
-            Command::Get(get) => !get.force || get.dry.dry_run,
+            Command::Get(get) => (!get.force && !get.web_page) || get.dry.dry_run,
             Command::Remove(Remove { dry, .. })
             | Command::Drop(Drop { dry, .. })
             | Command::Build(Build { dry, .. })
@@ -900,6 +900,11 @@ pub(crate) struct Add {
     /// keep zip, 7z and tar archives packed, as extract = false in data.toml does
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    /// keep the web page a link answers with as the data, as `web_page = true` in data.toml
+    /// does. without it, a page where a file was expected is refused
+    #[arg(long, help_heading = "options")]
+    pub(crate) web_page: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,
@@ -1170,6 +1175,11 @@ pub(crate) struct Get {
     /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    /// keep the web page a link answers with as the file. without it, a page where a file
+    /// was expected is refused
+    #[arg(long, help_heading = "options")]
+    pub(crate) web_page: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

@@ -25,6 +25,7 @@ fn args(exclude: &[&str]) -> Get {
             exclude: exclude.iter().map(|value| (*value).to_owned()).collect(),
         },
         no_extract: false,
+        web_page: false,
         dry: crate::cli::args::DryRun { dry_run: false },
     }
 }

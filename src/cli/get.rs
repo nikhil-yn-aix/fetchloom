@@ -707,6 +707,7 @@ fn prepare(
         .zip(&names)
         .map(|(remote, name)| {
             let mut job = fetch::listed_job(remote, name, extract);
+            job.fetch.page = args.web_page;
             let placed = lone
                 .as_deref()
                 .filter(|_| !job.fetch.unpack)
@@ -1388,6 +1389,9 @@ fn pin_command(args: &Get, link: &str) -> Option<String> {
     if args.no_extract {
         parts.push("--no-extract".to_owned());
     }
+    if args.web_page {
+        parts.push("--web-page".to_owned());
+    }
     Some(parts.join(" "))
 }
 
@@ -1869,6 +1873,7 @@ mod tests {
                 exclude: Vec::new(),
             },
             no_extract: false,
+            web_page: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
         let pasted = |file: &str| {
@@ -1922,6 +1927,7 @@ mod tests {
                 exclude: vec!["old/*".to_owned()],
             },
             no_extract: true,
+            web_page: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
         assert_eq!(

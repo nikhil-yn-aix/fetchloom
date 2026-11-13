@@ -617,7 +617,7 @@ async fn add_held(
             &net,
             &cache,
             vec![&mut addition.listing],
-            !args.no_extract,
+            (!args.no_extract, args.web_page),
         )
         .await
         .map_err(|error| typed(error, false))?;
@@ -981,6 +981,11 @@ fn added(
         &args.filter.exclude,
         !args.no_extract,
     )?;
+    let updated = if args.web_page {
+        manifest::with_web_page(&updated, name)?
+    } else {
+        updated
+    };
     let manifest = Manifest::parse(&updated)?;
     Ok((updated, manifest))
 }
@@ -1508,7 +1513,7 @@ async fn learn_names(
     net: &Arc<Net>,
     cache: &crate::cache::Cache,
     listings: Vec<&mut Listing>,
-    extract: bool,
+    (extract, page): (bool, bool),
 ) -> Result<(), Error> {
     let mut lone: Vec<&mut Remote> = listings
         .into_iter()
@@ -1522,7 +1527,11 @@ async fn learn_names(
     }
     let jobs = lone
         .iter()
-        .map(|remote| fetch::listed_job(remote, &remote.path, extract))
+        .map(|remote| {
+            let mut job = fetch::listed_job(remote, &remote.path, extract);
+            job.fetch.page = page;
+            job
+        })
         .collect();
     let started = std::time::Instant::now();
     // the add changes nothing before its downloads are done

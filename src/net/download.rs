@@ -67,6 +67,10 @@ impl Expect {
 }
 
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each says one thing of the download apart from the others"
+)]
 pub(crate) struct Fetch {
     /// the URL the file is known by. it names the unfinished download and what the URL served.
     pub(crate) url: Url,
@@ -87,6 +91,8 @@ pub(crate) struct Fetch {
     pub(crate) unpack: bool,
     /// the bytes are a mirror's copy, which mirror-only mode lets the request ask for.
     pub(crate) mirror: bool,
+    /// the person asked for the web page itself, so one is the file rather than a mistake.
+    pub(crate) page: bool,
 }
 
 impl Fetch {
@@ -134,6 +140,7 @@ impl Fetch {
             held: None,
             unpack: false,
             mirror: false,
+            page: false,
         }
     }
 
@@ -520,6 +527,7 @@ impl Net {
             held: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
+            page: fetch.page,
         };
         let bucket = crate::source::Bucket::holding(&fetch.from);
         if bucket

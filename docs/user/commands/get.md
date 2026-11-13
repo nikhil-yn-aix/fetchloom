@@ -29,6 +29,7 @@ fetchloom get [options] <link>...
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
+| `--web-page` | keep the web page a link answers with as the file; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
 | `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 
 [global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; several are one search, quoted or not, as in `fetchloom get fashion mnist`, when none is a link, an id, a DOI or a path. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.

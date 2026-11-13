@@ -18,12 +18,12 @@ pub(crate) const DATA_DIR: &str = "data";
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 12] = [
-    "ref", "select", "exclude", "extract", "members", "copy", "path", "place", "from", "run",
-    "code", "env",
+const DATASET_KEYS: [&str; 13] = [
+    "ref", "select", "exclude", "extract", "members", "web_page", "copy", "path", "place", "from",
+    "run", "code", "env",
 ];
 /// the keys of a dataset fetched from a source, beside `ref`.
-const SOURCE_KEYS: [&str; 4] = ["select", "exclude", "extract", "members"];
+const SOURCE_KEYS: [&str; 5] = ["select", "exclude", "extract", "members", "web_page"];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
 /// the keys of a dataset a recipe makes.
@@ -76,6 +76,9 @@ pub(crate) struct Source {
     pub(crate) extract: bool,
     /// which files of each archive it unpacks the dataset keeps.
     pub(crate) members: Members,
+    /// whether a web page that answers where a file was expected is the data a person asked for,
+    /// rather than a folder listing or a sign-in page to refuse.
+    pub(crate) web_page: bool,
 }
 
 /// what a dataset keeps of the archives it unpacks: a table per archive, keyed by its path as
@@ -585,6 +588,7 @@ impl Reader<'_> {
             exclude: self.patterns(table.get("exclude"), "exclude")?,
             extract,
             members: self.members(table, name, extract)?,
+            web_page: self.boolean(table.get("web_page"), "web_page", false)?,
         })
     }
 
@@ -1164,6 +1168,7 @@ pub(crate) struct NewDataset<'a> {
     pub(crate) select: &'a [String],
     pub(crate) exclude: &'a [String],
     pub(crate) extract: bool,
+    pub(crate) web_page: bool,
 }
 
 impl NewDataset<'_> {
@@ -1178,6 +1183,9 @@ impl NewDataset<'_> {
         }
         if !self.extract {
             table.insert("extract", toml_edit::value(false));
+        }
+        if self.web_page {
+            table.insert("web_page", toml_edit::value(true));
         }
         table
     }
@@ -1212,10 +1220,25 @@ pub(crate) fn with_dataset(
         select,
         exclude,
         extract,
+        web_page: false,
     };
     let mut document = editable(text)?;
     if !put(&mut document, name, added.table()) {
         return Err(added.refused_inline());
+    }
+    Ok(document.to_string())
+}
+
+/// data.toml's text with the dataset `name` marked `web_page = true`, as `add --web-page` writes
+/// it once the dataset is in.
+pub(crate) fn with_web_page(text: &str, name: &str) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    if let Some(table) = document
+        .get_mut("datasets")
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+    {
+        table.insert("web_page", toml_edit::value(true));
     }
     Ok(document.to_string())
 }

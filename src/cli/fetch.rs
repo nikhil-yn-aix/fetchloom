@@ -523,6 +523,7 @@ impl<'a> Watch<'a> {
                 resumed,
                 resumable,
             } => self.started(total, resumed, resumable)?,
+            Event::WebPage { .. } if self.job.fetch.page => {}
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
                 // a page that names no file, at a link whose name has no extension, is a folder
@@ -531,6 +532,12 @@ impl<'a> Watch<'a> {
                     && std::path::Path::new(label).extension().is_none()
                     && !self.job.fetch.expect.proves()
                 {
+                    let asked = match &self.job.dataset {
+                        Some(dataset) => {
+                            format!("add web_page = true to [datasets.{dataset}] in data.toml")
+                        }
+                        None => "add --web-page".to_owned(),
+                    };
                     return Err(Error::new(
                         Kind::SourceInvalid,
                         format!(
@@ -538,7 +545,7 @@ impl<'a> Watch<'a> {
                             crate::net::Shown(&self.job.fetch.url)
                         ),
                     )
-                    .help("open it in a browser, copy the link of each file you want, and give fetchloom those links"));
+                    .help(format!("open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}")));
                 }
                 let name = given.as_deref().unwrap_or(label);
                 if std::path::Path::new(name)
@@ -1804,7 +1811,7 @@ mod tests {
                     assert_eq!(
                         error.help.as_deref(),
                         Some(
-                            "open it in a browser, copy the link of each file you want, and give fetchloom those links"
+                            "open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page"
                         )
                     );
                 }

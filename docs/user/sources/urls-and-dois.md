@@ -24,7 +24,7 @@ a raw link to a file git-lfs keeps answers with git-lfs's pointer, a few lines g
 
 a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../concepts.md#archives) as from any source.
 
-a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with a web page and nothing says the bytes are a file: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead, or publish the folder packed, as `tar czf many.tar.gz many`, and add the archive's link, which unpacks into the dataset's folder. a web page served under a name that looks like data gets a warning; check the file and use a download or raw link. a server that answers with something HTTP does not allow, as a broken server does, a port that serves something else, or an `http://` link to a port that wants `https://`, fails with `<host> sent a reply that is not valid HTTP`, and no other try is made, since none would get another answer.
+a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with a web page and nothing says the bytes are a file: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead, or publish the folder packed, as `tar czf many.tar.gz many`, and add the archive's link, which unpacks into the dataset's folder. when the page is the data, ask for it, as [web pages as data](#web-pages-as-data) says. a web page served under a name that looks like data gets a warning; check the file and use a download or raw link. a server that answers with something HTTP does not allow, as a broken server does, a port that serves something else, or an `http://` link to a port that wants `https://`, fails with `<host> sent a reply that is not valid HTTP`, and no other try is made, since none would get another answer.
 
 ## names
 
@@ -42,13 +42,31 @@ a link's file is named after the last part of its path, decoded. a character win
 ```sh
 $ fetchloom add http://127.0.0.1:19353/many/
 error: http://127.0.0.1:19353/many/ answered with a web page, such as a folder listing, not a file
-  help: open it in a browser, copy the link of each file you want, and give fetchloom those links
+  help: open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page
 $ fetchloom add http://127.0.0.1:19353/many.tar.gz
  Downloaded many.tar.gz · 215 B in 8 ms
    Unpacked many/many.tar.gz · 3 files · 9 B in 94 ms
       Added many, its files are in data/many
   hint: scripts can find it with `fetchloom path many`
 ```
+
+## web pages as data
+
+when the page itself is what you want, such as a report or a table a site shows only as a page, ask for it. `fetchloom add <link> --web-page` pins the page's bytes as the dataset's one file, named after the link, and records `web_page = true` in data.toml, so each sync and each clone takes the page too. `fetchloom get <link> --web-page` keeps it once. a sync of a link that answers with a page data.toml does not ask for is refused the same way, and its help names the line to add. from real runs against a server on this machine, the second after a `[datasets.notes]` table with the folder link went into data.toml:
+
+```sh
+$ fetchloom add http://127.0.0.1:19353/report/ --web-page
+Downloading report · 86 B
+ Downloaded report · 86 B in 6 ms
+    Started a project in /home/ada/notes
+      Added report, its files are in data/report
+  hint: scripts can find it with `fetchloom path report`
+$ fetchloom sync
+error: http://127.0.0.1:19353/many/ answered with a web page, such as a folder listing, not a file
+  help: open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add web_page = true to [datasets.notes] in data.toml
+```
+
+the setting only lets a page through, and adds no host, header or key, so data.toml may carry it. most pages change between visits, so a clone that fetches the page again gets other bytes than data.lock pins and is refused, as for any [changed file](../troubleshooting.md#errors); whoever pinned it can push the pinned copy to a folder the clone reads.
 
 ## dry runs
 

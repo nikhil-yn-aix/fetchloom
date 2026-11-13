@@ -310,7 +310,8 @@ async fn put(
     let done = match early {
         Early::Kept(kept) => kept,
         Early::Download(known) => {
-            let fetched = download(context, net, cache, remote, known.held).await?;
+            let fetched =
+                download(context, net, cache, remote, (known.held, args.web_page)).await?;
             // bytes this run wrote may leave the cache for the file, so it holds the link until
             // they are there, for a run waiting for the link to find them in one or the other
             let _link = if context.work.cached_before(&fetched.digest) {
@@ -575,10 +576,11 @@ async fn download(
     net: &Arc<Net>,
     cache: &Cache,
     remote: &Remote,
-    held: Option<Sha256>,
+    (held, page): (Option<Sha256>, bool),
 ) -> Result<Fetched, Error> {
     let mut job = fetch::listed_job(remote, &remote.path, false);
     job.fetch.held = held;
+    job.fetch.page = page;
     vet(
         cache,
         std::slice::from_ref(remote),

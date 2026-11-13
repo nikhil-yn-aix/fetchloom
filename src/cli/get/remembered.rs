@@ -107,6 +107,7 @@ mod tests {
                 exclude: exclude.iter().map(|&pattern| pattern.to_owned()).collect(),
             },
             no_extract: false,
+            web_page: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         }
     }

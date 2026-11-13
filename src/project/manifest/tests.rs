@@ -424,6 +424,7 @@ fn datasets_added_together_land_as_each_would_alone() {
             select: if index % 3 == 0 { &select } else { &[] },
             exclude: &[],
             extract: index % 4 != 1,
+            web_page: false,
         })
         .collect();
     let mut sorted: Vec<&NewDataset<'_>> = added.iter().collect();
@@ -1191,7 +1192,7 @@ fn unknown_keys_are_rejected_at_each_table_level() {
         (
             "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
             "data.toml:3   unknown_setting = true",
-            "the keys here are ref, select, exclude, extract, members, copy, path, place, from, run, code, env",
+            "the keys here are ref, select, exclude, extract, members, web_page, copy, path, place, from, run, code, env",
         ),
         (
             "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",

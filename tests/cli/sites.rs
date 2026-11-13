@@ -1,5 +1,6 @@
-//! a website's own credential, saved for its host with `auth login <host>`: a token, a header or
-//! cookies, sent to that host alone and named when the host refuses it.
+//! any website: its own credential, saved for its host with `auth login <host>`, a token, a header
+//! or cookies, sent to that host alone and named when the host refuses it; and a web page a
+//! person asks for as the data.
 #![cfg(debug_assertions)]
 
 use crate::auth::with_stdin;
@@ -549,5 +550,84 @@ fn chrome_on_windows_is_refused_with_what_works_instead() -> Result {
         error["message"],
         "chrome on windows keeps its cookies under app-bound encryption, which only chrome itself may open"
     );
+    Ok(())
+}
+
+/// a link with no extension that answers with a web page is refused, unless the person asks for
+/// the page, on the command line or in data.toml.
+#[test]
+fn a_web_page_is_pinned_only_when_asked_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the report</body></html>";
+    let length = page.len().to_string();
+    let site = Routes::start(vec![(
+        "/report".to_owned(),
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html"), ("Content-Length", &length)],
+            page,
+        ),
+    )])?;
+    let link = format!("{}/report", site.url);
+    let refused = sandbox.run(&["add", &link])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("if the page itself is the data, add --web-page"),
+        "{stderr}"
+    );
+    let added = sandbox.run(&["add", &link, "--web-page"])?;
+    assert!(added.status.success(), "{}", text(&added.stderr)?);
+    let manifest = std::fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(manifest.contains("web_page = true"), "{manifest}");
+    let lock = std::fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&crate::support::sha256_hex(page)), "{lock}");
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data/report/report"))?,
+        page
+    );
+    // data.toml's word alone lets a sync pin a page, as a teammate's clone does
+    site.change(vec![(
+        "/notes".to_owned(),
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html"), ("Content-Length", &length)],
+            page,
+        ),
+    )]);
+    sandbox.allow(&site.url);
+    let notes = format!(
+        "{manifest}\n[datasets.notes]\nref = \"{}/notes\"\n",
+        site.url
+    );
+    std::fs::write(sandbox.work().join("data.toml"), &notes)?;
+    let refused = sandbox.run(&["sync"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("add web_page = true to [datasets.notes] in data.toml"),
+        "{stderr}"
+    );
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        format!("{notes}web_page = true\n"),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert!(synced.status.success(), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data/notes/notes"))?,
+        page
+    );
+    for (asked, code) in [(&[][..], Some(10)), (&["--web-page"][..], Some(0))] {
+        let mut args = vec!["get", link.as_str(), "-o", "page.html", "--force"];
+        args.extend_from_slice(asked);
+        let output = sandbox.run(&args)?;
+        assert_eq!(
+            output.status.code(),
+            code,
+            "{asked:?}: {}",
+            text(&output.stderr)?
+        );
+    }
     Ok(())
 }
