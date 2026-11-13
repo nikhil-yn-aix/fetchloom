@@ -78,7 +78,7 @@ jobs:
           retention-days: 14
 
   # cargo-bolero builds every test target and picks the property only when it runs it, so one
-  # build serves all eight, fuzzed one after another
+  # build serves all nine, fuzzed one after another
   fuzz:
     if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'fuzz'
     runs-on: ubuntu-24.04
@@ -109,6 +109,7 @@ jobs:
             drive-pages=source::drive::folder::tests::fuzz_drive_pages
             response-headers=net::headers::tests::fuzz_response_headers
             object-listings=source::xml::tests::fuzz_object_listings
+            cookie-databases=auth::cookies::sqlite::tests::fuzz_cookie_databases
         shell: bash
         run: |
           failed=""
@@ -124,7 +125,8 @@ jobs:
               --corpus-dir "target/fuzz-corpus/$name" --crashes-dir "$results/crashes" \
               "${entry#*=}" 2>&1 | tee "$results/run.log" || failed="$failed $name"
             echo "::endgroup::"
-            limit=7m
+            # a later target took 5 min 2 s, so 25 + 8 x 6 = 73 minutes stay under the job cap
+            limit=6m
           done
           git diff --exit-code -- Cargo.lock
           if [ -n "$failed" ]; then
