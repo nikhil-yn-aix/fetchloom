@@ -108,7 +108,7 @@ jobs:
             manifest=project::manifest::tests::fuzz_manifest
             drive-pages=source::drive::folder::tests::fuzz_drive_pages
             response-headers=net::headers::tests::fuzz_response_headers
-            object-listings=source::bucket::xml::tests::fuzz_object_listings
+            object-listings=source::xml::tests::fuzz_object_listings
         shell: bash
         run: |
           failed=""

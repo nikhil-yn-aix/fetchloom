@@ -1,5 +1,6 @@
-//! a small XML reader for S3 answers: elements, text and the five named entities. it refuses
-//! document type declarations, so no entity can expand, and bounds how deep elements nest.
+//! a small XML reader for the answers of S3, azure and arXiv: elements, text and the five named
+//! entities, without attributes. it refuses document type declarations, so no entity can expand,
+//! and bounds how deep elements nest.
 
 use std::borrow::Cow;
 

@@ -6,9 +6,10 @@ use std::fmt;
 
 use url::Url;
 
-use super::{Listed, Object, Prefix, object_url, query, xml};
+use super::{Listed, Object, Prefix, object_url, query};
 use crate::error::Error;
 use crate::net::{Api, Response};
+use crate::source::xml;
 
 /// the version of azure's API every request to a blob host asks for. without one, a request gets
 /// the account's default, as old as 2009-09-19, under which newer kinds of blob refuse to list;

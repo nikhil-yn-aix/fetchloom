@@ -23,6 +23,7 @@ mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
 pub(crate) mod search;
+mod xml;
 mod zenodo;
 
 use std::collections::HashSet;

@@ -3,10 +3,11 @@
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Keyed, Listed, Object, Prefix, is_region, object_url, query, s3_host, xml};
+use super::{Keyed, Listed, Object, Prefix, is_region, object_url, query, s3_host};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
+use crate::source::xml;
 
 /// where a bucket's requests go: its own host, or a path on the service's host for a dotted name
 /// the wildcard certificate does not cover, as always for a bucket at another service.

@@ -254,7 +254,7 @@ impl Signer {
     pub(crate) fn says_expired(status: u16, body: &[u8]) -> bool {
         let code = std::str::from_utf8(body)
             .ok()
-            .and_then(|text| super::xml::parse(text).ok())
+            .and_then(|text| crate::source::xml::parse(text).ok())
             .filter(|said| said.name == "Error")
             .and_then(|said| said.text_of("Code").map(str::to_owned));
         matches!(status, 400 | 403)

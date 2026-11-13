@@ -6,7 +6,6 @@ mod azure;
 mod gcs;
 mod s3;
 mod signing;
-mod xml;
 
 use std::fmt;
 

@@ -118,6 +118,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/search.rs` | `search` across public catalogs, its candidates interleaved, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `search`, `near` | `Candidate`, `Search`, `is_search`, `Near` |
 | `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere` |
 | `src/source/doi.rs` | DOIs, routed by the host doi.org names, never by their prefix | `Doi::locate` |  |
+| `src/source/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
 | `src/source/zenodo.rs` | zenodo records, with the MD5 zenodo states for every file | `Record` | `Record::resolve` |
 | `src/source/figshare.rs` | figshare articles, optionally at a version | `Article` | `Article::resolve` |
 | `src/source/dataverse.rs` | datasets on any dataverse install, by host and persistent id | `Dataset` | `Dataset::resolve` |
@@ -153,7 +154,6 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/bucket/gcs.rs` | google cloud storage's JSON object list | `list` |  |
 | `src/source/bucket/azure.rs` | azure's `List Blobs`, with a SAS only for a container `azure_containers` lists | `list` |  |
 | `src/source/bucket/signing.rs` | which S3 requests go signed, with which keys and region | `Signing` | `Located`, `Signer`, `Keyed` |
-| `src/source/bucket/xml.rs` | a small XML reader for S3 answers that refuses document type declarations | `parse` | `Element`, `unescape` |
 
 ## auth
 
