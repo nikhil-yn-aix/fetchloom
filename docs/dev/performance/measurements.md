@@ -101,6 +101,7 @@ every change measured with the current harness, one row each: what it gained whe
 | build | memoized immutable recipe-input contents, three versions | 4,000-recipe status ratios 0.0140 glibc and 0.0092 musl, but no-reuse controls slowed about 1% | dropped, control time | [recipe inputs](#memoizing-recipe-input-contents-2026-11-12) |
 | build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
+| process | mimalloc's huge pages turned off on musl, by `MIMALLOC_ALLOW_THP=0` or the crate's `no_thp` feature | peak memory 0.35 to 0.89, as `add -i` of 1,000 links 94.7 to 35.1 MiB, but work over many files 1.10 to 1.23 slower: status of 100,000 files 1.176, placing 100,001 from the cache 1.133, a no-op over 1,000 datasets 1.154, `drop` across 1,000 1.230 | dropped again, huge pages stay on | [huge pages at the release](#mimallocs-huge-pages-at-the-release-candidate-2026-11-13) |
 | process | mimalloc for libc's own allocations on musl | no-op sync 0.833 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | process | a mimalloc purge delay of 10 ms for lean on musl | lean with `MIMALLOC_PURGE_DELAY=10` set before start: peak memory 0.703 to 0.922, time 1.013 to 1.068 | not built: nothing sets it for lean alone without unsafe code | [purge delay](#a-shorter-purge-delay-for-lean-on-musl-2026-11-12) |
 | process | `panic = unwind` for a clean thread error | no faster anywhere; binary 14.5% larger | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -1476,3 +1477,30 @@ the builds: on glibc, a8f9dad7's stock release (sha256 `0ddf803c…`) against a 
 | settled sync of 3 files | musl | 100 | 0.982 [0.971, 0.997] | | |
 
 the glibc medians were 2.5, 2.9 and 3.9 ms, so the difference is 0.04 to 0.1 ms, and gnu time's own fork and exec inside the clock make the ratios understate it. medians of 20 runs of `perf stat` say where it comes from: user instructions 1.43 to 1.49 million for `--version` (+4.2%), 3.02 to 3.26 million for `help` (+8.0%) and 3.13 to 3.35 million for the sync (+6.9%); page faults 254 to 271, 268 to 294 and 314 to 344. the system calls are the same but for two `ioctl`s, and the dynamic loader does the same work, 13,687 to 14,865 relative relocations in about 0.05 ms either way. the glibc binary grew from 15.5 to 17.1 MB. musl runs the same extra instructions with fewer page faults (155 to 143, 160 to 148, 219 to 196) and is not slower. the extra work fits the larger command line, which `help` builds whole, and the larger binary's pages; a profile with symbols of both commits would name the functions. not chased: linux ships the musl build, and the cost is under 0.1 ms a command.
+
+## mimalloc's huge pages at the release candidate, 2026-11-13
+
+the release recheck found the musl build's peak memory rounded up by huge pages: mimalloc reserves a 1 GiB arena and asks for transparent huge pages on it with `madvise(MADV_HUGEPAGE)`, which ubuntu's `madvise` setting honors, so each 2 MiB stretch a command touches costs 2 MiB, and the peak moves between runs by whole pages (a 100,000-file status 83.6 to 103.6 MiB on one binary). [transparent huge pages left on](#ab-passes-on-placement-and-startup-2026-11) decided this once, with the process's own `prctl`; this a/b asks again of mimalloc's own switches, which leave other programs alone. dropped again: memory falls by a third to two thirds, and the work over many files gets 10 to 23% slower.
+
+three arms in the same rounds, each case one batch after a warmup round, the arms in a seeded shuffled order, under the measure lock on cores 12–23, on tmpfs: the stage run's musl package of 7daf4747 as it ships; the same binary with `MIMALLOC_ALLOW_THP=0`, which skips the `madvise` and turns huge pages off for the process; and a musl build of c7593e78 with mimalloc's `no_thp` feature, made as ci makes it, whose only change is the missing `madvise` (strace shows none). a ratio is off over on, the median of paired ratios with its 95% bootstrap interval from `bench/ab.py`. the owner's training and other builds held some cores throughout, so most rounds carried other load; it falls on all three arms of a round alike.
+
+| workload | pairs | time, variable | time, no_thp build | peak MiB: on, variable, build |
+|---|---:|---|---|---|
+| `--json status` of 100,000 files | 20 | 1.176 [1.138, 1.202] | 1.173 [1.134, 1.190] | 89.6, 83.9, 81.9 |
+| settled sync of 100,000 files | 20 | 1.134 [1.118, 1.154] | 1.116 [1.084, 1.156] | 96.6, 81.2, 79.3 |
+| placing 100,001 files from a full cache | 12 | 1.133 [1.119, 1.153] | 1.119 [1.101, 1.147] | 203.6, 169.3, 170.4 |
+| sync of 40,000 one-file datasets | 10 | 1.146 [1.136, 1.163] | 1.133 [1.125, 1.154] | 209.0, 183.5, 182.0 |
+| settled sync of 1,000 one-file datasets | 60 | 1.154 [1.147, 1.160] | 1.154 [1.144, 1.161] | 31.0, 14.7, 12.7 |
+| `lock` merge of 1,000 datasets | 12 | 1.098 [1.080, 1.112] | 1.087 [1.068, 1.117] | 41.5, 25.0, 22.6 |
+| `drop` across 1,000 datasets | 12 | 1.230 [1.212, 1.239] | 1.220 [1.208, 1.252] | 44.0, 23.1, 20.8 |
+| `cache verify` of 100,000 objects | 20 | 1.041 [1.028, 1.073] | 1.011 [0.987, 1.040] | 50.2, 32.2, 31.1 |
+| `status --verify` of 8 × 64 MiB | 20 | 1.017 [0.992, 1.036] | 1.224 [1.031, 1.390] | 26.5, 16.8, 15.0 |
+| `add -i` of 1,000 links | 25 | 1.030 [0.990, 1.048] | 1.024 [1.003, 1.093] | 94.7, 35.1, 33.1 |
+| sync of a zip of 10,000 files | 20 | 1.037 [0.967, 1.099] | 1.024 [0.989, 1.062] | 126.8, 61.0, 60.5 |
+| 1 GiB `get` | 12 | 1.010 [1.007, 1.028] | 1.012 [1.008, 1.018] | 94.9, 62.9, 59.4 |
+| `path` of 1 file beside 100,000 records | 60 | 0.984 [0.978, 0.994] | 1.021 [1.016, 1.034] | 16.7, 9.4, 7.1 |
+| settled sync of 3 files | 150 | 0.998 [0.990, 1.004] | 1.019 [1.015, 1.027] | 16.6, 9.2, 7.3 |
+| `--version` | 150 | 1.000 [0.991, 1.009] | 1.018 [1.011, 1.022] | 10.6, 5.2, 4.4 |
+| `help` | 150 | 1.027 [1.019, 1.034] | 1.039 [1.031, 1.049] | 11.4, 5.9, 4.6 |
+
+the cost is page faults: with 4 KiB pages the same memory faults far more often. `perf stat` over 10 runs of the shipped binary, huge pages on and then off by the variable: the no-op over 1,000 datasets 204 to 1,595 faults and 18.1 to 21.6 ms of cpu, the status of 100,000 files 707 to 15,564 faults and 673 to 735 ms. the two switches behave alike here; the build's small extra on the shortest commands is its own binary, another commit's layout. on a system set to `always`, the feature would leave the kernel's huge pages on where the variable turns them off. huge pages stay on. turning them off would not bring the two musl peaks above [the 150 MB budget](budgets.md) under it either: placing 100,001 files, 203.6 to 169.3 MiB, and the sync of 40,000 datasets, 209.0 to 183.5 MiB.
