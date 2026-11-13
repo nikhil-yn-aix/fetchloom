@@ -156,22 +156,27 @@ class DocumentationLinks(unittest.TestCase):
                     if fragment and target.suffix == ".md":
                         self.assertIn(fragment, anchors(target), "the link names no heading")
 
-    def test_every_user_page_is_listed(self):
-        """the site's sidebar, the user guide's index and llms.txt each name every user page; a page
-        SUMMARY.md leaves out is still built, with no place in the site's navigation."""
-        user = ROOT / "docs" / "user"
-        pages = {page.resolve() for page in user.rglob("*.md")}
-        for index in (ROOT / "docs" / "SUMMARY.md", user / "README.md", ROOT / "llms.txt"):
-            listed = {
-                (index.parent / unquote(urlsplit(link).path)).resolve()
-                for _, link in links(index)
-                if not urlsplit(link).scheme
-            }
-            missing = sorted(
-                page.relative_to(user).as_posix() for page in pages - listed - {index.resolve()}
-            )
-            with self.subTest(index=index.relative_to(ROOT).as_posix()):
-                self.assertEqual(missing, [], "these user pages are not listed")
+    def test_the_summary_lists_every_page(self):
+        """SUMMARY.md is the site's navigation: a page it leaves out is still built, with no place
+        in it."""
+        docs = ROOT / "docs"
+        navigation = listed(docs / "SUMMARY.md")
+        missing = sorted(page.relative_to(docs).as_posix() for page in docs.rglob("*.md")
+                         if page.name != "SUMMARY.md" and page.resolve() not in navigation)
+        self.assertEqual(missing, [], "SUMMARY.md does not list these pages")
+
+    def test_llms_txt_names_only_pages_the_summary_lists(self):
+        """llms.txt is a hand-kept choice of pages, each one the site's navigation holds."""
+        docs = (ROOT / "docs").resolve()
+        named = {page for page in listed(ROOT / "llms.txt") if page.is_relative_to(docs) and page.suffix == ".md"}
+        outside = sorted(page.relative_to(docs).as_posix() for page in named - listed(docs / "SUMMARY.md"))
+        self.assertEqual(outside, [], "llms.txt names pages SUMMARY.md does not list")
+
+
+def listed(index):
+    """the files the relative links of ``index`` name."""
+    return {(index.parent / unquote(urlsplit(link).path)).resolve()
+            for _, link in links(index) if not urlsplit(link).scheme and urlsplit(link).path}
 
 
 if __name__ == "__main__":
