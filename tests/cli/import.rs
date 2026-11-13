@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::support::{Result, Sandbox, json, text, zip_of};
 
-/// a folder of two files, one of them in a folder of its own, as a person keeps measurements.
+/// a folder of two files, one of them in a folder of its own.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let folder = sandbox.folder("flowers")?;
     fs::create_dir_all(folder.join("petals"))?;
@@ -103,8 +103,7 @@ fn an_import_tells_what_it_copied_and_that_the_folder_is_unchanged() -> Result {
     Ok(())
 }
 
-/// copies the project in `work` to a folder of its own, as a teammate's clone of its repository
-/// gets data.toml and data.lock.
+/// copies data.toml and data.lock to a folder of their own, as a teammate's clone gets them.
 fn clone_of(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let clone = sandbox.folder("clone")?;
     for file in ["data.toml", "data.lock"] {
@@ -226,9 +225,8 @@ fn supplying_the_same_folder_again_changes_no_pins() -> Result {
     Ok(())
 }
 
-/// a mac writes `.DS_Store` into a folder a person opens, and `._` files beside each file on a disk
-/// not its own. they are no data: an import leaves them out and says so, and the folder supplied
-/// later, after finder wrote more of them, still matches its pins.
+/// a mac writes `.DS_Store` into a folder a person opens and `._` files beside each file on a disk
+/// not its own; they are no data, so a supply after finder wrote more still matches the pins.
 #[test]
 fn files_the_system_makes_are_left_out_of_imports_and_supplies() -> Result {
     let sandbox = Sandbox::new()?;
@@ -362,7 +360,6 @@ fn a_lost_pin_of_an_import_is_pinned_again_from_its_files() -> Result {
     Ok(())
 }
 
-/// a zip of `pack/a.csv` and `pack/b.csv`.
 fn pack() -> Result<Vec<u8>> {
     zip_of(&[("pack/a.csv", b"a\n"), ("pack/b.csv", b"b\n")])
 }
@@ -440,9 +437,7 @@ fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Re
     Ok(())
 }
 
-/// a typo in the last name of a path is answered with the one name near it in that folder, as
-/// the command typed with that name, its options kept and quoted for a shell, and nothing is
-/// searched for.
+/// the help retypes the command with the near name from the same folder, quoted for a shell.
 #[test]
 fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {
     let sandbox = Sandbox::new()?;
@@ -499,8 +494,7 @@ fn one_file_is_imported_under_its_own_name_and_a_dry_run_writes_nothing() -> Res
     Ok(())
 }
 
-/// files bigger than the free space on the cache's disk are told before any byte is copied, and
-/// `--yes` goes on anyway, as on a disk that clones them.
+/// `--yes` goes on anyway, as a disk that clones the files may hold them.
 #[test]
 fn an_import_the_cache_disk_cannot_hold_asks_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -529,8 +523,7 @@ fn an_import_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
-/// a file whose name is not text is refused by its path in the folder imported, at its top as
-/// below it.
+/// a file at the folder's top and one below it are both named by their path in it.
 #[cfg(unix)]
 #[test]
 fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
@@ -584,8 +577,8 @@ fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
     Ok(())
 }
 
-/// a large import's counts read with their thousands apart: a folder of more files than a run
-/// lists, its names windows cannot store, and its list in data.lock.d past the most.
+/// three counts are checked: files past the most a run lists, names windows cannot store, and a
+/// list in data.lock.d past the most.
 #[cfg(unix)]
 #[test]
 fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
@@ -631,8 +624,8 @@ fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
     Ok(())
 }
 
-/// two files whose names differ only in how their unicode is written, as a mac and a linux
-/// machine may write café, are refused as that, never as a file and a folder.
+/// a mac and a linux machine may write café two ways, and the refusal says so rather than call
+/// them a file and a folder.
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn names_written_with_two_unicode_forms_are_refused_as_such() -> Result {

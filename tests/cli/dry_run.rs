@@ -1,4 +1,4 @@
-//! `--dry-run` on add, remove, sync and cache gc: the plan is told and nothing on disk changes.
+//! `--dry-run` on add, remove, sync, get and cache gc tells the plan and changes nothing on disk.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -302,8 +302,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     Ok(())
 }
 
-/// a gc dry run tells each thing it would free with the verb the real gc prints for it: the
-/// cached files no project needs, and an unfinished download no fetchloom holds.
+/// the lines are a cached file no project needs and an unfinished download no fetchloom holds.
 #[test]
 fn cache_gc_dry_run_tells_its_lines_as_the_real_gc_does() -> Result {
     let sandbox = Sandbox::new()?;
@@ -577,9 +576,8 @@ fn a_dry_run_audits_damaged_read_only_hardlinks() -> Result {
     Ok(())
 }
 
-/// a file someone put where a new dataset goes may hold the pinned bytes, and only the download
-/// tells, since the link publishes no checksum. the dry run says it would check the file, rather
-/// than calling it different from data.lock.
+/// the link publishes no checksum, so only the download tells whether the file holds the pinned
+/// bytes, and the dry run says it would check it.
 #[test]
 fn a_file_already_in_place_is_not_called_different_before_the_download() -> Result {
     let sandbox = Sandbox::new()?;
@@ -613,10 +611,8 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
     Ok(())
 }
 
-/// a dry get tells what it would fetch and where the files would land, a size its source does
-/// not state and an archive's files unknown until it is unpacked, as a dry add does, and changes
-/// nothing: no folder or file, no cache folder and no request for the bytes. offline it fails as
-/// the get would.
+/// a dry get, like a dry add, tells an unstated size and an archive's files as unknown, makes no
+/// cache folder or request, and fails offline as the get would.
 #[test]
 fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
