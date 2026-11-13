@@ -351,6 +351,40 @@ fn gc_refuses_unreadable_project_records() -> Result {
     Ok(())
 }
 
+/// gc runs from one project, so a merge left unfinished in another names that project's folder in
+/// the lock command that finishes it, which a script can then run as given.
+#[test]
+fn gc_names_the_project_whose_merge_is_unfinished() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("src")?;
+    fs::write(source.join("a.csv"), b"a\n")?;
+    let other = sandbox.folder("other project")?;
+    for project in [sandbox.work(), other.clone()] {
+        let output = sandbox
+            .command_in(&project, &["add", &source.display().to_string()])
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let lock = fs::read_to_string(other.join("data.lock"))?;
+    fs::write(
+        other.join("data.lock"),
+        format!("<<<<<<< ours\n{lock}=======\n{lock}>>>>>>> theirs\n"),
+    )?;
+    let output = sandbox.run(&["--json", "cache", "gc"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    let lock = format!("fetchloom -C \"{}\" lock", other.display());
+    let error = &document["errors"][0];
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.contains(&format!("`{lock}`"))),
+        "{document}"
+    );
+    assert_eq!(error["fix"], lock.as_str(), "{document}");
+    Ok(())
+}
+
 #[test]
 fn verify_reports_unenumerable_object_folders() -> Result {
     let sandbox = Sandbox::new()?;

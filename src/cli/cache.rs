@@ -768,9 +768,14 @@ fn needed_with(
             .and_then(|text| Manifest::parse(text).ok());
         let lock = project.lock().map_err(|err| {
             // a broken lock is fixed in its own project, which is not where gc runs
+            let here = format!("`{}`", crate::suggested::command("lock"));
+            let there = format!(
+                "`fetchloom -C {} lock`",
+                super::shell_word(&project.root.to_string_lossy())
+            );
             let help = match err.help.as_deref() {
                 Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
-                Some(help) => help.to_owned(),
+                Some(help) => help.replace(&here, &there),
                 None => "fix that project's data.lock, then try again".to_owned(),
             };
             Error::new(
