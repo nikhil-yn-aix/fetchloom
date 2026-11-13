@@ -37,7 +37,6 @@ fn proxy_verdicts_are_cached_and_typed_origins_skip_preflight() {
     }
 }
 
-/// a proxy is named by where it is, never by the login its address may hold.
 #[test]
 fn a_proxy_is_shown_without_its_login() {
     let url = Url::parse("https://data.example.org/iris.csv").unwrap();
@@ -62,8 +61,7 @@ fn env(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsStri
     }
 }
 
-/// a value the proxy matcher cannot read would send every request around the proxy, as if the
-/// variable were unset, so it is refused, naming the variable and never a login it holds.
+/// since requests would go around the proxy; it names the variable, never a login it holds.
 #[test]
 fn a_proxy_setting_that_names_no_proxy_is_refused() {
     for (variable, value) in [
@@ -151,9 +149,8 @@ fn proxies(pairs: &[(&'static str, &'static str)]) -> Proxies {
     }
 }
 
-/// a message names the proxy that carries a link, by its address without a login and by the
-/// variable that set it: the one for the link's scheme, else `ALL_PROXY`. a proxy no variable
-/// names came from the system's settings.
+/// the one for the link's scheme, else `ALL_PROXY`, and by its address without a login. a proxy
+/// no variable names came from the system's settings.
 #[test]
 fn a_proxy_is_named_by_the_variable_that_set_it() {
     let https = Url::parse("https://data.example.org/iris.csv").unwrap();
@@ -194,8 +191,7 @@ fn a_proxy_is_named_by_the_variable_that_set_it() {
     );
 }
 
-/// a proxy at an address that drops every packet is checked once a request through it has
-/// waited three seconds, and the check gives up after five more, so it fails in eight seconds
+/// checked once a request through it has waited three seconds, the check giving up five later,
 /// rather than after each try's connect timeout. later requests through it are told at once.
 #[tokio::test(start_paused = true)]
 async fn a_proxy_that_drops_every_packet_is_found_in_seconds() {
@@ -254,7 +250,6 @@ async fn an_unsure_check_is_made_again() {
     assert_eq!(checks.load(Ordering::SeqCst), 2);
 }
 
-/// why a connection to a proxy did not open reads the same on every system.
 #[test]
 fn a_failed_connection_says_why_in_the_same_words_everywhere() {
     use std::io::{Error, ErrorKind};

@@ -349,7 +349,7 @@ async fn a_name_rejected_as_nonexistent_keeps_its_permanent_error_category() {
     use reqwest::dns::Resolve as _;
 
     let resolver = Resolver::new(Typed::default(), false, Reach::Public);
-    // an overlong label fails locally without querying a DNS server.
+    // an overlong label fails locally without querying a DNS server
     let long = "x".repeat(256);
     let Err(error) = resolver.resolve(long.parse().unwrap()).await else {
         panic!("an overlong name cannot resolve");

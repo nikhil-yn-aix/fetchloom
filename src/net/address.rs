@@ -1,9 +1,6 @@
-//! where a request may go. the origin of a link a person typed on the command line, of a mirror
-//! they named and of each entry the `allowed_origins` setting lists may be at any address, a lab
-//! server included. any other URL, from data.toml, data.lock, a source's listing or a redirect,
-//! and another port or scheme of a trusted host too, may not reach private, loopback or
-//! link-local addresses, so a cloned project, a hostile server or a tampered lock cannot reach
-//! into a local network.
+//! where a request may go. only the origins a person typed, named as a mirror or listed in
+//! `allowed_origins` may reach private addresses, so a cloned project, a hostile server or a
+//! tampered lock cannot reach into a local network.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -49,9 +46,8 @@ pub(crate) struct Allowed {
 }
 
 impl Allowed {
-    /// how to let a later run reach `origin` as well: the setting's whole value with `origin`
-    /// added, quoted for the settings file and for one run's variable, or for the variable alone
-    /// while it is the one that sets it.
+    /// how to let a later run reach `origin` too: the setting's whole value with `origin` added,
+    /// for the settings file and one run's variable, or for the variable alone while it sets it.
     pub(crate) fn remedy(&self, origin: &url::Origin) -> String {
         let mut listed: Vec<String> = self
             .origins
@@ -139,8 +135,7 @@ impl Typed {
     }
 
     /// whether `host` may resolve to a private address for a client that keeps `reach`: a proxy
-    /// may for every client, and a host a trusted origin is on for the client that carries
-    /// requests to trusted origins.
+    /// may for every client, a host a trusted origin is on only for the trusted client.
     pub(crate) fn may_resolve_privately(&self, host: &str, reach: Reach) -> bool {
         let key = key(host);
         let hosts = self.hosts();
@@ -293,9 +288,8 @@ impl fmt::Display for Unknown {
 
 impl std::error::Error for Unknown {}
 
-/// whether a failed lookup said the name does not exist, rather than that DNS could not answer
-/// for now. getaddrinfo reports that only through its message on unix: glibc, musl and macos
-/// each word it their own way.
+/// whether a failed lookup said the name does not exist, rather than that DNS could not answer.
+/// on unix only getaddrinfo's message says so, worded differently by glibc, musl and macos.
 fn is_unknown(err: &std::io::Error) -> bool {
     if cfg!(windows) {
         // WSAHOST_NOT_FOUND and WSANO_DATA
@@ -337,9 +331,8 @@ const VARIABLES: [[&str; 2]; 3] = [
     ["ALL_PROXY", "all_proxy"],
 ];
 
-/// the proxy each set variable names. a value the matcher cannot read, which it would pass over
-/// as if the variable were unset, is refused, since a person who set it relies on the proxy and
-/// requests would go around it. an empty value names no proxy.
+/// the proxy each set variable names, none for an empty one. a value the matcher cannot read,
+/// which it would treat as unset, is refused, so requests never go around a proxy a person set.
 ///
 /// # Errors
 ///
@@ -459,11 +452,9 @@ impl Proxies {
         })
     }
 
-    /// checks `url` before it is sent, when a proxy will carry it. the proxy resolves the name
-    /// itself, so fetchloom's resolver never sees the addresses, and a host whose origin is not
-    /// trusted is looked up here first and refused when any of its addresses is private. a name
-    /// this machine cannot resolve is left to the proxy, since some networks resolve names only
-    /// through it. the proxy itself may be reached wherever it is, since a person set it up.
+    /// checks `url` before a proxy carries it: the proxy resolves names itself, so an untrusted
+    /// host is looked up here first and refused when any address is private. a name this machine
+    /// cannot resolve is left to the proxy, since some networks resolve names only through it.
     pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
         let Some(proxy) = url
             .as_str()
@@ -612,9 +603,8 @@ impl reqwest::dns::Resolve for Resolver {
     }
 }
 
-/// addresses that belong to this machine or its local network rather than the internet. the
-/// fake addresses clash and mihomo hand out from 198.18.0.0/15 stay public: those tools answer
-/// every name with one, so refusing them would refuse every download.
+/// addresses of this machine or its local network rather than the internet. 198.18.0.0/15 stays
+/// public: clash and mihomo answer every name with a fake address there.
 pub(crate) fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -652,7 +642,7 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
     }
 }
 
-// IPv6 documentation classification is still unstable in std.
+// IPv6 documentation classification is still unstable in std
 fn documentation(ip: Ipv6Addr) -> bool {
     let [first, second, ..] = ip.segments();
     (first == 0x2001 && second == 0x0db8) || (first == 0x3fff && second & 0xf000 == 0)
@@ -676,9 +666,8 @@ fn nat64(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     (ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| Ipv4Addr::new(a, b, c, d))
 }
 
-/// whether `ip` sits in the local-use NAT64 prefix `64:ff9b:1::/48`. a network picks its own prefix
-/// length inside it, and with it where the IPv4 address sits, so no address there can be read
-/// for sure and every one is treated as private.
+/// whether `ip` sits in the local-use NAT64 prefix `64:ff9b:1::/48`, where each network places the
+/// IPv4 address itself, so every address there counts as private.
 fn local_nat64(ip: Ipv6Addr) -> bool {
     ip.segments()[..3] == [0x64, 0xff9b, 1]
 }
@@ -809,9 +798,7 @@ mod tests {
         );
     }
 
-    /// a name a trusted origin is on may resolve privately for the client that carries requests
-    /// to trusted origins alone, so the host's other origins, sent by the other client, cannot
-    /// reach this machine or its network.
+    /// so the host's other origins, sent by the other client, cannot reach this machine's network.
     #[test]
     fn a_trusted_name_resolves_privately_for_the_trusted_client_alone() {
         let typed = Typed::default();
@@ -824,9 +811,8 @@ mod tests {
         assert_eq!(on("other.local"), Vec::<String>::new());
     }
 
-    /// a refusal quotes the whole value `allowed_origins` needs to lift it: for the settings
-    /// file, with what it lists already, and for one run's variable, or for the variable alone
-    /// while it sets the list, since it wins over the file then.
+    /// for the settings file, with what it lists already, and for one run's variable, or for the
+    /// variable alone while it sets the list, since it then wins over the file.
     #[test]
     fn a_refusal_quotes_the_whole_setting_that_lifts_it() {
         let origin = Url::parse("http://10.0.0.5:9001/a.zip").unwrap().origin();
@@ -854,10 +840,8 @@ mod tests {
         );
     }
 
-    /// an origin `allowed_origins` lists, a link a person types and a mirror they name are each
-    /// trusted at that origin alone. another port or scheme of the host is a url nobody typed: a
-    /// private address written out is refused at once, and a name is left to the addresses it
-    /// resolves to.
+    /// another port or scheme of the host is a url nobody typed: a private address written out is
+    /// refused at once, and a name is left to the addresses it resolves to.
     #[test]
     fn a_trusted_origin_trusts_nothing_else_on_its_host() {
         let typed = Typed::default();

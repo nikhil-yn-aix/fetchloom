@@ -98,9 +98,8 @@ impl Proxies {
         }
     }
 
-    /// waits while a request through `carrier` has no answer. once it has waited [`GRACE`], the
-    /// proxy is checked, and this ends only with why the proxy cannot be reached. with a proxy
-    /// that answers, the request is left to end on its own.
+    /// waits while a request through `carrier` has no answer, checking the proxy after [`GRACE`]:
+    /// it ends only with why the proxy cannot be reached, and never for one that answers.
     pub(crate) async fn watch(&self, carrier: &Carrier) -> String {
         if self.verdict(carrier).is_none() {
             tokio::time::sleep(GRACE).await;
