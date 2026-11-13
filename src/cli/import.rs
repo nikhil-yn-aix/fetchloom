@@ -1,7 +1,6 @@
-//! `add <path>`: files on this machine pinned by their bytes. every plain file below a folder is
-//! found without following a link, checked by name as an archive's members are, and copied into
-//! the cache, hashed as it is copied. the files themselves are only read: never changed, moved or
-//! linked, since a link to the cache's copy would make a person's file read-only.
+//! `add <path>`: files on this machine pinned by their bytes, found without following a link and
+//! copied into the cache. they are only read, never changed, moved or linked, since a link to the
+//! cache's copy would make a person's file read-only.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry as Slot;
@@ -25,15 +24,8 @@ use crate::{name, place, units};
 /// the longest path a file may have below the folder, in bytes, as an archive's members may.
 const LONGEST_PATH: usize = 4096;
 
-/// the file or folder `typed`, a path on this machine as [`local::is_path`] reads it, names: from
-/// the root, from `here`, from the home folder `home` for a leading `~`, or as a `file:` link
-/// gives it. links in the path are followed, since the person named it, and the result names no
-/// link.
-///
-/// # Errors
-///
-/// nothing is there, with help naming the one name a typo away in its folder when there is one,
-/// `~` names another user's home folder, or a `file:` link names a file on another machine.
+/// the path `typed` names, as [`local::is_path`] reads it: from `here`, from `home` for a leading
+/// `~`, or as a `file:` link gives it, with links followed, since the person named it.
 pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<PathBuf, Error> {
     let typed = typed.trim();
     let path = if typed
@@ -95,8 +87,7 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
     })
 }
 
-/// the most names [`near`] reads in one folder. a folder holding more gets no guess, rather than
-/// a slow one.
+/// the most names [`near`] reads in one folder; more gets no guess rather than a slow one.
 const MOST_NAMES: usize = 10_000;
 
 /// `typed` with its last name changed to the one name in its folder a typo away from it, when
@@ -130,12 +121,7 @@ fn near(typed: &str, path: &Path) -> Option<String> {
 }
 
 /// refuses to import `start`, a path with no link in it, where it overlaps what fetchloom keeps:
-/// a folder holding the project at `root`, anything in its data folder `data`, which placing
-/// writes, and the cache at `cache`. `shown` is how messages name `start`.
-///
-/// # Errors
-///
-/// `start` overlaps one of them.
+/// a folder holding the project, anything in the data folder, which placing writes, or the cache.
 pub(super) fn refuse_overlap(
     start: &Path,
     shown: &str,
@@ -204,7 +190,6 @@ pub(super) struct Walked {
 }
 
 impl Walked {
-    /// what the files take, all together.
     pub(super) fn bytes(&self) -> u64 {
         self.files
             .iter()
@@ -212,15 +197,9 @@ impl Walked {
     }
 }
 
-/// the plain files at `start`, a folder or one file without a link in its path, that `entry`'s
-/// patterns keep, each checked by name. `shown` is how messages name `start`. repository metadata
-/// is left out unseen; links and special files are left out, never followed, and named in
-/// [`Walked::skipped`].
-///
-/// # Errors
-///
-/// a folder cannot be read, a kept name cannot be pinned on every machine, a select pattern keeps
-/// nothing, more files are kept than one dataset may list, or a stop is asked.
+/// the plain files at `start`, a folder or one file with no link in its path, that `source`'s
+/// patterns keep, each checked by name. repository metadata is left out unseen, and links and
+/// special files are never followed but named in [`Walked::skipped`].
 pub(super) fn walk(
     start: &Path,
     shown: &str,
@@ -325,8 +304,7 @@ pub(super) fn walk(
     Ok(walked)
 }
 
-/// keeps the files `source`'s patterns select and do not exclude. a select pattern that keeps
-/// nothing is a mistake worth stopping for.
+/// a select pattern that keeps nothing is a mistake worth stopping for.
 fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> {
     let matches = |globs: &[Glob], path: &str| globs.iter().any(|glob| glob.matches(path));
     if let Some(glob) = source
@@ -365,9 +343,8 @@ fn composed(path: &str) -> String {
     }
 }
 
-/// refuses a name data.lock could not pin for every machine, as an archive's member is refused:
-/// one that holds a control character or a `\`, names a drive, is too long, cannot be stored here,
-/// or is one name with another on disks that ignore case or unicode composition.
+/// refuses a name data.lock could not pin for every machine, as an archive's member is refused,
+/// including one that is another's name on disks that ignore case or unicode composition.
 fn checked_names(files: &[Found], shown: &str) -> Result<(), Error> {
     let mut seen: HashMap<String, (&str, bool)> = HashMap::new();
     for file in files {
@@ -408,7 +385,7 @@ fn checked_names(files: &[Found], shown: &str) -> Result<(), Error> {
                     } else if was_folder || is_folder {
                         format!("{shown} holds \"{named}\" both as a file and as a folder")
                     } else {
-                        // a folder holds no name twice, so these two differed until they were composed
+                        // a folder holds no name twice, so these two differed until composed
                         format!(
                             "{shown} holds two files named \"{named}\", their unicode written two ways, which macos disks see as one name"
                         )
@@ -422,7 +399,6 @@ fn checked_names(files: &[Found], shown: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// the refusal of `path` below `shown`, for `reason`.
 fn refused(shown: &str, path: &str, reason: &str) -> Error {
     Error::new(
         Kind::SourceInvalid,
@@ -431,13 +407,8 @@ fn refused(shown: &str, path: &str, reason: &str) -> Error {
     .help("rename it, or leave it out with --exclude")
 }
 
-/// refuses, before any byte is copied, files `walked` found in `shown` that the cache's disk
-/// cannot take: one larger than FAT32 holds there, and, unless the person said yes, more than
-/// the disk has free, which a disk that clones them would not need.
-///
-/// # Errors
-///
-/// a file is too large for the cache's disk, or the disk lacks the room and nobody said yes.
+/// refuses, before any byte is copied, a file too large for the cache's disk, as on FAT32, and,
+/// unless the person said yes, more than it has free, which a disk that clones would not need.
 pub(super) fn room(
     context: &Context,
     cache: &Cache,
@@ -468,21 +439,15 @@ pub(super) fn room(
     )
 }
 
-/// the files `found` copied into the cache and pinned by path, size and SHA-256, in `found`'s
-/// order, with no link: no source has an import's bytes.
+/// the files copied into the cache, in the order found, pinned with no link: no source has them.
 pub(super) struct Copied {
     pub(super) files: Vec<LockedFile>,
     /// whether every file is a clone sharing its blocks, which takes no room of its own.
     pub(super) cloned: bool,
 }
 
-/// copies every file `walked` found into the cache on the placement workers, as many at once as
-/// the threads setting allows, and pins each. nothing is in the cache under its hash until every
-/// file is on disk, and a failure or a stop leaves none of them there.
-///
-/// # Errors
-///
-/// a file cannot be read, the cache cannot take it, or a stop is asked.
+/// copies every file `walked` found into the cache and pins each. none is in the cache under its
+/// hash until every one is on disk, so a failure or a stop leaves none of them there.
 pub(super) fn into_cache(
     context: &Context,
     cache: &Cache,
@@ -550,7 +515,6 @@ pub(super) fn into_cache(
 struct Sealing {
     /// each taken once to be put in place.
     sealed: Vec<Mutex<Option<Sealed>>>,
-    /// whether every copy is a clone.
     cloned: bool,
 }
 
@@ -634,7 +598,6 @@ fn sealed(
     Ok(Sealing { sealed, cloned })
 }
 
-/// where `file` is below `root`, the folder a walk found it in.
 fn below<'f>(root: &Path, file: &'f Found) -> std::io::Result<&'f Path> {
     file.source
         .strip_prefix(root)
@@ -652,7 +615,6 @@ impl Beneath {
         std::fs::File::open(folder).map(Beneath)
     }
 
-    /// the plain file at `relative` below the folder.
     fn open(&self, relative: &Path) -> std::io::Result<std::fs::File> {
         use std::os::fd::AsFd as _;
 
@@ -700,9 +662,8 @@ impl Beneath {
     }
 }
 
-/// the pin of `files`, imported for the dataset `name` as data.toml's `source` gives it. it names
-/// no source to fetch from: relocking learns what its archives unpack to, and stamps when it was
-/// pinned.
+/// the pin of `files` imported for `name`, naming no source to fetch from. relocking learns what
+/// its archives unpack to and stamps when it was pinned.
 pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Locked {
     Locked {
         name: name.to_owned(),
@@ -719,9 +680,8 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
     }
 }
 
-/// the first way the files a folder holds, `found`, differ from `pinned`, the files data.lock pins
-/// for a dataset, both sorted by path: a file only one of them has, or another size. none when
-/// they may hold the same bytes, which only hashing tells.
+/// the first way `found` differs from `pinned`, both sorted by path: a file only one has, or
+/// another size. none when they may hold the same bytes, which only hashing tells.
 pub(super) fn first_difference(found: &[Found], pinned: &[LockedFile]) -> Option<String> {
     let mut found = found.iter().peekable();
     let mut pinned = pinned.iter().peekable();
@@ -785,10 +745,6 @@ mod tests {
             .clone()
     }
 
-    /// a path whose last name is one typo from a single name in its folder is told with that
-    /// name, as a command to paste, quoted for a shell. a name two others are as near to, a
-    /// folder that cannot be read, or a name the folder holds as a broken link gets no guess,
-    /// and only that one folder is read.
     #[test]
     fn a_missing_path_names_the_one_near_name_in_its_folder() {
         let dir = tempfile::tempdir().unwrap();
@@ -912,9 +868,7 @@ mod tests {
         assert_eq!(walked.skipped, ["more", "queue", "secret.txt"]);
     }
 
-    /// what the system writes into folders by itself is no data: finder's `.DS_Store`, the `._`
-    /// files a mac leaves on other disks and windows' thumbnails are left out and named, and a
-    /// folder of them is not read.
+    /// they are named, and a folder of them, as `__MACOSX`, is not read.
     #[test]
     fn files_the_system_makes_are_left_out() {
         let dir = tempfile::tempdir().unwrap();

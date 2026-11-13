@@ -1,9 +1,6 @@
-//! `fetchloom export`: the SHA-256 of each file a project places, or the link and SHA-256 of each
-//! file it downloads, in forms other tools read: `sha256sum -c`, a list of links, or an aria2c
-//! input file. it reads data.toml, data.lock and the cache's records of what each archive
-//! unpacked to, and asks no server anything. a text form is complete or not written at all, but
-//! for the datasets it has nothing to write for, which it names; `--json` lists everything it
-//! knows and names what it does not.
+//! `fetchloom export`: the SHA-256 of placed files, or the link and SHA-256 of downloaded ones, as
+//! `sha256sum -c` input, a list of links or an aria2c input file, asking no server. a text form is
+//! complete or not written, but for datasets with nothing to write, which it names.
 
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
@@ -155,8 +152,6 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     Ok(report)
 }
 
-/// says once how many files a list of links leaves out because they were imported from a
-/// folder, which no link holds.
 fn tell_imported(output: &crate::output::Output, report: &Report, format: Format) {
     if format == Format::Sha256 || report.imported.is_empty() {
         return;
@@ -189,9 +184,7 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
     );
 }
 
-/// the datasets `names`, or every dataset when none is named, that `format` never lists: a
-/// recipe's result or an import has no link, and a dataset with `place = false` no file in the
-/// data folder.
+/// the datasets `names`, or every one when none is named, that `format` never lists.
 fn left_out(manifest: &Manifest, names: &[String], format: Format) -> Vec<LeftOut> {
     manifest
         .datasets
@@ -212,8 +205,7 @@ fn left_out(manifest: &Manifest, names: &[String], format: Format) -> Vec<LeftOu
         .collect()
 }
 
-/// says on one line which recipes' results a list of links leaves out, or which datasets with
-/// `place = false` a list of checksums does. imports have their own warning, with a count.
+/// imports are left to [`tell_imported`], whose warning counts their files.
 fn tell_left_out(output: &crate::output::Output, report: &Report) {
     let named = |reason: Reason| -> Vec<&str> {
         report
@@ -246,9 +238,7 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
     }
 }
 
-/// what the datasets `names`, or every dataset when none is named, pin: the files placed from
-/// `lock`, archive members as the cache recorded them, and the files downloaded, with what is not
-/// known here.
+/// what the datasets `names`, or every one when none is named, pin, and what is not known here.
 fn inventory(
     manifest: &Manifest,
     mut lock: Lock,
@@ -320,7 +310,6 @@ fn inventory(
     Ok(report)
 }
 
-/// adds to `report` each file `lock` pins for a dataset, with its link, or why it has none.
 fn sources(manifest: &Manifest, lock: &Lock, report: &mut Report) -> Result<(), Error> {
     for dataset in &lock.datasets {
         let folder = plan::subfolder(manifest, &dataset.name);
@@ -366,9 +355,8 @@ fn sources(manifest: &Manifest, lock: &Lock, report: &mut Report) -> Result<(), 
     Ok(())
 }
 
-/// `text`, a link data.lock gives a file, as export and list write it, or why it is not written:
-/// fetchloom never pins a link with a login or a secret, nor one a line cannot hold, so such a
-/// link was written by someone else.
+/// `text` as export and list write a link, or why not: fetchloom never pins a link with a login
+/// or a secret, or one a line cannot hold, so such a link was written by someone else.
 pub(super) fn link(text: &str) -> Result<String, &'static str> {
     if text.contains(|character: char| character.is_whitespace() || name::is_control(character)) {
         return Err("holds a space or a control character");
@@ -386,8 +374,7 @@ pub(super) fn link(text: &str) -> Result<String, &'static str> {
     Ok(url.into())
 }
 
-/// refuses a text answer that would leave out what `format` needs: a dataset not pinned, files
-/// inside an archive this machine never unpacked, or a link that is not written.
+/// refuses a text answer that would leave out what `format` needs.
 fn complete(report: &Report, format: Format) -> Result<(), Error> {
     if !report.stale.is_empty() {
         let error = Error::new(Kind::Outdated, "data.lock is out of date with data.toml");
@@ -492,9 +479,8 @@ fn render(report: &Report, format: Format) -> (String, u64) {
     (text, count)
 }
 
-/// writes `text` as the file at `path`: in full under a hidden name beside it, flushed, then
-/// given the name without replacing anything there. with `force`, a file already there is moved
-/// aside until the new one has its name. returns the file's absolute path.
+/// writes `text` in full under a hidden name beside `path`, flushed, then names it without
+/// replacing anything; with `force`, a file there is moved aside until the new one has its name.
 fn publish(path: &Path, text: &str, force: bool) -> Result<PathBuf, Error> {
     let writing = || format!("could not write {}", path.display());
     let target = std::path::absolute(path).map_err(|err| Error::io(writing(), &err))?;
@@ -563,8 +549,6 @@ fn publish(path: &Path, text: &str, force: bool) -> Result<PathBuf, Error> {
     Ok(target)
 }
 
-/// a new file in `folder` under a hidden name made from `name`, holding `bytes` flushed to disk,
-/// and its path.
 fn write_hidden(folder: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     loop {
         let hidden = folder.join(format!(".{name}.{:08x}.tmp", fastrand::u32(..)));
