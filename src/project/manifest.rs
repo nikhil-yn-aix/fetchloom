@@ -48,7 +48,6 @@ pub(crate) struct Manifest {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Entry {
-    /// where the dataset comes from: a source it is fetched from, or a recipe that makes it.
     pub(crate) origin: Origin,
     pub(crate) copy: bool,
     /// where the dataset lands inside the data folder, when not under its name: a folder, or
@@ -79,9 +78,8 @@ pub(crate) struct Source {
     pub(crate) members: Members,
 }
 
-/// what a dataset keeps of the archives it unpacks: a table for each archive under its path as
-/// data.lock gives it, or under a glob key, as `"shard-*.tar"`, for every archive the key
-/// matches.
+/// what a dataset keeps of the archives it unpacks: a table per archive, keyed by its path as
+/// data.lock gives it or by a glob, as `"shard-*.tar"`, for every archive that matches.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Members {
     tables: BTreeMap<String, MemberFilter>,
@@ -102,8 +100,7 @@ impl Members {
         Members::default()
     }
 
-    /// adds `filter` under `key`. a key with `*`, `?` or `[` that reads as a pattern is a glob;
-    /// any other key names one archive.
+    /// adds `filter` under `key`, a glob when it reads as a pattern, else one archive's path.
     fn insert(&mut self, key: String, filter: MemberFilter) {
         if key.contains(['*', '?', '['])
             && let Ok(glob) = Glob::new(&key)
@@ -134,14 +131,9 @@ impl Members {
         }
     }
 
-    /// the table that chooses the files of the archive at `archive`, its path in the dataset
-    /// `dataset` as data.lock gives it, with its key: the archive's own, which wins, or else the
-    /// one glob key that matches the path. none when no key does.
-    ///
-    /// # Errors
-    ///
-    /// `project.invalid` naming both keys and the archive, when two glob keys match it and it
-    /// has no table of its own.
+    /// the table for `archive`, its path in `dataset` as data.lock gives it, with its key: the
+    /// archive's own, which wins, or else the one glob key that matches. `project.invalid` when
+    /// two glob keys match and it has no table of its own.
     pub(crate) fn of(
         &self,
         dataset: &str,
@@ -169,9 +161,8 @@ impl Members {
         }
     }
 
-    /// the table [`Members::of`] finds for `archive`, for a reader that cannot refuse, as gc
-    /// deciding what to keep: none when two glob keys match it, so every file of it counts.
-    /// planning refuses that data.toml.
+    /// [`Members::of`] for a reader that cannot refuse, as gc deciding what to keep: none when two
+    /// glob keys match, so every file counts. planning refuses that data.toml.
     pub(crate) fn get(&self, archive: &str) -> Option<&MemberFilter> {
         match self.found(archive) {
             Found::One(key) => Some(&self.tables[key]),
@@ -179,8 +170,7 @@ impl Members {
         }
     }
 
-    /// the tables, in key order, whose keys neither name one of `archives` nor match one as a
-    /// pattern.
+    /// the tables, in key order, whose keys neither name nor match any of `archives`.
     pub(crate) fn unmatched<'m>(
         &'m self,
         archives: &'m [&str],
@@ -207,9 +197,8 @@ impl<'m> IntoIterator for &'m Members {
     }
 }
 
-/// the files a dataset keeps of each archive its key covers, matched against the archive's own
-/// paths, its top folder included, before placing strips anything. they change where files go,
-/// not what data.lock pins, so they stay out of the dataset's spec.
+/// the files kept of each archive the key covers, by their paths in it, top folder included.
+/// they change where files go, not what data.lock pins, so they stay out of the spec.
 #[derive(Clone, Debug)]
 pub(crate) struct MemberFilter {
     pub(crate) select: glob::Set,
@@ -310,9 +299,8 @@ impl Manifest {
     }
 }
 
-/// where data.toml may hold a secret, sorted and merged: each dataset's ref, which can carry a
-/// key in its query, and its env, which should not but may. a message cites such a line by its
-/// number alone.
+/// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key,
+/// and each env, which should not but may. a message cites such a line by number alone.
 fn private(root: &Table) -> Vec<Range<usize>> {
     let mut spans = Vec::new();
     let datasets = root.get("datasets").and_then(Item::as_table_like);
@@ -486,9 +474,8 @@ impl Reader<'_> {
         })
     }
 
-    /// the refusal of `table`, the dataset `name` in `datasets` with members tables alone, as
-    /// when only the dataset's own table was renamed. the new name is told only when a single
-    /// other dataset's ref ends in the file of an archive the tables name.
+    /// the refusal of `name`, a dataset with members tables alone, as when only its own table was
+    /// renamed; it names the new one when a single other ref ends in a file those tables name.
     fn left_members(
         &self,
         datasets: &dyn TableLike,
@@ -601,9 +588,8 @@ impl Reader<'_> {
         })
     }
 
-    /// the tables under `members` that choose the files of each archive, by its path. they
-    /// choose among files fetchloom unpacks, so a dataset that keeps its archives packed refuses
-    /// them.
+    /// the tables under `members`, by archive path. they choose among files fetchloom unpacks,
+    /// so a dataset that keeps its archives packed refuses them.
     fn members(&self, table: &dyn TableLike, name: &str, extract: bool) -> Result<Members, Error> {
         let Some(item) = table.get("members") else {
             return Ok(Members::new());
@@ -670,8 +656,7 @@ impl Reader<'_> {
         Ok(members)
     }
 
-    /// the recipe of a dataset made from others, which `table` gives with from and run. the
-    /// datasets it reads are checked once every dataset is read.
+    /// the recipe `table` gives; the datasets it reads are checked once every dataset is read.
     fn recipe(&self, table: &dyn TableLike, name: &str) -> Result<Recipe, Error> {
         let span = |key: &str| table.key(key).and_then(Key::span);
         let first = RECIPE_KEYS
@@ -792,8 +777,7 @@ impl Reader<'_> {
         Ok(code)
     }
 
-    /// a recipe's variables: a table of strings, named as every system takes them, none of them
-    /// fetchloom's own or a secret.
+    /// a recipe's env: strings under portable names, none fetchloom's own or a secret.
     fn variables(&self, item: &Item, name: &str) -> Result<BTreeMap<String, String>, Error> {
         let table = item.as_table_like().ok_or_else(|| {
             self.error(
@@ -1139,8 +1123,7 @@ impl Reader<'_> {
     }
 }
 
-/// whether every system takes `variable` as a name: letters, digits and `_`, not starting with a
-/// digit, as POSIX names them.
+/// whether every system takes `variable` as a name, as POSIX names them.
 fn portable(variable: &str) -> bool {
     variable
         .bytes()
@@ -1151,9 +1134,8 @@ fn portable(variable: &str) -> bool {
             .is_some_and(|first| !first.is_ascii_digit())
 }
 
-/// whether an uppercase variable name looks like it holds a secret: a word of it ends in TOKEN,
-/// holds a word of [`SECRETS`], or two words name a key, as `API_KEY`. `MAX_TOKENS` and
-/// `TOKENIZERS_PARALLELISM` count tokens of text, so they stay usable.
+/// whether an uppercase variable name looks like it holds a secret. a word must end in TOKEN, so
+/// `MAX_TOKENS` and `TOKENIZERS_PARALLELISM`, which count tokens of text, stay usable.
 fn secret(upper: &str) -> bool {
     let words: Vec<&str> = upper.split('_').collect();
     words.iter().any(|word| {
@@ -1165,8 +1147,7 @@ fn secret(upper: &str) -> bool {
         .any(|pair| pair[1] == "KEY" && KEYS.contains(&pair[0]))
 }
 
-/// whether a folder in data.toml is shell shorthand a person may expect to be expanded: it
-/// starts with `~` or `$`, or names a variable such as `$SCRATCH` or `${SCRATCH}`.
+/// whether a folder is shell shorthand a person may expect expanded, as `~` or `${SCRATCH}`.
 fn shorthand(folder: &str) -> bool {
     folder.starts_with(['~', '$'])
         || folder
@@ -1215,9 +1196,8 @@ impl NewDataset<'_> {
     }
 }
 
-/// data.toml's text with one more dataset, or a new file holding just that dataset. it goes
-/// before the dataset whose name follows its own, so two people adding different datasets rarely
-/// change the same lines.
+/// data.toml's text with one more dataset, or a new file of just it. it goes before the dataset
+/// whose name follows, so two people adding different datasets rarely change the same lines.
 pub(crate) fn with_dataset(
     text: &str,
     name: &str,
@@ -1369,9 +1349,8 @@ fn make_room(table: &mut Table, room: &[(isize, usize)]) {
     }
 }
 
-/// puts `table` among the datasets as `name`, before the dataset whose name follows it, or after
-/// them all, with the comments touching its header. false when the datasets are written inline,
-/// where no table can go.
+/// puts `table` as the dataset `name` before the one whose name follows, or last, with the
+/// comments touching its header; false when the datasets are written inline.
 fn put(document: &mut DocumentMut, name: &str, mut table: Table) -> bool {
     let blank_line_first = !document.as_table().is_empty();
     let datasets = document.entry("datasets").or_insert_with(|| {
@@ -1394,8 +1373,7 @@ fn put(document: &mut DocumentMut, name: &str, mut table: Table) -> bool {
     true
 }
 
-/// the dataset table whose name follows `name` most closely. none when `name` comes last or the
-/// others are written inline.
+/// the dataset table whose name follows `name` most closely; none if last or inline.
 fn successor(datasets: &Table, name: &str) -> Option<String> {
     datasets
         .iter()
@@ -1410,9 +1388,8 @@ fn successor(datasets: &Table, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// moves the dataset `name`, just put last, to just before the dataset `next`, with `touching`,
-/// its own comments, above its header. a note a blank line above `next`, such as one at the top
-/// of the file, then stays above both.
+/// moves the dataset `name`, just put last, before `next`, with `touching`, its own comments,
+/// above its header; a note standing apart above `next`, as at the file's top, stays above both.
 fn insert_before(document: &mut DocumentMut, name: &str, next: &str, touching: &str) {
     let Some(following) = document
         .get("datasets")
@@ -1517,13 +1494,8 @@ pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
 }
 
 /// data.toml's text with `patterns` in the `exclude` of the dataset `name`, or of its members
-/// table for `archive`, each once, keeping comments, order and spacing. a table for an archive
-/// gets a header of its own under the dataset's, as `[datasets.pets.members."pets.zip"]`.
-///
-/// # Errors
-///
-/// `project.invalid` for a dataset or a members table written inline, which gets no new keys,
-/// as `add` refuses to add to inline datasets.
+/// table for `archive`, under a header of its own as `[datasets.pets.members."pets.zip"]`, each
+/// once. `project.invalid` for a dataset or members table written inline, as `add` refuses.
 pub(crate) fn with_exclusions(
     text: &str,
     name: &str,
@@ -1535,7 +1507,7 @@ pub(crate) fn with_exclusions(
     Ok(document.to_string())
 }
 
-/// `document` with `patterns` in an exclude, as [`with_exclusions`] says.
+/// the edit [`with_exclusions`] makes, on `document`.
 fn exclusions(
     document: &mut DocumentMut,
     name: &str,
@@ -1578,8 +1550,7 @@ fn exclusions(
     Ok(())
 }
 
-/// the refusal to add to `what`, a part of data.toml written inline, which gets no new keys, as
-/// `add` refuses to add to inline datasets.
+/// the refusal to add keys to `what`, a part of data.toml written inline.
 fn inline(what: &str) -> Error {
     Error::new(
         Kind::ProjectInvalid,
@@ -1590,16 +1561,10 @@ fn inline(what: &str) -> Error {
     ))
 }
 
-/// data.toml's text with the members table of the dataset `name` under the glob key `from`
-/// copied under `archive`, its select and exclude as written, without the comments around them
-/// and the select patterns in `unmatched`, which match no file of the archive. a table under an
-/// archive's own path wins over a glob, so the one drop writes for an archive a glob covers
-/// starts as a copy, and the archive keeps what the glob chose; a pattern that matches nothing
-/// there keeps nothing, and an archive's own table refuses it.
-///
-/// # Errors
-///
-/// `project.invalid` for a dataset or a members table written inline, as [`with_exclusions`].
+/// data.toml's text with `name`'s members table under the glob key `from` copied under `archive`
+/// without its comments: an archive's own table wins over a glob, so the archive keeps what the
+/// glob chose. select patterns in `unmatched` match nothing there, which an own table refuses, so
+/// they are left out. fails as [`with_exclusions`] does on a part written inline.
 pub(crate) fn with_members_copied(
     text: &str,
     name: &str,
@@ -1612,7 +1577,7 @@ pub(crate) fn with_members_copied(
     Ok(document.to_string())
 }
 
-/// `document` with a members table copied, as [`with_members_copied`] says.
+/// the edit [`with_members_copied`] makes, on `document`.
 fn members_copied(
     document: &mut DocumentMut,
     name: &str,
@@ -1661,8 +1626,7 @@ fn members_copied(
     Ok(())
 }
 
-/// adds each of `patterns` that `exclude` in `table` lacks, a list of more than one written a
-/// pattern per line.
+/// adds the `patterns` the exclude in `table` lacks, writing more than one a pattern per line.
 fn exclude_once(table: &mut Table, patterns: &[String]) {
     let mut list = match table.get("exclude").and_then(Item::as_value) {
         Some(Value::Array(list)) => list.clone(),
@@ -1735,7 +1699,7 @@ pub(crate) fn without_members(text: &str, name: &str, archive: &str) -> Result<S
     Ok(document.to_string())
 }
 
-/// `document` without a members table, as [`without_members`] says.
+/// the edit [`without_members`] makes, on `document`.
 fn members_out(document: &mut DocumentMut, name: &str, archive: &str) {
     if let Some(dataset) = document
         .get_mut("datasets")
@@ -1776,12 +1740,8 @@ pub(crate) enum Narrowing<'a> {
     WithoutMembers { name: &'a str, archive: String },
 }
 
-/// data.toml's text with each change made in turn, read and written once however many there are.
-///
-/// # Errors
-///
-/// as the change that meets a part of data.toml written inline fails, and the changes after it
-/// are not made.
+/// data.toml's text with each change made in turn, read and written once however many there
+/// are. it fails as the first change meeting a part written inline does, making none after it.
 pub(crate) fn narrowed(text: &str, changes: &[Narrowing<'_>]) -> Result<String, Error> {
     if changes.is_empty() {
         return Ok(text.to_owned());
@@ -1833,7 +1793,7 @@ fn narrowed_one_at_a_time(text: &str, changes: &[Narrowing<'_>]) -> Result<Strin
     Ok(text)
 }
 
-/// takes the dataset `name` out of `document`, as [`without_dataset`] says.
+/// the edit [`without_dataset`] makes, on `document`.
 fn remove(document: &mut DocumentMut, name: &str) {
     let Some(datasets) = document
         .get_mut("datasets")
@@ -1875,9 +1835,8 @@ fn remove(document: &mut DocumentMut, name: &str) {
     }
 }
 
-/// data.toml's text with the dataset `name` as `other`, the text of another data.toml, writes it,
-/// comments touching its header included: in place of the one `text` has, under any note above
-/// that one, or else before the dataset whose name follows it.
+/// data.toml's text with the dataset `name` as the data.toml `other` writes it, with the comments
+/// touching its header: in place of `text`'s, under any note above it, or before its successor.
 pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
     let table = copied(&editable(other)?, name)?;
@@ -1969,9 +1928,8 @@ fn one_at_a_time(text: &str, sources: &[&str], edits: &[(&str, Edit)]) -> Result
     Ok(text)
 }
 
-/// the text [`with_datasets_from`] writes, from one reading of `text` and of each source used,
-/// for data.toml laid out as most are; none for any other layout, or a copy that is not a plain
-/// table, which the edits one at a time then write alike, errors included.
+/// [`with_datasets_from`]'s text from one reading of `text` and each source used; none for an
+/// unusual layout or a copy that is not a plain table, left to [`one_at_a_time`], errors and all.
 fn edited_at_once(text: &str, sources: &[&str], edits: &[(&str, Edit)]) -> Option<String> {
     if edits.is_empty() {
         return None;
@@ -2004,10 +1962,8 @@ fn edited_at_once(text: &str, sources: &[&str], edits: &[(&str, Edit)]) -> Optio
     Some(document.to_string())
 }
 
-/// whether `document` is laid out so that edits made to it at once write what the same edits
-/// write with data.toml written and read again after each: only tables at the top, none dotted
-/// nor in an array, each dataset a table with its own header, and every table written in the
-/// order its key is held.
+/// whether edits made to `document` at once write what they would with data.toml read again
+/// after each: only tables, none dotted or in an array, datasets headed, all in key order.
 fn plain(document: &DocumentMut) -> bool {
     if !document.iter().all(|(_, item)| item.is_table()) {
         return false;
@@ -2048,9 +2004,8 @@ fn in_order(table: &Table, last: &mut Option<isize>) -> bool {
     })
 }
 
-/// gives the dataset `name`, put after all the others, the place reading data.toml again gives
-/// it: just after the last table under the datasets, or after every table when it is the only
-/// dataset.
+/// gives `name`, put after the other datasets, the place reading data.toml again would: just
+/// after the last table under the datasets, or after every table when it is the only one.
 fn place_last(document: &mut DocumentMut, name: &str) {
     let Some(datasets) = document.get("datasets").and_then(Item::as_table) else {
         return;
@@ -2218,8 +2173,7 @@ pub(crate) mod tests {
         READS.set(READS.get() + 1);
     }
 
-    /// how many times this thread has read a data.toml's text whole, to edit it or to read its
-    /// datasets.
+    /// how many times this thread has read a data.toml's text whole, to edit or read it.
     pub(crate) fn reads() -> usize {
         READS.get()
     }
@@ -2270,8 +2224,7 @@ pub(crate) mod tests {
 
     const PETS: &str = "[datasets.pets]\nref = \"https://example.org/pets.zip\"\n";
 
-    /// a members table keeps or leaves out the files of one archive by their paths inside it,
-    /// top folder and all, whichever way the table is written.
+    /// by their paths inside it, top folder and all, whichever way the table is written.
     #[test]
     fn members_tables_choose_files_inside_each_archive() {
         let manifest = parse(&format!(
@@ -2320,8 +2273,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// member filters change where files go, not what data.lock pins, so they stay out of a
-    /// dataset's spec: editing them needs no network and `sync --locked` still passes.
+    /// so editing them needs no network and `sync --locked` still passes.
     #[test]
     fn member_filters_stay_out_of_the_spec() {
         let plain = parse(PETS);
@@ -2470,9 +2422,8 @@ pub(crate) mod tests {
         refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");
     }
 
-    /// data.toml comes with a cloned repository, so fetchloom never expands `~` or a variable in
-    /// it, and a folder that only makes sense expanded is refused rather than made under its
-    /// literal name.
+    /// data.toml comes with a cloned repository, so `~` or a variable in it is never expanded,
+    /// and a folder that only makes sense expanded is refused, not made under its literal name.
     #[test]
     fn folders_are_taken_as_written_so_shell_shorthand_is_refused() {
         for (key, table, inside) in [
@@ -2605,9 +2556,8 @@ pub(crate) mod tests {
         assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
     }
 
-    /// datasets added together land where each would land added alone, one after another, in
-    /// any order: comments, notes and blank lines included, and those that go before the same
-    /// dataset in name order.
+    /// one after another, in any order, comments, notes and blank lines included; those that go
+    /// before the same dataset land in name order.
     #[test]
     fn datasets_added_together_land_as_each_would_alone() {
         let texts = [
@@ -2666,8 +2616,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// a new dataset goes before the one whose name follows it, so two people adding different
-    /// datasets rarely change the same lines of data.toml.
     #[test]
     fn add_inserts_in_sorted_order() {
         let add = |text: &str, name: &str| {
@@ -2703,8 +2651,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// a merge takes a dataset from the other side with the comments touching its header: in
-    /// place of the one this side has, or in name order.
+    /// in place of the one this side has, or in name order.
     #[test]
     fn a_dataset_from_the_other_side_keeps_its_comments_and_its_place() {
         let ours = "# inputs\n\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.core]\nref = \"zenodo:3\"\n";
@@ -2725,8 +2672,7 @@ pub(crate) mod tests {
         assert!(with_dataset_from(ours, theirs, "missing").is_err());
     }
 
-    /// a merge cannot rewrite datasets this side writes inline, as `datasets = { … }`, so taking
-    /// one from the other side is refused, with help to merge by hand.
+    /// as `datasets = { … }`, with help to merge by hand.
     #[test]
     fn a_dataset_from_the_other_side_is_refused_where_datasets_are_inline() {
         let ours = "datasets = { alpha = { ref = \"zenodo:1\" } }\n";
@@ -2774,8 +2720,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// drop adds each pattern once, under the dataset's own header or one of its own for the
-    /// archive, and leaves every other line as written.
+    /// under the dataset's own header or one of its own for the archive.
     #[test]
     fn an_exclusion_is_added_once_keeping_comments() {
         let text = "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n";
@@ -2902,9 +2847,8 @@ pub(crate) mod tests {
         (manifest.data_dir.clone(), datasets.collect())
     }
 
-    /// any text: what reads is valid, and removing or adding a dataset changes only that
-    /// dataset. each dataset is added again under another name with its own values, so the
-    /// writer is given every string the reader takes.
+    /// any text: what reads is valid, and removing or adding a dataset changes only it. each is
+    /// added again under another name, so the writer is given every string the reader takes.
     #[test]
     fn fuzz_manifest() {
         bolero::check!().for_each(|bytes| {
@@ -2985,8 +2929,7 @@ pub(crate) mod tests {
     const RAW: &str = "[datasets.raw]\nref = \"zenodo:1\"\n\n";
     const CLEAN: &str = "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
 
-    /// a recipe makes a dataset from others with a command, so it needs both, and a dataset is
-    /// fetched from a source or made by a recipe, never both.
+    /// a dataset is fetched from a source or made by a recipe, never both.
     #[test]
     fn a_recipe_needs_from_and_run_and_no_ref() {
         let manifest = parse(&format!(
@@ -3081,8 +3024,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// `place = false` keeps a dataset pinned and cached but out of the data folder, whether it
-    /// is fetched or made, and only true or false is read.
+    /// `place = false` keeps a dataset out of the data folder; only true or false is read.
     #[test]
     fn place_reads_on_both_kinds() {
         let manifest = parse(&format!(
@@ -3104,9 +3046,8 @@ pub(crate) mod tests {
         assert_eq!(error.details, ["data.toml:4   place = \"no\""]);
     }
 
-    /// each word of run is text with `{name}` for the folder of a dataset it reads and `{out}`
-    /// for the result's, so a word naming anything else, or a step that cannot find an input
-    /// or write its result, is refused before anything runs.
+    /// `{name}` is the folder of a dataset a step reads and `{out}` the result's; a word naming
+    /// anything else, or a step missing an input or its result, is refused before anything runs.
     #[test]
     fn templates_name_inputs_and_out() {
         let recipe = |run: &str| format!("{RAW}[datasets.clean]\nfrom = [\"raw\"]\nrun = {run}\n");
@@ -3171,8 +3112,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// a recipe reads datasets data.toml has, and recipes cannot be made from each other, since
-    /// no order of steps could make them. a cycle names its path.
+    /// no order of steps could make recipes made from each other; a cycle names its path.
     #[test]
     fn from_names_exist_and_form_no_cycle() {
         let recipe = |name: &str, from: &[&str]| {
@@ -3229,9 +3169,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// code names files and folders the step reads, whose bytes enter the key, so each stays
-    /// inside the project and out of what fetchloom writes: the data folder, data.lock and
-    /// data.lock.d, and repository metadata.
+    /// code's bytes enter the key, so it stays out of what fetchloom writes, the data folder,
+    /// data.lock and data.lock.d, and out of repository metadata.
     #[test]
     fn code_stays_in_the_project_and_out_of_the_data_folder() {
         let recipe = |data_dir: &str, code: &str| {
@@ -3387,8 +3326,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// git for windows checks data.toml out with CRLF line endings, which a multi-line string
-    /// keeps, so a variable reads with LF on every system and keys alike.
+    /// with LF, so a recipe's key is the same on every system.
     #[test]
     fn a_multi_line_variable_reads_alike_in_a_crlf_checkout() {
         let text =
@@ -3596,8 +3534,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// a members table left behind when its dataset's table was renamed is told as a rename to
-    /// finish, naming the new table only when data.toml shows which one it is.
+    /// naming the new table only when data.toml shows which one it is.
     #[test]
     fn members_left_by_a_rename_say_to_rename_them_too() {
         let members = "\n[datasets.glob.members.\"glob-000000.tar\"]\nexclude = ['a1.wav']\n";
@@ -3770,10 +3707,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// edits made at once write data.toml as the same edits made one at a time do, over layouts
-    /// with notes, comments, member tables, datasets out of order, and copies in place, before
-    /// another dataset or last, from either of two sources, and removals; layouts the edits at
-    /// once cannot follow are left to the edits one at a time.
+    /// over varied layouts, with copies in place, before another dataset or last, from either of
+    /// two sources, and removals; layouts edits at once cannot follow fall back to one at a time.
     #[test]
     fn edits_at_once_write_what_edits_one_at_a_time_write() {
         let names = ["a", "b", "c", "d", "e", "f"];
@@ -3814,9 +3749,8 @@ pub(crate) mod tests {
         assert!(compared * 2 > cases, "{compared} of {cases} compared");
     }
 
-    /// a data.toml for drop to change: datasets with their own exclude, written as one pattern
-    /// or a list, a table for a glob of archives or for one archive, members written with
-    /// dotted keys or inline, and now and then a dataset written inline.
+    /// a data.toml for drop to change: excludes as one pattern or a list, members tables for a
+    /// glob or one archive, dotted or inline, and now and then a dataset written inline.
     fn narrowable(layouts: &mut Layouts) -> (String, Vec<&'static str>) {
         let mut text = String::new();
         let mut written = Vec::new();
@@ -3864,9 +3798,7 @@ pub(crate) mod tests {
         (text, written)
     }
 
-    /// changes drop makes, made at once in one reading of a data.toml laid out as most are,
-    /// write what the same changes made one at a time write, and fail alike where one meets a
-    /// part written inline.
+    /// and fail alike where one meets a part written inline.
     #[test]
     fn drop_changes_at_once_write_what_changes_one_at_a_time_write() {
         let missing = ["e", "z"];
