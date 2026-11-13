@@ -32,9 +32,8 @@ const DIVERSIONS: u32 = 3;
 /// the largest page read to find where the file is.
 const LARGEST_PAGE: usize = 4 * 1024 * 1024;
 
-/// turns a page a server sent instead of the file, such as a confirmation form, into the URL that
-/// serves the file, or into an error saying why there is none, such as a download quota. it reads
-/// the page with the URL the page came from, after redirects, and its status.
+/// turns a page sent instead of the file, such as a confirmation form, into the file's URL or an
+/// error such as a download quota, given the page's URL after redirects, its status and its text.
 pub(crate) type Divert = fn(&Url, u16, &str) -> Result<Url, Error>;
 
 /// whether a forbidden XML answer names an expired source-issued download link.
@@ -61,8 +60,7 @@ impl Expect {
     }
 
     /// whether the hashes alone decide whether the bytes are the file: a pinned SHA-256, or a
-    /// stated MD5 with the size. no answer's validator then matters, since the check at the end
-    /// catches bytes from another version.
+    /// stated MD5 with the size. no validator then matters: the final check catches other bytes.
     pub(crate) fn pins(&self) -> bool {
         self.sha256.is_some() || (self.md5.is_some() && self.size.is_some())
     }
@@ -79,10 +77,9 @@ pub(crate) struct Fetch {
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
     pub(crate) revalidate: bool,
-    /// the bytes a revalidated download may find unchanged, which the cache or a file of the
-    /// caller's holds, such as the one `get -o` wrote: when the url's record names them, the
-    /// server is asked whether they changed, though the cache lacks them, and a large file asks
-    /// about its size only once the server sends it.
+    /// the bytes a revalidated download may find unchanged, in the cache or a caller's file such
+    /// as `get -o` wrote. when the url's record names them, the server is asked whether they
+    /// changed, and a large file asks about its size only once the server sends it.
     pub(crate) held: Option<Sha256>,
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
@@ -187,9 +184,8 @@ pub(crate) enum Event {
     },
 }
 
-/// whether a later run can go on from the bytes a stopped download keeps. that run asks the
-/// server for the rest only with proof that the rest belongs to the same file, a pinned hash or a
-/// validator [`if_range`] can send, and the server then has to send the rest alone.
+/// whether a later run can go on from a stopped download's bytes: it needs proof the rest is the
+/// same file, a pinned hash or a validator [`if_range`] can send, and a server that sends parts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Resumable {
     /// the server said it sends parts of a file, or sent one, and the bytes are proven.
@@ -203,10 +199,9 @@ pub(crate) enum Resumable {
 }
 
 impl Resumable {
-    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file. `asked`
-    /// holds the validators of kept bytes whose rest the request asked for: a whole answer naming
-    /// that same version ignored the request, as a server that sends no parts does, while one
-    /// naming another version is a restart that says nothing about parts.
+    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file. asked for
+    /// the rest of kept bytes with validators `asked`, a whole answer of that version means the
+    /// server sends no parts; one of another version is a restart that says nothing about parts.
     fn answered(
         status: StatusCode,
         head: &header::HeaderMap,
@@ -272,11 +267,9 @@ pub(crate) struct Fetched {
 }
 
 impl Fetched {
-    /// how long the downloads among `fetched` took from `started`: until their last byte
-    /// arrived, so the time a slow disk takes to keep them does not count against the link, and
-    /// until now, which counts it. each leaves out the time it waited for a person's answer, so
-    /// the batch ends with the latest of them once that is left out. with nothing received, the
-    /// time since `started` for both.
+    /// how long the downloads among `fetched` took from `started`: until their last byte arrived,
+    /// so a slow disk does not count against the link, and until now, which counts it. each leaves
+    /// out its wait for a person's answer; with nothing received, both are the time since then.
     pub(crate) fn transfer<'a>(
         fetched: impl IntoIterator<Item = &'a Fetched>,
         started: Instant,
@@ -559,7 +552,7 @@ impl Net {
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         let (partial, waited) = self.claim(&fetch.url, cache, on).await?;
-        // another run can publish between the lookup and a claim that never reports contention.
+        // another run can publish between the lookup and a claim that never reports contention
         if let Some(found) = self.in_cache(fetch, cache) {
             return Ok(found);
         }
@@ -925,9 +918,8 @@ impl Net {
             && proven
     }
 
-    /// the answer itself when it brings the file. otherwise what it means instead: the URL a
-    /// page's handler says the file is at, an expired link to try again, or a refusal, which for
-    /// an S3 bucket says whether a key went with the request.
+    /// the answer itself when it brings the file, else what it means: the URL a page's handler
+    /// finds, an expired link to try again, or a refusal that says whether an S3 key went with it.
     async fn instead(
         &self,
         from: &Url,
@@ -1157,7 +1149,7 @@ impl Net {
             Err(Failure::Final(error)) if error.kind == Kind::Interrupted => {
                 Err(Failure::Final(error))
             }
-            // without a readable expiry message, the original 403 remains an access refusal.
+            // without a readable expiry message, the original 403 remains an access refusal
             Err(_) => Ok(false),
         }
     }
@@ -1461,8 +1453,7 @@ fn unreadable(error: &Error) -> bool {
 }
 
 /// the error for a pinned `version` its bucket `refused`, when the object there now failed with
-/// `error`: other bytes say so, with the refusal beside them, and any other failure leaves the
-/// refusal.
+/// `error`: other bytes say so beside the refusal, and any other failure leaves the refusal.
 fn unread(error: Error, refused: Error, version: &str) -> Error {
     if error.kind == Kind::IntegrityMismatch {
         error.detail(format!(
@@ -1521,9 +1512,8 @@ fn conditions<'a>(
     }
 }
 
-/// opens the writing end of a download on a blocking thread, since continuing one hashes the
-/// bytes kept so far again. none when those bytes are not the ones recorded, so the download
-/// starts over.
+/// opens the writing end of a download on a blocking thread, since continuing one hashes the kept
+/// bytes again. none when those are not the bytes recorded, so the download starts over.
 async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Failure> {
     let Body {
         offset,
@@ -1570,8 +1560,7 @@ async fn finish(writer: PartialWriter) -> Result<Received, Failure> {
 }
 
 /// stands in for a flush a slow disk makes long: with `FETCHLOOM_TEST_HOLD_FLUSH` naming a file,
-/// a finished download writes `<file>.held`, then waits, whatever is asked meanwhile, as a thread
-/// inside a kernel flush does, until that file appears. release builds never read it.
+/// a finished download writes `<file>.held`, then ignores any stop until that file appears.
 #[cfg(debug_assertions)]
 fn held_flush() {
     let Some(release) = std::env::var_os("FETCHLOOM_TEST_HOLD_FLUSH").map(std::path::PathBuf::from)

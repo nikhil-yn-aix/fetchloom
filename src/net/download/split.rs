@@ -1,7 +1,5 @@
-//! one large file over several streams at once. each stream fetches a range and writes it where
-//! it belongs, a stream that runs out of work takes half of the largest range left, and a stream
-//! is added only while each one has made the whole download faster. a download usually gets here
-//! from one stream that proved slow, whose answer goes on as the first stream.
+//! one large file over several streams at once: a stream out of work takes half of the largest
+//! range left, and a stream is added only while each one made the whole download faster.
 
 use std::future::{Future, poll_fn};
 use std::io;
@@ -40,9 +38,8 @@ const GAIN: f64 = 1.15;
 /// failed streams after which a download asks for no more ranges.
 const FAILURES: u32 = 3;
 
-/// the split settings a run starts with. debug builds read `FETCHLOOM_TEST_SPLIT`, which only
-/// tests set: a file then splits from 4 MiB, in pieces from 512 KiB, after a fifth of a second
-/// of measuring, so a test of a slow download needs neither 64 MiB nor seconds.
+/// the split settings a run starts with. tests set `FETCHLOOM_TEST_SPLIT` for small, quick
+/// splits, so a test of a slow download needs neither 64 MiB nor seconds.
 pub(crate) fn starting(when: Splitting) -> Split {
     #[cfg(debug_assertions)]
     if std::env::var_os("FETCHLOOM_TEST_SPLIT").is_some() {
@@ -551,9 +548,9 @@ impl Net {
         }
     }
 
-    /// asks for bytes `start` up to `end` of the file, for stream `id`, with `If-Range` so that
-    /// a server holding another version sends the whole file instead. a pinned file asks without
-    /// it, since servers behind one name may label the same bytes differently.
+    /// asks for bytes `start` up to `end` with `If-Range`, so a server holding another version
+    /// sends the whole file. a pinned file asks without, since servers behind one name may label
+    /// the same bytes differently.
     async fn part(
         &self,
         shared: &Streams<'_>,
@@ -669,9 +666,8 @@ impl Net {
         Ok(())
     }
 
-    /// adds a stream when the rate rule allows it: the slots and work it takes. a stream is
-    /// added while each added stream made the download at least [`GAIN`] times faster, and only
-    /// when the host has a free slot that no other file waits for.
+    /// adds a stream, with the slots and work it takes, while each added one made the download at
+    /// least [`GAIN`] times faster and the host has a free slot no other file waits for.
     fn consider(
         &self,
         shared: &Streams<'_>,

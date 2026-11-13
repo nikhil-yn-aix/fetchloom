@@ -32,7 +32,7 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     let mut reading =
         std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, Some(4096)));
     assert!(poll(reading.as_mut()).is_pending());
-    // only 1024 bytes remain, so probe windows cannot hand the body to another stream.
+    // only 1024 bytes remain, so probe windows cannot hand the body to another stream
     for _ in 0..12 {
         tokio::time::advance(std::time::Duration::from_millis(20)).await;
         assert!(poll(reading.as_mut()).is_pending());
@@ -94,7 +94,7 @@ async fn an_uncontended_claim_rechecks_bytes_published_after_the_cache_miss() {
                 },
             )
             .unwrap();
-        // publication wins before the first claim attempt, so no contention was observed.
+        // publication wins before the first claim attempt, so no contention was observed
         let fetched = tokio::select! {
             result = net.claim_and_download(&fetch, &cache, None, &|_| Ok(())) => result.unwrap(),
             _ = server.accept() => panic!("a newly claimed download fetched bytes already published after its cache miss"),
@@ -246,8 +246,7 @@ fn a_refusal_page_reaches_the_divert_with_its_status() {
     assert_eq!(err.message, "/file 403 over quota");
 }
 
-/// a page is read whole up to 4 MiB to find where the file is, and one byte more is refused, so a
-/// server cannot hand over an endless page instead of the file.
+/// so a server cannot hand over an endless page instead of the file.
 #[test]
 fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
     for (size, read) in [(4 << 20, true), ((4 << 20) + 1, false)] {
@@ -280,9 +279,8 @@ fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
     }
 }
 
-/// a server may send three pages, such as confirmation forms, before the file, and a fourth is
-/// refused, so pages that point on and on never become a download. both runs ask for the same
-/// four links; only what the fourth answers differs.
+/// such as confirmation forms, so pages that point on and on never become a download. both runs
+/// ask for the same four links; only what the fourth answers differs.
 #[test]
 fn a_server_may_send_three_pages_before_the_file_but_not_four() {
     for (pages, followed) in [(3, true), (4, false)] {
@@ -408,8 +406,7 @@ fn a_resume_answered_from_another_version_starts_over() {
     }
 }
 
-/// a link that breaks again and again still finishes a file while every try moves it on, as a
-/// long download over a connection that drops every few minutes does.
+/// so a long download over a connection that drops every few minutes still finishes.
 #[test]
 fn tries_that_move_the_file_on_earn_the_tries_back() {
     let body = "abcdefg";
@@ -445,8 +442,6 @@ fn tries_that_move_the_file_on_earn_the_tries_back() {
     assert_eq!(net.work.counts().retries, total as u64 - 1);
 }
 
-/// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,
-/// which proves the joined bytes as a pinned SHA-256 does.
 #[test]
 fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
     let (url, asked) = serve(vec![reply(
@@ -718,9 +713,8 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     );
 }
 
-/// a download that goes on from what an earlier run kept says so before any server answers, so
-/// a stop while it waits for a slot or an answer still counts those bytes as kept. those bytes
-/// may be continued, as their `ETag` proves them, and once the server sends the rest, they can.
+/// so a stop while it waits for a slot or an answer still counts those bytes as kept. their `ETag`
+/// proves they may be continued, and once the server sends the rest, they can.
 #[test]
 fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers() {
     let body = "abcdefgh".repeat(1024);
@@ -775,12 +769,8 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
     );
 }
 
-/// a later run goes on from kept bytes only when the server sends parts of a file and a pinned
-/// hash or a validator proves those parts belong to the bytes kept. a server that never said
-/// whether it sends parts may; one that says it sends none, or bytes nothing proves, start over,
-/// and so does one that answered a request for the rest of the same version with all of it, as
-/// python's http.server does. a whole answer naming another version restarts on a new file, which
-/// says nothing about parts.
+/// a server that sent all of the same version when asked for the rest, as python's http.server
+/// does, sends no parts, while one that never said whether it does may.
 #[test]
 fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
     let head = |pairs: &[(&'static str, &'static str)]| {
@@ -1017,7 +1007,7 @@ async fn waiting_for_an_answer_is_no_network_silence() {
     let first = std::sync::atomic::AtomicBool::new(true);
     let asking = |_: Event| {
         if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            // advancing the virtual clock happens before advance's first yield.
+            // advancing the virtual clock happens before advance's first yield
             let mut answer =
                 std::pin::pin!(tokio::time::advance(std::time::Duration::from_millis(800)));
             let _ = poll(answer.as_mut());
@@ -1163,9 +1153,8 @@ fn a_checksum_restart_reacquires_released_download_slots() {
     assert_eq!(asked.lock().unwrap().len(), 2);
 }
 
-/// the S3 version a bucket names for the bytes comes with them: from a whole answer, from a
-/// resume whose range does not name it again, and from the record of a link asked again when
-/// the server says nothing changed.
+/// from a whole answer, a resume whose range does not name it again, and the record of a link
+/// asked again when the server says nothing changed.
 #[test]
 fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
     let version = ("x-amz-version-id", "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY");
@@ -1206,9 +1195,8 @@ fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
     assert_eq!(fetched.size, 8);
 }
 
-/// a pinned S3 version that can no longer be read, refused or gone, is fetched from the object
-/// there now, and its pinned hash decides: the same bytes are taken, other bytes are a mismatch
-/// that says the version could not be read. a file nothing pins keeps the refusal.
+/// and its pinned hash decides: other bytes are a mismatch that says the version could not be
+/// read. a file nothing pins keeps the refusal.
 #[test]
 fn an_unreadable_pinned_version_comes_from_the_object_there_now() {
     for (status, now, kind) in [
@@ -1274,10 +1262,8 @@ fn versioned(url: &Url, name: &str, bytes: &[u8]) -> Fetch {
     }
 }
 
-/// a public bucket that lets nobody read old versions refuses every pinned version. once one
-/// refusal with 401 or 403 was followed by the object there now matching its pin, the bucket's
-/// later files ask for the object there now first: three files cost four requests, not six. a
-/// version that is gone, 404, is about one object and changes nothing for the others.
+/// once a 401 or 403 to a version was followed by the object there now matching its pin, so three
+/// files cost four requests, not six. a 404 is about one object and changes nothing for the others.
 #[test]
 fn a_bucket_that_refused_a_version_is_asked_for_its_objects_as_they_are_now() {
     for (refusal, expected) in [
@@ -1347,8 +1333,7 @@ fn a_changed_object_still_reaches_its_pinned_version() {
     );
 }
 
-/// the time downloads took ends when their last byte arrived, not when the disk kept them, so a
-/// slow flush does not make the link look slow.
+/// not when the disk kept it, so a slow flush does not make the link look slow.
 #[test]
 fn the_transfer_time_ends_with_the_last_byte() {
     let started = Instant::now();
@@ -1369,10 +1354,8 @@ fn the_transfer_time_ends_with_the_last_byte() {
     );
 }
 
-/// a download that waited for a person to say whether it may go on leaves that wait out of its
-/// time, so the answer does not make the link look slow. a batch ends with the latest of its
-/// downloads once each leaves out its own wait, and the time until now still holds what the
-/// disk took after the last byte.
+/// so a person's answer does not make the link look slow. a batch ends with its latest download
+/// once each leaves out its own wait, and the time until now keeps what the disk took after.
 #[test]
 fn the_transfer_time_leaves_out_the_wait_for_an_answer() {
     let started = Instant::now();

@@ -425,8 +425,7 @@ fn from_the_start(server: &Server) -> usize {
         .count()
 }
 
-/// servers behind one name may label the same bytes with other validators. a file pinned by its
-/// hash keeps the parts it has and lets the hash decide, while an unpinned one starts over.
+/// and lets its hash decide, while an unpinned file starts over.
 #[test]
 fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
     let body = body(4 * MIB);
