@@ -31,8 +31,7 @@ pub(crate) fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> Strin
     target
 }
 
-/// an S3 listing page of `(key, body)` objects, with each key escaped as `encoding-type=url`
-/// asks.
+/// an S3 listing page of `(key, body)` objects, with each key escaped as `encoding-type=url` asks.
 pub(crate) fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
     let stated: Vec<(&str, String, u64)> = objects
         .iter()
@@ -139,8 +138,7 @@ fn openneuro() -> Result<Routes> {
     ])
 }
 
-/// an add that keeps some of the files a link lists counts what it keeps on its Resolved line,
-/// so the files of a whole repository never read as the ones added.
+/// the whole repository's file count must never read as the files added.
 #[test]
 fn add_counts_the_files_it_keeps_when_it_resolves() -> Result {
     let sandbox = Sandbox::new()?;
@@ -505,10 +503,9 @@ fn mac(key: &[u8], text: &str) -> Result<Vec<u8>> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// checks a request as S3 checks its signature, rebuilding the canonical request from what
-/// arrived and signing it with `secret`, and returns the key id and region it was signed with.
-/// the test servers keep heads in lowercase, so signed tests use lowercase keys, sessions and
-/// versions, and the date's `t` and `z` and the `versionId` name are read back as sent.
+/// checks a request's signature as S3 does and returns the key id and region it was signed with.
+/// the test servers lowercase heads, so signed tests use lowercase keys, sessions and versions,
+/// and the date's `t` and `z` and the `versionId` name are restored as sent.
 fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
     let mut lines = head.lines();
     let target = lines
@@ -649,9 +646,8 @@ fn teammate_sync(sandbox: &Sandbox, routes: &str) -> Result<(std::path::PathBuf,
     Ok((clone, output))
 }
 
-/// a private bucket the person lists: the listing is asked without a key, refused, and asked
-/// again signed; the object is signed from the start and pinned at its version; a teammate's
-/// sync signs with a profile after one refusal; and no secret reaches a file or an output.
+/// the listing is refused without a key and asked again signed, the object is signed from the
+/// start and pinned at its version, a teammate's profile signs too, and no secret leaks.
 #[test]
 fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
     let sandbox = Sandbox::new()?;
@@ -808,9 +804,8 @@ fn a_bucket_nobody_listed_never_gets_a_key() -> Result {
     Ok(())
 }
 
-/// a cloned data.toml naming a bucket at a server on this machine reaches it only as an allowed
-/// origin, and never with a key unless the person lists the bucket and their AWS settings send
-/// keys to that server.
+/// a local bucket a cloned data.toml names is reached only as an allowed origin, and with a key
+/// only if the person lists it and their AWS settings send keys to that server.
 #[test]
 fn a_cloned_project_cannot_aim_keys_at_a_server_of_its_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -859,8 +854,7 @@ fn a_cloned_project_cannot_aim_keys_at_a_server_of_its_own() -> Result {
     Ok(())
 }
 
-/// a bucket at another service, typed on the command line, may be on this machine, and takes
-/// the keys of the AWS profile whose `endpoint_url` names it.
+/// typed on the command line, a bucket at another service may be on this machine.
 #[test]
 fn an_endpoint_bucket_signs_with_the_profile_that_names_its_endpoint() -> Result {
     let sandbox = Sandbox::new()?;
@@ -918,8 +912,7 @@ fn an_endpoint_bucket_signs_with_the_profile_that_names_its_endpoint() -> Result
     Ok(())
 }
 
-/// what a `credential_process` or the AWS CLI prints in the tests of programs that give keys,
-/// lowercase like the heads the test server keeps.
+/// what a program that gives keys prints, lowercase like the heads the test server keeps.
 #[cfg(unix)]
 const PRINTED: &str = r#"{"Version": 1, "AccessKeyId": "akiaprintedkey", "SecretAccessKey": "printed-secret-never-shown", "SessionToken": "printed-session-never-shown", "Expiration": "2999-01-01T00:00:00Z"}"#;
 #[cfg(unix)]
@@ -927,8 +920,7 @@ const PRINTED_SECRET: &str = "printed-secret-never-shown";
 #[cfg(unix)]
 const PRINTED_SESSION: &str = "printed-session-never-shown";
 
-/// writes a program at `path` that runs `script` in sh, as a `credential_process` or the AWS
-/// CLI.
+/// writes a program at `path` that runs `script` in sh, as a `credential_process` or the AWS CLI.
 #[cfg(unix)]
 pub(crate) fn program(path: &std::path::Path, script: &str) -> Result {
     use std::os::unix::fs::PermissionsExt;
@@ -962,9 +954,8 @@ fn refusing() -> Result<Routes> {
     )])
 }
 
-/// a profile's `credential_process` gives the keys that sign a listed bucket. it runs without a
-/// shell, once for the listing and the download, and nothing it printed reaches an output, a
-/// file or the cache.
+/// the program runs without a shell, once for the listing and the download, and nothing it
+/// printed reaches an output, a file or the cache.
 #[cfg(unix)]
 #[test]
 fn a_credential_process_gives_the_keys_for_a_listed_bucket() -> Result {
@@ -1039,8 +1030,7 @@ fn a_credential_process_gives_the_keys_for_a_listed_bucket() -> Result {
     Ok(())
 }
 
-/// a profile that signs in to IAM identity center gets its keys from `aws configure
-/// export-credentials`, run from the folder PATH names that holds the AWS CLI.
+/// the profile signs in to IAM identity center, and the AWS CLI comes from a folder PATH names.
 #[cfg(unix)]
 #[test]
 fn a_profile_that_signs_in_gets_its_keys_from_the_aws_cli() -> Result {
@@ -1089,9 +1079,8 @@ fn a_profile_that_signs_in_gets_its_keys_from_the_aws_cli() -> Result {
     Ok(())
 }
 
-/// a profile that signs in needs the AWS CLI. without one in a folder PATH names by its full
-/// path, the bucket fails with what to install, and an `aws` in a folder PATH names relatively,
-/// which a cloned project could hold, never runs.
+/// only absolute PATH folders count, so an `aws` in a relative one, which a cloned project could
+/// hold, never runs.
 #[test]
 fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1134,8 +1123,7 @@ fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
     Ok(())
 }
 
-/// keys a `credential_process` gives that have expired stop the bucket's request: it goes again
-/// neither without a key nor with the profile's other keys.
+/// the request never goes again without a key or with the profile's other keys.
 #[cfg(unix)]
 #[test]
 fn expired_keys_from_a_credential_process_stop_the_request() -> Result {
@@ -1170,9 +1158,8 @@ fn expired_keys_from_a_credential_process_stop_the_request() -> Result {
     Ok(())
 }
 
-/// keys S3 says expired mid-run, as after a jump in this machine's clock, are asked of their
-/// `credential_process` again, once, and the request goes again with the new ones. S3's refusal
-/// repeats the expired session, which no output shows.
+/// keys can expire mid-run, as after a jump in this machine's clock. the request goes again with
+/// the new keys, and the expired session S3's refusal repeats shows in no output.
 #[cfg(unix)]
 #[test]
 fn keys_s3_says_expired_come_again_from_their_program_once() -> Result {
@@ -1234,8 +1221,7 @@ fn keys_s3_says_expired_come_again_from_their_program_once() -> Result {
     Ok(())
 }
 
-/// a `credential_process` that fails, or prints no keys fetchloom can read, fails the bucket's
-/// request with what went wrong, and nothing it printed shows.
+/// printing no keys fetchloom can read fails the same way, with what went wrong.
 #[cfg(unix)]
 #[test]
 fn a_credential_process_that_fails_is_named_without_what_it_printed() -> Result {
@@ -1302,8 +1288,7 @@ fn a_credential_process_that_fails_is_named_without_what_it_printed() -> Result 
     Ok(())
 }
 
-/// the `credential_process` runs only for a bucket `s3_buckets` lists that refused a request
-/// without a key: never for one nobody listed, nor for a listed one that answers without a key.
+/// a bucket nobody listed never runs it, nor does a listed one that answers without a key.
 #[cfg(unix)]
 #[test]
 fn a_credential_process_runs_only_for_a_listed_bucket_that_refused() -> Result {
@@ -1360,8 +1345,7 @@ fn a_credential_process_runs_only_for_a_listed_bucket_that_refused() -> Result {
     Ok(())
 }
 
-/// a bucket at `base` whose one prefix lists `objects`, stated as the test asks, and serves no
-/// file.
+/// a bucket at `base` whose one prefix lists `objects`, stated as the test asks, serving no file.
 fn stated_bucket(base: &str, objects: &[(&str, String, u64)]) -> Result<Routes> {
     Routes::start(vec![(
         s3_listing(base, "data/", None),
@@ -1462,8 +1446,7 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     Ok(())
 }
 
-/// the most files a dataset may list is a setting, and the error names it with the way to need
-/// fewer.
+/// the help also gives the way to need fewer files.
 #[test]
 fn a_listing_past_the_most_files_names_the_setting() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1489,9 +1472,7 @@ fn a_listing_past_the_most_files_names_the_setting() -> Result {
     Ok(())
 }
 
-/// a dataset of more files than data.lock lists in itself keeps them in a compressed list beside
-/// it: a clone syncs from the list, a damaged list is refused and keeps the cache as it is, and a
-/// dataset that shrinks back lists its files inline again.
+/// past what data.lock lists in itself, a dataset's files go to a compressed list beside it.
 #[test]
 fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1524,7 +1505,6 @@ fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
             .map(Vec::len),
         Some(3)
     );
-    // a clone with its own cache syncs from the list
     let clone = sandbox.folder("clone")?;
     fs::create_dir(clone.join("data.lock.d"))?;
     for file in ["data.toml", "data.lock"] {
@@ -1562,9 +1542,8 @@ fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
     Ok(())
 }
 
-/// switching extract never lists the bucket again: an archive the cache holds unpacks offline,
-/// an archive the cache dropped once unpacked is fetched by its own link to stay packed, and
-/// `sync --locked` calls a lock with the other extract out of date.
+/// a cached archive unpacks offline, one the cache dropped once unpacked is fetched by its own
+/// link to stay packed, and `sync --locked` calls the lock out of date.
 #[test]
 fn switching_extract_needs_no_listing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1654,8 +1633,7 @@ const LISTED: [&str; 3] = [
     "participants.tsv",
 ];
 
-/// offline, the file `get -o` wrote from a listed link stays while it holds what the link gave
-/// last time, though nothing can list the link and those bytes left the cache for the file.
+/// offline nothing lists the link and its bytes left the cache, yet the file holding them stays.
 #[test]
 fn get_output_of_a_listed_link_runs_again_offline() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1676,8 +1654,7 @@ fn get_output_of_a_listed_link_runs_again_offline() -> Result {
     Ok(())
 }
 
-/// offline, `--sha256` alone decides about the file at `-o`, so a listed link needs no earlier
-/// run.
+/// offline, `--sha256` alone decides about the file at `-o`, with no earlier run.
 #[test]
 fn get_output_of_a_listed_link_with_its_sha256_needs_nothing_offline() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1706,7 +1683,7 @@ fn get_output_of_a_listed_link_with_its_sha256_needs_nothing_offline() -> Result
     Ok(())
 }
 
-/// offline, a folder `get` filled from one file of a listed link is checked again from the cache.
+/// the folder's file is checked again from the cache.
 #[test]
 fn get_folder_of_a_listed_link_runs_again_offline() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1723,8 +1700,7 @@ fn get_folder_of_a_listed_link_runs_again_offline() -> Result {
     Ok(())
 }
 
-/// a get that keeps some of the files a link lists counts what it keeps on its Resolved line, as
-/// one of a repository's files, and the whole listing when it keeps every file.
+/// keeping every file, the line counts the whole listing.
 #[test]
 fn get_counts_the_files_it_keeps_when_it_resolves() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1759,9 +1735,8 @@ fn tar_of(name: &str, body: &[u8]) -> Result<Vec<u8>> {
     Ok(builder.into_inner()?)
 }
 
-/// what an s3-compatible service answers for the prefix `shards/` of its bucket `speech`, given
-/// each object as its key, bytes and `ETag`: a listing that states each one's size and `ETag`,
-/// and each object. such a service promises no MD5 in an `ETag`.
+/// the routes of an s3-compatible bucket `speech` listing `shards/` with each object's size and
+/// `ETag`, and serving each object; such a service promises no MD5 in an `ETag`.
 fn speech_bucket(objects: &[(String, Vec<u8>, String)]) -> Vec<(String, Vec<Part>)> {
     let listed: Vec<(&str, String, u64)> = objects
         .iter()
@@ -1810,9 +1785,8 @@ fn asked_since(routes: &Routes, asked: usize) -> Vec<String> {
     targets
 }
 
-/// wf-audio F05: one shard added to an s3-compatible prefix is the one object `lock --upgrade`
-/// downloads. the others list the size and `ETag` this machine's cache recorded when it
-/// downloaded them, so their pins stay without their bytes coming again.
+/// the unchanged objects list the size and `ETag` this machine's cache recorded, so their pins
+/// stay without their bytes coming again.
 #[test]
 fn an_upgrade_downloads_only_the_objects_a_listing_shows_are_new_or_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1858,8 +1832,7 @@ fn an_upgrade_downloads_only_the_objects_a_listing_shows_are_new_or_changed() ->
     Ok(())
 }
 
-/// an object whose listing states another `ETag` or another size than this machine recorded is
-/// downloaded again, as one the cache has no record of is, and its new bytes are pinned.
+/// a record that no longer matches counts as none, and the new bytes are pinned.
 #[test]
 fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1897,8 +1870,7 @@ fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {
     Ok(())
 }
 
-/// the record that spares a download lives in this machine's cache, not in data.lock, so a
-/// teammate's upgrade downloads every object no checksum pins, as it always has.
+/// the record that spares a download lives in this machine's cache, not in data.lock.
 #[test]
 fn an_upgrade_on_a_machine_without_the_record_downloads_every_object() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1929,9 +1901,8 @@ fn an_upgrade_on_a_machine_without_the_record_downloads_every_object() -> Result
     Ok(())
 }
 
-/// reuse trusts that a service's `ETag` and size change with an object's bytes. one that keeps
-/// both while the bytes change gets its old pin kept here, and the change shows wherever the
-/// bytes are downloaded: the pinned SHA-256 refuses them and nothing is placed.
+/// reuse trusts a service to change the `ETag` or size with the bytes, so here the old pin stays;
+/// where the bytes are downloaded, the pinned SHA-256 refuses them and nothing is placed.
 #[test]
 fn bytes_changed_under_an_unchanged_etag_are_refused_where_they_are_downloaded() -> Result {
     let sandbox = Sandbox::new()?;
