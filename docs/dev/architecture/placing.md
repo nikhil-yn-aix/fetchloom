@@ -118,7 +118,7 @@ placement-order tests pause at the first metadata observation before later names
 
 | files | cargo filter |
 |---|---|
-| [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs), [place/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/tests.rs), [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
+| [plan/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan/tests.rs), [place/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/tests.rs), [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
 | [sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs), [put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | `cargo test --locked --lib cli::sync::place::` |
 | [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [layout.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/layout.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli layout::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
 
