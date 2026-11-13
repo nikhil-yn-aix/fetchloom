@@ -16,6 +16,7 @@ use super::{Cache, Failure};
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::stop::Stop;
+use crate::threads::Threads;
 
 /// how long an object no project needs stays, so a download a project has not locked yet, or a
 /// `get` from this morning, survives a gc.
@@ -294,45 +295,50 @@ impl Cache {
         Ok(intact)
     }
 
-    pub(crate) fn scan_objects(&self, stop: &Stop) -> Result<Scan, Error> {
+    /// every object in the cache, its fan folders read on up to `threads` workers, in the order
+    /// a serial walk would give.
+    pub(crate) fn scan_objects(&self, threads: Threads, stop: &Stop) -> Result<Scan, Error> {
         let mut scan = Scan::default();
         let folder = self.root.join("objects");
-        for fan in scan_entries(&folder, &mut scan.unreadable, stop)? {
-            stop.check()?;
-            let prefix = fan.file_name().to_string_lossy().into_owned();
-            // a file the system leaves behind, such as finder's .DS_Store, is no fan folder. a
-            // fan's own name that is not a folder is damage, and is reported as unreadable
-            if prefix.len() != 2 || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                continue;
-            }
-            for entry in scan_entries(&fan.path(), &mut scan.unreadable, stop)? {
-                stop.check()?;
-                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
-                let Some(digest) = Sha256::from_hex(&name) else {
-                    continue;
+        // a file the system leaves behind, such as finder's .DS_Store, is no fan folder. a fan's
+        // own name that is not a folder is damage, and is reported as unreadable
+        let fans: Vec<(String, PathBuf)> = scan_entries(&folder, &mut scan.unreadable, stop)?
+            .into_iter()
+            .filter_map(|fan| {
+                let prefix = fan.file_name().to_string_lossy().into_owned();
+                (prefix.len() == 2 && prefix.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                    .then(|| (prefix, fan.path()))
+            })
+            .collect();
+        let read = crate::place::run_coarse(&fans, threads, FANS_PER_WORKER, |(prefix, fan)| {
+            scan_fan(prefix, fan, stop)
+        });
+        let read = read.into_iter().collect::<Result<Vec<_>, Error>>()?;
+        scan.objects
+            .reserve_exact(read.iter().map(|fan| fan.found.len()).sum());
+        // each path is made here rather than on the worker, whose memory would stay spread over
+        // threads that are gone
+        for ((_, path), fan) in fans.iter().zip(read) {
+            let mut paths = fan.paths.into_iter().peekable();
+            for (at, found) in fan.found.into_iter().enumerate() {
+                let path = if let Some((_, path)) = paths.next_if(|(place, _)| *place == at) {
+                    path
+                } else {
+                    let hex = found.digest.hex();
+                    let mut object = PathBuf::with_capacity(path.as_os_str().len() + 64);
+                    object.push(path);
+                    object.push(&hex[2..]);
+                    object
                 };
-                match entry.metadata().and_then(|metadata| {
-                    let modified = metadata.modified()?;
-                    let changed = super::object::changed(&metadata)
-                        .map_or(modified, |changed| changed.max(modified));
-                    // the metadata unix gives counts names, so this takes no further call; what a
-                    // windows listing gives does not count them
-                    #[cfg(unix)]
-                    let names = Some(std::os::unix::fs::MetadataExt::nlink(&metadata));
-                    #[cfg(not(unix))]
-                    let names = None;
-                    Ok((metadata.len(), changed, names))
-                }) {
-                    Ok((size, changed, names)) => scan.objects.push(Object {
-                        digest,
-                        size,
-                        path: entry.path(),
-                        changed,
-                        names,
-                    }),
-                    Err(err) => scan.unreadable.push(Failure::new(&entry.path(), &err)),
-                }
+                scan.objects.push(Object {
+                    digest: found.digest,
+                    size: found.size,
+                    path,
+                    changed: found.changed,
+                    names: found.names,
+                });
             }
+            scan.unreadable.extend(fan.unreadable);
         }
         super::failure::sort(&mut scan.unreadable);
         Ok(scan)
@@ -347,6 +353,7 @@ impl Cache {
         stale_projects: &[PathBuf],
         now: SystemTime,
         grace: Duration,
+        threads: Threads,
         stop: &Stop,
     ) -> Result<Freed, Error> {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
@@ -354,7 +361,7 @@ impl Cache {
             // FAT rounds a new file's time up, into the future, so no age is asked of `--now`
             grace.is_zero() || now.duration_since(modified).is_ok_and(|age| age >= grace)
         };
-        let scan = self.scan_objects(stop)?;
+        let scan = self.scan_objects(threads, stop)?;
         if let Some(failure) = scan.unreadable.first() {
             return Err(failure.error("cannot inspect; the cache stays unchanged:"));
         }
@@ -571,7 +578,12 @@ impl Cache {
         progress: &(dyn Fn(u64) + Sync),
         stop: &Stop,
     ) -> Result<Checked, Error> {
-        self.verify_scanned(self.scan_objects(stop)?, threads, progress, stop)
+        self.verify_scanned(
+            self.scan_objects(Threads::default(), stop)?,
+            threads,
+            progress,
+            stop,
+        )
     }
 
     /// hashes every object `scan` found, so a caller that sized a progress bar from the scan
@@ -687,6 +699,80 @@ pub(super) fn scan_entries(
     Ok(found)
 }
 
+/// fan folders a scan worker is worth, each holding many objects in a large cache.
+const FANS_PER_WORKER: usize = 32;
+
+/// one fan folder's objects as a scan worker reads them, without their paths.
+struct Fan {
+    found: Vec<Found>,
+    /// the paths of the objects at these places in `found` whose names are not in lowercase, so
+    /// not the ones their digests give.
+    paths: Vec<(usize, PathBuf)>,
+    unreadable: Vec<Failure>,
+}
+
+struct Found {
+    digest: Sha256,
+    size: u64,
+    changed: SystemTime,
+    names: Option<u64>,
+}
+
+/// the objects in the fan folder `fan`, whose name is `prefix`.
+fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
+    let mut unreadable = Vec::new();
+    let entries = scan_entries(fan, &mut unreadable, stop)?;
+    let mut found = Vec::with_capacity(entries.len());
+    let mut paths = Vec::new();
+    for entry in &entries {
+        stop.check()?;
+        let name = entry.file_name();
+        let name = name.as_encoded_bytes();
+        if prefix.len() + name.len() != 64 {
+            continue;
+        }
+        let mut hex = [0; 64];
+        hex[..2].copy_from_slice(prefix.as_bytes());
+        hex[2..].copy_from_slice(name);
+        let Some(digest) = std::str::from_utf8(&hex).ok().and_then(Sha256::from_hex) else {
+            continue;
+        };
+        match entry.metadata().and_then(|metadata| {
+            let modified = metadata.modified()?;
+            let changed =
+                super::object::changed(&metadata).map_or(modified, |changed| changed.max(modified));
+            // the metadata unix gives counts names, so this takes no further call; what a windows
+            // listing gives does not count them
+            #[cfg(unix)]
+            let names = Some(std::os::unix::fs::MetadataExt::nlink(&metadata));
+            #[cfg(not(unix))]
+            let names = None;
+            Ok((metadata.len(), changed, names))
+        }) {
+            Ok((size, changed, names)) => {
+                if !hex
+                    .iter()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                {
+                    paths.push((found.len(), entry.path()));
+                }
+                found.push(Found {
+                    digest,
+                    size,
+                    changed,
+                    names,
+                });
+            }
+            Err(err) => unreadable.push(Failure::new(&entry.path(), &err)),
+        }
+    }
+    Ok(Fan {
+        found,
+        paths,
+        unreadable,
+    })
+}
+
 pub(super) fn removed(path: &Path, result: io::Result<()>, not_removed: &mut Vec<Failure>) -> bool {
     match result {
         Ok(()) => true,
@@ -755,12 +841,21 @@ mod tests {
         }
 
         pub(crate) fn objects(&self) -> Vec<Object> {
-            self.scan_objects(&Stop::default()).unwrap().objects
+            self.scan_objects(Threads::default(), &Stop::default())
+                .unwrap()
+                .objects
         }
 
         pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
-            self.sweep_with_stop(needed, &[], now, GRACE, &Stop::default())
-                .unwrap()
+            self.sweep_with_stop(
+                needed,
+                &[],
+                now,
+                GRACE,
+                Threads::default(),
+                &Stop::default(),
+            )
+            .unwrap()
         }
 
         pub(crate) fn verify_all(
@@ -805,6 +900,7 @@ mod tests {
                     &[],
                     SystemTime::now(),
                     Duration::ZERO,
+                    Threads::default(),
                     &Stop::default(),
                 )
                 .unwrap();
@@ -833,6 +929,7 @@ mod tests {
                 &[root],
                 SystemTime::now(),
                 GRACE,
+                Threads::default(),
                 &Stop::default(),
             )
             .unwrap();
@@ -877,6 +974,7 @@ mod tests {
                 &[root],
                 SystemTime::now() + GRACE + Duration::from_secs(60),
                 GRACE,
+                Threads::default(),
                 &stop,
             )
             .unwrap_err();
@@ -897,6 +995,69 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind, Kind::Interrupted);
         assert!(cache.changed().is_empty());
+    }
+
+    /// the fan folders are read on several workers, yet the scan is what a walk on one thread
+    /// gives: the same objects in the same order, each at the path its folder gives it.
+    #[test]
+    fn a_scan_on_workers_matches_one_on_a_single_thread() {
+        let (_dir, cache) = cache();
+        let digests: Vec<Sha256> = (0..300)
+            .map(|n| store(&cache, format!("object {n}").as_bytes()).digest)
+            .collect();
+        let fans: HashSet<String> = digests
+            .iter()
+            .map(|digest| digest.hex()[..2].to_owned())
+            .collect();
+        assert!(fans.len() >= 2 * FANS_PER_WORKER, "{} fans", fans.len());
+        // a name in capitals still names its object, at its own path
+        let shouted = cache.object_path(&digests[0]);
+        let loud = shouted.with_file_name(digests[0].hex()[2..].to_uppercase());
+        fs::rename(&shouted, &loud).unwrap();
+        let fan = shouted.parent().unwrap();
+        fs::write(fan.join("notes.txt"), b"not an object").unwrap();
+        let free = (0..=255u8)
+            .map(|byte| format!("{byte:02x}"))
+            .find(|prefix| !fans.contains(prefix))
+            .unwrap();
+        fs::write(
+            cache.root.join("objects").join(&free),
+            b"a fan that is a file",
+        )
+        .unwrap();
+        let listed = |threads: Threads| {
+            let scan = cache.scan_objects(threads, &Stop::default()).unwrap();
+            let objects: Vec<(Sha256, PathBuf, u64)> = scan
+                .objects
+                .into_iter()
+                .map(|object| (object.digest, object.path, object.size))
+                .collect();
+            let unreadable: Vec<String> = scan
+                .unreadable
+                .iter()
+                .map(|failure| failure.path.display().to_string())
+                .collect();
+            (objects, unreadable)
+        };
+        let (many, unreadable) = listed(Threads::default());
+        assert_eq!(
+            (many.clone(), unreadable.clone()),
+            listed(Threads::default().at_most(1))
+        );
+        assert_eq!(many.len(), digests.len());
+        for (digest, path, size) in &many {
+            let expected = if *digest == digests[0] {
+                loud.clone()
+            } else {
+                cache.object_path(digest)
+            };
+            assert_eq!(path, &expected);
+            assert_eq!(fs::symlink_metadata(path).unwrap().len(), *size);
+        }
+        assert_eq!(
+            unreadable,
+            [cache.root.join("objects").join(&free).display().to_string()]
+        );
     }
 
     #[cfg(unix)]
@@ -963,6 +1124,7 @@ mod tests {
                 &[],
                 SystemTime::now(),
                 GRACE,
+                Threads::default(),
                 &Stop::default(),
             )
             .unwrap();
@@ -973,6 +1135,7 @@ mod tests {
                 &[],
                 SystemTime::now(),
                 Duration::ZERO,
+                Threads::default(),
                 &Stop::default(),
             )
             .unwrap();
@@ -993,6 +1156,7 @@ mod tests {
                 std::slice::from_ref(&root),
                 SystemTime::now(),
                 GRACE,
+                Threads::default(),
                 &Stop::default(),
             )
             .unwrap();
@@ -1005,6 +1169,7 @@ mod tests {
                 &[root],
                 SystemTime::now(),
                 GRACE,
+                Threads::default(),
                 &Stop::default(),
             )
             .unwrap();

@@ -42,7 +42,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let Found {
         needed, projects, ..
     } = needed_with(&cache, None, &context.stop, false, Uses::Told)?;
-    let scan = cache.scan_objects(&context.stop)?;
+    let scan = cache.scan_objects(context.threads, &context.stop)?;
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
     }
@@ -305,6 +305,7 @@ fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<F
         &found.stale_projects,
         SystemTime::now(),
         grace,
+        context.threads,
         &context.stop,
     )?;
     // the sweep looked for a stop last, so what it freed is told whatever is asked from here
@@ -490,7 +491,7 @@ fn tell_dry_gc(
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
-    let scan = cache.scan_objects(&context.stop)?;
+    let scan = cache.scan_objects(context.threads, &context.stop)?;
     let total: u64 = scan.objects.iter().map(|object| object.size).sum();
     let what = "cached data files";
     let bar = context.output.bar("Checking", what.to_owned());
@@ -656,7 +657,7 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
         return;
     }
     let needed = found.needed;
-    let Ok(scan) = cache.scan_objects(stop) else {
+    let Ok(scan) = cache.scan_objects(Threads::default(), stop) else {
         return;
     };
     // what `fetchloom cache` says gc frees now, so the two never disagree. the reminder tells

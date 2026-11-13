@@ -256,7 +256,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/plan.rs` | where every pinned file lands: destinations expanded, clashes found before anything is written, names compared as a disk that ignores case does | `Plan`, `Target` | `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
-| `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_hashes` |
+| `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_coarse`, `run_hashes` |
 | `src/place/parents.rs` | on unix, directory handles that keep later path swaps out of placement | `Parents` |  |
 | `src/place/parents_windows.rs` | the windows twin: folder handles that deny deletion while placement uses their paths | `Parents` |  |
 | `src/place/schedule.rs` | a cap on concurrent changes to one folder's entries, apart from the worker ceiling | `Folders` |  |

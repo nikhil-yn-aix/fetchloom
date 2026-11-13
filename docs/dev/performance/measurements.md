@@ -96,6 +96,7 @@ every change measured with the current harness, one row each: what it gained whe
 | cache | bounded name discovery and checked-open metadata during verification | 100,000 objects up to 22% faster, but retry at 1,000 objects 1.343 ext4 / 1.323 xfs | dropped, control time | [verification pipeline](#pipelining-cache-verification-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
+| cache | the cache's 256 fan folders read on up to 8 workers, each object's path made after, on one thread | `cache verify` of 100,000 objects 0.371 [0.367, 0.379], of 10,000 0.471; the cache report beside 100,000 files 0.644; peak memory 0.93 to 0.97 | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | staging shards only for large pushes, with compact-name retry | musl 100,000 files: time 0.732, peak RSS 1.042 [1.024, 1.050] | dropped, memory regression | [conditional shards](#conditional-mirror-staging-shards-2026-11-12) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -1526,3 +1527,15 @@ before downloading, a cold sync asked the cache about each pinned file four time
 | a zip of 10,000 files | 12 | 1.015 [0.993, 1.088] | 1.019 [0.958, 1.059] | 1.000 | 1.016 |
 
 kept: the 100,000-file interval clears the 10% bar and the a/a spread, and the 10,000-file median does too. the zip's wide interval is its own a/a's. `add` asks the cache through another path, which this does not change.
+
+### reading the cache's folders on workers
+
+every command that walks the cache, `cache verify`, the cache report, gc and `cache gc --inputs`, read its 256 fan folders one after another, about 3.6 µs an object, all of it one thread's system calls: 0.36 s of a 0.47 s verify of 100,000 objects on tmpfs. now up to 8 workers read a fan folder each, one per 32 folders the cache has, and the objects come back in the order one thread would give. a first build had each worker make its objects' paths, and peak memory nearly doubled: mimalloc keeps memory a thread frees for 1 s, and with `MIMALLOC_PURGE_DELAY=0` the extra was 4 MiB. the kept build's workers return only each object's digest, size, times and link count, the path of any name not in lowercase aside, and the paths are made after, on the calling thread, into a list sized once.
+
+| case | pairs | wall | a/a wall | cpu | peak memory | peak memory, paths made on the workers |
+|---|---:|---|---|---|---|---|
+| `cache verify`, 100,000 objects | 12 | 0.371 [0.367, 0.379] | 0.990 [0.984, 1.007] | 1.019 | 0.966 [0.964, 0.968] | 1.975 [1.891, 1.983] |
+| `cache verify`, 10,000 objects | 12 | 0.471 [0.467, 0.480] | 1.000 [0.994, 1.026] | 1.000 | 0.928 [0.924, 0.935] | 1.435 [1.401, 1.472] |
+| `--json cache` beside 100,000 placed files | 12 | 0.644 [0.641, 0.647] | 1.000 [0.991, 1.005] | 1.005 | 0.960 [0.959, 0.961] | 1.165 [1.163, 1.169] |
+
+the base medians were 0.473 s and 55.5 MiB, 0.051 s and 25.5 MiB, 0.813 s and 146.9 MiB. the first build gave `cache verify` of 1,000 objects 0.763 [0.749, 0.775]; a cache of fewer than 64 fan folders is still read on one thread. kept, and `FETCHLOOM_THREADS` caps the workers as it does elsewhere.

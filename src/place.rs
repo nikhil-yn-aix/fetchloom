@@ -865,6 +865,22 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     run_work(items, workers(items.len(), cap), job)
 }
 
+/// runs `job` on every item in order on up to [`THREADS`] workers, one per `per` items, for
+/// coarse items such as the cache's 256 fan folders, each holding many objects.
+pub(crate) fn run_coarse<T: Sync, R: Send>(
+    items: &[T],
+    cap: Threads,
+    per: usize,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    run_work(
+        items,
+        cap.limit(threads.min(THREADS).min(items.len() / per.max(1))),
+        job,
+    )
+}
+
 /// runs hashing work in item order, using bytes as well as file count to repay worker startup.
 pub(crate) fn run_hashes<T: Sync, R: Send>(
     items: &[T],

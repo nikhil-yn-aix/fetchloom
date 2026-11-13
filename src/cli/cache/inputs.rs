@@ -172,7 +172,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     let asked = ask(context, &plan)?;
     let cache = super::hold(context)?;
     let found = super::needed_with(&cache, None, &context.stop, true, Uses::Grouped)?;
-    let cached = cached_of(&cache, &found.groups, &context.stop)?;
+    let cached = cached_of(&cache, &found.groups, context.threads, &context.stop)?;
     recheck(&mut plan, &found.needed, &found.groups, &cached);
     let mut not_removed = Vec::new();
     free(&mut plan, &cache, &mut not_removed, &context.stop)?;
@@ -193,7 +193,7 @@ fn merge(freed: &mut Freed, not_removed: Vec<Failure>) {
 fn look(context: &Context, cache: &Cache, collect_stale: bool) -> Result<(Found, Plan), Error> {
     let mut found = super::needed_with(cache, None, &context.stop, collect_stale, Uses::Grouped)?;
     let groups = std::mem::take(&mut found.groups);
-    let cached = cached_of(cache, &groups, &context.stop)?;
+    let cached = cached_of(cache, &groups, context.threads, &context.stop)?;
     let plan = plan(
         &context.output,
         groups,
@@ -211,13 +211,14 @@ fn look(context: &Context, cache: &Cache, collect_stale: bool) -> Result<(Found,
 fn cached_of(
     cache: &Cache,
     groups: &[Group],
+    threads: Threads,
     stop: &Stop,
 ) -> Result<HashMap<Sha256, Cached>, Error> {
     let wanted: HashSet<Sha256> = groups
         .iter()
         .flat_map(|group| group.objects.iter().copied())
         .collect();
-    let scan = cache.scan_objects(stop)?;
+    let scan = cache.scan_objects(threads, stop)?;
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect; the cache stays unchanged:"));
     }
@@ -869,7 +870,7 @@ mod tests {
     /// the plan gc `--inputs` makes from what `walked` found, with folder mirrors at `mirrors`.
     fn planned(cache: &Cache, (needed, groups): (Needed, Vec<Group>), mirrors: &[&Path]) -> Plan {
         let stop = Stop::default();
-        let cached = cached_of(cache, &groups, &stop).unwrap();
+        let cached = cached_of(cache, &groups, Threads::default(), &stop).unwrap();
         let mirrors = Mirrors::new(
             mirrors
                 .iter()
@@ -1049,7 +1050,7 @@ mod tests {
         let placed = Manifest::parse(&RAW_AND_CLEAN.replacen("place = false\n", "", 1)).unwrap();
         let (needed, groups) = walked(root, &cache, &placed, &lock);
         let stop = Stop::default();
-        let cached = cached_of(&cache, &groups, &stop).unwrap();
+        let cached = cached_of(&cache, &groups, Threads::default(), &stop).unwrap();
         recheck(&mut plan, &needed, &groups, &cached);
         let mut not_removed = Vec::new();
         free(&mut plan, &cache, &mut not_removed, &stop).unwrap();

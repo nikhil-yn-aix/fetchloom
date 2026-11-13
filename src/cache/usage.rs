@@ -319,7 +319,9 @@ mod tests {
         fs::create_dir_all(root.join(".fetchloom")).unwrap();
         fs::write(root.join(".fetchloom").join("state"), state.render()).unwrap();
         let usage = Usage::measure(
-            &cache.scan_objects(&Stop::default()).unwrap(),
+            &cache
+                .scan_objects(Threads::default(), &Stop::default())
+                .unwrap(),
             &Needed::default(),
             &[root],
             SystemTime::now(),
@@ -403,7 +405,9 @@ mod tests {
         fs::write(project.join("data/set/edited.csv"), b"edited by hand\n").unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let after = Usage::measure(
-            &cache.scan_objects(&Stop::default()).unwrap(),
+            &cache
+                .scan_objects(Threads::default(), &Stop::default())
+                .unwrap(),
             &Needed::default(),
             &[project],
             SystemTime::now(),
