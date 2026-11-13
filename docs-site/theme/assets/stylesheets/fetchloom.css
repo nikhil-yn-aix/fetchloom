@@ -1,5 +1,6 @@
-/* fetchloom's site: the cli's palette (src/output/style.rs) on the paper and ink of the benchmark
-   charts (bench/render.py), set like a printed manual for a terminal tool */
+/* fetchloom's site: the colors of the cli's light and dark themes (src/output/style.rs) and of the
+   benchmark charts (bench/render.py), indigo on drafting paper, set like a printed manual for a
+   terminal tool */
 
 /* geist mono and instrument serif are the files of bench/fonts, which the charts use; source serif 4
    4.004 is the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes. the OFL file
@@ -32,36 +33,36 @@
 }
 
 [data-md-color-scheme="default"] {
-  --fl-paper: #faf9f5;
-  --fl-ink: #141413;
-  --fl-muted: #75726a;
-  --fl-hair: #e6e3d9;
-  --fl-track: #efece4;
-  --fl-accent: #b44f26;
-  --fl-done: #3c7a37;
-  --fl-warn: #8f6200;
-  --fl-fail: #bf213a;
+  --fl-paper: #f8f8f7;
+  --fl-ink: #121315;
+  --fl-muted: #5c6064;
+  --fl-hair: #dcdedf;
+  --fl-track: #ebeced;
+  --fl-accent: #2e3f9c;
+  --fl-done: #2e7836;
+  --fl-warn: #875a00;
+  --fl-fail: #b5202e;
   /* the search dialog's colors, as rgb triplets */
-  --color-foreground: 20 20 19;
-  --color-background: 250 249 245;
-  --color-background-subtle: 244 242 236;
-  --color-backdrop: 250 249 245;
+  --color-foreground: 18 19 21;
+  --color-background: 248 248 247;
+  --color-background-subtle: 235 236 237;
+  --color-backdrop: 248 248 247;
 }
 
 [data-md-color-scheme="slate"] {
-  --fl-paper: #1b1a17;
-  --fl-ink: #f2efe7;
-  --fl-muted: #9b978c;
-  --fl-hair: #34322c;
-  --fl-track: #24231f;
-  --fl-accent: #ee7a4c;
-  --fl-done: #8fc086;
-  --fl-warn: #e8b65a;
-  --fl-fail: #f25c6a;
-  --color-foreground: 242 239 231;
-  --color-background: 27 26 23;
-  --color-background-subtle: 36 35 31;
-  --color-backdrop: 27 26 23;
+  --fl-paper: #141617;
+  --fl-ink: #e8e9ea;
+  --fl-muted: #999ea2;
+  --fl-hair: #2b2e31;
+  --fl-track: #1e2123;
+  --fl-accent: #9ea9f2;
+  --fl-done: #86c98b;
+  --fl-warn: #e4b25a;
+  --fl-fail: #f2736d;
+  --color-foreground: 232 233 234;
+  --color-background: 20 22 23;
+  --color-background-subtle: 30 33 35;
+  --color-backdrop: 20 22 23;
   color-scheme: dark;
 }
 
