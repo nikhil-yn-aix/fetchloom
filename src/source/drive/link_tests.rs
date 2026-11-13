@@ -186,3 +186,70 @@ fn download_plans_read_confirmation_and_refusal_pages() {
         assert!(error.help.is_some());
     }
 }
+
+/// gdown's public test slides, read for real from the link drive shares them by: the reference
+/// names the file by its id, drive names it as it sends it, and the bytes are the ones pinned here
+/// from a download on 2026-11-13, 34,667 bytes.
+#[test]
+#[ignore = "live: talks to drive.google.com and drive.usercontent.google.com"]
+fn live_drive_file() {
+    let id = "15umvZKlsJ3094HNg5S4vJsIhxcFlyTeK";
+    let sha256 = crate::digest::Sha256::from_hex(
+        "dcf256e9df93140c10e51fcda344445eeb73bd45389d3c42186abd366c622000",
+    );
+    let work = std::sync::Arc::new(crate::work::Work::default());
+    let net = crate::net::Net::new(
+        crate::net::Options {
+            offline: crate::net::Offline::No,
+            jobs: 4,
+            credentials: Vec::new(),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        work.clone(),
+        std::sync::Arc::default(),
+        std::sync::Arc::new(|_| {}),
+    );
+    let start = std::time::Instant::now();
+    let link = format!("https://drive.google.com/file/d/{id}/view?usp=sharing");
+    let listing = block_on(reference(&link).resolve(&net)).unwrap();
+    assert_eq!(listing.resolved.to_string(), format!("drive:{id}"));
+    let [remote] = listing.files.as_slice() else {
+        panic!("one file: {listing:?}");
+    };
+    assert_eq!(
+        (
+            remote.path.as_str(),
+            remote.named_by_server,
+            remote.size,
+            remote.sha256,
+            remote.md5
+        ),
+        ("download", true, None, None, None)
+    );
+    assert_eq!(
+        remote.url.as_str(),
+        format!("https://drive.google.com/uc?id={id}")
+    );
+    let folder = tempfile::tempdir().unwrap();
+    let cache = crate::cache::Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = crate::net::Fetch {
+        expect: crate::net::Expect {
+            sha256,
+            md5: None,
+            size: Some(34_667),
+        },
+        ..crate::source::fetch_plan(&remote.url)
+    };
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    eprintln!(
+        "drive: {} as {:?}, {} bytes, {}, {} requests, {:?}",
+        listing.resolved,
+        fetched.name,
+        fetched.size,
+        fetched.digest.short(),
+        work.counts().requests,
+        start.elapsed()
+    );
+    assert_eq!(fetched.name.as_deref(), Some("gdown.pptx"));
+    assert_eq!((Some(fetched.digest), fetched.size), (sha256, 34_667));
+}

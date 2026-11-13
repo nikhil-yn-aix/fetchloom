@@ -91,3 +91,66 @@ fn unrelated_downloads_have_no_dropbox_page_handler() {
     assert_eq!(from, url);
     assert!(divert.is_none());
 }
+
+/// the shared pdf the dropbox page shows, read for real: the link names the file, dropbox sends
+/// it, and the bytes are the ones pinned here from a download on 2026-11-13, 775,543 bytes.
+#[test]
+#[ignore = "live: talks to www.dropbox.com and dl.dropboxusercontent.com"]
+fn live_dropbox() {
+    let link = "https://www.dropbox.com/s/3y96pnutxum3p4v/0569.pdf?dl=1";
+    let sha256 = crate::digest::Sha256::from_hex(
+        "86c4de5593a6058b67cefe76ccff78d98ba20fe1606cbd7d62b11f77b39aee59",
+    );
+    let work = std::sync::Arc::new(crate::work::Work::default());
+    let net = crate::net::Net::new(
+        crate::net::Options {
+            offline: crate::net::Offline::No,
+            jobs: 4,
+            credentials: Vec::new(),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        work.clone(),
+        std::sync::Arc::default(),
+        std::sync::Arc::new(|_| {}),
+    );
+    let start = std::time::Instant::now();
+    let reference = Reference::parse(link).unwrap().reference;
+    let listing = block_on(reference.resolve(&net)).unwrap();
+    assert_eq!(listing.resolved.to_string(), link);
+    let [remote] = listing.files.as_slice() else {
+        panic!("one file: {listing:?}");
+    };
+    assert_eq!(
+        (
+            remote.path.as_str(),
+            remote.named_by_server,
+            remote.size,
+            remote.sha256,
+            remote.md5
+        ),
+        ("0569.pdf", true, None, None, None)
+    );
+    assert_eq!(remote.url.as_str(), link);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = crate::cache::Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = crate::net::Fetch {
+        expect: crate::net::Expect {
+            sha256,
+            md5: None,
+            size: Some(775_543),
+        },
+        ..crate::source::fetch_plan(&remote.url)
+    };
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    eprintln!(
+        "dropbox: {} as {:?}, {} bytes, {}, {} requests, {:?}",
+        listing.resolved,
+        fetched.name,
+        fetched.size,
+        fetched.digest.short(),
+        work.counts().requests,
+        start.elapsed()
+    );
+    assert_eq!(fetched.name.as_deref(), Some("0569.pdf"));
+    assert_eq!((Some(fetched.digest), fetched.size), (sha256, 775_543));
+}

@@ -6,6 +6,8 @@ const DEEP: &str = "1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL";
 const FOLDER_1: &str = "1TMZoSAu4ecs_Q3GEEWfiyrQIPtj3DJAC";
 const FOLDER_1_1: &str = "1-Z2wzjaaqqB1lBiPXNGfgkICA2Pc9q_U";
 const FOLDER_2: &str = "1RRfB3nFcMtg_ibfCjoU6P6DbsrXkwnPF";
+/// gdown's test folder `files_2`, which holds a file shared before 2021, with its resource key.
+const KEYED: &str = "1LufWJZBSP-qij-4rC_F8BPpf_JFxW2ku";
 
 fn page(id: &str) -> String {
     format!("https://drive.google.com/embeddedfolderview?id={id}")
@@ -66,9 +68,8 @@ fn a_folder_lists_the_files_of_every_folder_inside_it() {
 
 #[test]
 fn a_file_shared_before_2021_keeps_its_resource_key() {
-    let id = "1LufWJZBSP-qij-4rC_F8BPpf_JFxW2ku";
-    let recorded = Recorded::default().fixture(&page(id), "drive/folder-keyed.html");
-    let listing = block_on(folder(id).resolve(&recorded)).unwrap();
+    let recorded = Recorded::default().fixture(&page(KEYED), "drive/folder-keyed.html");
+    let listing = block_on(folder(KEYED).resolve(&recorded)).unwrap();
     let urls: Vec<(&str, &str)> = listing
         .files
         .iter()
@@ -268,4 +269,100 @@ fn unavailable_entries_count_toward_the_listing_limit() {
             assert!(error.message.contains("more than 1,000 files"));
         }
     }
+}
+
+/// gdown's public test folders, read for real: `deep_folder` lists the files of every folder in
+/// it, and `files_2` keeps the resource key of a file shared before 2021, which downloads with it
+/// to the bytes pinned here from a download on 2026-11-13, the 5 bytes of `spam.txt`.
+#[test]
+#[ignore = "live: talks to drive.google.com and drive.usercontent.google.com"]
+fn live_drive_folder() {
+    let sha256 = crate::digest::Sha256::from_hex(
+        "284e3029cce3ae5ee0b05866100e300046359f53ae4c77fe6b34c05aa7a72cee",
+    );
+    let work = std::sync::Arc::new(crate::work::Work::default());
+    let net = crate::net::Net::new(
+        crate::net::Options {
+            offline: crate::net::Offline::No,
+            jobs: 4,
+            credentials: Vec::new(),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        work.clone(),
+        std::sync::Arc::default(),
+        std::sync::Arc::new(|_| {}),
+    );
+    let start = std::time::Instant::now();
+    let deep = block_on(folder(DEEP).resolve(&net)).unwrap();
+    assert_eq!(deep.resolved.to_string(), format!("drive:folders/{DEEP}"));
+    assert_eq!(deep.title.as_deref(), Some("deep_folder"));
+    let listed: Vec<(&str, &str)> = deep
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.url.as_str()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "file.txt",
+                "https://drive.google.com/uc?id=15bpMH3clXwBJf9cdGpXIOgwKwHrg4T--"
+            ),
+            (
+                "folder_1/file.txt",
+                "https://drive.google.com/uc?id=1T8RH3_FJMzShUfibltqBLCYvQN3QYWFG"
+            ),
+            (
+                "folder_2/file.txt",
+                "https://drive.google.com/uc?id=1ioOMsmyR9HRWvwTUFSPb__MoOs4wE42v"
+            ),
+            (
+                "folder_1/folder_1_1/file.txt",
+                "https://drive.google.com/uc?id=1eGGJOMWkEZCzfp5rT4fbZ3-lJ5ShDUST"
+            ),
+        ]
+    );
+    let keyed = block_on(folder(KEYED).resolve(&net)).unwrap();
+    assert_eq!(keyed.title.as_deref(), Some("files_2"));
+    let spam = keyed
+        .files
+        .iter()
+        .find(|file| file.path == "spam.txt")
+        .unwrap();
+    assert_eq!(
+        spam.url.as_str(),
+        "https://drive.google.com/uc?id=0B9P1L--7Wd2vU3VUVlFnbTgtS2c&resourcekey=0-WWs_XOSctfaY_0-sJBKRSQ"
+    );
+    assert_eq!(
+        (spam.size, spam.sha256, spam.md5, spam.named_by_server),
+        (None, None, None, false)
+    );
+    let pages = work.counts().requests;
+    let cache_folder = tempfile::tempdir().unwrap();
+    let cache = crate::cache::Cache::open(cache_folder.path().join("cache")).unwrap();
+    let fetch = crate::net::Fetch {
+        expect: crate::net::Expect {
+            sha256,
+            md5: None,
+            size: Some(5),
+        },
+        ..crate::source::fetch_plan(&spam.url)
+    };
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    eprintln!(
+        "drive: {} files in {}, {} in {}, {} pages, {} as {:?}, {} bytes, {}, {:?}",
+        deep.files.len(),
+        deep.resolved,
+        keyed.files.len(),
+        keyed.resolved,
+        pages,
+        spam.path,
+        fetched.name,
+        fetched.size,
+        fetched.digest.short(),
+        start.elapsed()
+    );
+    assert_eq!(pages, 5);
+    assert_eq!(fetched.name.as_deref(), Some("spam.txt"));
+    assert_eq!((Some(fetched.digest), fetched.size), (sha256, 5));
 }
