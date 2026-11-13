@@ -31,9 +31,8 @@ pub(crate) struct Survey {
     pub(crate) disk: HashMap<String, Look>,
     /// the listing's spelling of an alias, within the current data folder, for removals.
     pub(crate) listed: HashMap<String, String>,
-    /// hardlinks whose bytes hashing found changed while they still share them, with the cache's
-    /// copy or other projects, or are a copy a change mark records: edited through some link to
-    /// that copy. sync puts them back with or without --force.
+    /// hardlinks hashing found changed while they share their bytes with the cache or other
+    /// projects, or are a copy a change mark records. sync puts them back, with or without --force.
     pub(crate) elsewhere: HashSet<String>,
     /// hardlinks a mark put in doubt whose bytes hashing found intact, which sync keeps, recording
     /// the scan's start.
@@ -41,10 +40,8 @@ pub(crate) struct Survey {
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
-    /// copies and reflinks, and links left with no name but their own, that still look as placed
-    /// but hold other bytes: a change that kept the size and time, as a failing disk or a tool
-    /// that restores times makes. hashing every placed file finds them, as `--verify` asks, and a
-    /// change mark puts them in doubt too. sync puts them back with or without --force.
+    /// copies, reflinks and links with no other name that look as placed but hold other bytes, as
+    /// `--verify` or a change mark finds. sync puts them back, with or without --force.
     pub(crate) damaged: HashSet<String>,
     /// files the disk lets their owner write. a link to the cache's copy among them leaves the
     /// copy every project shares open to an edit.
@@ -62,9 +59,8 @@ pub(crate) struct Survey {
     holding: OnceLock<HashSet<String>>,
     /// the data folder's path in the project, below which entries can stand in a file's way.
     data_dir: String,
-    /// the files the state records outside the data folder that are still there, by their paths
-    /// in the project, in order: what fetchloom placed before `data_dir` changed. a sync never
-    /// deletes them.
+    /// the files the state records outside the data folder that are still there, in order, as
+    /// fetchloom placed them before `data_dir` changed. a sync never deletes them.
     outside: Vec<String>,
 }
 
@@ -75,9 +71,8 @@ pub(crate) struct LeftBehind {
     pub(crate) folder: Option<String>,
     /// their paths in the project, in order.
     pub(crate) files: Vec<String>,
-    /// what else `folder` holds that fetchloom did not place, such as a person's notes, which go
-    /// with the folder when someone deletes it: files, links and special files, by path in the
-    /// project, sorted.
+    /// what else `folder` holds, such as a person's notes, which deleting the folder takes too:
+    /// files, links and special files fetchloom did not place, sorted.
     pub(crate) others: Vec<String>,
 }
 
@@ -85,10 +80,8 @@ pub(crate) struct LeftBehind {
 /// dataset needs, with what else is in it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Retired {
-    /// its path in the project.
     pub(crate) folder: String,
-    /// the files, links and special files in it that fetchloom did not place, by path in the
-    /// project, in order.
+    /// the files, links and special files in it that fetchloom did not place, sorted.
     pub(crate) unplaced: Vec<String>,
 }
 
@@ -114,16 +107,14 @@ pub(crate) struct Blocker {
     /// whether `sync --force` may remove it. a folder holding anything stays, since its files
     /// may be someone's work.
     pub(crate) clearable: bool,
-    /// the dataset the entry is a file of, or whose files a folder in the way holds, when the
-    /// run leaves that dataset alone, as a sync of other datasets does. such an entry stays
-    /// even with `--force`.
+    /// the dataset whose file the entry is, or whose files the folder holds, when the run leaves
+    /// that dataset alone, as a sync of other datasets does. it stays even with `--force`.
     pub(crate) dataset: Option<String>,
 }
 
 /// what removing the files of a run's `going` takes out of the way, from one survey.
 pub(crate) struct Freeing<'s> {
     going: &'s HashSet<String>,
-    /// the folders holding a file of `going`.
     holding_going: HashSet<&'s str>,
     /// the folders holding something removing `going` leaves: another file, a link, a special
     /// file or a folder that holds no file of `going`.
@@ -131,9 +122,8 @@ pub(crate) struct Freeing<'s> {
 }
 
 impl Freeing<'_> {
-    /// whether removing the files in `going`, with the folders that leaves empty, takes
-    /// `blocker` out of the way: a file in the way that is one of them, or a folder that holds
-    /// nothing else, since a folder goes with the last file removed from it.
+    /// whether removing `going` takes `blocker` out of the way: a file among them, or a folder
+    /// holding nothing else, since a folder goes with the last file removed from it.
     pub(crate) fn frees(&self, blocker: &Blocker) -> bool {
         match blocker.found {
             Entry::File => self.going.contains(&blocker.path),
@@ -174,9 +164,8 @@ impl Survey {
         Self::surveyed(project, data_dir, None, threads, stop)
     }
 
-    /// [`Survey::read`] of the folders `within` alone, paths in the project inside `data_dir`:
-    /// it lists only them and keeps only the state's records inside them, so it answers for the
-    /// files there, and its state is never written back.
+    /// [`Survey::read`] of the folders `within` alone, inside `data_dir`, keeping only the state's
+    /// records inside them, so that partial state is never written back.
     pub(crate) fn read_within(
         project: &Project,
         data_dir: &str,
@@ -235,11 +224,9 @@ impl Survey {
         Ok(survey)
     }
 
-    /// the files among `going`, the records a run drops, that fetchloom placed before `data_dir`
-    /// changed and that are still outside the data folder, with the folder they are in: the part
-    /// of their paths before the path a file of `wanted` has below the data folder now, as when
-    /// only `data_dir` changed, else the folder they share. that folder, in the project at
-    /// `root`, is read for what else it holds. none when no file was left behind.
+    /// the files among `going`, the records a run drops, still outside the data folder, and their
+    /// folder: the old data folder, found from where a file of `wanted` sits below the new one,
+    /// else the folder they share. none when no file was left behind.
     pub(crate) fn left_behind(
         &self,
         root: &Path,
@@ -287,9 +274,8 @@ impl Survey {
         })
     }
 
-    /// what `folder`, in the project at `root`, holds that no record says fetchloom placed,
-    /// leaving out what an interrupted placement staged there: files, links and special files,
-    /// by path in the project, sorted. links are neither followed nor read.
+    /// what `folder` holds that no record says fetchloom placed, besides copies a placement
+    /// staged: files, links and special files, sorted. links are neither followed nor read.
     fn not_placed(&self, root: &Path, folder: &str) -> Vec<String> {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
@@ -315,10 +301,8 @@ impl Survey {
         others
     }
 
-    /// the folders that held files fetchloom placed, `going`, which no file of `wanted` needs now,
-    /// each the highest below the data folder that holds none of `wanted`, with what else they
-    /// hold, as the survey listed it before anything was removed. a folder holding nothing else
-    /// goes with its last file, so it is not among them.
+    /// each highest folder below the data folder holding a file of `going` and none of `wanted`,
+    /// with what else the survey listed in it. one holding nothing else goes with its last file.
     pub(crate) fn retired(&self, wanted: &HashSet<&str>, going: &HashSet<&str>) -> Vec<Retired> {
         if going.is_empty() {
             return Vec::new();
@@ -383,10 +367,8 @@ impl Survey {
             .collect()
     }
 
-    /// on windows, a folder's listing keeps a hardlinked file's size, time and read-only flag as
-    /// they were when this link last opened it, so an edit made through another project's link
-    /// does not show. opening the file reads them as they are, for the files placed as hardlinks
-    /// only.
+    /// windows listings keep a hardlink's size, time and read-only flag as this name last saw
+    /// them, hiding an edit through another link, so each file placed as a hardlink is opened.
     #[cfg(windows)]
     fn look_through_links(&mut self, root: &Path) {
         for (path, placed) in &self.state.files {
@@ -411,12 +393,9 @@ impl Survey {
     )]
     fn look_through_links(&mut self, _root: &Path) {}
 
-    /// reconciles missing recorded names, then hashes files whose recorded time is not older than the
-    /// state's own, `written`. a coarse clock, such as FAT's two seconds, gives a file edited in
-    /// the tick it was placed the size and time recorded for it, and both times come from that
-    /// clock. git treats its racily clean index entries the same way. a data folder on an
-    /// `other_device` than the state's may keep times to a coarser step than the state's, so
-    /// there the state vouches only for files older than it by the coarsest step.
+    /// carries listed aliases to missing recorded names, then hashes files that look as recorded
+    /// but are not older than the state, `written`: a coarse clock gives a file edited in the tick
+    /// it was placed the size and time recorded for it.
     fn hash_racy(&mut self, root: &Path, written: u64, other_device: bool) {
         let written = vouched_before(written, other_device);
         let mut racy = Vec::new();
@@ -451,7 +430,6 @@ impl Survey {
             return;
         }
         let _span = tracing::debug_span!("hash_racy", files = racy.len()).entered();
-        // a time equal to the state's own cannot tell an edit in the same clock tick apart
         tracing::debug!(
             files = racy.len(),
             "hashing files placed too recently to trust their time"
@@ -471,11 +449,8 @@ impl Survey {
         }
     }
 
-    /// carries a placed record to a wanted alias before decisions or removals can treat the
-    /// two spellings as separate files. edits and doubts still belong to that same file. a file
-    /// nothing recorded is carried only when its listed name differs in unicode composition
-    /// alone, as hfs+ lists every name decomposed, so it is the target's own file and never
-    /// both missing and extra.
+    /// carries a record, with its edits and doubts, to a wanted alias, so decisions and removals
+    /// see one file. an unrecorded file moves only when the names differ in unicode composition.
     pub(crate) fn retarget(&mut self, root: &Path, targets: &[Target]) {
         // an alias of another composition needs a name beyond ascii on one side
         if self.state.files.is_empty()
@@ -525,9 +500,8 @@ impl Survey {
         }
     }
 
-    /// gives each file hashing found edited a recorded size no file has. a state written now is
-    /// newer than the edit and would vouch for the size and time it shares with the placed file.
-    /// git smudges its racily clean index entries the same way.
+    /// gives each edited file a recorded size no file has, as git smudges racily clean entries,
+    /// since a state written now would vouch for the size and time the edit kept.
     pub(crate) fn smudge_edited(&mut self) {
         for path in &self.edited {
             if let Some(placed) = self.state.files.get_mut(path) {
@@ -536,9 +510,8 @@ impl Survey {
         }
     }
 
-    /// what keeps a file data.lock places at `path` from being placed, when no plain file stands
-    /// there: a file, link or special file where a folder on its way belongs, or a folder, link
-    /// or special file at the path itself. none when nothing does, as when the path is free.
+    /// the entry in the way of a file data.lock places at `path`, where no plain file stands: a
+    /// non-folder where a folder on its way belongs, or a folder, link or special file at `path`.
     pub(crate) fn blocker(&self, path: &str) -> Option<Blocker> {
         let start = self.data_dir.len() + 1;
         let below = path
@@ -617,22 +590,14 @@ impl Survey {
             .filter(|path| !self.state.files.contains_key(*path))
     }
 
-    /// files placed as hardlinks that only hashing can tell intact from changed, with the cache's
-    /// copy of their bytes in doubt.
+    /// hardlinks only hashing can tell intact from changed, with the cache's copy in doubt.
     ///
-    /// one kind still shows the size and time it was placed with, while its object was marked as
-    /// changed after fetchloom last knew the link to hold its bytes, so the mark is the only sign
-    /// of an edit made through another project. the link may also name an older copy of the
-    /// object than the one that changed. a mark within a coarse clock's step of that time is in
-    /// doubt too, as its time may be cut down. a link that is the very file a repair put in place
-    /// is that copy, which the cache trusts; a shared time alone proves nothing, since two files
-    /// can carry the same coarse time.
+    /// one looks as placed, but its object was marked changed after, or within a coarse clock's
+    /// step of, the time the link was last known intact; the very file a repair put in place is
+    /// trusted, as a shared coarse time alone proves nothing.
     ///
-    /// the other kind changed, and is still the cache's own copy, or the very copy a mark records
-    /// the cache found changed. an edit through any link to that copy, in this project or
-    /// another, changed what every project sharing it reads, so it is damage to the cached copy
-    /// rather than this project's own file. a link replaced by a file of the project's own is
-    /// another file, and stays an edit.
+    /// the other changed while it is still the cache's copy, or a copy a mark records, so its edit
+    /// is damage every sharing project reads; a link replaced by a file of its own stays an edit.
     pub(crate) fn doubted(&self, root: &Path, cache: &Cache) -> Result<Vec<String>, Error> {
         let marks = cache.marks()?;
         Ok(self
@@ -717,12 +682,9 @@ impl Survey {
         Ok(())
     }
 
-    /// hashes every placed file of a dataset in `scope` that still looks as placed and that
-    /// nothing here hashed or put in doubt already, so changed bytes that kept their size and
-    /// time show too, as `--verify` asks. given `output`, a bar of the bytes moves as each block
-    /// is read. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
-    /// file joins `damaged`. a file that cannot be read stops the check. returns the files it
-    /// found changed, which a plain sync cannot see.
+    /// hashes for `--verify` each placed file in `scope` that looks as placed and that this survey
+    /// has not hashed or put in doubt, and returns those changed, which join `elsewhere` or
+    /// `damaged`. `output` shows a bar of the bytes; an unreadable file stops the check.
     pub(crate) fn verify(
         &mut self,
         root: &Path,
@@ -796,8 +758,8 @@ impl Survey {
     }
 }
 
-/// finds only unambiguous aliases that resolve to the listed file. an ordinary scan never
-/// folds names or reads files again when every recorded spelling was listed.
+/// each path of `missing` with the one listed spelling it folds to, when both name the same file.
+/// nothing is folded or read again when no recorded spelling is missing.
 fn aliases<'a>(
     root: &Path,
     disk: &HashMap<String, Look>,
@@ -874,14 +836,11 @@ fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
     false
 }
 
-/// the step of the coarsest clock a data folder may sit on: fat cuts a file's time down to two
-/// seconds.
+/// the coarsest clock step a data folder may keep: fat cuts a file's time down to two seconds.
 const COARSE: u64 = 2_000_000_000;
 
-/// the time before which the state, written at `written`, vouches for a file that still looks as
-/// it records: a file as new as the state may hold an edit made in the same tick of a coarse
-/// clock. a data folder on an `other_device` than the state's may keep times to a coarser step,
-/// so there the state vouches only for files older than it by the coarsest step.
+/// the time before which a state written at `written` vouches for files that look as recorded.
+/// a data folder on an `other_device` may keep a coarser clock, so there it is `COARSE` earlier.
 pub(crate) fn vouched_before(written: u64, other_device: bool) -> u64 {
     if other_device {
         written.saturating_sub(COARSE)
@@ -890,10 +849,8 @@ pub(crate) fn vouched_before(written: u64, other_device: bool) -> u64 {
     }
 }
 
-/// the files `state` records outside the data folder `data_dir`, as fetchloom placed them before
-/// `data_dir` changed, that are still plain files in real folders under `root`, in order. a path
-/// that names a file `disk` lists in the data folder under another spelling, as a disk that
-/// ignores case reads it, is that file.
+/// the files `state` records outside `data_dir`, placed before it changed, that are still plain
+/// files in real folders, in order, unless they are a data folder file under another spelling.
 fn outside(
     root: &Path,
     data_dir: &str,
@@ -913,8 +870,7 @@ fn outside(
         .collect()
 }
 
-/// the deepest folder holding every one of `paths`, by path in the project. empty when that is
-/// the project itself.
+/// the deepest folder holding all of `paths`, empty when that is the project itself.
 fn shared_folder(paths: &[String]) -> String {
     let mut shared: Option<Vec<&str>> = None;
     for path in paths {
@@ -936,8 +892,7 @@ fn shared_folder(paths: &[String]) -> String {
     shared.unwrap_or_default().join("/")
 }
 
-/// whether `path` below `root` is a plain file whose folders are real, never links. `real` keeps
-/// what each folder was found to be.
+/// whether `path` is a plain file in real folders, never links; `real` caches each folder's answer.
 fn plain_in_real_folders(root: &Path, path: &str, real: &mut HashMap<String, bool>) -> bool {
     let folders_real = path.match_indices('/').all(|(end, _)| {
         let folder = &path[..end];
@@ -988,24 +943,18 @@ pub(crate) fn apart(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// what a scan of the data folder found.
 #[derive(Debug, Default, PartialEq)]
 struct Scanned {
-    /// every file and how it looks, by its path in the project.
     found: HashMap<String, Look>,
-    /// the paths of the files under the hidden names placement stages files in.
+    /// the files under the hidden names placement stages files in.
     temporaries: Vec<String>,
     /// every other entry: folders, links and special files.
     entries: HashMap<String, Entry>,
-    /// the files the disk lets their owner write.
     writable: HashSet<String>,
 }
 
-/// every file under the data folder, how it looks and whether it is writable, by its path in the
-/// project, the paths of those under the hidden names placement stages files in, and the folders,
-/// links and special files beside them. links are neither followed nor touched. with `within`,
-/// only those folders are listed, and what stands on the way down to them. interrupted once
-/// `stop` is asked, before the next folder.
+/// lists the data folder, or with `within` only those folders and what stands on the way down to
+/// them, never following links. interrupted once `stop` is asked, before the next folder.
 fn scan(
     root: &Path,
     data_dir: &str,
@@ -1033,7 +982,7 @@ fn scan(
         || stop.is_asked(),
         |entry, path, temporary, parent| {
             if last_parent != Some(parent) {
-                // DirEntry retains its parent handle on unix; bound distinct parents too.
+                // a DirEntry holds its parent's handle on unix, so distinct parents are bounded too
                 if parents == 8 {
                     scan_pending(&mut pending, threads, &mut scanned);
                     parents = 0;
@@ -1087,9 +1036,8 @@ fn scan_pending(
     }
 }
 
-/// whether `folder`, a path in the project inside `data_dir`, is a folder reached through real
-/// folders, never links, as a scan of the whole data folder would reach it. what stands on the
-/// way is recorded as that scan records it.
+/// whether `folder`, inside `data_dir`, is reached through real folders as a whole scan would
+/// reach it, recording what stands on the way as that scan would.
 fn way_down(
     root: &Path,
     data_dir: &str,
@@ -1184,9 +1132,8 @@ pub(crate) fn is_inside(path: &str, folder: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// lists `folders` and every folder below them, handing each file to `visit` and keeping the
-/// other entries in `others`. says whether it listed them all, rather than ending at a folder
-/// where `stopped` said so.
+/// lists `folders` and every folder below, handing each file to `visit` and keeping the other
+/// entries in `others`. false when `stopped` ended it early.
 fn visit_files(
     mut folders: Vec<(std::path::PathBuf, String)>,
     others: &mut HashMap<String, Entry>,
@@ -1225,11 +1172,9 @@ fn visit_files(
     true
 }
 
-/// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
-/// through a hardlink also changes the cached object, which is then dropped and fetched again,
-/// so it never spreads to other projects. a link hashing found changed that is still the object
-/// itself marks the object at once, since its bytes are the object's; one the cache no longer
-/// holds is marked as a changed copy, so other projects that link it check it too.
+/// hashes the objects behind hardlinks someone edited, before anything downloads, so a changed
+/// object is fetched again rather than spread. a link in `elsewhere` marks its object, or, when
+/// it is no longer the object, its own copy, so other projects linking that copy check it too.
 pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result<(), Error> {
     let _span = tracing::debug_span!("audit").entered();
     for (path, placed) in &survey.state.files {
@@ -1473,8 +1418,7 @@ mod tests {
         assert!(!inside_any("data/a/x", &outermost("data", &[])));
     }
 
-    /// the listing of the data folder looks for a stop at each folder, so a first ctrl-c on a
-    /// large or slow data folder does not wait for the whole listing.
+    /// a first ctrl-c need not wait for the whole listing of a large or slow data folder.
     #[test]
     fn a_survey_ends_at_a_stop_asked_before_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -1491,8 +1435,8 @@ mod tests {
         assert_eq!(error.kind, crate::error::Kind::Interrupted);
     }
 
-    /// a survey of named folders lists them alone, and what stands on the way down to them, as
-    /// a survey of the whole data folder would see it: a link there is never followed.
+    /// what stands on the way down to the named folders is listed as a whole survey lists it, and
+    /// a link there is never followed.
     #[test]
     fn a_survey_within_folders_lists_and_keeps_only_them() {
         let dir = tempfile::tempdir().unwrap();
@@ -1619,10 +1563,8 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), b"modified");
     }
 
-    /// a change that keeps a file's size and time shows in no listing; only hashing every placed
-    /// file finds it. a hardlink found so is the cache's copy, any other file is damaged, and
-    /// files hashing already settled are not hashed again, nor are those of a dataset the run
-    /// leaves alone.
+    /// a changed link that still shares its bytes is the cache's copy and any other changed file
+    /// is damaged; files already found edited, or of a dataset the run leaves alone, are skipped.
     #[test]
     fn verifying_finds_changes_that_kept_their_size_and_time() {
         let dir = tempfile::tempdir().unwrap();
@@ -1874,9 +1816,8 @@ mod tests {
         );
     }
 
-    /// a file placed as a hardlink, then replaced by a file of its own that holds other bytes
-    /// under the recorded size and time, shares nothing with the cache: a change mark puts it in
-    /// doubt, and hashing finds it damaged, not changed through a link it no longer is.
+    /// a hardlink replaced by a file of its own that kept the recorded size and time shares
+    /// nothing with the cache, so hashing after a change mark finds it damaged.
     #[test]
     fn a_changed_file_that_is_no_longer_a_link_is_damaged_not_changed_elsewhere() {
         let dir = tempfile::tempdir().unwrap();
@@ -1898,8 +1839,7 @@ mod tests {
         assert!(survey.elsewhere.is_empty());
     }
 
-    /// a changed link that other projects share, once the cache no longer holds its bytes, is
-    /// still recorded as a copy found changed, so the other projects' links to it are checked.
+    /// a mark records the changed link's own copy, so other projects linking that copy check it.
     #[test]
     fn a_changed_shared_link_the_cache_lost_is_marked_for_the_other_projects() {
         let dir = tempfile::tempdir().unwrap();
@@ -1987,9 +1927,8 @@ mod tests {
         }
     }
 
-    /// a link that changed is damage to the cached copy while it is still the cache's own copy,
-    /// or the copy a mark records the cache found changed after a repair gave the object a new
-    /// one. a file the project put at the link's name is its own edit, which no hash is needed for.
+    /// a changed link is damage while it is the cache's copy, or the old copy a mark records after
+    /// a repair; a file the project put at the link's name is its own edit, which needs no hash.
     #[test]
     fn a_changed_link_that_is_the_cached_copy_is_doubted_and_found_damaged() {
         use crate::cache::tests::{hardlinks, rewrite, seal, store};
@@ -2357,8 +2296,7 @@ mod tests {
         assert_eq!(blocker("elsewhere/a.csv"), None);
     }
 
-    /// a folder in a file's way goes with the files a run removes only when that leaves it
-    /// empty: every file in it removed, and every folder in it holding one of them.
+    /// an empty folder inside a folder in the way keeps it there, as removing files never takes it.
     #[test]
     fn a_folder_in_the_way_is_freed_only_when_removing_files_empties_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -2471,8 +2409,8 @@ mod tests {
         );
     }
 
-    /// what a removal leaves in a folder no dataset uses now: work of yours, a link, never a
-    /// file placement stages, and never a folder beside it whose name only starts the same.
+    /// a retired folder lists links and a person's files but no staged copy, and `pets-extra` is
+    /// no part of `pets`.
     #[cfg(unix)]
     #[test]
     fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
@@ -2539,9 +2477,8 @@ mod tests {
         );
     }
 
-    /// a file the state records outside the data folder is left behind only while it is a plain
-    /// file reached through real folders, and the same file under another spelling of the data
-    /// folder, as a disk that ignores case gives, is not.
+    /// a file reached through a link is not left behind, nor is a data folder file that a disk
+    /// ignoring case reads under another spelling.
     #[cfg(unix)]
     #[test]
     fn only_real_files_outside_the_data_folder_are_left_behind() {
@@ -2587,8 +2524,7 @@ mod tests {
         );
     }
 
-    /// what the old data folder holds besides the files fetchloom placed is named, links among it,
-    /// and neither its folders nor a copy an interrupted placement staged there are.
+    /// the old data folder's links are named, but not its folders or a copy a placement staged.
     #[cfg(unix)]
     #[test]
     fn a_folder_left_behind_names_what_fetchloom_did_not_place() {
@@ -2631,9 +2567,8 @@ mod tests {
         );
     }
 
-    /// the folder named for files left behind is the data folder they were placed in, found from
-    /// where the same files sit now, else the folder they share, and never one that holds the
-    /// data folder, which deleting it would delete too.
+    /// the folder named for files left behind is the old data folder, found from where the same
+    /// files sit now, else the folder they share.
     #[test]
     fn the_folder_left_behind_never_holds_the_data_folder() {
         let dir = tempfile::tempdir().unwrap();
