@@ -128,6 +128,36 @@ pub(crate) struct Check {
     pub(crate) who: fn(&serde_json::Value) -> Option<String>,
 }
 
+/// the refusal to sign in to `name` when it is a cloud whose own tool signs in, which fetchloom
+/// reads rather than keeping a key of its own.
+fn cloud_sign_in(name: &str) -> Option<Error> {
+    let (signs_in, reads, then) = match name {
+        "aws" => (
+            "the AWS CLI",
+            "reads its profile",
+            "run `aws sso login` or `aws configure`, then list your private buckets in the s3_buckets setting",
+        ),
+        "google" | "gcloud" => (
+            "the gcloud CLI",
+            "reads its application default credentials",
+            "run `gcloud auth application-default login`, then list your private buckets in the gcs_buckets setting",
+        ),
+        "azure" | "az" => (
+            "the az CLI",
+            "asks it for a token",
+            "run `az login`, then list your private containers in the azure_containers setting",
+        ),
+        _ => return None,
+    };
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!("{name} signs in with {signs_in}, and fetchloom {reads}"),
+        )
+        .help(then),
+    )
+}
+
 /// the name of the system's credential store, as a person knows it.
 pub(crate) fn keyring_name() -> &'static str {
     if cfg!(windows) {
@@ -173,6 +203,9 @@ impl Account {
                 Account::Login(other.to_owned())
             }
             _ => {
+                if let Some(cloud) = cloud_sign_in(&lowered) {
+                    return Err(cloud);
+                }
                 return Err(Error::new(
                     Kind::Usage,
                     format!(

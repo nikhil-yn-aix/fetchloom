@@ -105,7 +105,7 @@ it lists each account with a key, where the key came from and, online, who the s
   Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet, aws, google, azure
 ```
 
-`aws`, `google` and `azure` are the keys [private buckets](../signing-in.md#private-buckets-and-folders), containers and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret.
+`aws`, `google` and `azure` are the keys [private buckets](../signing-in.md#private-buckets-and-folders), containers and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret. each signs in with the cloud's own tool, which fetchloom reads, so `fetchloom auth login aws` says so with `usage`, exit 2, and the tool's command, as `aws signs in with the AWS CLI, and fetchloom reads its profile` with the help ``run `aws sso login` or `aws configure`, then list your private buckets in the s3_buckets setting``; google names `gcloud auth application-default login` and azure `az login`.
 
 | row | what it names |
 |---|---|

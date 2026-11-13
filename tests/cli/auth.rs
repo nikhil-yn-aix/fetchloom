@@ -65,6 +65,37 @@ fn auth_alone_lists_every_account() -> Result {
     Ok(())
 }
 
+/// aws, google and azure, which `auth` lists, sign in with their own tools, which fetchloom reads,
+/// so `auth login` says so rather than that it knows no such account.
+#[test]
+fn a_cloud_login_names_the_clouds_own_tool() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (account, message, help) in [
+        (
+            "aws",
+            "aws signs in with the AWS CLI, and fetchloom reads its profile",
+            "run `aws sso login` or `aws configure`, then list your private buckets in the s3_buckets setting",
+        ),
+        (
+            "google",
+            "google signs in with the gcloud CLI, and fetchloom reads its application default credentials",
+            "run `gcloud auth application-default login`, then list your private buckets in the gcs_buckets setting",
+        ),
+        (
+            "azure",
+            "azure signs in with the az CLI, and fetchloom asks it for a token",
+            "run `az login`, then list your private containers in the azure_containers setting",
+        ),
+    ] {
+        let output = sandbox.run(&["--json", "auth", "login", account])?;
+        assert_eq!(output.status.code(), Some(2), "{account}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["message"], message, "{account}");
+        assert_eq!(error["help"], help, "{account}");
+    }
+    Ok(())
+}
+
 #[test]
 fn logout_names_another_configured_key_that_remains() -> Result {
     let sandbox = Sandbox::new()?;
