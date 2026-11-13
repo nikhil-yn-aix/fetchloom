@@ -264,6 +264,13 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
         let stderr = text(&refused.stderr)?;
         assert_eq!(refused.status.code(), Some(40), "{moved}: {stderr}");
         assert!(stderr.contains("such as its sign-in page"), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "if that page itself is the data, ask for it by the link it is at, {}/login, with --web-page",
+                site.url
+            )),
+            "{stderr}"
+        );
         assert!(!sandbox.work().join("moved.html").exists());
     }
     let notes_link = format!("{}/notes", site.url);
@@ -287,6 +294,59 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
 
 /// a website that refuses a link and names no way in is offered each way to sign in: in its
 /// help, and at a terminal as a choice that saves the key and runs the command again.
+/// a page the site moved the link to, as a release's latest notes are, is the data when asked
+/// for, though a saved token went; unasked, the help names the link the page is at.
+#[test]
+fn a_page_a_signed_in_site_moved_the_link_to_is_the_data_when_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let notes = b"<html><body>the v3 notes</body></html>";
+    let length = notes.len().to_string();
+    let site = Routes::start(vec![
+        (
+            "/latest".to_owned(),
+            reply(
+                "302 Found",
+                &[("Location", "/v3/"), ("Content-Length", "0")],
+                b"",
+            ),
+        ),
+        (
+            "/v3/".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "text/html"), ("Content-Length", &length)],
+                notes,
+            ),
+        ),
+    ])?;
+    sign_in_with_token(&sandbox, &host_of(&site), "t-1")?;
+    let latest = format!("{}/latest", site.url);
+    let unasked = sandbox.run(&["get", &latest, "-o", "v3.html"])?;
+    let stderr = text(&unasked.stderr)?;
+    assert_eq!(unasked.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "if that page itself is the data, ask for it by the link it is at, {}/v3/, with --web-page",
+            site.url
+        )),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("v3.html").exists());
+    let asked = sandbox.run(&["get", &latest, "-o", "v3.html", "--web-page"])?;
+    assert!(asked.status.success(), "{}", text(&asked.stderr)?);
+    assert_eq!(std::fs::read(sandbox.work().join("v3.html"))?, notes);
+    assert_eq!(
+        heard(&site, "authorization"),
+        [
+            Some("bearer t-1".to_owned()),
+            Some("bearer t-1".to_owned()),
+            Some("bearer t-1".to_owned()),
+            Some("bearer t-1".to_owned())
+        ]
+    );
+    Ok(())
+}
+
 #[test]
 fn a_website_that_refuses_is_offered_each_way_in() -> Result {
     let sandbox = Sandbox::new()?;

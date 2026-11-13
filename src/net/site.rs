@@ -187,6 +187,17 @@ impl Sent {
             ))
     }
 
+    /// the error for a web page that came back from `url`, where a redirect led the link, which
+    /// counts as a sign-in page: its help names the page's own link, since asking for a page by
+    /// the link that was moved would be refused again.
+    fn moved_out(&self, url: &Url) -> Error {
+        self.signed_out(url).help(format!(
+            "{}, then run the same command again. if that page itself is the data, ask for it by the link it is at, {}, with --web-page",
+            self.again,
+            Shown(url)
+        ))
+    }
+
     /// whether the hop that answered carried the credential.
     pub(crate) fn answered(&self) -> bool {
         self.answered
@@ -195,8 +206,9 @@ impl Sent {
 
 /// the refusal of `response`, a web page from `answered` where a file was expected after a saved
 /// credential went for `link`, as a site sends its sign-in page once a session ends. a page the
-/// link was sent on to, by another origin or path, is refused whatever was asked; else none when
-/// the person `asked` for a page, or the page's own name says it is one.
+/// link itself answered with is the data when the person `asked` for a page or its own name
+/// says it is one; a page a redirect led to, at another origin or path, only when asked for, on
+/// the same site, at a link that names no sign-in page.
 pub(super) fn sign_in_page(
     response: &reqwest::Response,
     answered: &Url,
@@ -204,10 +216,81 @@ pub(super) fn sign_in_page(
     asked: bool,
 ) -> Option<Error> {
     let sent = response.extensions().get::<Sent>()?;
-    let page = response.status().is_success() && super::headers::is_html(response.headers());
+    if !response.status().is_success() || !super::headers::is_html(response.headers()) {
+        return None;
+    }
     let moved = answered.origin() != link.origin()
         || answered.path().trim_end_matches('/') != link.path().trim_end_matches('/');
-    (page && (moved || !(asked || names_a_page(answered)))).then(|| sent.signed_out(answered))
+    if !moved {
+        return (!(asked || names_a_page(answered))).then(|| sent.signed_out(answered));
+    }
+    let kept = asked && same_site(link, answered) && !names_a_sign_in(answered);
+    (!kept).then(|| sent.moved_out(answered))
+}
+
+/// whether `answered` is on `link`'s site: its host, but for a leading `www.`, on the same port,
+/// over https or the link's own scheme.
+fn same_site(link: &Url, answered: &Url) -> bool {
+    let host = |url: &Url| {
+        let host = url.host_str()?.to_ascii_lowercase();
+        Some(host.strip_prefix("www.").map(str::to_owned).unwrap_or(host))
+    };
+    host(link).is_some()
+        && host(link) == host(answered)
+        && link.port() == answered.port()
+        && (answered.scheme() == link.scheme() || answered.scheme() == "https")
+}
+
+/// the parts of a path, without an extension, that sites name a sign-in page by.
+const SIGN_IN: [&str; 19] = [
+    "login",
+    "log-in",
+    "log_in",
+    "logon",
+    "signin",
+    "sign-in",
+    "sign_in",
+    "sso",
+    "saml",
+    "saml2",
+    "oauth",
+    "oauth2",
+    "authorize",
+    "auth",
+    "cas",
+    "idp",
+    "shibboleth",
+    "session",
+    "sessions",
+];
+
+/// the query keys a sign-in page keeps its way back to the link under.
+const WAY_BACK: [&str; 16] = [
+    "next",
+    "return",
+    "returnto",
+    "return_to",
+    "returnurl",
+    "redirect",
+    "redirect_uri",
+    "redirect_url",
+    "redirect_to",
+    "continue",
+    "service",
+    "relaystate",
+    "samlrequest",
+    "came_from",
+    "goto",
+    "callback",
+];
+
+/// whether `url` names a sign-in page: a part of its path, as `/login` or `/SignIn.aspx`, or a
+/// way back to the link in its query, as `?next=`.
+fn names_a_sign_in(url: &Url) -> bool {
+    let known = |word: &str, list: &[&str]| list.iter().any(|name| word.eq_ignore_ascii_case(name));
+    url.path_segments().is_some_and(|mut parts| {
+        parts.any(|part| known(part.split('.').next().unwrap_or(part), &SIGN_IN))
+    }) || url.query_pairs().any(|(key, _)| known(&key, &WAY_BACK))
 }
 
 /// whether the last part of `link`'s path ends in a web page's extension.

@@ -384,6 +384,20 @@ fn a_refusal_names_what_was_saved_and_how_to_save_it_again() {
 
 /// a web page where a file was expected, once a saved credential went, is the site's sign-in
 /// page, unless the person asked for a page or the link names one.
+/// the refusal, if any, of a web page of `kind` that came from `from` for `link` once `net`
+/// sent its saved credential, the person having `asked` for a page or not.
+fn judged(net: &Net, link: &str, from: &str, kind: &str, asked: bool) -> Option<Error> {
+    let link = Url::parse(link).unwrap();
+    let mut response = reqwest::Response::from(
+        http::Response::builder()
+            .header(header::CONTENT_TYPE, kind)
+            .body(Vec::<u8>::new())
+            .unwrap(),
+    );
+    net.mark_site(&mut response, &link, true, &mut None);
+    sign_in_page(&response, &Url::parse(from).unwrap(), &link, asked)
+}
+
 #[test]
 fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
     let net = net(vec![
@@ -402,17 +416,8 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
         )
         .unwrap(),
     ]);
-    let answered = |link: &str, from: &str, kind: &str, asked: bool| {
-        let link = Url::parse(link).unwrap();
-        let mut response = reqwest::Response::from(
-            http::Response::builder()
-                .header(header::CONTENT_TYPE, kind)
-                .body(Vec::<u8>::new())
-                .unwrap(),
-        );
-        net.mark_site(&mut response, &link, true, &mut None);
-        sign_in_page(&response, &Url::parse(from).unwrap(), &link, asked)
-    };
+    let answered =
+        |link: &str, from: &str, kind: &str, asked: bool| judged(&net, link, from, kind, asked);
     let answer = |link: &str, kind: &str, asked: bool| answered(link, link, kind, asked);
     let error = answer(
         "https://data.lab/files/1",
@@ -445,7 +450,26 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
     ] {
         assert!(answer(link, kind, asked).is_none(), "{link} {kind} {asked}");
     }
-    // a page the link was sent on to, as a sign-in page is, counts whatever was asked or named
+    // a `.html` name counts for the page the answer came from, not the link
+    assert!(
+        answered(
+            "https://data.lab/report.html",
+            "https://data.lab/report.html/",
+            "text/html",
+            false
+        )
+        .is_some()
+    );
+}
+
+/// a page a redirect led the link to, as a site's `www.` or a release's latest version does,
+/// is the data when asked for, on the same site, at a link that names no sign-in page; anywhere
+/// else it is refused, asked or not, and the help names the link the page is at.
+#[test]
+fn a_page_a_redirect_led_to_is_the_data_on_its_own_site_alone() {
+    let net = net(vec![token("data.lab", "t-1"), token("www.data.lab", "t-1")]);
+    // a page the link was sent on to, asked for, counts when it stays on the site and is no
+    // sign-in page by its path or its way back; anywhere else it is refused whatever was asked
     for (link, from, refused) in [
         ("https://data.lab/files/1", "https://data.lab/login", true),
         (
@@ -464,22 +488,61 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
             "https://data.lab/docs?v=2",
             false,
         ),
+        ("https://data.lab/latest", "https://data.lab/v3/", false),
+        (
+            "https://data.lab/report",
+            "https://www.data.lab/report",
+            false,
+        ),
+        (
+            "https://www.data.lab/report",
+            "https://data.lab/report",
+            false,
+        ),
+        (
+            "https://data.lab/files/1",
+            "https://data.lab/SignIn.aspx?ReturnUrl=%2Ffiles%2F1",
+            true,
+        ),
+        (
+            "https://data.lab/files/1",
+            "https://data.lab/portal?next=%2Ffiles%2F1",
+            true,
+        ),
+        (
+            "https://data.lab/files/1",
+            "https://data.lab/idp/profile/SAML2/Redirect/SSO",
+            true,
+        ),
+        ("https://data.lab/files/1", "http://data.lab/files/2", true),
+        (
+            "https://data.lab/files/1",
+            "https://data.lab:8443/v3/",
+            true,
+        ),
+        ("https://data.lab/files/1", "https://lab/files/2", true),
     ] {
         assert_eq!(
-            answered(link, from, "text/html", true).is_some(),
+            judged(&net, link, from, "text/html", true).is_some(),
             refused,
             "{link} from {from}"
         );
     }
-    // a `.html` name counts for the page the answer came from, not the link
-    assert!(
-        answered(
-            "https://data.lab/report.html",
-            "https://data.lab/report.html/",
-            "text/html",
-            false
+    // unasked, a page the link was sent on to is refused on the site too, and the help points
+    // at the link the page is at rather than at --web-page alone
+    let moved = judged(
+        &net,
+        "https://data.lab/latest",
+        "https://data.lab/v3/?token=t-secret",
+        "text/html",
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        moved.help.as_deref(),
+        Some(
+            "sign in again with `fetchloom auth login data.lab --token`, then run the same command again. if that page itself is the data, ask for it by the link it is at, https://data.lab/v3/?token=***, with --web-page"
         )
-        .is_some()
     );
 }
 
