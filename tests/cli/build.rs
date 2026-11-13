@@ -1837,19 +1837,27 @@ fn ctrl_c(sandbox: &Sandbox, pid: u32) -> Result {
 /// a powershell script that attaches to the console of the process its argument names, ignores
 /// ctrl-c itself, and sends it to every process there.
 #[cfg(windows)]
-const CTRL_C: &str = r#"param([uint32] $Id)
-Add-Type -Name Console -Namespace FetchloomTests -MemberDefinition @'
-[DllImport("kernel32.dll")] public static extern bool FreeConsole();
-[DllImport("kernel32.dll")] public static extern bool AttachConsole(uint id);
-[DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(System.IntPtr handler, bool add);
-[DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint group);
-'@
-[void] [FetchloomTests.Console]::FreeConsole()
-if (-not [FetchloomTests.Console]::AttachConsole($Id)) { exit 2 }
-[void] [FetchloomTests.Console]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)
-if (-not [FetchloomTests.Console]::GenerateConsoleCtrlEvent(0, 0)) { exit 3 }
+const CTRL_C: &str = r"param([uint32] $Id)
+$ErrorActionPreference = 'Stop'
+# a type made at run time calls the console functions; Add-Type would start the c# compiler
+$name = New-Object Reflection.AssemblyName 'FetchloomTests'
+$assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, 'Run')
+$type = $assembly.DefineDynamicModule('FetchloomTests').DefineType('Console', 'Public, Class')
+function Declare([string] $Name, [Type[]] $Parameters) {
+    $method = $type.DefinePInvokeMethod($Name, 'kernel32.dll', 'Public, Static, PinvokeImpl', 'Standard', [bool], $Parameters, 'Winapi', 'Auto')
+    $method.SetImplementationFlags('PreserveSig')
+}
+Declare FreeConsole @()
+Declare AttachConsole @([uint32])
+Declare SetConsoleCtrlHandler @([IntPtr], [bool])
+Declare GenerateConsoleCtrlEvent @([uint32], [uint32])
+$console = $type.CreateType()
+[void] $console::FreeConsole()
+if (-not $console::AttachConsole($Id)) { exit 2 }
+[void] $console::SetConsoleCtrlHandler([IntPtr]::Zero, $true)
+if (-not $console::GenerateConsoleCtrlEvent(0, 0)) { exit 3 }
 exit 0
-"#;
+";
 
 /// a step that waited for the build running it would wait forever.
 #[test]
