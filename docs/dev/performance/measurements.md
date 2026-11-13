@@ -107,6 +107,7 @@ every change measured with the current harness, one row each: what it gained whe
 | process | profile-guided optimization, its training rebalanced toward manifests | musl, 10,000 datasets: `lock --check` 0.901 [0.895, 0.910], `list` 0.910, status 0.934; 100,000 files: status 0.937, settled sync 0.954; nothing slower, binary 14.8% smaller; two trainings of one corpus gave binaries 13.7 million bytes apart | dropped: below the bar, and a reproducible release would need a committed profile for each target | [pgo](#profile-guided-optimization-2026-11-13) |
 | process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept on windows, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
 | process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
+| process | none: the release candidate 7daf4747 against a8f9dad7 on commands of a few milliseconds | glibc `help` 1.030 and 1.036 [1.032, 1.041] in a second batch, `--version` 1.020 and 1.016 [1.011, 1.021], a settled sync of 3 files 1.010 and 1.017 [1.011, 1.022], 0.04 to 0.1 ms; a copy of a8f9dad7 against itself 1.000 to 1.005; musl flat | recorded, not chased: glibc only, 4 to 8% more startup instructions in a binary 1.5 MB larger | [tiny commands at the release](#tiny-commands-at-the-release-candidate-2026-11-13) |
 
 ## final benchmark on the linux lab, 2026-11-09
 
@@ -1458,3 +1459,20 @@ the a/b ran one glibc release build per arm, 585a2a7b with the 10 s grace agains
 the change took 3.08–3.11 s in every round, and the 10 s grace 2.68–10.10 s, 10.08 s at the median. the cost is coverage: the change left out ENA in 11 rounds, dandi in 7 and openneuro in 1, each with the warning that names `--source`, where the 10 s grace left out ENA in 8. dandi answered in 2–4.5 s in these later runs, against 0.4–1.2 s in the first ones that night.
 
 raw evidence: `fix-a-search-grace/` beside the lab notes, with `runs.jsonl` and the per-site timings. these are live sites from one machine on one night, not a claim about every network.
+
+## tiny commands at the release candidate, 2026-11-13
+
+the release recheck ran the audit's headline and tiny cases with the release candidate 7daf4747 against a8f9dad7. every case that moves data was flat or faster on both libcs; a zip of 10,000 files on glibc came out at 1.023 [1.009, 1.045] in a first batch and flat in two more, 1.007 [0.993, 1.014] beside an a/a arm at 1.000 [0.989, 1.016]. three commands of a few milliseconds were slower on glibc in both of their batches. the shipped musl build was not slower on any of them.
+
+the builds: on glibc, a8f9dad7's stock release (sha256 `0ddf803c…`) against a local `cargo build --release --locked` of 7daf4747 (`b174ccbe…`); on musl, a stock release build of a8f9dad7 against the stage run's x86_64-unknown-linux-musl package of 7daf4747 (`855bd7ce…`), which a local build with ci's flags reproduces but for mimalloc's build-time stamp. the a/a arm is a byte-identical copy of the glibc a8f9dad7 at another path, in the same rounds. every arm ran once a round in a seeded shuffled order after a warmup round, under the measure lock on cores 12–23, on tmpfs. a ratio is the median of paired ratios with its 95% bootstrap interval from `bench/ab.py`.
+
+| command | libc | pairs | first batch | second batch | a/a, second batch |
+|---|---|---:|---|---|---|
+| `help` | glibc | 100, 200 | 1.030 [1.020, 1.037] | 1.036 [1.032, 1.041] | 1.005 [1.000, 1.012] |
+| `--version` | glibc | 100, 200 | 1.020 [1.014, 1.029] | 1.016 [1.011, 1.021] | 1.000 [0.995, 1.007] |
+| settled sync of 3 files | glibc | 100, 200 | 1.010 [1.004, 1.017] | 1.017 [1.011, 1.022] | 1.005 [1.000, 1.009] |
+| `help` | musl | 100 | 1.002 [0.992, 1.018] | | |
+| `--version` | musl | 100 | 0.999 [0.988, 1.012] | | |
+| settled sync of 3 files | musl | 100 | 0.982 [0.971, 0.997] | | |
+
+the glibc medians were 2.5, 2.9 and 3.9 ms, so the difference is 0.04 to 0.1 ms, and gnu time's own fork and exec inside the clock make the ratios understate it. medians of 20 runs of `perf stat` say where it comes from: user instructions 1.43 to 1.49 million for `--version` (+4.2%), 3.02 to 3.26 million for `help` (+8.0%) and 3.13 to 3.35 million for the sync (+6.9%); page faults 254 to 271, 268 to 294 and 314 to 344. the system calls are the same but for two `ioctl`s, and the dynamic loader does the same work, 13,687 to 14,865 relative relocations in about 0.05 ms either way. the glibc binary grew from 15.5 to 17.1 MB. musl runs the same extra instructions with fewer page faults (155 to 143, 160 to 148, 219 to 196) and is not slower. the extra work fits the larger command line, which `help` builds whole, and the larger binary's pages; a profile with symbols of both commits would name the functions. not chased: linux ships the musl build, and the cost is under 0.1 ms a command.
