@@ -116,6 +116,8 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 
 google drive and dropbox are read through their shared links rather than an API, and drive's API v3 serves the private items `drive_folders` lists. no live check covers dropbox, and drive's needs google credentials the weekly run does not have.
 
+[search](../commands/search.md) asks each site's own search: hugging face's, kaggle's and dandi's dataset lists, zenodo's records, EBI search's `sra-study` domain for ENA, NCBI's E-utilities `esearch` and `esummary` at eutils.ncbi.nlm.nih.gov for GEO, and openneuro's GraphQL `advancedSearch`. the weekly macos journey runs one search of all seven, which passes while any of them finds a match.
+
 ## keys shared with other tools
 
 fetchloom reads and saves keys where each source's own tools keep them, so one sign-in serves both. [environment](environment.md#credentials) lists where it looks and in which order, and [auth](../commands/auth.md) where a sign-in saves.
