@@ -73,7 +73,8 @@ impl<'a> Retry<'a> {
     }
 
     /// which try comes next, of how many it may get while none makes progress: the retries
-    /// left, and while it is `waiting` for the host's rate limit, the waits for it left too.
+    /// left, and while it is `waiting` for the host's rate limit, the waits for it left too. a
+    /// host refusing for load is asked nothing more after a few refusals in a row, which caps it.
     fn numbered(&self, waiting: bool) -> (u32, u32) {
         let retries = (self.net.retries + 1).saturating_sub(self.attempt);
         let waits = if waiting {
@@ -81,7 +82,10 @@ impl<'a> Retry<'a> {
         } else {
             0
         };
-        let most = (self.tries + retries + waits).min(MOST_TRIES);
+        let mut most = (self.tries + retries + waits).min(MOST_TRIES);
+        if let Some(left) = self.net.paces.refusals_left(&super::paced(self.url)) {
+            most = most.min(self.tries + left.saturating_sub(1));
+        }
         (self.tries, most.max(self.tries))
     }
 
@@ -1319,6 +1323,51 @@ mod tests {
                 "export.arxiv.org refused one request after another because it is busy, so this run asks it nothing more"
             );
         }
+    }
+
+    /// a paced host refusing for load is asked nothing more after four refusals in a row, so each
+    /// retry is numbered of four, whatever the retries would allow.
+    #[tokio::test(start_paused = true)]
+    async fn a_paced_host_refusing_for_load_numbers_its_tries_of_four() {
+        use crate::net::{Notice, Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let url = Url::parse("https://export.arxiv.org/api/query").unwrap();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let kept = heard.clone();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(move |notice| {
+                if let Notice::Retrying { next, of, .. } = notice {
+                    kept.lock().unwrap().push((next, of));
+                }
+            }),
+        )
+        .with_retries(10);
+        let name = super::super::paced(&url);
+        let mut retry = Retry::new(&net, &url);
+        let refused = loop {
+            let sent = net.pace(&url).await.unwrap().sent;
+            let answer = pace::Answered {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                sent,
+                at: tokio::time::Instant::now().into_std(),
+                share: 0.0,
+            };
+            net.paces.answered(&name, &answer);
+            if let Err(error) = retry.wait("429".to_owned(), None, false).await {
+                break error;
+            }
+        };
+        assert_eq!(refused.kind, Kind::NetworkRateLimited);
+        assert_eq!(*heard.lock().unwrap(), [(2, 4), (3, 4), (4, 4)]);
     }
 
     /// after one wait for the host's rate limit, the count still comes from the retries, since the

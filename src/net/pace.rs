@@ -376,6 +376,14 @@ impl Paces {
         })
     }
 
+    /// how many more answers in a row `host` may refuse for load before the run asks it nothing
+    /// more, while its last answer refused; none otherwise.
+    pub(super) fn refusals_left(&self, host: &str) -> Option<u32> {
+        let shared = self.shared(host)?;
+        let pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        (pace.refused > 0).then(|| MOST_REFUSED.saturating_sub(pace.refused))
+    }
+
     fn shared(&self, host: &str) -> Option<Arc<Mutex<Pace>>> {
         self.hosts
             .lock()

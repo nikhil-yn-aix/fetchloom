@@ -271,8 +271,12 @@ struct RetryLines {
 
 impl RetryLines {
     /// whether a retry to `host` at `now` gets a line: the first does, and then one every
-    /// [`RETRY_LINES`] while the trouble lasts.
+    /// [`RETRY_LINES`] while the trouble lasts. a host that takes one request at a time retries
+    /// one request alone, seconds apart, so each of its retries does.
     fn tell(&self, host: &str, now: Instant) -> bool {
+        if crate::source::most_at_once(&crate::source::paced_as(host)) == Some(1) {
+            return true;
+        }
         let mut told = self
             .told
             .lock()
@@ -1840,6 +1844,19 @@ mod tests {
             lines.tell("huggingface.co", at(30)),
             "a long outage is told again"
         );
+    }
+
+    /// a host that takes one request at a time retries one request alone, a few seconds apart,
+    /// so each retry gets its line rather than a long silence.
+    #[test]
+    fn each_retry_to_a_host_taking_one_request_at_a_time_gets_a_line() {
+        let lines = RetryLines::default();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        for host in ["api.semanticscholar.org", "export.arxiv.org"] {
+            assert!(lines.tell(host, at(0)), "{host}");
+            assert!(lines.tell(host, at(5)), "{host}");
+        }
     }
 
     #[test]
