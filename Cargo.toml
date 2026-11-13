@@ -32,10 +32,14 @@ name = "fetchloom"
 path = "src/main.rs"
 
 [dependencies]
+# decrypt the cookies chromium's browsers keep on linux and macos, AES-128 in CBC mode, whose key
+# ring derives; both are already in the tree on linux, under keyring's secret service store
+aes = "0.9"
 anstream = "1.0"
 anstyle = "1.0"
 bytes = "1.10"
 bzip2 = "0.6"
+cbc = { version = "0.2", features = ["alloc"] }
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
 clap_complete = "4.6"
 console = { version = "0.16", default-features = false }
@@ -55,6 +59,9 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["client
 icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 indicatif = "0.18"
 keyring = "4.2"
+# the search of the system's credential store keyring sets up, which finds the key chromium's
+# browsers keep on linux by its attributes
+keyring-core = "1.0"
 liblzma = { version = "0.4.9", default-features = false, features = ["static"] }
 md-5 = "0.11"
 percent-encoding = "2.3"

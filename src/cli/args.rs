@@ -790,7 +790,8 @@ pub(crate) struct Login {
     pub(crate) cookies: Option<std::path::PathBuf>,
 
     /// for any website: save its cookies from your browser once you signed in there:
-    /// firefox, or firefox:<profile>
+    /// firefox, chrome, chromium, brave, edge, vivaldi or opera, with :<profile> for
+    /// another profile
     #[arg(
         long,
         value_name = "name",

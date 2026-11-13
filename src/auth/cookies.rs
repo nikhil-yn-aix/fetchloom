@@ -10,6 +10,7 @@ use super::site::{Cookie, without_port};
 use crate::error::{Error, Kind};
 use crate::source::Var;
 
+mod chromium;
 mod firefox;
 mod sqlite;
 
@@ -23,6 +24,8 @@ pub(crate) enum Why {
     Unsendable,
     /// the browser keeps it apart: for a container, a private window or another site's frames.
     Apart,
+    /// it is encrypted with a key fetchloom could not read.
+    Locked,
 }
 
 /// what a browser's profile holds: its cookies, and those it keeps apart or cannot open.
@@ -42,10 +45,11 @@ pub(crate) struct Browser {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Named {
     Firefox,
+    Chromium(chromium::Chromium),
 }
 
 /// the browsers `--browser` takes, as its help lists them.
-pub(crate) const BROWSERS: &str = "firefox";
+pub(crate) const BROWSERS: &str = "firefox, chrome, chromium, brave, edge, vivaldi or opera";
 
 impl Browser {
     /// the browser `typed` names, with a profile after a `:`, as `firefox:work` or a profile's
@@ -59,8 +63,13 @@ impl Browser {
             Some((name, profile)) if !profile.is_empty() => (name, Some(profile.to_owned())),
             _ => (typed.trim_end_matches(':'), None),
         };
-        let named = match name.trim().to_ascii_lowercase().as_str() {
-            "firefox" => Named::Firefox,
+        let lowered = name.trim().to_ascii_lowercase();
+        let chromium = chromium::BROWSERS
+            .iter()
+            .find(|browser| browser.name == lowered);
+        let named = match (lowered.as_str(), chromium) {
+            ("firefox", _) => Named::Firefox,
+            (_, Some(browser)) => Named::Chromium(*browser),
             _ => {
                 return Err(Error::new(
                     Kind::Usage,
@@ -81,11 +90,12 @@ impl Browser {
     pub(crate) fn name(&self) -> &'static str {
         match self.named {
             Named::Firefox => "firefox",
+            Named::Chromium(browser) => browser.name,
         }
     }
 
     /// the cookies `host` takes at `now` from the profile this browser used last, or the one a
-    /// person named, with those left out, and the file they came from.
+    /// person named, with those left out, and the profile's folder.
     ///
     /// # Errors
     ///
@@ -96,26 +106,51 @@ impl Browser {
         host: &str,
         now: SystemTime,
     ) -> Result<(Picked, PathBuf), Error> {
-        let roots = firefox::roots(var);
-        let file = firefox::file(&roots, self.profile.as_deref()).ok_or_else(|| {
+        let name = self.name();
+        let profile = self.profile.as_deref();
+        let (roots, file) = match self.named {
+            Named::Firefox => {
+                let roots = firefox::roots(var);
+                let file = firefox::file(&roots, profile);
+                (roots, file)
+            }
+            Named::Chromium(browser) => {
+                let root = browser.root(var).ok_or_else(|| {
+                    Error::new(
+                        Kind::Usage,
+                        format!("{name} on windows keeps its cookies under app-bound encryption, which only {name} itself may open"),
+                    )
+                    .help("use --browser firefox, or export the site's cookies as cookies.txt with a browser extension and use --cookies <file>")
+                })?;
+                let file = chromium::file(&root, profile);
+                (vec![root], file)
+            }
+        };
+        let file = file.ok_or_else(|| {
             let looked: Vec<String> = roots.iter().map(|root| crate::units::path(root)).collect();
-            Error::new(
-                Kind::Usage,
-                format!("found no {} profile with cookies", self.name()),
-            )
-            .detail(format!("looked in {}", looked.join(", ")))
-            .help(format!(
-                "sign in to {} in {} first, or name the profile's folder, as `--browser {}:<folder>`",
-                without_port(host),
-                self.name(),
-                self.name()
-            ))
+            Error::new(Kind::Usage, format!("found no {name} profile with cookies"))
+                .detail(format!("looked in {}", looked.join(", ")))
+                .help(format!(
+                    "sign in to {} in {name} first, or name the profile's folder, as `--browser {name}:<folder>`",
+                    without_port(host),
+                ))
         })?;
-        let read = firefox::read(&file).map_err(|err| {
+        let read = match self.named {
+            Named::Firefox => firefox::read(&file),
+            Named::Chromium(browser) => {
+                let store = super::store::KEYRING.usable(var);
+                // chromium's fixed linux key needs no store; any other key is the store's
+                let key = |tag: &str| {
+                    let fixed = tag == "v10" && !cfg!(target_os = "macos");
+                    (fixed || store).then(|| browser.key(tag)).flatten()
+                };
+                chromium::read(&file, host, &key)
+            }
+        }
+        .map_err(|err| {
             Error::io(
                 format!(
-                    "could not read {}'s cookies in {}",
-                    self.name(),
+                    "could not read {name}'s cookies in {}",
                     crate::units::path(&file)
                 ),
                 &err,
@@ -127,7 +162,12 @@ impl Browser {
                 .into_iter()
                 .filter(|left| covers(&left.domain, host)),
         );
-        Ok((picked, file))
+        // chromium keeps its cookies in the profile's `Network` folder
+        let mut profile = file.parent().unwrap_or(&file);
+        if profile.file_name().is_some_and(|name| name == "Network") {
+            profile = profile.parent().unwrap_or(profile);
+        }
+        Ok((picked, profile.to_path_buf()))
     }
 }
 

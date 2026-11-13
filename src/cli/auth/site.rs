@@ -209,6 +209,18 @@ fn none_kept(host: &str, picked: &Picked, place: &str, again: &str) -> Error {
         )
         .help(again);
     }
+    if picked.left.iter().any(|left| left.why == Why::Locked) {
+        let help = if cfg!(target_os = "macos") {
+            "when macos asks whether fetchloom may use the browser's safe storage key in your keychain, allow it, then run the same command again"
+        } else {
+            "unlock your keyring, which the browser keeps its key in, then run the same command again; fetchloom asks the secret service, which gnome keyring and KDE wallet 5.97 and later answer"
+        };
+        return Error::new(
+            Kind::AuthRequired,
+            format!("the cookies for {host} in {place} are encrypted, and fetchloom could not read the key that opens them"),
+        )
+        .help(format!("{help}. or export the site's cookies as cookies.txt with a browser extension and use --cookies <file>"));
+    }
     let mut domains: Vec<&str> = Vec::new();
     for left in &picked.left {
         if !domains.contains(&left.domain.as_str()) {
@@ -227,16 +239,15 @@ fn none_kept(host: &str, picked: &Picked, place: &str, again: &str) -> Error {
 /// name, domain and expiry, with those left out that a person might have expected.
 fn from_browser(context: &Context, host: &str, typed: &str) -> Result<Saved, Error> {
     let browser = cookies::Browser::parse(typed)?;
-    let (mut picked, file) = browser.cookies(&auth::env, host, SystemTime::now())?;
+    let (mut picked, profile) = browser.cookies(&auth::env, host, SystemTime::now())?;
     // a profile holds every site's cookies; only those of the host's own site are worth a word
     picked
         .left
         .retain(|left| left.why != Why::Elsewhere || same_site(&left.domain, host));
-    let profile = file.parent().unwrap_or(&file);
     let place = format!(
         "{}'s profile {}",
         browser.name(),
-        crate::units::path(profile)
+        crate::units::path(&profile)
     );
     tell(&context.output, host, &picked, &format!("in {place}"));
     let bare = site::without_port(host);
@@ -304,6 +315,7 @@ fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
             Why::Apart,
             "the browser keeps apart, for a container, a private window or another site's frames",
         ),
+        (Why::Locked, "no key fetchloom could read opens"),
     ] {
         let mut domains: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut order: Vec<&str> = Vec::new();

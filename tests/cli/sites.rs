@@ -451,3 +451,103 @@ fn cookies_from_firefox_are_shown_and_saved_only_with_a_yes() -> Result {
     );
     Ok(())
 }
+
+/// a chrome profile in the sandbox's home, as chrome keeps one on linux, holding a cookie for
+/// `domain` named `name`, sealed as chrome seals it there without a keyring: under `v10`, with
+/// chromium's fixed key, after the SHA-256 of its domain.
+#[cfg(target_os = "linux")]
+fn chrome_profile(sandbox: &Sandbox, domain: &str, name: &str, value: &str) -> Result {
+    use aes::cipher::block_padding::Pkcs7;
+    use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
+    use sha2::Digest as _;
+    // PBKDF2-HMAC-SHA1 of "peanuts" over "saltysalt", once, as chromium's posix_key_provider.cc
+    // gives it
+    let key: [u8; 16] = [
+        0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27,
+        0x78,
+    ];
+    let plain = [
+        sha2::Sha256::digest(domain.as_bytes()).as_slice(),
+        value.as_bytes(),
+    ]
+    .concat();
+    let sealed = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
+        .encrypt_padded_vec::<Pkcs7>(&plain);
+    let folder = sandbox
+        .work()
+        .parent()
+        .ok_or("no sandbox")?
+        .join("home/.config/google-chrome/Default/Network");
+    std::fs::create_dir_all(&folder)?;
+    let db = rusqlite::Connection::open(folder.join("Cookies"))?;
+    db.execute_batch(
+        "CREATE TABLE meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR); \
+         INSERT INTO meta VALUES ('version', '24'); \
+         CREATE TABLE cookies(creation_utc INTEGER NOT NULL,host_key TEXT NOT NULL,top_frame_site_key TEXT NOT NULL,\
+         name TEXT NOT NULL,value TEXT NOT NULL,encrypted_value BLOB NOT NULL,path TEXT NOT NULL,\
+         expires_utc INTEGER NOT NULL,is_secure INTEGER NOT NULL,is_httponly INTEGER NOT NULL,\
+         last_access_utc INTEGER NOT NULL,has_expires INTEGER NOT NULL,is_persistent INTEGER NOT NULL,\
+         priority INTEGER NOT NULL,samesite INTEGER NOT NULL,source_scheme INTEGER NOT NULL,\
+         source_port INTEGER NOT NULL,last_update_utc INTEGER NOT NULL,source_type INTEGER NOT NULL,\
+         has_cross_site_ancestor INTEGER NOT NULL);",
+    )?;
+    let sealed = [b"v10".as_slice(), &sealed].concat();
+    db.execute(
+        "INSERT INTO cookies VALUES (0, ?1, '', ?2, '', ?3, '/', 0, 0, 1, 0, 0, 0, 1, 0, 1, 80, 0, 0, 0)",
+        rusqlite::params![domain, name, sealed],
+    )?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cookies_chrome_sealed_open_and_go_to_their_host() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    chrome_profile(&sandbox, "127.0.0.1", "sid", "sealed-value")?;
+    let login = sandbox.run(&["auth", "login", &host, "--browser", "chrome", "--yes"])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "Found 1 cookie for {host} in chrome's profile ~/.config/google-chrome/Default\n"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("sid · 127.0.0.1 · ends with the browser's session\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("sealed-value"), "{stderr}");
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        heard(&site, "cookie"),
+        [Some("sid=sealed-value".to_owned())]
+    );
+    Ok(())
+}
+
+/// chrome and edge on windows seal cookies with app-bound encryption, which only they may open.
+#[cfg(windows)]
+#[test]
+fn chrome_on_windows_is_refused_with_what_works_instead() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&[
+        "--json",
+        "auth",
+        "login",
+        "data.example.org",
+        "--browser",
+        "chrome",
+        "--yes",
+    ])?;
+    assert_eq!(output.status.code(), Some(2));
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "chrome on windows keeps its cookies under app-bound encryption, which only chrome itself may open"
+    );
+    Ok(())
+}

@@ -797,12 +797,14 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "fetchloom"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anstream",
  "anstyle",
  "anstyle-query",
  "bolero",
  "bytes",
  "bzip2",
+ "cbc",
  "clap",
  "clap_complete",
  "clap_mangen",
@@ -818,6 +820,7 @@ dependencies = [
  "indicatif",
  "insta",
  "keyring",
+ "keyring-core",
  "liblzma",
  "md-5",
  "mimalloc",
