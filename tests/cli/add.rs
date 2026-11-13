@@ -1,5 +1,5 @@
-//! `add` against servers on this machine: naming a dataset, adding it again, putting the project
-//! back when an add fails, and stops and cancels while it downloads.
+//! `add`: naming a dataset, adding it again, putting the project back when an add fails, and
+//! stops and cancels while it downloads.
 
 use std::fs;
 
@@ -43,9 +43,8 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     Ok(())
 }
 
-/// a raw link to a file git-lfs keeps answers with the small pointer git keeps in its place,
-/// which is refused before data.lock pins it, while a larger file that starts the same way is
-/// data like any other.
+/// a raw link to a file git-lfs keeps answers with the small pointer git keeps in its place; a
+/// larger file that starts the same way is data like any other.
 #[test]
 fn a_git_lfs_pointer_is_refused_rather_than_pinned() -> Result {
     let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
@@ -86,8 +85,7 @@ fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
     Ok(())
 }
 
-/// a link `get` fetched has its bytes and their hash in the cache, so an offline add pins it
-/// from there, whether `--as` names the dataset or the link's file does.
+/// `get` left the link's bytes and their hash in the cache, which the offline add pins from.
 #[test]
 fn an_offline_add_pins_a_link_get_fetched_with_or_without_a_name() -> Result {
     for (name, asked) in [("iris", &[][..]), ("tips", &["--as", "tips"][..])] {
@@ -150,8 +148,7 @@ fn no_hints_keeps_the_story_and_drops_the_hints() -> Result {
     Ok(())
 }
 
-/// the same add again, with or without the name it gave, as a script run twice does, changes
-/// nothing and asks no server.
+/// a script run twice adds again, with or without the name, and no server is asked.
 #[test]
 fn adding_the_same_dataset_again_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -177,9 +174,8 @@ fn adding_the_same_dataset_again_changes_nothing() -> Result {
     Ok(())
 }
 
-/// a name data.toml has refuses another link, or the same link with other patterns, which only
-/// a person can choose between, so json hands no command to run: the one an agent once ran
-/// removed the dataset that had the name.
+/// another link, or the same one with other patterns, is a choice only a person can make, so json
+/// gives no fix: one an agent ran once removed the dataset that had the name.
 #[test]
 fn a_name_data_toml_has_refuses_another_dataset_with_no_fix() -> Result {
     let sandbox = Sandbox::new()?;
@@ -288,8 +284,8 @@ fn duplicate_add_chooses_the_entry_with_matching_settings() -> Result {
     Ok(())
 }
 
-/// data.toml turned into a folder while a first add downloads is a change the add keeps: it
-/// writes neither file, says so to a person and in json, and takes back the `.fetchloom` it made.
+/// a folder in data.toml's place is a change the add keeps: it writes neither file, says so in
+/// text and json, and takes back the `.fetchloom` it made.
 #[test]
 fn a_first_add_whose_data_toml_turns_into_a_folder_writes_nothing() -> Result {
     for machine in [false, true] {
@@ -362,8 +358,7 @@ fn failed_add_restores_both_project_files_after_writing_the_lock() -> Result {
     Ok(())
 }
 
-/// data.lock turned into a folder while an add downloads is a change the add keeps: it writes
-/// neither data.toml nor data.lock, so it needs no recovery copy.
+/// a folder in data.lock's place stays, and with neither file written no recovery copy is needed.
 #[test]
 fn an_add_whose_data_lock_turns_into_a_folder_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -457,8 +452,7 @@ fn completed_adds_and_rollbacks_remove_recovery_copies() -> Result {
     Ok(())
 }
 
-/// a name given with `--as` is refused for its real reason, with the limit it breaks, and the
-/// suggested name keeps the letters it can and is one the next run accepts.
+/// the reason names the limit broken, and the suggestion keeps what letters it can.
 #[test]
 fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
     let sandbox = Sandbox::new()?;
@@ -508,8 +502,7 @@ fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
     Ok(())
 }
 
-/// an add into a project folder that is read-only names that folder, claims no rollback for files
-/// it never changed, and leaves no recovery copies behind.
+/// the error claims no rollback for files the add never changed.
 #[cfg(unix)]
 #[test]
 fn an_add_into_a_read_only_project_folder_names_it_and_leaves_no_copies() -> Result {
@@ -582,8 +575,8 @@ fn held(path: &str, body: &[u8], sent: usize) -> Result<(Server, std::sync::mpsc
     Ok((Server::start(path, vec![response])?, release))
 }
 
-/// an add cut off while it downloads, as by a second ctrl-c, a closed terminal or a killed job,
-/// has not changed data.toml or data.lock: it writes them only once every byte is in the cache.
+/// a second ctrl-c, a closed terminal or a killed job can cut an add off, and it writes
+/// data.toml and data.lock only once every byte is in the cache.
 #[test]
 fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
     let sandbox = Sandbox::new()?;
@@ -612,8 +605,7 @@ fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
     Ok(())
 }
 
-/// an edit to data.toml made while an add downloads stays: the add writes neither data.toml nor
-/// data.lock, says which file changed, and keeps what it downloaded in the cache.
+/// the add writes neither file, says which one changed, and keeps what it downloaded in the cache.
 #[test]
 fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -655,8 +647,7 @@ fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
     Ok(())
 }
 
-/// ctrl-c during an add whose data.toml someone edited meanwhile says that nothing was added,
-/// and keeps the edit: the add never wrote either file, so there is nothing it failed to put back.
+/// the add never wrote either file, so there is nothing it failed to put back.
 #[cfg(unix)]
 #[test]
 fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Result {
@@ -686,8 +677,7 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     Ok(())
 }
 
-/// ctrl-c during an add's download ends it with the project as it was, says so, and keeps what
-/// arrived in the cache, so the same add continues from there.
+/// what arrived stays in the cache, so the same add continues from there.
 #[cfg(unix)]
 #[test]
 fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result {
@@ -732,8 +722,7 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
     Ok(())
 }
 
-/// a first add that fails or is refused leaves its folder as it was: no `.fetchloom`, no data
-/// folder and no data.toml or data.lock.
+/// a refused first add leaves the folder empty too.
 #[test]
 fn a_first_add_that_fails_leaves_the_folder_as_it_was() -> Result {
     let sandbox = Sandbox::new()?;
@@ -778,8 +767,7 @@ const SEARCHED: [(&str, &[u8]); 7] = [
     ),
 ];
 
-/// a first add of search words that ends without a dataset, because nobody can choose one here
-/// or because ctrl-c stopped the search, leaves its folder as it was.
+/// the search ends with nobody here to choose one, or with a ctrl-c.
 #[cfg(debug_assertions)]
 #[test]
 fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
@@ -821,9 +809,8 @@ fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
     Ok(())
 }
 
-/// the first add says it started a project, and where, the home folder as `~`. in the home
-/// folder, where a project would take in every folder below, it asks first, and with nobody to
-/// ask it refuses unless --yes.
+/// the home folder shows as `~`; a project there would take in every folder below, so the add
+/// asks first, and with nobody to ask it refuses unless --yes.
 #[test]
 fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -862,8 +849,7 @@ fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> 
     Ok(())
 }
 
-/// an add run in a folder below its project names the project once, for a person at a terminal,
-/// and shows where the files are from where the person stands.
+/// the project is named once, at a terminal, and paths are shown from where the person stands.
 #[test]
 fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -899,8 +885,7 @@ fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Res
     Ok(())
 }
 
-/// at a terminal, q at the list of search results, or no to starting a project in the home
-/// folder, cancels the add and leaves the folder as it was.
+/// q at the list of search results and no to starting a project in the home folder both cancel.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
 fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
@@ -939,10 +924,8 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     Ok(())
 }
 
-/// a cancel the person chose is no error: q at the list of search results, ctrl-c there, and no
-/// or ctrl-c at the question about starting a project in the home folder each say what was
-/// cancelled and that nothing changed on a line of their own, never `error:`. the exit codes
-/// stay those scripts know: 2 for q, 1 for no, 130 for ctrl-c.
+/// q or ctrl-c at the search list, and no or ctrl-c at the home folder question, each say what
+/// was cancelled and that nothing changed, exiting 2 for q, 1 for no and 130 for ctrl-c.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
 fn a_cancel_at_a_question_is_no_error() -> Result {
@@ -1001,9 +984,8 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     Ok(())
 }
 
-/// with `FETCHLOOM_ACCESSIBLE=1`, the datasets a search finds are a numbered list drawn once,
-/// without an escape code to move the cursor, and the number typed picks one: a number out of
-/// range asks again, and q cancels as at the picker.
+/// with `FETCHLOOM_ACCESSIBLE=1` the list is drawn once, numbered and free of cursor escapes; a
+/// number out of range asks again, and q cancels as at the picker.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
 fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
@@ -1043,8 +1025,7 @@ fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
     Ok(())
 }
 
-/// no or ctrl-c at the question about a large download an add needs is a cancel, and the add has
-/// changed nothing by then: it writes data.toml and data.lock only once every file is in.
+/// no or ctrl-c at the large download's question cancels before data.toml or data.lock is written.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
@@ -1147,8 +1128,7 @@ fn a_list_adds_one_dataset_per_line_and_checks_hashes() -> Result {
     Ok(())
 }
 
-/// a list ends with one line for each dataset it adds, as a single add does, and `-v` adds what
-/// each one pinned and where its files were placed.
+/// `-v` adds what each dataset pinned and where its files were placed.
 #[test]
 fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1195,8 +1175,8 @@ fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
     Ok(())
 }
 
-/// several links on the command line add a dataset each, as a list does, and are trusted as one
-/// typed link is. `--as`, which names one dataset, is refused before any request.
+/// every link is trusted as a single typed one is, and `--as`, which names one dataset, is
+/// refused before any request.
 #[test]
 fn several_typed_links_add_a_dataset_each() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1229,8 +1209,7 @@ fn several_typed_links_add_a_dataset_each() -> Result {
     Ok(())
 }
 
-/// a list takes no --as, so the help for a name an earlier line took points at data.toml, where
-/// a dataset can be renamed with its pin.
+/// a list takes no --as, so the help points at data.toml, where a rename keeps the pin.
 #[test]
 fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1282,10 +1261,8 @@ fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
     Ok(())
 }
 
-/// a link typed for add reaches a private address, such as a lab server's, for that run alone.
-/// the add warns of it with the exact origin and the settings file to list it in, which `-q`
-/// keeps, and a clone with an empty cache is refused, naming the link once and quoting the
-/// setting that lets it through, until `allowed_origins` lists that origin.
+/// the typed link reaches a private address for that run alone; the warning, which `-q` keeps,
+/// names the origin and the settings file, and a clone is refused until `allowed_origins` lists it.
 #[test]
 fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1346,8 +1323,7 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     Ok(())
 }
 
-/// a typed link whose name resolves to this machine, as localhost does, gets the same hint, from
-/// what the add's own lookup found: nothing is looked up again for it.
+/// the hint comes from what the add's own lookup of localhost found, with no second lookup.
 #[test]
 fn a_typed_name_on_a_private_address_gets_the_same_hint() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1366,8 +1342,7 @@ fn a_typed_name_on_a_private_address_gets_the_same_hint() -> Result {
     Ok(())
 }
 
-/// at a terminal, the warning about a private address comes before the closing line, and that
-/// line says what anyone who clones needs before their sync can reach it.
+/// the closing line says what anyone who clones needs before their sync can reach the address.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_private_link_is_told_before_the_closing_line() -> Result {
@@ -1390,9 +1365,8 @@ fn a_private_link_is_told_before_the_closing_line() -> Result {
     Ok(())
 }
 
-/// a new link or id with nothing at it is fixed on the command line, since data.toml has no entry
-/// for it: the help runs the add again and names no data.toml, whether naming the dataset or
-/// syncing the project met it.
+/// data.toml has no entry for a new link or id yet, so the help reruns the add and names no
+/// data.toml, with `--as` or without.
 #[test]
 fn a_new_link_with_nothing_at_it_is_fixed_on_the_command_line() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1429,8 +1403,8 @@ fn a_new_link_with_nothing_at_it_is_fixed_on_the_command_line() -> Result {
     Ok(())
 }
 
-/// a link data.toml has and data.lock pins is fixed there should it have moved, or its pinned
-/// bytes come from a folder mirror, whether the add names it again or syncs it beside a new link.
+/// the help offers the pinned bytes from a folder mirror or a new ref in data.toml, whether the
+/// add names the link again or syncs it beside a new one.
 #[test]
 fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1506,10 +1480,9 @@ fn revision(name: &str) -> String {
 const OWNED: &str =
     "/api/datasets?author=scikit-learn&sort=downloads&direction=-1&limit=100&expand%5B%5D=private";
 
-/// a hugging face and a kaggle on this machine that answer for a dataset they do not show as
-/// both answer for a typo, hugging face with `hidden`: 401 without a key or with one it refuses,
-/// 404 with one it takes. they list the datasets of its owner, `scikit-learn` and `uciml`, a
-/// private one a typo away first.
+/// a hugging face and a kaggle on this machine that answer a typo as they answer a hidden dataset,
+/// hugging face with `hidden`: 401 without a key or with one it refuses, 404 with one it takes.
+/// each lists its owner's datasets, `scikit-learn` and `uciml`, a private one a typo away first.
 #[cfg(debug_assertions)]
 fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
     let refusal = r#"{"error":"Invalid username or password."}"#;
@@ -1540,10 +1513,8 @@ fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
     Ok((hub, kaggle))
 }
 
-/// a hugging face or kaggle id one typo from a public dataset of the same owner, which its source
-/// answers as it answers a private one, gets the command meant rather than a sign-in, from one
-/// request to the source's own list of the owner's datasets, and exits 10 as an id the source
-/// does not have. `--json` asks the same, and gives the guess as help but never as a fix.
+/// one request for the owner's list of datasets finds the guess, offered instead of a sign-in, and
+/// the exit is 10 as for an id the source lacks; `--json` gives it as help, never as a fix.
 #[cfg(debug_assertions)]
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant() -> Result {
@@ -1590,8 +1561,7 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
     Ok(())
 }
 
-/// at a terminal, an id one typo from a public dataset ends with the command meant and asks
-/// nothing, while one with no public dataset close still offers to sign in.
+/// a typo of a public name ends with the command meant at a terminal, and asks nothing.
 #[cfg(all(debug_assertions, target_os = "linux"))]
 #[test]
 fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
@@ -1617,9 +1587,8 @@ fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
     Ok(())
 }
 
-/// a signed-in person's typo gets the command meant too, whether hugging face takes their key
-/// and answers 404 or refuses an old one, and when kaggle names no sign-in: none of these stops
-/// the look at the owner's datasets. a private one a typo away is never named.
+/// neither hugging face's 404 for a key it takes, its 401 for an old one, nor kaggle's 404 stops
+/// the look at the owner's datasets, and a private one a typo away is never named.
 #[cfg(debug_assertions)]
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
@@ -1655,9 +1624,8 @@ fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
     Ok(())
 }
 
-/// the list of the owner's datasets is a hint the person can do without, so it gets one try:
-/// a source that answers it with 429 or 500, or whose rate limit is used up, gets no further
-/// request, and the error comes at once, with no suggestion.
+/// the list is a hint the person can do without, so a 429, a 500 or a used-up rate limit gets no
+/// further request, and the error comes at once, with no suggestion.
 #[cfg(debug_assertions)]
 #[test]
 fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
@@ -1715,8 +1683,7 @@ fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
     Ok(())
 }
 
-/// a link on line 3 of a list that has nothing at it fails the add naming that line, in text and
-/// in json, and the help says to fix the line, since data.toml has no entry for it yet.
+/// text and json both name line 3, and the help fixes the line, as data.toml has no entry yet.
 #[test]
 fn a_missing_link_in_a_list_names_its_line() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1750,8 +1717,7 @@ fn a_missing_link_in_a_list_names_its_line() -> Result {
     Ok(())
 }
 
-/// links of a list that fail are fixed on their lines of the list, which the error names, never
-/// on the command line or in data.toml: the help says so whether the links failed alike or not.
+/// the help never sends them to the command line or data.toml, whether they failed alike or not.
 #[test]
 fn links_of_a_list_that_fail_are_fixed_on_their_lines() -> Result {
     let sandbox = Sandbox::new()?;
