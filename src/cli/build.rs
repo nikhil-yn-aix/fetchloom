@@ -1578,4 +1578,74 @@ mod tests {
             "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, `fetchloom build --accept emb tok` pins them"
         );
     }
+
+    /// one differing step is named in the message with its count, several are listed with a count
+    /// each, and each lists its paths up to 20. a rerun that matched stays out; one that could not
+    /// be checked is said.
+    #[test]
+    fn a_differing_rebuild_names_each_step_and_the_paths_that_differ() {
+        let manifest = Manifest::parse("").unwrap();
+        let step = |name: &str, action: Did, check: Option<Compared>, kept: bool| {
+            let key = digest::sha256(name.as_bytes());
+            let mut step = done(action, name, key, key, &[]);
+            step.check = check;
+            step.candidate = kept.then(|| format!("sha256:{key}"));
+            step
+        };
+        let changed = |paths: &[&str]| Compared {
+            changed: paths.iter().map(|path| (*path).to_owned()).collect(),
+            ..Compared::default()
+        };
+        let emb = Compared {
+            matching: 2,
+            changed: vec!["vectors.bin".to_owned()],
+            missing: vec!["index.json".to_owned()],
+            extra: vec!["notes.txt".to_owned()],
+        };
+        let many: Vec<String> = (0..21).map(|part| format!("part-{part:02}.bin")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let unchecked = "clean was not checked: it reads a result data.lock pins that is not on this machine or a mirror";
+        let rows = [
+            (
+                vec![step("emb", Did::Ran, Some(emb), true)],
+                "emb differs from data.lock: 2 of 4 files match",
+                vec![
+                    "changed vectors.bin".to_owned(),
+                    "missing index.json".to_owned(),
+                    "new notes.txt".to_owned(),
+                ],
+            ),
+            (
+                vec![
+                    step("emb", Did::Ran, Some(changed(&["vectors.bin"])), true),
+                    step("raw", Did::Ran, Some(Compared::default()), false),
+                    step("tok", Did::Ran, Some(changed(&["tokens.bin"])), true),
+                    step("clean", Did::Skipped, None, false),
+                ],
+                "emb and tok differ from data.lock",
+                vec![
+                    "emb: 0 of 1 file match data.lock".to_owned(),
+                    "changed vectors.bin".to_owned(),
+                    "tok: 0 of 1 file match data.lock".to_owned(),
+                    "changed tokens.bin".to_owned(),
+                    unchecked.to_owned(),
+                ],
+            ),
+            (
+                vec![step("emb", Did::Ran, Some(changed(&many)), true)],
+                "emb differs from data.lock: 0 of 21 files match",
+                many[..20]
+                    .iter()
+                    .map(|path| format!("changed {path}"))
+                    .chain(["and 1 more".to_owned()])
+                    .collect(),
+            ),
+        ];
+        for (steps, message, details) in rows {
+            let error = differs(&manifest, &steps);
+            assert_eq!(error.kind, Kind::BuildDiffers, "{message}");
+            assert_eq!(error.message, message);
+            assert_eq!(error.details, details, "{message}");
+        }
+    }
 }
