@@ -27,7 +27,7 @@ impl Drop for Connection {
             .unwrap_or_else(PoisonError::into_inner)[self.index]
             .take();
         if let Some(stream) = stream {
-            // windows needs an explicit FIN before duplicated socket handles are closed.
+            // windows needs an explicit FIN before duplicated socket handles are closed
             let _ = stream.shutdown(SocketShutdown::Write);
         }
     }
@@ -59,7 +59,7 @@ impl Shutdown {
         while !self.stopped() {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    // accepted sockets inherit nonblocking mode on some platforms.
+                    // accepted sockets inherit nonblocking mode on some platforms
                     stream.set_nonblocking(false).ok()?;
                     let connection = self.track(&stream)?;
                     return Some((stream, connection));
@@ -76,7 +76,7 @@ impl Shutdown {
         None
     }
 
-    /// a paced response can be interrupted immediately by server shutdown.
+    /// waits `duration` or until the server stops, saying whether it stopped.
     pub(super) fn pause(&self, duration: Duration) -> bool {
         let stopped = self.stopped.lock().unwrap_or_else(PoisonError::into_inner);
         let (stopped, _) = self

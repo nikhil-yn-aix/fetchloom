@@ -1,6 +1,5 @@
-//! a command a test runs, which the harness ends once it runs past [`DEADLINE`], failing the test
-//! with what the command wrote to stderr and the end of its debug log, so a stall shows where it
-//! waited rather than leaving nextest to end the test with nothing kept.
+//! a command a test runs, ended past [`DEADLINE`] with a failure that shows its stderr and the end
+//! of its debug log, so a stall shows where it waited rather than nextest ending it with nothing.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;

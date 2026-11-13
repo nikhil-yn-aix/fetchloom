@@ -1,6 +1,5 @@
-//! a command running beside its test: its stderr read as it comes, so the test can wait for a
-//! line before it releases a server or stops the command, and a finish that gives up on a command
-//! still running after a minute.
+//! a command running beside its test, its stderr read as it comes so the test can wait for a
+//! line, and a finish that gives up on a command still running after a minute.
 
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
@@ -90,7 +89,6 @@ impl Running {
         })
     }
 
-    /// the command's process id.
     pub(crate) fn id(&self) -> Result<u32> {
         Ok(self.child.as_ref().ok_or("child already finished")?.id())
     }
@@ -136,16 +134,14 @@ impl Running {
             .kill()?)
     }
 
-    /// whether the command has ended.
     #[cfg(unix)]
     pub(crate) fn has_ended(&mut self) -> Result<bool> {
         let child = self.child.as_mut().ok_or("child already finished")?;
         Ok(child.try_wait()?.is_some())
     }
 
-    /// waits for the command to end, while what it started may still hold its output open. a
-    /// command still running at the harness's deadline is killed, and the error holds the end of
-    /// its debug log.
+    /// waits for the command to end, though what it started may still hold its output open; past
+    /// the harness's deadline it is killed, and the error holds the end of its debug log.
     pub(crate) fn wait(&mut self) -> Result<ExitStatus> {
         let mut pause = Duration::from_millis(1);
         loop {

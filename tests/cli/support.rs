@@ -136,9 +136,8 @@ impl Sandbox {
         Ok(links)
     }
 
-    /// [`Sandbox::filters`] for `story`, output that tells how files were placed. a drive that
-    /// makes neither link copies every file and says why; there that wording becomes the linking
-    /// one, so one snapshot holds both. a story there that names no copy is an error.
+    /// [`Sandbox::filters`] for `story`, which tells how files were placed: where the drive links
+    /// nothing, its copy wording, which must be there, reads as linking, so a snapshot holds both.
     pub(crate) fn placed_filters(&self, story: &str) -> Result<insta::Settings> {
         let mut settings = self.filters();
         let links = self.links()?;
@@ -164,9 +163,8 @@ impl Sandbox {
         Ok(settings)
     }
 
-    /// waits until a file written in the sandbox now carries a later time than `time`. a
-    /// filesystem stamps times in steps, two seconds on FAT32, so a file written right after
-    /// another can carry the same time.
+    /// waits until a file written now would carry a later time than `time`: filesystems stamp
+    /// times in steps, two seconds on FAT32, so the next file written can carry the same time.
     pub(crate) fn wait_for_a_later_time(&self, time: SystemTime) -> Result {
         let probe = self.root.join(".clock");
         let started = Instant::now();
@@ -307,10 +305,8 @@ impl Sandbox {
         }
     }
 
-    /// snapshot settings that hide what changes from run to run: this sandbox's path, ports and
-    /// timings. a rate shows only once a download takes a second, which a busy machine or a
-    /// retry wait can cause, so rates are dropped whole. backslashes become slashes so windows
-    /// matches the other platforms.
+    /// snapshot settings that hide what changes between runs: this sandbox's path, ports, timings,
+    /// rates, which a slow run alone shows, and backslashes, which become slashes for windows.
     pub(crate) fn filters(&self) -> insta::Settings {
         let mut settings = insta::Settings::clone_current();
         settings.add_filter(&literal(&self.root.display().to_string()), "[sandbox]");
@@ -333,12 +329,9 @@ pub(crate) fn command_help() -> insta::Settings {
     settings
 }
 
-/// what a person at a terminal sees from `inner`, run in `folder` through a pseudo terminal that
-/// `script` opens, after typing `keys` once the screen shows `after`, with its exit code. `stty`
-/// settings apply to that terminal first: `rows 30 cols 40` makes it 40 columns wide, and
-/// `-isig` lets a typed ctrl-c reach fetchloom as the key a question reads rather than as a
-/// signal. keys typed before `stty` runs would still be read the old way, so a ctrl-c waits for
-/// its question. none when `script` is not installed.
+/// what a person at a terminal sees from `inner` in `folder` under `script`, with its exit code,
+/// typing `keys` once `after` shows; none without `script`. `stty` runs first, as `cols 40` or
+/// `-isig` for a ctrl-c a question reads, and keys typed before it are read the old way.
 #[cfg(target_os = "linux")]
 pub(crate) fn typed(
     folder: &Path,
@@ -526,9 +519,8 @@ pub(crate) fn without_copy_warning(stderr: &str) -> String {
         .collect()
 }
 
-/// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
-/// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
-/// alone, since a placed hardlink shares it with the cached object.
+/// deletes the file at `path` as a person can, clearing its read-only flag only where removal
+/// needs that, as on windows' FAT32 and exFAT: a placed hardlink shares the flag with the cache.
 pub(crate) fn delete(path: &Path) -> Result {
     match std::fs::remove_file(path) {
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -643,8 +635,7 @@ pub(crate) enum Part {
 }
 
 /// a server on this machine that answers each new connection with the next scripted response,
-/// byte for byte, then hangs up. it can do what real servers do and polite fakes cannot, such as
-/// stopping halfway through a body.
+/// byte for byte, then hangs up, so it can stop halfway through a body as real servers do.
 pub(crate) struct Server {
     pub(crate) url: String,
     heads: Arc<Watched<Vec<String>>>,
@@ -782,9 +773,8 @@ impl Server {
     }
 }
 
-/// a server on this machine for one large file, as file servers send one: to any number of
-/// connections at once, with a strong `ETag`, byte ranges and `If-Range`, and each answer paced
-/// to a rate of its own, as when loss holds every connection of a far link to a few Mbit/s.
+/// a server on this machine for one large file, to any number of connections at once, with a
+/// strong `ETag`, ranges and `If-Range`, pacing each answer as loss on a far link would.
 pub(crate) struct Ranged {
     pub(crate) url: String,
     site: Arc<Site>,
@@ -1024,9 +1014,8 @@ fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>)
     }
 }
 
-/// a server on this machine that answers by request target, the path and query, as a service
-/// with many URLs does: the same answer to every request for one target, any number of times,
-/// and 404 for a target it does not know.
+/// a server on this machine that answers by request target, path and query, as a service with
+/// many URLs does: the same answer every time for a target it knows, and 404 for any other.
 pub(crate) struct Routes {
     pub(crate) url: String,
     requests: Arc<Mutex<Vec<String>>>,
@@ -1116,9 +1105,8 @@ impl Routes {
     }
 }
 
-/// the next connection that asks for something, with the head of its request, lowercased. a
-/// connection that closes without a request, as fetchloom's check whether a proxy is up, is
-/// passed over, so it takes no scripted response.
+/// the next connection that asks for something, with its request head, lowercased; one that
+/// closes unasked, as fetchloom's check whether a proxy is up, takes no scripted response.
 fn asking(listener: &TcpListener, stop: &Arc<Shutdown>) -> Option<(TcpStream, Connection, String)> {
     loop {
         let (mut stream, connection) = stop.accept(listener)?;
@@ -1206,10 +1194,9 @@ impl<T> Watched<T> {
     }
 }
 
-/// checks `ready` until it holds, for state that nothing announces, such as the bytes another
-/// process writes to disk. a server's requests and a child's stderr have waits that need no
-/// polling: [`Server::wait_for_requests`] and [`Running::wait_for`]. the deadline only keeps a
-/// test from hanging, and names what never happened.
+/// polls `ready` until it holds, for state nothing announces, such as bytes another process
+/// writes; [`Server::wait_for_requests`] and [`Running::wait_for`] need no polling. the deadline
+/// only keeps a test from hanging, and names what never happened.
 pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) -> Result {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !ready()? {
@@ -1221,9 +1208,8 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
     Ok(())
 }
 
-/// `command` run until it marks its work as finishing, held there by
-/// `FETCHLOOM_TEST_HOLD_FINISH`, so a stop sent now lands past its mark, with the file whose
-/// writing releases it.
+/// `command` run until `FETCHLOOM_TEST_HOLD_FINISH` holds it at its mark, so a stop sent now
+/// lands past it, with the file whose writing releases it.
 #[cfg(unix)]
 pub(crate) fn held_at_its_mark(
     sandbox: &Sandbox,
@@ -1261,10 +1247,8 @@ pub(crate) fn finished_anyway(running: Running, release: &Path) -> Result<String
     Ok(stderr)
 }
 
-/// the scripted server, the ranged server and the proxy each run in a `ServerTask`. dropping one
-/// stops its worker and waits for it, so the listener the worker owns is closed by then. this is
-/// checked through the worker's own handle, since a freed port may at once belong to a test
-/// running alongside.
+/// each server and the proxy runs in a `ServerTask`. the check uses the worker's own handle,
+/// since a freed port may at once belong to a test running alongside.
 #[test]
 fn dropping_a_server_task_closes_the_listener_its_worker_owns() -> Result {
     let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -1341,8 +1325,7 @@ fn dropping_a_server_interrupts_an_unreleased_response() -> Result {
     Ok(())
 }
 
-/// a test reads only the AWS keys and profiles it sets itself: none of the machine's reach a
-/// command, and the shared AWS files are ones that do not exist.
+/// the shared AWS files a command sees are ones that do not exist.
 #[test]
 fn no_aws_setting_of_the_machine_reaches_a_command() -> Result {
     for name in [
@@ -1368,9 +1351,8 @@ fn no_aws_setting_of_the_machine_reaches_a_command() -> Result {
     Ok(())
 }
 
-/// a command still running at its deadline is ended, and the test fails with what it wrote to
-/// stderr and the end of its debug log, which shows where it waited: here on a server that never
-/// answers. a command a test started keeps the deadline as the test waits for it.
+/// the command is ended, and the end of its debug log shows where it waited, here on a server
+/// that never answers; a command a test spawned keeps the deadline while the test waits.
 #[test]
 fn a_command_past_its_deadline_fails_with_its_stderr_and_debug_log() -> Result {
     let sandbox = Sandbox::new()?;
