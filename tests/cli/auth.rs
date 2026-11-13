@@ -266,12 +266,13 @@ fn a_key_no_source_answered_for_is_saved_as_not_checked() -> Result {
         .env("FETCHLOOM_RETRIES", "0");
     let output = with_stdin(command, "hf_example\n")?;
     let told = text(&output.stderr)?;
+    let token = ["~", ".cache", "huggingface", "token"].join(std::path::MAIN_SEPARATOR_STR);
     assert_eq!(output.status.code(), Some(0), "{told}");
     assert!(!told.contains("Signed in"), "{told}");
     assert!(
-        told.contains(
-            "Saved a key for hugging face to ~/.cache/huggingface/token, not checked, as huggingface.co gave no answer"
-        ),
+        told.contains(&format!(
+            "Saved a key for hugging face to {token}, not checked, as huggingface.co gave no answer"
+        )),
         "{told}"
     );
     assert!(
@@ -289,9 +290,9 @@ fn a_key_no_source_answered_for_is_saved_as_not_checked() -> Result {
         .env("FETCHLOOM_RETRIES", "0");
     let listed = text(&listing.output()?.stderr)?;
     assert!(
-        listed.contains(
-            "Signed in to hf · ~/.cache/huggingface/token, not checked, as huggingface.co gave no answer"
-        ),
+        listed.contains(&format!(
+            "Signed in to hf · {token}, not checked, as huggingface.co gave no answer"
+        )),
         "{listed}"
     );
     Ok(())
