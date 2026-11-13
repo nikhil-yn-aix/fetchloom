@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -263,3 +264,32 @@ class RecordAndRun(unittest.TestCase):
                                                      "--extract-overwrite", "--workspace-remap", str(self.root)])
                 # nothing is built again from source
                 self.assertNotIn("--tests", command)
+
+
+@unittest.skipIf(os.name == "nt", "stands in for nextest and git with scripts on PATH")
+class Program(unittest.TestCase):
+    def test_a_run_exits_with_nextests_own_code(self):
+        # the only way failed tests fail the nextest step
+        listing = {"rust-suites": {"fetchloom": {"binary-path": "fetchloom", "testcases": {
+            CHMOD: {"ignored": False, "filter-match": {"status": "matches"}}}}}}
+        with tempfile.TemporaryDirectory() as folder:
+            # a copy in a checkout of its own, so its reports stay out of this one
+            root = Path(folder)
+            (root / "python").mkdir()
+            shutil.copyfile(ci_tests.__file__, root / "python/ci_tests.py")
+            (root / "target/ci").mkdir(parents=True)
+            (root / "target/ci/selection.json").write_text(json.dumps({"chmod": [f"fetchloom::{CHMOD}"]}),
+                                                         encoding="utf-8")
+            tools = root / "tools"
+            tools.mkdir()
+            for name, program in [
+                ("cargo-nextest", f"import sys\nif sys.argv[2] != 'list':\n    sys.exit(100)\nprint({json.dumps(listing)!r})\n"),
+                ("git", ""),
+            ]:
+                (tools / name).write_text(f"#!{sys.executable}\n{program}", encoding="utf-8")
+                (tools / name).chmod(0o755)
+            result = subprocess.run([sys.executable, str(root / "python/ci_tests.py"), "run", "chmod", "--chmod"],
+                                    env={**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}"},
+                                    capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 100, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "chmod: 1 selected tests match cargo/libtest\n")
