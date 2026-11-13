@@ -26,7 +26,9 @@ every change measured with the current harness, one row each: what it gained whe
 | network | a split download's later streams written in batches, and its read-back buffer kept between ranges | 96 MiB split from a server holding each connection to 0.8 MB/s: 36.8 s for 0.27 s of cpu, 0.7%, hashing every byte and reading three quarters back | dropped: the network sets a split download's pace | [small leftovers](#small-leftovers-from-the-perf-maps-2026-11-13) |
 | network | lean against default: 2 requests at once, 2 to one host | 100 links from a server that waits 50 ms: time 2.006, peak memory 0.998; `add -i` of 1,000 local links 1.081 and 0.887 glibc, 1.085 and 0.679 musl; 1 GiB `get` 0.977 and 0.862 glibc, 0.997 and 0.991 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | network | max against default: 32 requests at once, 16 to one host | 100 links at 50 ms: time 0.281, peak memory 1.077; `add -i` of 1,000 local links 1.046 and 1.274 glibc, 1.040 and 1.141 musl; 1 GiB `get` 1.005 and 1.069 glibc, 0.999 and 1.074 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
-| network | a cold sync asks the cache about each pinned file once, on the workers, where it asked up to three times in turn | 10,000 small files 0.877 [0.868, 0.905], 100,000 0.876 [0.841, 0.883], beside a/a arms at 1.005 and 0.990; on ext4 0.947 [0.934, 0.971]; `add`, no-op and zip flat; peak memory flat | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
+| network | a cold sync asks the cache about each pinned file once, on the workers, where it asked four times in turn | 10,000 small files 0.877 [0.868, 0.905], 100,000 0.876 [0.841, 0.883], beside a/a arms at 1.005 and 0.990; on ext4 0.947 [0.934, 0.971]; `add`, no-op and zip flat; peak memory flat | kept | [pinnacle pass](#a-cold-syncs-questions-to-the-cache) |
+| network | a download's request slot freed once its body is read, and its partial record read once | cold sync of 10,000 small files 0.892 [0.878, 0.901], over the ask-once change 0.872 [0.819, 0.913]; `add` 0.919; ext4 1.002; 512 MiB `get` flat | dropped, below the bar | [pinnacle pass](#a-downloads-slot) |
+| network | no URL record for a link `add` learns from a listing, or the record written in place | `add` of 100,000 small files on ext4 writes 1,083 MB, 409.6 MB of it these records, a 4 KiB block each; without them 0.622 of the bytes and time 0.849, but `lock --upgrade` and another project's `add` then download every unchanged object again; written in place, the same bytes | not changed: the records keep the ETag data.lock lacks | [pinnacle pass](#what-add-writes) |
 | search | a 3 s grace for the sites still searching once one has answered a search of every site, 10 s when `--source` names them | 12 pairs of new search words: wall 0.307 [0.306, 0.420], 10.08 to 3.08 s at the median; peak memory 1.002 [0.972, 1.033]; dandi left out in 7 of 12, openneuro in 1, ENA in 11 against 8 | kept, a site later than 3 s left out with its warning | [search grace](#a-shorter-search-grace-2026-11-13) |
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -50,7 +52,7 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | stream declared large members with spare writer budget | large gzip 0.754 glibc, 0.759 musl; 4.0625 MiB-member control 0.856 and 0.885; highest musl RSS 88.6 MiB | kept | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
 | archives | lean against default: 2 local workers | sync of a zip of 10,000 files: time 2.095 glibc, 2.031 musl; peak memory 0.934 glibc, 0.870 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | archives | max against default: default's workers and memory | the same zip: time 1.018 glibc, 0.992 musl; peak memory 0.934 glibc, 1.000 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
-| archives | a sync's drop of unpacked archives looks only at the archives it may drop, each member once across projects, on the workers, and reads only the kept rebuilds of each project's state | sync of a zip of 10,000 files that 20 projects share 2.09 to 0.18 s, 0.086 [0.085, 0.086]; one project's zip 0.802, tar.gz 0.822; the cache report beside 100,000 files 0.834; peak memory up to 5.6 MiB more | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
+| archives | a sync's drop of unpacked archives looks only at the archives it may drop, each member once across projects, on the workers, and reads only the kept rebuilds of each project's state | sync of a zip of 10,000 files that 20 projects share 2.09 to 0.18 s, 0.086 [0.085, 0.086]; one project's zip 0.802, tar.gz 0.822; the cache report beside 100,000 files 0.834; peak memory up to 5.6 MiB more | kept | [pinnacle pass](#dropping-unpacked-archives) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -77,7 +79,8 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | a whole dataset a command hands over, and a draft, found through sets while drafting | `add -i` of 40,000 small links 1.013 [0.985, 1.017] | dropped, no win | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | an unplaced dataset's files told through a set of the unplaced | status with 40,000 datasets set to `place = false`: 4.42 to 1.38 s, 0.315 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | each blocker listed once through a set, not a search of those listed | status with 40,000 folders where files belong: 5.04 to 1.54 s, with the scans below already gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
-| project state | a whole read of the state goes through its index a block at a time into one list, which builds the map at once, not the whole document held and parsed into a map one record at a time | settled sync of 100,000 files 0.839 [0.817, 0.849], peak memory 0.834; status 0.838, peak 0.904; `status --verify` 0.882; 10,000 files 0.899 and 0.894, a no-op's peak 2 MiB more | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
+| project state | a whole read of the state goes through its index a block at a time into one list, which builds the map at once, not the whole document held and parsed into a map one record at a time | settled sync of 100,000 files 0.839 [0.817, 0.849], peak memory 0.834; status 0.838, peak 0.904; `status --verify` 0.882; 10,000 files 0.899 and 0.894, a no-op's peak 2 MiB more | kept | [pinnacle pass](#reading-the-whole-state) |
+| project state | the whole state read on a thread of its own beside the data folder walk, and status's data.lock beside both | over the block-wise read below: settled sync of 100,000 files 0.671 against 0.839, status 0.669, 0.501 with data.lock; but 10,000 files' peak memory 1.55 for the no-op and 1.45 for status, the reading thread's own huge pages | dropped, memory | [pinnacle pass](#the-state-beside-the-folder-walk) |
 | placement | whether a folder in a file's way holds anything, from the folders the scan found something in | the same status: 7.26 to 1.54 s, with the other scans gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | what removing a run's unneeded files frees, worked out once for every blocker | 40,000 folders holding a file where files belong: status 10.45 to 1.75 s, `sync --dry-run` 10.22 to 1.55 s | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | a changed copy's name checked against a set of the target paths | `sync --verify --dry-run` of 10,000 files edited through other links beside 100,000: 0.403 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
@@ -98,10 +101,12 @@ every change measured with the current harness, one row each: what it gained whe
 | cache | bounded name discovery and checked-open metadata during verification | 100,000 objects up to 22% faster, but retry at 1,000 objects 1.343 ext4 / 1.323 xfs | dropped, control time | [verification pipeline](#pipelining-cache-verification-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
-| cache | the cache's 256 fan folders read on up to 8 workers, each object's path made after, on one thread | `cache verify` of 100,000 objects 0.371 [0.367, 0.379], of 10,000 0.471; the cache report beside 100,000 files 0.644; peak memory 0.93 to 0.97 | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
+| cache | the cache's 256 fan folders read on up to 8 workers, each object's path made after, on one thread | `cache verify` of 100,000 objects 0.371 [0.367, 0.379], of 10,000 0.471; the cache report beside 100,000 files 0.644; peak memory 0.93 to 0.97 | kept | [pinnacle pass](#reading-the-caches-folders-on-workers) |
+| cache | more readers than the 8 hashing workers when checking files, for a deeper disk queue | cold ext4: `cache verify` of 100,000 objects 0.631 with 32, `status --verify` 0.534; warm 0.955 to 1.023; peak memory 1.17 to 1.71 | dropped, memory | [pinnacle pass](#more-readers-for-a-cold-disk) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | staging shards only for large pushes, with compact-name retry | musl 100,000 files: time 0.732, peak RSS 1.042 [1.024, 1.050] | dropped, memory regression | [conditional shards](#conditional-mirror-staging-shards-2026-11-12) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| push | push's files made in `tmp/` and renamed out of it by one thread each, behind a lock, or by fewer workers, to stop the kernel spinning on those folders' locks | cpu 0.42 to 0.97, wall 1.07 to 2.65 | dropped, wall time | [pinnacle pass](#pushs-spinning) |
 | build | memoized immutable recipe-input contents, three versions | 4,000-recipe status ratios 0.0140 glibc and 0.0092 musl, but no-reuse controls slowed about 1% | dropped, control time | [recipe inputs](#memoizing-recipe-input-contents-2026-11-12) |
 | build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | process | transparent huge pages turned off | peak memory 0.33 to 0.73, but a no-op sync and placing slower. left on: 100,000 files 0.884 and the no-op 0.918, for peak memory 1.17 to 2.47 | dropped, huge pages stay on | [lab](#ab-passes-on-the-linux-lab-2026-11), [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -1511,9 +1516,9 @@ the cost is page faults: with 4 KiB pages the same memory faults far more often.
 
 ## the pinnacle pass, 2026-11-13
 
-a pass that measured the busiest commands whole, cores and disk and network sampled over time beside fetchloom's own trace, and chased each stretch where work waited on a resource that sat idle. each change ran behind a run-time switch, `FETCHLOOM_EXP_<name>`, read once, in one musl release build of 8580a81e (x86_64-unknown-linux-musl, as ci builds it).
+a pass that measured the busiest commands whole, cores and disk and network sampled over time beside fetchloom's own trace, and chased each stretch where work waited on a resource that sat idle. each change ran behind a run-time switch, `FETCHLOOM_EXP_<name>`, read once, in a musl release build (x86_64-unknown-linux-musl, as ci builds it) of 8580a81e, or for the block-wise state read of the two commits before it, so an arm and its base were always one binary.
 
-setup: every arm, a/a included, once a round in a seeded shuffled order after a warmup round, under the measure lock on cores 12–23, on tmpfs unless a row says ext4 (over nvme). the a/a arm runs the base arm's binary and switches again in the same rounds, so its interval is the spread the a/b has to clear. a ratio is the median of paired ratios, new over old, with its 95% bootstrap interval; peak memory is gnu time's `%M` of the child. the downloads came from a local server, a small std-only rust program writing each file from memory, with no pacing: one stream carries 2.1 GB/s, four carry 6 GB/s, and it answers over 17,000 requests a second, so the client sets the pace. the small-file fixtures hold 10,000 or 100,000 files of 4.6 KB on average, 46 MB and 462 MB. measured beside 4 busy training processes, about one core each, which the scheduler moved across all 24 cores; the rounds' other load, read from `/proc/stat` around each run, was about 1 to 2 cores.
+setup: every arm, a/a included, once a round in a seeded shuffled order after a warmup round, under the measure lock on cores 12–23, on tmpfs unless a row says ext4 (over nvme). the a/a arm runs the base arm's binary and switches again in the same rounds, so its interval is the spread the a/b has to clear. a ratio is the median of paired ratios, new over old, with its 95% bootstrap interval from `bench/ab.py`; peak memory is gnu time's `%M` of the child, and bytes written its `%O`. the downloads came from a local server, a small std-only rust program writing each file from memory, with no pacing: one stream carries 2.1 GB/s, four carry 6 GB/s, and it answers over 17,000 requests a second, so the client sets the pace. the small-file fixtures hold 10,000 or 100,000 files of 4.6 KB on average, 46 MB and 462 MB. measured beside 4 busy training processes, about one core each, which the scheduler moved across all 24 cores; the rounds' other load, read from `/proc/stat` around each run, was about 1 to 2 cores.
 
 ### a cold sync's questions to the cache
 
@@ -1568,3 +1573,75 @@ a status or a settled sync reads the project's whole state, about 247 bytes a re
 | `--json status`, 10,000 files | 12 | 0.894 [0.890, 0.898] | 0.999 [0.988, 1.010] | 0.926 | 0.953 [0.949, 0.959] |
 
 the base medians were 0.400 s and 99.1 MiB, 0.399 s and 94.9 MiB, 0.547 s and 133.3 MiB, 0.041 s and 37.1 MiB, 0.048 s and 40.6 MiB. kept: every interval at 100,000 files clears the bar and the a/a spread, and so do the 10,000-file status and the no-op's median; the no-op's peak at 10,000 files is 2 MiB more.
+
+### the state beside the folder walk
+
+a status or a settled sync reads the state and then walks the data folder, though the walk needs nothing from the state. reading the state on a thread of its own while the walk runs, and for status data.lock on another, cut the time at 100,000 files by a further fifth, and by two fifths with data.lock. but the reading thread's allocations land in memory of its own, which mimalloc backs with 2 MiB huge pages on musl, and at 10,000 files that cost 16 to 20 MiB: a no-op's peak was 38 MiB without the thread and 46 to 63 MiB with it, and 17.5 against 18.7 MiB with `MIMALLOC_ALLOW_THP=0`. over the block-wise read, the base here:
+
+| case | pairs | state beside the walk | peak memory | and data.lock beside both | peak memory |
+|---|---:|---|---|---|---|
+| settled sync, 100,000 files | 12 | 0.671 [0.656, 0.688] | 0.849 | | |
+| `--json status`, 100,000 files | 12 | 0.669 [0.650, 0.681] | 0.914 | 0.501 [0.495, 0.509] | 1.039 |
+| `--json status --verify`, 100,000 files | 12 | 0.765 [0.753, 0.772] | 0.932 | 0.638 [0.631, 0.642] | 0.983 |
+| settled sync, 10,000 files | 12 | 0.757 [0.747, 0.773] | 1.546 [1.537, 1.550] | | |
+| `--json status`, 10,000 files | 12 | 0.788 [0.782, 0.796] | 1.445 [1.437, 1.449] | 0.658 [0.651, 0.663] | 1.343 |
+
+the ratios are against the build before the block-wise read, whose own row above gives 0.839 and 0.899 for the two syncs; its a/a arm sat at 0.997 to 1.009. dropped for the memory at 10,000 files. reading beside the walk only for a state large enough that 20 MiB is a small part of the peak would keep the 100,000-file win; it was not built.
+
+### a download's slot
+
+a cold sync of 10,000 small files from the local server kept each connection idle 85% of the time, a 208 µs gap between one response's end and the next request on average. two things sat in that gap: a download held its request slot until the task writing its bytes had finished, though the body was already read whole, and a download's first attempt read its partial record twice. freeing the slot once the body is read, and reusing the first read of the record, together:
+
+| case | pairs | both | slot alone | record alone | a/a |
+|---|---:|---|---|---|---|
+| cold sync, 10,000 small files | 12 | 0.892 [0.878, 0.901] | 0.914 [0.905, 0.927] | 0.961 [0.956, 0.989] | 0.993 [0.979, 1.010] |
+| `add` of a 10,000-file listing | 12 | 0.919 [0.899, 0.930] | 0.934 [0.908, 0.936] | 0.970 [0.953, 0.986] | 1.007 [0.983, 1.022] |
+| 512 MiB `get` | 12 | 1.000 [0.998, 1.002] | 0.998 | 0.998 | 0.997 [0.995, 1.000] |
+| cold sync, over the ask-once change | 12 | 0.872 [0.819, 0.913] | 0.908 [0.861, 0.943] | | 0.976 [0.946, 1.033] |
+| `add`, over the ask-once change | 12 | 0.922 [0.886, 0.945] | 0.935 [0.889, 0.971] | | 0.998 [0.955, 1.016] |
+| cold sync on ext4, over the ask-once change | 10 | 1.002 [0.954, 1.091] | 0.964 [0.917, 1.183] | | 0.996 [0.942, 1.052] |
+
+dropped: no interval clears the 10% bar, and on ext4, where writing the files sets the pace, nothing moved. a server far enough away to matter makes the client's gap a small part of each request: with the local server paced, this pass found large files keeping the link 99.7% full and small ones keeping 3.8 of the 4 requests to one host in flight.
+
+### what `add` writes
+
+`add` of a listing of 100,000 small files wrote 1,083 MB to ext4 for 462 MB of data, where a cold sync of the same files wrote 674 MB, the data on 4 KiB blocks plus the state. the 409.6 MB between them is 100,000 times 4,096 bytes: the URL record `add` keeps for each link it learns, about 380 bytes of json that take a block of their own. nothing needs them for safety: a missing or broken one only means a download. but they are the only place the ETag a link served is kept, which data.lock does not hold, and [`lock --upgrade`](#upgrading-a-bucket-prefix-2026-11-12) and another project's `add` of the same listing skip an unchanged object by it. ext4, 6 pairs:
+
+| case | arm | bytes written | wall | cpu |
+|---|---|---|---|---|
+| `add`, 100,000 files | no URL records | 0.622, 1,083.4 to 673.8 MB | 0.849 [0.806, 0.890] | 0.859 |
+| `add`, 100,000 files | records written in place, not through `tmp/` | 1.000 | 1.006 [0.954, 1.102] | 0.956 |
+| `add`, 100,000 files | a/a | 1.000 | 1.013 [0.962, 1.179] | 1.008 |
+| `add`, 10,000 files | no URL records | 0.627, 109.7 to 68.8 MB | 0.813 [0.783, 0.945] | 0.866 |
+| `add`, 10,000 files | records written in place | 1.000 | 1.090 [0.953, 1.313] | 0.943 |
+| `add`, 10,000 files | a/a | 1.000 | 1.028 [0.903, 1.144] | 0.997 |
+
+not changed: leaving the records out would make each upgrade of that listing download its 462 MB again, and writing them in place saved no bytes. a store holding a listing's records in one file would keep both; it was not built.
+
+### more readers for a cold disk
+
+checking files reads them on at most 8 workers. the nvme here reads small files faster the more reads are in flight, about 73,000 a second from 8 threads, 103,000 from 12, 173,000 from 24 and 304,000 from 96, so a cold check waits on the disk with most of its depth unused. more readers than workers, up to the number below and one per 16 files, on ext4 after dropping the files from the page cache, 8 pairs, 10 for 32 readers:
+
+| readers | `cache verify`, 100,000 | peak memory | `status --verify`, 100,000 | peak memory |
+|---:|---|---|---|---|
+| 12 | 1.001 [0.999, 1.144] | 0.998 | 0.815 [0.723, 0.842] | 1.250 |
+| 16 | 0.856 [0.847, 0.892] | 1.066 | 0.730 [0.696, 0.959] | 1.356 |
+| 24 | 0.704 [0.702, 0.707] | 1.175 | 0.613 [0.581, 0.628] | 1.707 |
+| 32 | 0.631 [0.629, 0.644] | 1.315 | 0.534 [0.530, 0.546] | 1.665 |
+
+the a/a arms sat at 0.997 to 1.003; the base medians were 1.387 s and 57.6 MiB, 2.378 s and 132.6 MiB. with the files in the page cache, 32 readers gave 0.991 and 1.023 for `cache verify` of 100,000 and 10,000 objects and 0.955 for `status --verify`, at 1.31 to 1.68 of the peak. dropped for the memory, which every run would pay for a win only a cold disk sees. a reader that asks the kernel to read ahead, rather than a thread per read in flight, would not cost a thread's memory; it was not built.
+
+### push's spinning
+
+a first push of 100,000 small files to a folder mirror on ext4 took 7.0 to 7.4 s of wall time and 32.7 s of cpu, 30.2 s of it in the kernel. perf put that time in `osq_lock` and `rwsem_spin_on_owner` on `tmp/`'s directory lock, which each new file takes, and `mutex_spin_on_owner` on the lock each rename from `tmp/` into `objects/` takes: the kernel's waiters spin while the lock's owner runs, rather than sleep. there is no retry loop or busy wait in fetchloom. every way to make the waiters sleep cost wall time, since the spinning is what hands each lock on without a wakeup:
+
+| arm | ext4, 10,000: wall, cpu | ext4, 100,000: wall, cpu | tmpfs, 10,000: wall, cpu | tmpfs, 100,000: wall, cpu |
+|---|---|---|---|---|
+| a lock in fetchloom around each make and rename | 1.555, 0.583 | 1.575, 0.515 | 2.645, 0.907 | 2.608, 0.872 |
+| one thread makes the files | 1.126, 0.586 | 1.086, 0.584 | 1.277, 0.972 | 1.305, 0.966 |
+| one thread renames them | 1.071, 0.958 | 1.083, 0.856 | 1.542, 0.898 | 1.554, 0.880 |
+| both | 1.148, 0.539 | 1.200, 0.469 | 1.778, 0.850 | 1.854, 0.833 |
+| 4 workers, by `FETCHLOOM_THREADS` | 1.217, 0.604 | 1.168, 0.552 | 1.241, 0.729 | 1.186, 0.654 |
+| 2 workers | 1.782, 0.448 | 1.738, 0.418 | 1.903, 0.636 | 1.943, 0.620 |
+
+8 to 12 pairs a cell; the a/a arms sat at 0.988 to 1.011 in wall time. dropped: none holds the wall time. the conditional staging shards [measured before](#conditional-mirror-staging-shards-2026-11-12) spread the made files over 16 folders and were faster at 100,000 files, 0.732, but cost peak memory; their cpu was not recorded.
