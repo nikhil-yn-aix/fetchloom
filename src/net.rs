@@ -652,8 +652,13 @@ impl Net {
                 .await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             let at = tokio::time::Instant::now().into_std();
-            self.paces
-                .answered(&paced(&hop), response.status(), at, fastrand::f64());
+            let answer = pace::Answered {
+                status: response.status(),
+                sent: ticket.sent,
+                at,
+                share: fastrand::f64(),
+            };
+            self.paces.answered(&paced(&hop), &answer);
             pace::Paces::heard(ticket, limits, at);
             if !renewed
                 && self

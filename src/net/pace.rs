@@ -213,6 +213,20 @@ struct Pace {
     /// answers in a row that refused for load, each of which doubles the pause before the next
     /// request to a host that asks its requests to start apart.
     refused: u32,
+    /// when the pause the last counted refusal set ends. a refusal of a request sent before then
+    /// came in the same burst, which counts once.
+    paused: Option<Instant>,
+}
+
+/// an answer from a host that asks its requests to start apart, as [`Paces::answered`] counts it.
+pub(super) struct Answered {
+    pub(super) status: StatusCode,
+    /// when the request went, which tells a refusal in the same burst as the last apart.
+    pub(super) sent: Instant,
+    /// when the answer came.
+    pub(super) at: Instant,
+    /// the share of the second half of a pause to wait, a random number from 0 to 1.
+    pub(super) share: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -251,6 +265,8 @@ impl Hold {
 #[derive(Debug)]
 pub(super) struct Ticket {
     pace: Option<Arc<Mutex<Pace>>>,
+    /// when the request was let go.
+    pub(super) sent: Instant,
 }
 
 impl Drop for Ticket {
@@ -290,7 +306,10 @@ impl Paces {
             }
             pace.pending += 1;
             drop(pace);
-            return Ok(Ticket { pace: Some(shared) });
+            return Ok(Ticket {
+                pace: Some(shared),
+                sent: now,
+            });
         };
         let announce = pace
             .announced
@@ -306,10 +325,11 @@ impl Paces {
         })
     }
 
-    /// counts an answer from `host` at `at`, when it asks its requests to start apart: a refusal
-    /// for load, 429 or 503, pauses its next request for longer than the last, by a random `share`
-    /// of the second half of the pause, and any other answer ends the run of refusals.
-    pub(super) fn answered(&self, host: &str, status: StatusCode, at: Instant, share: f64) {
+    /// counts an answer from `host`, when it asks its requests to start apart: a refusal for load,
+    /// 429 or 503, pauses its next request for longer than the last, and any other answer ends the
+    /// run of refusals. a refusal of a request sent before the last pause ended came in the same
+    /// burst, as requests at once to NCBI do, and is not counted again.
+    pub(super) fn answered(&self, host: &str, answer: &Answered) {
         let Some(spacing) = crate::source::spacing(host) else {
             return;
         };
@@ -319,14 +339,18 @@ impl Paces {
         };
         let mut pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
         if !matches!(
-            status,
+            answer.status,
             StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
         ) {
             pace.refused = 0;
             return;
         }
+        if pace.paused.is_some_and(|end| answer.sent < end) {
+            return;
+        }
         pace.refused = pace.refused.saturating_add(1);
-        let until = at + paused(spacing, pace.refused, share);
+        let until = answer.at + paused(spacing, pace.refused, answer.share);
+        pace.paused = Some(until);
         pace.next = Some(pace.next.map_or(until, |next| next.max(until)));
     }
 

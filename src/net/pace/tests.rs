@@ -388,6 +388,17 @@ fn a_pause_after_refusals_doubles_up_to_a_minute_with_a_random_second_half() {
     }
 }
 
+/// the answer `status` to a request sent at `sent`, come at `at`, with `share` of a pause's second
+/// half to wait.
+fn answered(status: StatusCode, sent: Instant, at: Instant, share: f64) -> Answered {
+    Answered {
+        status,
+        sent,
+        at,
+        share,
+    }
+}
+
 /// arXiv asks for three seconds between requests; once it refuses one for load, the next waits
 /// longer, until an answer that is no refusal.
 #[test]
@@ -396,41 +407,56 @@ fn a_paced_host_that_refuses_for_load_is_asked_less_often_until_it_answers() {
     let host = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
     let start = Instant::now();
     let at = |seconds: u64| start + Duration::from_secs(seconds);
-    drop(paces.admit(&host, at(0)).unwrap());
-    paces.answered(&host, StatusCode::SERVICE_UNAVAILABLE, at(1), 1.0);
+    let sent = paces.admit(&host, at(0)).unwrap().sent;
+    paces.answered(
+        &host,
+        &answered(StatusCode::SERVICE_UNAVAILABLE, sent, at(1), 1.0),
+    );
     assert_eq!(paces.pause(&host, at(1)), Some(Duration::from_secs(6)));
     assert_eq!(paces.admit(&host, at(4)).unwrap_err().until, at(7));
-    drop(paces.admit(&host, at(7)).unwrap());
-    paces.answered(&host, StatusCode::TOO_MANY_REQUESTS, at(8), 0.0);
+    let sent = paces.admit(&host, at(7)).unwrap().sent;
+    paces.answered(
+        &host,
+        &answered(StatusCode::TOO_MANY_REQUESTS, sent, at(8), 0.0),
+    );
     assert_eq!(paces.admit(&host, at(10)).unwrap_err().until, at(14));
-    drop(paces.admit(&host, at(14)).unwrap());
-    paces.answered(&host, StatusCode::OK, at(15), 0.0);
+    let sent = paces.admit(&host, at(14)).unwrap().sent;
+    paces.answered(&host, &answered(StatusCode::OK, sent, at(15), 0.0));
     assert_eq!(paces.pause(&host, at(15)), None);
     assert_eq!(paces.admit(&host, at(16)).unwrap_err().until, at(17));
     assert!(!paces.busy(&host));
 }
 
+/// NCBI takes four requests at once, and four refused in one burst are one refusal; four
+/// refusals of requests each sent after the pause the last one set are four in a row, which stop
+/// the host, unless an answer between them ended the run.
 #[test]
 fn a_paced_host_that_keeps_refusing_is_asked_nothing_more_while_others_are_never_paused() {
     let paces = Paces::default();
-    let arxiv = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
-    let now = Instant::now();
-    for _ in 0..3 {
-        paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    let ncbi = crate::net::paced(&Url::parse("https://eutils.ncbi.nlm.nih.gov/x").unwrap());
+    let start = Instant::now();
+    let later = |minutes: u64| start + Duration::from_secs(61 * minutes);
+    let refused = |sent: Instant| answered(StatusCode::TOO_MANY_REQUESTS, sent, sent, 0.0);
+    for _ in 0..4 {
+        paces.answered(&ncbi, &refused(start));
     }
-    assert!(!paces.busy(&arxiv));
-    paces.answered(&arxiv, StatusCode::OK, now, 0.0);
-    for _ in 0..3 {
-        paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    assert!(!paces.busy(&ncbi), "a burst counts once");
+    for minutes in 1..3 {
+        paces.answered(&ncbi, &refused(later(minutes)));
     }
-    assert!(!paces.busy(&arxiv), "an answer between them ended the run");
-    paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
-    assert!(paces.busy(&arxiv));
-    for _ in 0..10 {
-        paces.answered("zenodo.org", StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    assert!(!paces.busy(&ncbi));
+    paces.answered(&ncbi, &answered(StatusCode::OK, later(3), later(3), 0.0));
+    for minutes in 4..7 {
+        paces.answered(&ncbi, &refused(later(minutes)));
+    }
+    assert!(!paces.busy(&ncbi), "an answer between them ended the run");
+    paces.answered(&ncbi, &refused(later(7)));
+    assert!(paces.busy(&ncbi));
+    for minutes in 0..10 {
+        paces.answered("zenodo.org", &refused(later(minutes)));
     }
     assert!(!paces.busy("zenodo.org"));
-    assert_eq!(paces.pause("zenodo.org", now), None);
+    assert_eq!(paces.pause("zenodo.org", start), None);
 }
 
 /// zenodo's answers once its limit is used up: a 429 whose limit resets a second after its date,

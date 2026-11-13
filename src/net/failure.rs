@@ -1284,19 +1284,27 @@ mod tests {
             }),
         );
         let name = super::super::paced(&url);
-        let now = tokio::time::Instant::now().into_std();
+        let now = || tokio::time::Instant::now().into_std();
+        let answer = |status, sent, share| pace::Answered {
+            status,
+            sent,
+            at: now(),
+            share,
+        };
+        let sent = net.pace(&url).await.unwrap().sent;
         net.paces
-            .answered(&name, StatusCode::SERVICE_UNAVAILABLE, now, 1.0);
+            .answered(&name, &answer(StatusCode::SERVICE_UNAVAILABLE, sent, 1.0));
         let mut retry = Retry::new(&net, &url);
         retry
             .wait("export.arxiv.org answered 503".to_owned(), None, false)
             .await
             .unwrap();
         assert_eq!(*heard.lock().unwrap(), [Duration::from_secs(6)]);
-        drop(net.pace(&url).await.unwrap());
+        // each refused request is sent once the pause the last one set ends
         for _ in 0..3 {
+            let sent = net.pace(&url).await.unwrap().sent;
             net.paces
-                .answered(&name, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+                .answered(&name, &answer(StatusCode::TOO_MANY_REQUESTS, sent, 0.0));
         }
         let stopped = retry
             .wait("export.arxiv.org answered 429".to_owned(), None, false)
