@@ -1,6 +1,5 @@
-//! `fetchloom drop`: files left out of their dataset for good, such as bad samples. it writes the
-//! patterns that leave them out into data.toml, rewrites data.lock for files a source lists, and
-//! deletes the unchanged files from the data folder. it asks no server.
+//! `fetchloom drop`: files left out of their dataset for good, by patterns in data.toml, from
+//! data.lock for files a source lists, and from the data folder when unchanged. it asks no server.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -30,7 +29,6 @@ pub(super) struct Report {
     project: PathBuf,
     /// each file left out, by its path in the project.
     dropped: Vec<Left>,
-    /// each members table drop wrote for an archive a glob key's table covered, as a copy of it.
     copied: Vec<Copied>,
     lock_changed: bool,
     placement: Option<Placement>,
@@ -41,8 +39,7 @@ pub(super) struct Report {
     changes: Option<Changes>,
 }
 
-/// one file left out: its dataset, the archive it is inside, if any, and the pattern written
-/// for it.
+/// one file left out, with the archive it is inside, if any, and the pattern written for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct Left {
     path: String,
@@ -51,9 +48,8 @@ struct Left {
     pattern: String,
 }
 
-/// a members table drop wrote for `archive` of `dataset` as a copy of the one under the glob key
-/// `from`, which covered it: a table under the archive's own path wins over a glob, so the
-/// archive keeps what the glob chose.
+/// a members table written for `archive` as a copy of the glob key `from`'s, which covered it: a
+/// table under the archive's own path wins over a glob, so the copy keeps what the glob chose.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct Copied {
     dataset: String,
@@ -96,9 +92,8 @@ struct Edit<'a> {
     left: Vec<Left>,
 }
 
-/// how much work planning did, a step for each planned file it took and each listed path it
-/// compared with a pattern, and where it looks for a stop: every [`CHUNK`] steps, and between
-/// its parts.
+/// planning's work, a step for each planned file it takes and each listed path it compares with
+/// a pattern, looking for a stop every [`CHUNK`] steps and between its parts.
 struct Pace<'p> {
     steps: usize,
     poll: &'p dyn Fn() -> Result<(), Error>,
@@ -227,8 +222,6 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     Ok(report(placement, None))
 }
 
-/// `error`, from deleting the files a drop leaves out, saying that data.toml, and data.lock when
-/// `lock_changed`, were written first and what removes the files then.
 fn written_first(error: Error, lock_changed: bool) -> Error {
     let written = if lock_changed {
         "data.toml and data.lock were"
@@ -241,7 +234,6 @@ fn written_first(error: Error, lock_changed: bool) -> Error {
     ))
 }
 
-/// the members tables `edits` copy from a glob key's, as `--json` lists them.
 fn copies(edits: &BTreeMap<&str, Edit>) -> Vec<Copied> {
     edits
         .iter()
@@ -263,7 +255,6 @@ fn unchanged_by_a_stop(stop: &crate::stop::Stop) -> Result<(), Error> {
     })
 }
 
-/// writes `updated` as data.toml, then `lock`, when the drop changed it, with its lists.
 fn write(
     context: &Context,
     project: &crate::project::Project,
@@ -279,8 +270,7 @@ fn write(
     Ok(())
 }
 
-/// the closing `next:` line of a drop that changed the datasets of `edits`: the build of the
-/// recipes made from them, which data.lock pins as made from the files before, or the commit.
+/// the closing `next:` line: build what data.lock pins as made from the files before, or commit.
 fn tell_next(
     context: &Context,
     project: &crate::project::Project,
@@ -331,7 +321,6 @@ fn built_again<'m>(manifest: &'m Manifest, changed: &[&str]) -> Vec<&'m str> {
         .collect()
 }
 
-/// what the line that shows planning at work names: the path asked for, or how many.
 fn planning(paths: &[String]) -> String {
     match paths {
         [one] => format!("the drop of {one}"),
@@ -342,12 +331,8 @@ fn planning(paths: &[String]) -> String {
     }
 }
 
-/// `arg`, a path relative to `here` that may name a file already deleted, as a path in the
-/// project with `/` between folders, read without following links.
-///
-/// # Errors
-///
-/// `usage` for a path outside the data folder, which holds every file drop can leave out.
+/// `arg`, relative to `here` and maybe naming a file already deleted, as a project path with `/`
+/// between folders, read without following links. it fails as `usage` outside the data folder.
 fn in_data_folder(root: &Path, here: &Path, data_dir: &str, arg: &Path) -> Result<String, Error> {
     let outside = || {
         Error::new(
@@ -384,13 +369,8 @@ fn in_data_folder(root: &Path, here: &Path, data_dir: &str, arg: &Path) -> Resul
     }
 }
 
-/// the planned files each of `paths` names: the file at it, or every file under it, compared
-/// the way a disk that ignores case compares names.
-///
-/// # Errors
-///
-/// `usage` for a path that names no planned file: a file of a recipe's result, one an archive
-/// this machine never unpacked may hold, one a pattern leaves out already, or any other.
+/// the planned files each of `paths` names, compared as a disk that ignores case compares names;
+/// it fails as `usage` for a path that names none, saying why, or that names a recipe's file.
 fn asked<'p, 'a>(
     manifest: &Manifest,
     lock: &Lock,
@@ -463,10 +443,7 @@ fn made_by_recipe(path: &str, dataset: &str) -> Error {
     .help("choose its files inside the recipe's step instead")
 }
 
-/// why `path`, in the data folder and `typed` as given, names no planned file of `sorted`, the
-/// planned files by their folded paths: a file a recipe makes, one an archive this machine never
-/// unpacked may hold, one a pattern leaves out already, a pattern, which drop does not take, or
-/// a path one name off the one meant.
+/// why `path`, `typed` as given, names no planned file of `sorted`, the targets by folded path.
 fn unplanned(
     manifest: &Manifest,
     lock: &Lock,
@@ -545,9 +522,8 @@ fn unplanned(
     )
 }
 
-/// the planned file or folder `path` likely meant: `path` with one name changed to the closest
-/// name planned there, below the deepest folder of `path` that holds planned files, among
-/// `sorted`, the planned files by their folded paths, as planning spells it.
+/// the planned file or folder `path` likely meant, as planning spells it: one name changed to the
+/// closest planned there, below the deepest folder of `path` holding planned files.
 fn near(sorted: &[(String, &Target)], path: &str) -> Option<String> {
     let key = name::fold(path);
     let names: Vec<&str> = key.split('/').collect();
@@ -580,9 +556,8 @@ fn near(sorted: &[(String, &Target)], path: &str) -> Option<String> {
     )
 }
 
-/// `typed`, given for `path` in the project, with the names from the first that `meant` changes
-/// written as `meant` has them, so the suggestion keeps the folder it was typed from. none when
-/// those names are not at the end of `typed` as they are in `path`, as after a `..`.
+/// `typed` with its names from the first `meant` changes written as in `meant`, so a suggestion
+/// keeps the folder it was typed from; none when they do not end `typed`, as after a `..`.
 fn retyped(typed: &Path, path: &str, meant: &str) -> Option<String> {
     let typed = typed.to_str()?;
     let names: Vec<&str> = path.split('/').collect();
@@ -606,9 +581,8 @@ fn retyped(typed: &Path, path: &str, meant: &str) -> Option<String> {
     Some(format!("{}{}", &typed[..start], changed[first..].join("/")))
 }
 
-/// the help for `path`, a pattern given where drop takes a path: the pattern that leaves out
-/// what it matches and where it goes in data.toml, when the folder before its last name holds
-/// planned files of one dataset that its source lists or that one archive holds.
+/// the help for `path`, a pattern given where drop takes a path: the exclude to write and where,
+/// when its folder holds planned files of one dataset from its source's list or one archive.
 fn exclude_help(
     manifest: &Manifest,
     lock: &Lock,
@@ -683,9 +657,7 @@ fn exclude_help(
     )
 }
 
-/// the pattern in data.toml that leaves out the file at `path`, in the data folder, as a few
-/// words naming it: an exclude or select of a members table, for a file an archive holds, or the
-/// dataset's own exclude, for a file its source lists.
+/// the pattern in data.toml that leaves out the file at `path`, as a few words naming it.
 fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Option<String> {
     let asked = name::fold(path);
     for locked in &lock.datasets {
@@ -733,15 +705,11 @@ fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Opti
     None
 }
 
-/// the last part of a path, its file name.
 fn archive_name(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
 
-/// what to write for each dataset `asked` names files of: an escaped path, or `<folder>/**` for
-/// a folder whose files it matches exactly, in the dataset's exclude for a file its source
-/// lists and in the archive's members table for a file inside an archive. a request for every
-/// file an archive keeps leaves out the archive itself.
+/// what to write for each dataset `asked` names files of.
 fn edits<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -835,9 +803,8 @@ fn edits<'a>(
     Ok(edits)
 }
 
-/// the glob key's table each archive in `members`, by its path in `locked`, starts its own table
-/// from, for one with no table of its own: a pattern added to the glob's table would reach every
-/// archive it covers.
+/// the glob key's table each archive in `members` without a table of its own starts from, since a
+/// pattern added to the glob's table would reach every archive it covers.
 fn from_globs<'a>(
     source: &manifest::Source,
     locked: &Locked,
@@ -884,8 +851,7 @@ fn missing_pin(dataset: &str) -> Error {
     ))
 }
 
-/// where the files `locked`'s archive `file` keeps land, with their paths inside it, from what
-/// this machine recorded unpacking it to, as planning places them.
+/// the [`Inside`] of `locked`'s archive `file`, from what this machine recorded unpacking it to.
 fn unpacked(
     manifest: &Manifest,
     locked: &Locked,
@@ -921,10 +887,8 @@ fn unpacked(
         .collect())
 }
 
-/// the patterns that leave out `chosen`, each a path in the project with its path in its origin:
-/// `<folder>/**` when `request` is a folder and that pattern matches exactly the chosen paths
-/// among `all` the origin keeps, else one escaped path each. each pattern comes with the paths it
-/// was written for.
+/// the patterns that leave out `chosen`, pairs of project and origin paths: `<folder>/**` when it
+/// matches exactly those among `all` the origin keeps, else one escaped path each.
 fn written_for<'c>(
     request: &Asked,
     chosen: &[(&'c str, &'c str)],
@@ -959,9 +923,8 @@ fn written_for<'c>(
         .collect())
 }
 
-/// the folder in the origin's own paths that `folder`, in the project, stands for: what is left
-/// of each chosen origin path once the part below `folder` is cut from its end, when that is the
-/// same for every one and not empty.
+/// the origin's folder that the project's `folder` stands for: each chosen origin path less the
+/// part below `folder`, when that is the same for all and not empty.
 fn shared_prefix(folder: &str, chosen: &[(&str, &str)]) -> Option<String> {
     let depth = folder.split('/').count();
     let mut shared: Option<&str> = None;
@@ -978,7 +941,6 @@ fn shared_prefix(folder: &str, chosen: &[(&str, &str)]) -> Option<String> {
     shared.map(str::to_owned)
 }
 
-/// adds what `patterns` leave out to `edit`'s record for `--json`.
 fn record(
     edit: &mut Edit,
     dataset: &str,
@@ -1008,9 +970,8 @@ fn record(
     }
 }
 
-/// turns a request for every file an archive keeps into leaving out the archive itself, every
-/// part of a split one, in the dataset's exclude, since a members table may not leave its
-/// archive no file.
+/// leaves out an archive whose every kept file was asked for, every part of it, in the dataset's
+/// exclude, since a members table may not leave its archive no file.
 fn whole_archives<'a>(
     locked: &'a Locked,
     edit: &mut Edit<'a>,
@@ -1059,9 +1020,8 @@ fn whole_archives<'a>(
     }
 }
 
-/// refuses a drop that would leave a dataset no file, or move files it keeps: a dataset of more
-/// than one file left with one archive places that archive's files without their top folder.
-/// a file a source lists leaves data.lock offline only while data.lock pins what data.toml asks.
+/// refuses a drop that would leave a dataset no file, or move files it keeps. data.lock can drop a
+/// listed file offline only while it pins what data.toml asks.
 fn refuse_what_breaks(
     manifest: &Manifest,
     lock: &Lock,
@@ -1144,8 +1104,6 @@ fn moves_alone(archive: &Archive<'_>, cache: &Cache) -> bool {
     })
 }
 
-/// data.toml's and data.lock's new content once `edits` are written. `manifest` is data.toml as
-/// `text` holds it.
 fn written(
     text: &str,
     manifest: &Manifest,
@@ -1216,7 +1174,6 @@ fn narrowed(
     manifest::narrowed(text, &changes)
 }
 
-/// data.lock's new content once `edits` are written and data.toml holds `updated`.
 fn lock_written(updated: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Result<Lock, Error> {
     let new_manifest = Manifest::parse(updated)?;
     let now = lock::timestamp(std::time::SystemTime::now());
@@ -1244,7 +1201,6 @@ fn lock_written(updated: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Res
     Ok(new_lock)
 }
 
-/// a line for each dataset and archive drop leaves files out of, with `-v` naming each file.
 fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, dry_run: bool) {
     let verb = if dry_run { "Would exclude" } else { "Excluded" };
     for (dataset, edit) in edits {
@@ -1291,8 +1247,7 @@ mod tests {
 
     use super::*;
 
-    /// data.toml and data.lock of the import tiny, `folders` folders of `each` files, with an
-    /// empty cache in a folder of its own.
+    /// the import tiny, `folders` folders of `each` files, with an empty cache of its own.
     fn tiny(folders: usize, each: usize) -> (Manifest, Lock, tempfile::TempDir, Cache) {
         let manifest = Manifest::parse("[datasets.tiny]\nref = \"local\"\n").unwrap();
         let source = manifest.datasets["tiny"].source().unwrap();
@@ -1335,8 +1290,7 @@ mod tests {
         paths.iter().map(PathBuf::from).collect()
     }
 
-    /// a folder of listed files is one pattern, found by reading the dataset's list once for
-    /// the folder, not once for each of its files.
+    /// a folder of listed files becomes one pattern.
     #[test]
     fn a_folder_reads_its_dataset_list_once() {
         let (manifest, lock, _folder, cache) = tiny(10, 100);
@@ -1363,9 +1317,7 @@ mod tests {
         assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
     }
 
-    /// the build a drop names makes every result made from what it changed again: a recipe
-    /// another of them is made from builds with that one, and recipes made from other datasets
-    /// stay out.
+    /// a recipe another one is made from builds with it; those made from other datasets stay out.
     #[test]
     fn a_drop_names_the_builds_that_make_every_result_again() {
         let manifest = Manifest::parse(concat!(
@@ -1387,8 +1339,7 @@ mod tests {
         assert_eq!(built_again(&alone, &["lab"]), Vec::<&str>::new());
     }
 
-    /// a path one name away from a planned file or folder finds it, whichever name is off, and
-    /// the suggestion keeps the path as it was typed up to that name.
+    /// whichever name is off; the suggestion keeps the path as typed up to that name.
     #[test]
     fn a_typo_is_found_one_name_away_and_kept_as_typed() {
         let (manifest, lock, _folder, cache) = tiny(3, 2);
@@ -1434,8 +1385,7 @@ mod tests {
         }
     }
 
-    /// planning looks for a stop every chunk of its work, and a stop it finds there ends it at
-    /// once, however much is left: the look that finds it is the last.
+    /// planning looks every chunk of its work, and the look that finds a stop is the last.
     #[test]
     fn planning_ends_at_the_first_look_after_a_stop() {
         let (manifest, lock, _folder, cache) = tiny(4, 1_000);
@@ -1581,9 +1531,8 @@ mod tests {
         "# left alone\n[datasets.untouched]\nref = \"zenodo:4\"\n",
     );
 
-    /// a drop across datasets writes each one's exclusions in its own table, an archive a glob
-    /// table covered gets a table of its own copied from it, and an archive that leaves whole
-    /// takes its own table with it, keeping every comment and the layout around them.
+    /// an archive a glob covered gets its own table copied from it, one that leaves whole takes its
+    /// own table with it, and every comment and the layout around them stay.
     #[test]
     fn a_drop_across_datasets_writes_each_dataset_in_place() {
         let manifest = Manifest::parse(ACROSS).unwrap();
@@ -1647,8 +1596,6 @@ mod tests {
         assert_eq!(files("untouched"), ["only.bin"]);
     }
 
-    /// a drop across many datasets reads data.toml as often as one across a few, rather than
-    /// once more for each dataset it writes.
     #[test]
     fn a_drop_across_many_datasets_reads_data_toml_as_often_as_across_few() {
         let reads = |count: usize| {
@@ -1689,8 +1636,7 @@ mod tests {
         );
     }
 
-    /// a drop across datasets refuses the first, in name order, it would leave no file, and
-    /// a dataset whose archive this machine has not unpacked is not counted out.
+    /// in name order; a dataset whose archive was never unpacked here is not counted out.
     #[test]
     fn a_drop_across_datasets_refuses_the_first_left_with_no_file() {
         let manifest = Manifest::parse(concat!(
