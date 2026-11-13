@@ -28,7 +28,7 @@ nav_file = "SUMMARY.md"
 custom_dir = "docs-site/theme"
 language = "en"
 font = false
-# fl, the short command, in geist mono and the accent
+# the twill of src/output.rs, which python/build_site.py draws there after zensical
 favicon = "assets/images/favicon.svg"
 features = [
   "content.action.edit",

@@ -804,12 +804,21 @@ fn hashes_on_a_line_read_apart_however_late_they_differ() {
 
 #[test]
 fn the_wordmark_shows_only_where_it_fits() {
-    assert_eq!(super::wordmark(98, false), "");
-    let shown = super::wordmark(100, false);
-    assert_eq!(shown.lines().count(), 8);
-    assert!(shown.ends_with("\\|__|\n\n"));
-    assert!(!shown.contains('\u{1b}'));
-    assert!(super::wordmark(100, true).contains('\u{1b}'));
+    assert_eq!(super::wordmark(24, false, true), "");
+    assert_eq!(
+        super::wordmark(25, false, true),
+        "█▀ ▄█▀ ▄█▀ ▄\n ▄█▀ ▄█▀ ▄█▀   fetchloom\n█▀ ▄█▀ ▄█▀ ▄\n\n"
+    );
+    assert!(super::wordmark(25, true, true).contains('\u{1b}'));
+}
+
+/// a terminal that shows only ascii gets the twill one row a line, in `#`.
+#[test]
+fn the_wordmark_falls_back_to_ascii() {
+    assert_eq!(
+        super::wordmark(25, false, false),
+        "##  ##  ##\n#  ##  ##  #   fetchloom\n  ##  ##  ##\n\n"
+    );
 }
 
 /// `Would` ends where every other verb does, however long its action.

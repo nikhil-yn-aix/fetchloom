@@ -34,13 +34,13 @@
 [data-md-color-scheme="default"] {
   --fl-paper: #faf9f5;
   --fl-ink: #141413;
-  --fl-stone: #75726a;
+  --fl-muted: #75726a;
   --fl-hair: #e6e3d9;
   --fl-track: #efece4;
-  --fl-clay: #b44f26;
-  --fl-sage: #3c7a37;
-  --fl-amber: #8f6200;
-  --fl-red: #bf213a;
+  --fl-accent: #b44f26;
+  --fl-done: #3c7a37;
+  --fl-warn: #8f6200;
+  --fl-fail: #bf213a;
   /* the search dialog's colors, as rgb triplets */
   --color-foreground: 20 20 19;
   --color-background: 250 249 245;
@@ -51,13 +51,13 @@
 [data-md-color-scheme="slate"] {
   --fl-paper: #1b1a17;
   --fl-ink: #f2efe7;
-  --fl-stone: #9b978c;
+  --fl-muted: #9b978c;
   --fl-hair: #34322c;
   --fl-track: #24231f;
-  --fl-clay: #ee7a4c;
-  --fl-sage: #8fc086;
-  --fl-amber: #e8b65a;
-  --fl-red: #f25c6a;
+  --fl-accent: #ee7a4c;
+  --fl-done: #8fc086;
+  --fl-warn: #e8b65a;
+  --fl-fail: #f25c6a;
   --color-foreground: 242 239 231;
   --color-background: 27 26 23;
   --color-background-subtle: 36 35 31;
@@ -76,19 +76,19 @@
   --md-default-bg-color--lighter: var(--fl-paper);
   --md-default-bg-color--lightest: var(--fl-paper);
   --md-default-fg-color: var(--fl-ink);
-  --md-default-fg-color--light: var(--fl-stone);
-  --md-default-fg-color--lighter: var(--fl-stone);
+  --md-default-fg-color--light: var(--fl-muted);
+  --md-default-fg-color--lighter: var(--fl-muted);
   --md-default-fg-color--lightest: var(--fl-hair);
   --md-primary-fg-color: var(--fl-paper);
   --md-primary-fg-color--light: var(--fl-paper);
   --md-primary-fg-color--dark: var(--fl-paper);
   --md-primary-bg-color: var(--fl-ink);
-  --md-primary-bg-color--light: var(--fl-stone);
-  --md-accent-fg-color: var(--fl-clay);
+  --md-primary-bg-color--light: var(--fl-muted);
+  --md-accent-fg-color: var(--fl-accent);
   --md-accent-fg-color--transparent: transparent;
   --md-accent-bg-color: var(--fl-paper);
   --md-typeset-color: var(--fl-ink);
-  --md-typeset-a-color: var(--fl-clay);
+  --md-typeset-a-color: var(--fl-accent);
   --md-typeset-table-color: var(--fl-hair);
   --md-typeset-table-color--light: transparent;
   --md-typeset-mark-color: var(--fl-track);
@@ -109,17 +109,17 @@
   --md-code-hl-punctuation-color: currentColor;
   --md-code-hl-variable-color: currentColor;
   --md-code-hl-generic-color: currentColor;
-  --md-code-hl-comment-color: var(--fl-stone);
+  --md-code-hl-comment-color: var(--fl-muted);
   --md-footer-fg-color: var(--fl-ink);
-  --md-footer-fg-color--light: var(--fl-stone);
-  --md-footer-fg-color--lighter: var(--fl-stone);
+  --md-footer-fg-color--light: var(--fl-muted);
+  --md-footer-fg-color--lighter: var(--fl-muted);
   --md-footer-bg-color: var(--fl-paper);
   --md-footer-bg-color--dark: var(--fl-paper);
   --md-shadow-z1: none;
   --md-shadow-z2: none;
   --md-shadow-z3: none;
   --md-mermaid-font-family: var(--fl-mono);
-  --md-mermaid-edge-color: var(--fl-stone);
+  --md-mermaid-edge-color: var(--fl-muted);
   --md-mermaid-node-bg-color: var(--fl-paper);
   --md-mermaid-node-fg-color: var(--fl-ink);
   --md-mermaid-label-bg-color: var(--fl-paper);
@@ -127,7 +127,7 @@
   --md-mermaid-sequence-actor-bg-color: var(--fl-paper);
   --md-mermaid-sequence-actor-fg-color: var(--fl-ink);
   --md-mermaid-sequence-actor-border-color: var(--fl-ink);
-  --md-mermaid-sequence-actor-line-color: var(--fl-stone);
+  --md-mermaid-sequence-actor-line-color: var(--fl-muted);
   --md-mermaid-sequence-actorman-bg-color: var(--fl-paper);
   --md-mermaid-sequence-actorman-line-color: var(--fl-ink);
   --md-mermaid-sequence-box-bg-color: var(--fl-paper);
@@ -136,12 +136,12 @@
   --md-mermaid-sequence-label-fg-color: var(--fl-ink);
   --md-mermaid-sequence-loop-bg-color: var(--fl-paper);
   --md-mermaid-sequence-loop-fg-color: var(--fl-ink);
-  --md-mermaid-sequence-loop-border-color: var(--fl-stone);
+  --md-mermaid-sequence-loop-border-color: var(--fl-muted);
   --md-mermaid-sequence-message-fg-color: var(--fl-ink);
-  --md-mermaid-sequence-message-line-color: var(--fl-stone);
+  --md-mermaid-sequence-message-line-color: var(--fl-muted);
   --md-mermaid-sequence-note-bg-color: var(--fl-paper);
   --md-mermaid-sequence-note-fg-color: var(--fl-ink);
-  --md-mermaid-sequence-note-border-color: var(--fl-stone);
+  --md-mermaid-sequence-note-border-color: var(--fl-muted);
   --md-mermaid-sequence-number-bg-color: var(--fl-ink);
   --md-mermaid-sequence-number-fg-color: var(--fl-paper);
 }
@@ -161,7 +161,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--fl-clay) !important;
+  outline: 2px solid var(--fl-accent) !important;
   outline-offset: 2px;
 }
 
@@ -180,7 +180,7 @@ body {
   display: none;
 }
 .md-header__button:not(.md-logo) {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-header__button:hover {
   color: var(--fl-ink);
@@ -189,23 +189,23 @@ body {
 .md-source {
   font-family: var(--fl-mono);
   font-size: .6rem;
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   padding: 0 .6rem;
   line-height: 2.4rem;
 }
 .md-source:hover {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
   opacity: 1;
 }
 .md-tabs {
   background-color: var(--fl-paper);
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   border-bottom: 1px solid var(--fl-hair);
 }
 .md-tabs__link {
   font-size: .7rem;
   opacity: 1;
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-tabs__item--active .md-tabs__link,
 .md-tabs__link:hover {
@@ -213,7 +213,7 @@ body {
 }
 .md-tabs__item--active .md-tabs__link {
   text-decoration: underline;
-  text-decoration-color: var(--fl-clay);
+  text-decoration-color: var(--fl-accent);
   text-decoration-thickness: 2px;
   text-underline-offset: .45em;
 }
@@ -222,7 +222,7 @@ body {
   line-height: 1.35;
 }
 .md-nav__link {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   background: none !important;
   padding: .2rem .4rem;
 }
@@ -243,33 +243,33 @@ body {
 }
 .md-path {
   font-size: .65rem;
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-path__link {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-path__link:hover {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 
 .md-search__button,
 .md-search__button:focus,
 .md-search__button:hover {
   font-family: var(--fl-serif);
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   background-color: var(--fl-paper);
   border: 1px solid var(--fl-hair);
 }
 .md-search__button:hover {
   color: var(--fl-ink);
-  border-color: var(--fl-stone);
+  border-color: var(--fl-muted);
 }
 .md-search__button::before {
-  background-color: var(--fl-stone);
+  background-color: var(--fl-muted);
 }
 .md-search__button::after {
   font-family: var(--fl-mono);
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   background: none;
 }
 
@@ -327,23 +327,23 @@ body {
 .md-typeset .headerlink {
   font-family: var(--fl-mono);
   font-size: .6em;
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-typeset .headerlink:hover,
 .md-typeset .headerlink:focus {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 .md-typeset a {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: .18em;
-  text-decoration-color: color-mix(in srgb, var(--fl-clay) 45%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--fl-accent) 45%, transparent);
 }
 .md-typeset a:hover,
 .md-typeset a:focus {
-  color: var(--fl-clay);
-  text-decoration-color: var(--fl-clay);
+  color: var(--fl-accent);
+  text-decoration-color: var(--fl-accent);
 }
 .md-typeset strong {
   font-weight: 600;
@@ -353,10 +353,10 @@ body {
 }
 .md-content__button {
   background: none;
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-content__button:hover {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 
 /* code: geist mono, as the benchmark charts set their numbers */
@@ -393,13 +393,13 @@ body {
 }
 /* what a person types: commands in the accent, as fetchloom's help shows its examples */
 .md-typeset :is(.language-sh, .language-bash, .language-shell, .language-powershell) code {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 .md-typeset .language-console code .gp {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-typeset .language-console code {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 .md-typeset .language-console code .go {
   color: var(--fl-ink);
@@ -410,11 +410,11 @@ body {
 }
 .md-code__button,
 :hover > * > .md-code__button {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 .md-code__button:hover,
 .md-code__button.focus-visible {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 
 /* transcripts in the colors fetchloom gives each line; bold is geist mono's medium */
@@ -430,22 +430,22 @@ body {
   font-weight: 500;
 }
 .fl-done {
-  color: var(--fl-sage);
+  color: var(--fl-done);
 }
 .fl-work,
 .fl-accent,
 .fl-typed {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 .fl-warn {
-  color: var(--fl-amber);
+  color: var(--fl-warn);
 }
 .fl-fail {
-  color: var(--fl-red);
+  color: var(--fl-fail);
 }
 .fl-dim,
 .fl-dim .fl-bold {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
 }
 
 /* tables in the booktabs manner: rules above and below, one under the head, none between rows */
@@ -515,18 +515,39 @@ body {
   -webkit-hyphens: manual;
 }
 
-/* the wordmark the cli prints on a wide terminal, scaled to the column: 98 columns of 0.6em */
-.md-content__inner {
-  container-type: inline-size;
-}
+/* the mark the cli prints on its welcome: the twill of src/output.rs, which python/build_site.py
+   draws here, beside the name */
 .md-typeset .fl-wordmark {
-  margin: .4em 0 1.6em;
-  color: var(--fl-clay);
-  font-family: var(--fl-mono);
-  font-size: min(.8rem, 1.7cqi);
-  line-height: 1.2;
-  white-space: pre;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: .42em;
+  margin: .1em 0 .9em;
+  font-family: var(--fl-display);
+  font-size: 2.1rem;
+  line-height: 1;
+  color: var(--fl-ink);
+}
+.md-typeset .fl-wordmark svg {
+  flex: none;
+  width: .74em;
+  height: .74em;
+  color: var(--fl-accent);
+}
+
+/* each section heading hangs one repeat of the twill in the margin, or before it on a phone */
+.md-typeset h2 {
+  position: relative;
+}
+.md-typeset h2::before {
+  content: "";
+  position: absolute;
+  left: -1.15em;
+  top: .92em;
+  width: .52em;
+  height: .52em;
+  background-color: var(--fl-accent);
+  -webkit-mask: url("../images/twill.svg") center / 100% 100% no-repeat;
+  mask: url("../images/twill.svg") center / 100% 100% no-repeat;
 }
 
 .md-footer {
@@ -539,10 +560,10 @@ body {
 }
 .md-footer__link:hover .md-footer__title,
 .md-footer__link:focus .md-footer__title {
-  color: var(--fl-clay);
+  color: var(--fl-accent);
 }
 .md-footer__direction {
-  color: var(--fl-stone);
+  color: var(--fl-muted);
   opacity: 1;
 }
 .md-footer-meta {
@@ -552,6 +573,12 @@ body {
 @media screen and (max-width: 44.984375em) {
   .md-typeset {
     font-size: .85rem;
+  }
+  .md-typeset h2 {
+    padding-left: .75em;
+  }
+  .md-typeset h2::before {
+    left: 0;
   }
   .md-content__inner > pre,
   .md-content__inner > .highlight {

@@ -863,6 +863,7 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Result {
+    let mark = " ▄█▀ ▄█▀ ▄█▀   fetchloom\n";
     let sandbox = Sandbox::new()?;
     let wide = text(&sandbox.run(&[])?.stdout)?;
     let welcome = sandbox.command(&[]);
@@ -875,15 +876,17 @@ fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Res
         narrow.lines().all(|line| line.chars().count() <= 60),
         "{narrow}"
     );
+    let (drawn, below) = narrow.split_once("\n\n").unwrap_or_default();
+    assert!(drawn.contains(mark), "{narrow}");
     assert_eq!(
-        narrow.split_whitespace().collect::<Vec<_>>(),
+        below.split_whitespace().collect::<Vec<_>>(),
         wide.split_whitespace().collect::<Vec<_>>(),
         "no word is split or lost\n{narrow}"
     );
-    let (_, short) = at("rows 24 cols 120")?.unwrap_or_default();
-    assert!(!short.contains("|__|"), "{short}");
-    let (_, tall) = at("rows 40 cols 120")?.unwrap_or_default();
-    assert!(tall.contains("|__|"), "{tall}");
+    let (_, short) = at("rows 20 cols 120")?.unwrap_or_default();
+    assert!(!short.contains(mark), "{short}");
+    let (_, tall) = at("rows 30 cols 120")?.unwrap_or_default();
+    assert!(tall.contains(mark), "{tall}");
     Ok(())
 }
 

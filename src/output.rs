@@ -620,6 +620,11 @@ impl Output {
         self.style.dot()
     }
 
+    /// whether the terminal shows unicode symbols, not only ascii.
+    pub(crate) fn draws_unicode(&self) -> bool {
+        self.style.unicode
+    }
+
     /// the width of the terminal a person watches the story on, or none for a pipe or a file.
     pub(crate) fn width(&self) -> Option<usize> {
         self.style
@@ -1485,30 +1490,60 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     }
     out.join("\n")
 }
-/// the name drawn large, 98 columns wide, for the welcome on a wide terminal.
-const WORDMARK: &str = r"
- ________ _______  _________  ________  ___  ___  ___       ________  ________  _____ ______
-|\  _____\\  ___ \|\___   ___\\   ____\|\  \|\  \|\  \     |\   __  \|\   __  \|\   _ \  _   \
-\ \  \__/\ \   __/\|___ \  \_\ \  \___|\ \  \\\  \ \  \    \ \  \|\  \ \  \|\  \ \  \\\__\ \  \
- \ \   __\\ \  \_|/__  \ \  \ \ \  \    \ \   __  \ \  \    \ \  \\\  \ \  \\\  \ \  \\|__| \  \
-  \ \  \_| \ \  \_|\ \  \ \  \ \ \  \____\ \  \ \  \ \  \____\ \  \\\  \ \  \\\  \ \  \    \ \  \
-   \ \__\   \ \_______\  \ \__\ \ \_______\ \__\ \__\ \_______\ \_______\ \_______\ \__\    \ \__\
-    \|__|    \|_______|   \|__|  \|_______|\|__|\|__|\|_______|\|_______|\|_______|\|__|     \|__|
-";
 
-/// the wordmark and a blank line, in the accent, when `width` columns can hold it.
-pub(crate) fn wordmark(width: usize, color: bool) -> String {
-    let longest = WORDMARK.lines().map(str::len).max().unwrap_or(0);
-    if width <= longest {
+/// one repeat of the 2/2 twill fetchloom draws as its mark, a row a string, `#` where the warp
+/// crosses over the weft. `python/build_site.py` draws the site's marks from the same rows.
+const TWILL: [&str; 4] = ["##..", "#..#", "..##", ".##."];
+
+/// the welcome's mark: the twill three repeats across, beside the name. a terminal cell holds two
+/// rows of the twill in half blocks, or one in `#` where the terminal shows only ascii.
+fn welcome_mark(unicode: bool) -> [String; 3] {
+    let woven = |row: usize, column: usize| {
+        TWILL[row % TWILL.len()].as_bytes()[column % TWILL[0].len()] == b'#'
+    };
+    let mut lines: [String; 3] = Default::default();
+    for (index, line) in lines.iter_mut().enumerate() {
+        for column in 0..3 * TWILL[0].len() {
+            let cell = if unicode {
+                match (woven(2 * index, column), woven(2 * index + 1, column)) {
+                    (true, true) => '\u{2588}',
+                    (true, false) => '\u{2580}',
+                    (false, true) => '\u{2584}',
+                    (false, false) => ' ',
+                }
+            } else if woven(index, column) {
+                '#'
+            } else {
+                ' '
+            };
+            line.push(cell);
+        }
+        line.truncate(line.trim_end().len());
+    }
+    lines[1].push_str("   fetchloom");
+    lines
+}
+
+/// the mark and a blank line, the twill in the accent and the name in bold, when `width` columns
+/// can hold it.
+pub(crate) fn wordmark(width: usize, color: bool, unicode: bool) -> String {
+    let lines = welcome_mark(unicode);
+    if lines.iter().any(|line| units::columns(line) >= width) {
         return String::new();
     }
     let tint = paint(color, accent());
-    WORDMARK
-        .trim_matches('\n')
-        .lines()
-        .map(|line| format!("{tint}{line}{tint:#}\n"))
-        .chain(std::iter::once(String::from("\n")))
-        .collect()
+    let bold = paint(color, Paint::new().bold());
+    let mut drawn = String::new();
+    for line in &lines {
+        let (twill, name) = line.split_at(line.find("fetchloom").unwrap_or(line.len()));
+        let _ = write!(drawn, "{tint}{twill}{tint:#}");
+        if !name.is_empty() {
+            let _ = write!(drawn, "{bold}{name}{bold:#}");
+        }
+        drawn.push('\n');
+    }
+    drawn.push('\n');
+    drawn
 }
 
 pub(crate) fn help_text(text: &str, color: bool) -> String {

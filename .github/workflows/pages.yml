@@ -15,7 +15,7 @@ on:
       - 'python/build_site.py'
       - 'python/check_site.py'
       - 'python/transcript.py'
-      # the wordmark on the home page
+      # the twill the home page, the favicon and the section headings draw
       - 'src/output.rs'
   release:
     types: [published]

@@ -910,7 +910,11 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     };
     let welcome = crate::output::wrap_help(&welcome, width, true);
     let rows = usize::from(console::Term::stdout().size().0);
-    let banner = crate::output::wordmark(width, Style::stdout_color(args::color()));
+    let banner = crate::output::wordmark(
+        width,
+        Style::stdout_color(args::color()),
+        context.output.draws_unicode(),
+    );
     let fits = banner.lines().count() + welcome.lines().count() < rows;
     about(context, if fits { &banner } else { "" }, &welcome, started)
 }

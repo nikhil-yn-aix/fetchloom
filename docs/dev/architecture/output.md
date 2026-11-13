@@ -41,7 +41,7 @@ the documentation site draws the transcripts its pages show with the same tones:
 
 subjects are bold and supporting facts are dim. `FETCHLOOM_COLORS` replaces any tone's color for the run. it is read once, when `Output` starts; an entry it cannot read keeps the default and becomes one warning. color code asks for a tone through `toned`, `tinted` or `accent`, never a fixed color.
 
-the welcome outside a project prints the wordmark in the accent when stdout is a terminal wider than 98 columns.
+the welcome outside a project starts with fetchloom's mark when stdout is a terminal wider than 24 columns with room below it for the whole welcome. the mark is `TWILL` in `src/output.rs`, one repeat of a 2/2 twill, drawn three repeats across in half blocks in the accent with the name in bold beside it, or one row a line in `#` where the terminal shows only ascii. `python/build_site.py` draws the site's mark, its favicon and the mark beside each section heading from the same rows.
 
 step and completion verbs are bold and right-aligned in 11 columns without status glyphs; a dry run's verb puts `Would` in the column and its action after it, as `      Would remove`. the subject before ` · ` is bold and its following facts are dim; a single-word subject is also bold. completed verbs include `Added`, `Fetched`, `Synced` and `Ok`. a search's rows show what to type in the accent, with no number, since `add` takes a reference; the picker numbers its rows, as keys that choose one.
 
