@@ -148,8 +148,8 @@ def add_wordmark(root, site):
     page = home.read_text(encoding="utf-8")
     if WORDMARK not in page:
         raise ValueError("the home page has no place for the wordmark")
-    drawn = WORDMARK.replace("></pre>", f">{html.escape(found[1].strip(chr(10)))}</pre>")
-    home.write_text(page.replace(WORDMARK, drawn), encoding="utf-8")
+    drawn = html.escape(found[1].strip("\n"))
+    home.write_text(page.replace(WORDMARK, WORDMARK.replace("></pre>", f">{drawn}</pre>")), encoding="utf-8")
 
 
 def color_transcripts(site):

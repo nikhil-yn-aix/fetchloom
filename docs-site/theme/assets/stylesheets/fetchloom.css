@@ -274,22 +274,6 @@ body {
   color: var(--fl-stone);
   background: none;
 }
-.md-search__input {
-  font-family: var(--fl-serif);
-  color: var(--fl-ink);
-}
-.md-search__input::placeholder {
-  color: var(--fl-stone);
-}
-.md-search__output,
-.md-search__scrollwrap,
-.md-search-result {
-  background-color: var(--fl-paper);
-}
-.md-search-result mark {
-  color: var(--fl-clay);
-  background: none;
-}
 
 /* the text: a serif for reading, about 66 characters a line */
 .md-typeset {
@@ -421,12 +405,16 @@ body {
 .md-typeset .language-console code .go {
   color: var(--fl-ink);
 }
-.md-clipboard {
-  color: var(--fl-stone);
+.md-code__nav,
+:hover > .md-code__nav {
   background-color: var(--fl-paper);
 }
-.md-clipboard:hover,
-.md-clipboard:focus {
+.md-code__button,
+:hover > * > .md-code__button {
+  color: var(--fl-stone);
+}
+.md-code__button:hover,
+.md-code__button.focus-visible {
   color: var(--fl-clay);
 }
 
