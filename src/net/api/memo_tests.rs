@@ -566,10 +566,8 @@ fn azure_sas_values_and_anonymous_requests_cannot_share_a_metadata_entry() {
     );
 }
 
-/// a query sent by GET with a header the server asks for, as a GraphQL server's guard against
-/// cross-site requests does, carries that header and goes by its link and headers as any
-/// request does: each query gets its own answer, the same query again in a run gets the one
-/// already read, and a plain GET of the same link is asked anew, without the header.
+/// each query gets its own answer, the same query again gets the one already read, and a plain
+/// GET of the same link is asked anew, without the header.
 #[test]
 fn a_query_sent_with_headers_never_gets_the_answer_to_another() {
     let (url, asked) = route(|target| reply("200 OK", &[], target.as_bytes()));

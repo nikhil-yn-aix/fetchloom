@@ -24,10 +24,9 @@ const LARGEST: usize = 64 * 1024 * 1024;
 pub(crate) trait Api: Sync {
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send;
 
-    /// a GET that also carries `headers`, as a GraphQL server's guard against requests from
-    /// other sites asks of a query sent by GET. the network keeps its answer for the run by the
-    /// link and every header it carried, so one query never gets another's answer. a test's
-    /// network that answers by link alone may answer as [`Api::get`] does.
+    /// a GET that also carries `headers`, as a GraphQL server's guard against cross-site requests
+    /// asks. its answer is kept by the link and every header, so one query never gets another's;
+    /// a test's network that answers by link alone may answer as [`Api::get`] does.
     fn get_with(
         &self,
         url: &Url,
@@ -56,7 +55,6 @@ pub(crate) trait Api: Sync {
 /// headers a request carries besides those the network gives it, by name and value.
 pub(crate) type Extra = &'static [(&'static str, &'static str)];
 
-/// `request` with the `extra` headers.
 fn with_extra(request: reqwest::RequestBuilder, extra: Extra) -> reqwest::RequestBuilder {
     extra.iter().fold(request, |request, (name, value)| {
         request.header(*name, *value)
@@ -498,9 +496,8 @@ pub(super) fn stand_in(url: &Url) -> Option<Url> {
         .or_else(|| test_drive(url))
 }
 
-/// local object storage for CLI tests, listings and object bytes alike: a request to an S3, cloud
-/// storage or azure blob host goes to `/<host><path>` on the test server instead. release builds
-/// never read this override.
+/// local object storage for CLI tests: a request to an S3, cloud storage or azure blob host goes
+/// to `/<host><path>` on the test server instead.
 #[cfg(debug_assertions)]
 fn test_bucket(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
@@ -518,9 +515,7 @@ fn test_bucket(url: &Url) -> Option<Url> {
     Some(local)
 }
 
-/// a local stand-in for the repositories whose CLI tests download as well as list: a request to
-/// one of their hosts, API or file, goes to `/<host><path>` on the test server instead. release
-/// builds never read this override.
+/// a stand-in at `/<host><path>` on the test server for repositories whose CLI tests download.
 #[cfg(debug_assertions)]
 fn test_source(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
@@ -546,9 +541,8 @@ fn test_source(url: &Url) -> Option<Url> {
     Some(local)
 }
 
-/// a local stand-in for google drive: its folder pages, its download host and its api. a request
-/// to one of their hosts goes to `/<host><path>` on the test server instead. release builds never
-/// read this override.
+/// a stand-in at `/<host><path>` on the test server for google drive's folder pages, download
+/// host and api.
 #[cfg(debug_assertions)]
 fn test_drive(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
@@ -596,7 +590,7 @@ fn next_link(value: &str) -> Option<String> {
             if name.trim().eq_ignore_ascii_case("anchor") {
                 return None;
             }
-            // RFC 8288 ignores later rel parameters on the same link.
+            // RFC 8288 ignores later rel parameters on the same link
             if name.trim().eq_ignore_ascii_case("rel") && relation.is_none() {
                 relation = Some(link_value(value.trim())?);
             }
@@ -748,7 +742,7 @@ mod tests {
     fn a_listing_body_at_the_limit_is_accepted_but_one_extra_byte_is_refused() {
         const LIMIT: usize = 64 * 1024 * 1024;
         for size in [LIMIT, LIMIT + 1] {
-            // No content length: the limit must be enforced while reading the body.
+            // no content length: the limit must be enforced while reading the body
             let mut answer = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
             answer.resize(answer.len() + size, b'x');
             let (url, _) = serve(vec![answer]);
