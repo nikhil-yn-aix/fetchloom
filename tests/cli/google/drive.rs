@@ -1,7 +1,5 @@
-//! private google drive folders and files, read through drive's api with google's application
-//! default credentials, against a server on this machine that stands in for google's token
-//! endpoint, for drive's folder pages and download host, and for drive's api, answering as
-//! google's api reference documents it.
+//! private google drive folders and files read through drive's api with application default
+//! credentials, against a stand-in for google's token endpoint, drive's pages and drive's api.
 
 use std::collections::HashMap;
 use std::fs;
@@ -229,7 +227,7 @@ fn command(
     command
 }
 
-/// each request as its path, whether it carried a token, and the item it was about.
+/// each request as its path, the token it carried, and the item it was about.
 fn sent(standin: &Standin) -> Vec<(String, Option<String>, String)> {
     standin
         .requests()
@@ -303,10 +301,8 @@ fn add_lab(sandbox: &Sandbox, standin: &Standin, trace: &std::path::Path) -> Res
     Ok(output)
 }
 
-/// a private folder the person lists: drive's folder view refuses it without a token, so drive's
-/// api lists it, both pages and the subfolder, with the token a service account's signed
-/// assertion got for the drive scope, and its files come from drive's api, pinned by the
-/// checksums drive states. no secret reaches an output, a log, a trace or a file.
+/// the folder view refuses it without a token, so the api lists it with a service account's drive
+/// token and sends its files, pinned by drive's checksums. no secret reaches any output or file.
 #[test]
 fn a_listed_private_folder_is_read_through_drives_api() -> Result {
     let sandbox = Sandbox::new()?;
@@ -366,10 +362,8 @@ fn a_listed_private_folder_is_read_through_drives_api() -> Result {
     Ok(())
 }
 
-/// a teammate's sync, with only data.toml and data.lock, a sharing link in its settings and a
-/// login: each file's download is refused without a token, so the listed folder's page is asked,
-/// refused too, and drive's api lists the folder once, with one token, before the files come
-/// from drive's api. nothing the lock names gets a token unless the listing found it there.
+/// a refused download leads to the folder's page, refused too, then to one api listing with one
+/// token; nothing the lock names gets a token unless the listing found it there.
 #[test]
 fn a_teammate_finds_a_private_folders_files_through_the_same_refusal() -> Result {
     let sandbox = Sandbox::new()?;
@@ -427,8 +421,7 @@ fn a_teammate_finds_a_private_folders_files_through_the_same_refusal() -> Result
     Ok(())
 }
 
-/// a private file shared on its own, listed by its id: its download is refused without a
-/// token, so drive's api names it and sends it, with a login's token.
+/// the tokenless download is refused, so the api names and sends the file with a login's token.
 #[test]
 fn a_listed_private_file_is_named_and_sent_by_drives_api() -> Result {
     let sandbox = Sandbox::new()?;
@@ -479,9 +472,8 @@ fn a_listed_private_file_is_named_and_sent_by_drives_api() -> Result {
     Ok(())
 }
 
-/// a folder nobody listed never gets a token, though credentials are on the machine: only the
-/// listed folder is searched for it, with the token going to requests about that folder alone.
-/// one listed without credentials says how to sign in for drive. neither changes data.toml.
+/// only listed folders are searched for an unlisted one, with tokens on those requests alone, and
+/// a listed one without credentials says how to sign in for drive.
 #[test]
 fn a_folder_gets_a_token_only_when_listed_and_signed_in() -> Result {
     let sandbox = Sandbox::new()?;
@@ -549,9 +541,8 @@ fn a_folder_gets_a_token_only_when_listed_and_signed_in() -> Result {
     Ok(())
 }
 
-/// a login without a drive scope, as gcloud's own client gives, says so and names the command
-/// that grants one; a service account drive does not share the folder with says whom to share
-/// it with. neither token reaches the output.
+/// a login without a drive scope, as gcloud's own client gives, says which command grants one,
+/// and an unshared service account says whom to share with; no token reaches the output.
 #[test]
 fn a_refusal_names_the_account_and_what_to_do() -> Result {
     let sandbox = Sandbox::new()?;
