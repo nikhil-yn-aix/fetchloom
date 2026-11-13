@@ -136,11 +136,13 @@ impl Context {
             .clone();
         let output = Arc::clone(&self.output);
         let cautioned = Arc::clone(&self.cautioned);
-        self.net_with(Vec::new()).finding_credentials(move || {
-            credentials.extend(crate::auth::credentials(&crate::auth::env));
-            caution(&output, &cautioned, &credentials);
-            credentials
-        })
+        self.net_with(Vec::new())
+            .finding_credentials(move || {
+                credentials.extend(crate::auth::credentials(&crate::auth::env));
+                caution(&output, &cautioned, &credentials);
+                credentials
+            })
+            .finding_sites(|| crate::auth::site::sites(&crate::auth::env))
     }
 
     /// the `allowed_origins` setting, with where a person changes it.

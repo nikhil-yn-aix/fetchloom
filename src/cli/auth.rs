@@ -14,6 +14,8 @@ use crate::net::Api;
 use crate::output::Warning;
 use crate::units;
 
+mod site;
+
 /// what `auth` reports.
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -40,8 +42,12 @@ pub(super) struct State {
     valid: Option<bool>,
     /// how keys for buckets and containers come, for AWS, google and azure, which `auth` never
     /// asks: `keys`, `credential_process`, `sso`, `role`, `service_account`, `authorized_user`,
-    /// `sas`, `key`, `az_cli` or `managed_identity`.
+    /// `sas`, `key`, `az_cli` or `managed_identity`; for a website, `token`, `header` or
+    /// `cookies`.
     kind: Option<&'static str>,
+    /// when the soonest of a website's saved cookies expires, left out of every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires: Option<String>,
 }
 
 impl State {
@@ -54,6 +60,7 @@ impl State {
             user: None,
             valid: None,
             kind: None,
+            expires: None,
         }
     }
 }
@@ -69,6 +76,9 @@ pub(super) struct Outcome {
 pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Error> {
     match args.action {
         None => status(context).await,
+        Some(AuthAction::Login(login)) if site::wanted(&login) => {
+            site::sign_in(context, &login).map(Report::Login)
+        }
         Some(AuthAction::Login(login)) => {
             let account = Account::parse(&login.account, login.host.as_deref())?;
             sign_in(context, &account, &login, false)
@@ -153,8 +163,10 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             user,
             valid,
             kind: None,
+            expires: None,
         });
     }
+    accounts.extend(site::listed(output));
     accounts.extend(aws_keys(output, &mut missing));
     accounts.push(google_credentials(output, &mut missing));
     accounts.extend(azure_credentials(
@@ -215,6 +227,7 @@ fn aws_keys(output: &crate::output::Output, missing: &mut Vec<String>) -> Vec<St
         user: None,
         valid: None,
         kind: Some(described.how.name()),
+        expires: None,
     });
     rows
 }
@@ -250,6 +263,7 @@ fn google_credentials(output: &crate::output::Output, missing: &mut Vec<String>)
         } else {
             "authorized_user"
         }),
+        expires: None,
     }
 }
 
@@ -276,6 +290,7 @@ fn azure_credentials(
         user,
         valid: None,
         kind: Some(kind),
+        expires: None,
     };
     let mut rows = Vec::new();
     if let Some((account, kept)) = described.kept {
@@ -823,6 +838,9 @@ fn kaggle_json(secret: &str) -> Result<String, Error> {
 }
 
 fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
+    if let Some(report) = site::sign_out(context, logout)? {
+        return Ok(report);
+    }
     let output = &context.output;
     let account = Account::parse(&logout.account, logout.host.as_deref())?;
     let var = &auth::env;
@@ -998,8 +1016,7 @@ pub(super) async fn offer(
     }
     let login = Login {
         account: account.id(),
-        host: None,
-        with_token: false,
+        ..Login::default()
     };
     sign_in(context, account, &login, true)
         .await

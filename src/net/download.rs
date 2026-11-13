@@ -964,6 +964,12 @@ impl Net {
             return Err(Failure::Final(keyed.refusal(from)));
         }
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && let Some(sent) = response.extensions().get::<super::site::Sent>()
+            && sent.answered()
+        {
+            return Err(Failure::Final(sent.refusal(response.url(), status)));
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && let Some(authorized) = response.extensions().get::<super::Authorized>()
         {
             return Err(Failure::Final(authorized.refusal(from)));

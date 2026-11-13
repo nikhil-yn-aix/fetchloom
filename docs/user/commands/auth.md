@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. with `--token` or `--header`, the host may carry its port, as `data.example.edu:8443` or `localhost:8080`. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 
@@ -49,6 +49,20 @@ it asks before replacing a saved key; `--yes` answers both questions yes, and a 
 a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=false`, or `0`, skips the credential store.
 
 [where a key goes](../signing-in.md#where-a-key-goes) lists the hosts each key is sent to.
+
+## any website
+
+a website fetchloom has no account for takes its own credential, saved for its host alone. [any website](../signing-in.md#any-website) says which to pick.
+
+```sh
+fetchloom auth login data.example.org --token
+fetchloom auth login api.example.org --header X-API-Key
+echo "$LAB_TOKEN" | fetchloom auth login data.example.org --token --with-token
+```
+
+`--token` saves a token the site gave you, sent as `Authorization: Bearer <token>`. `--header <name>` saves a key the site reads from the header `<name>`, as an api that wants `X-API-Key` asks; it refuses `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, the other headers that belong to one connection, `Cookie` and the headers fetchloom sets itself, such as `Range`. either asks for the key without showing it, or reads it from stdin with `--with-token`; nothing checks it, since every site checks keys its own way. it is kept in the system's credential store, or with your yes in `credentials.json` where the machine has none, as the keys of zenodo and the other sources without a file of their own are, and replaces what was saved for the host before, after a question. `fetchloom auth logout <host>` removes it, and a `.netrc` login for the same host stays until you run it again.
+
+a key the host refuses with 401 or 403 ends the command with `auth.required`, exit 40, naming what was refused and the command that saves a new one, as `fetchloom auth login data.example.org --token`.
 
 ## scripts and CI
 
@@ -137,4 +151,4 @@ a key whose source gives no answer, as a host this machine cannot reach, ends it
 
 ## JSON
 
-`auth` returns `result.accounts`, each with `account`; `signed_in`, true when a key was found, even a refused one; `from` and `user`, or null; and `valid`, true or false after a source checked the key, else null. the rows `aws`, or `s3:<endpoint>` for keys your AWS settings send to another endpoint, `google`, and `azure`, or `azure:<account>` for a SAS or a key kept to one account, add `kind`: `keys`, `credential_process`, `sso` or `role` for AWS, `service_account` or `authorized_user` for google, whose `user` is a service account's email, and `sas`, `key`, `az_cli` or `managed_identity` for azure, whose `from` is the variable or the az cli's path and whose `user` is the az cli's user or a user-assigned identity's client id. nothing checks them, so their `valid` is null, and every other account's `kind` is null. `auth login` returns `account`, `user` and `saved_to`, and `auth logout` returns `account` and `removed_from`, null when nothing was saved or removed. keys never appear.
+`auth` returns `result.accounts`, each with `account`; `signed_in`, true when a key was found, even a refused one; `from` and `user`, or null; and `valid`, true or false after a source checked the key, else null. a website's saved credential is listed as `site:<host>`, with `kind` `token` or `header` and `from` where it is kept; nothing checks it, so `valid` is null. the rows `aws`, or `s3:<endpoint>` for keys your AWS settings send to another endpoint, `google`, and `azure`, or `azure:<account>` for a SAS or a key kept to one account, add `kind`: `keys`, `credential_process`, `sso` or `role` for AWS, `service_account` or `authorized_user` for google, whose `user` is a service account's email, and `sas`, `key`, `az_cli` or `managed_identity` for azure, whose `from` is the variable or the az cli's path and whose `user` is the az cli's user or a user-assigned identity's client id. nothing checks them, so their `valid` is null, and every other account's `kind` is null. `auth login` returns `account`, `user` and `saved_to`, and `auth logout` returns `account` and `removed_from`, null when nothing was saved or removed; a website's is `site:<host>`. keys never appear.

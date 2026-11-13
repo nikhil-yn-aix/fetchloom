@@ -134,6 +134,11 @@ impl Typed {
         self.hosts().origins.contains(&url.origin())
     }
 
+    /// whether the `allowed_origins` setting lists the origin of `url`.
+    pub(crate) fn allows(&self, url: &Url) -> bool {
+        self.hosts().allowed.origins.contains(&url.origin())
+    }
+
     /// whether `host` may resolve to a private address for a client that keeps `reach`: a proxy
     /// may for every client, a host a trusted origin is on only for the trusted client.
     pub(crate) fn may_resolve_privately(&self, host: &str, reach: Reach) -> bool {

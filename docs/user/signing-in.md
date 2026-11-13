@@ -29,6 +29,20 @@ you may be signed in already: fetchloom reads the keys the hf and kaggle command
 
 a gated dataset or a competition also needs its terms accepted on its own page, with the same account; a key cannot accept them for you.
 
+## any website
+
+a site fetchloom has no account for may still want you signed in. `auth login` with the site's host name saves what the site gives you, for that host alone:
+
+| the site gives you | sign in with | each request to the host carries |
+|---|---|---|
+| a username and password | `fetchloom auth login data.example.org` | the login, from `.netrc`, which curl and wget read too |
+| a token | `fetchloom auth login data.example.org --token` | `Authorization: Bearer <token>` |
+| a key it reads from a header, as many apis ask | `fetchloom auth login api.example.org --header X-API-Key` | `X-API-Key: <key>` |
+
+a token or a header's key is typed without showing, or piped in with `--with-token`, and kept in the system's credential store, as the keys of sources without a file of their own are. `fetchloom auth` lists each host with its kind and where it is kept, and `fetchloom auth logout data.example.org` removes it. a host on another port than 443 is named with its port, as `data.example.org:8443`, and so is a server on this machine, as `localhost:8080`.
+
+`--header` takes a header a key can travel in, such as `X-API-Key` or `Authorization`. it refuses the headers that frame a request or belong to one connection, such as `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, and those fetchloom sets itself to resume and check downloads, such as `Range`.
+
 ## private buckets and folders
 
 a cloud store takes the keys its own tools keep, and fetchloom offers them only to the buckets, containers and folders you list in the [settings file](reference/environment.md#settings-file), so a project you clone cannot make fetchloom hand your keys to a bucket of its choosing:
@@ -57,6 +71,8 @@ in a script or CI there is nobody to ask: set the source's variable from the CI 
 
 ## where a key goes
 
-a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, which earthdata needs: its archives send you to `urs.earthdata.nasa.gov` to sign in. an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are. a semantic scholar key goes to `api.semanticscholar.org` only, never to the links on S3 it gives for dataset files.
+a key goes over https, to its own host on port 443, and never after a redirect leaves that host. plain http would show it to every network on the way, so a key goes over plain http only to this machine, `localhost` or a loopback address, or to an origin the `allowed_origins` setting lists, such as a lab server on a network you trust; that holds for a `.netrc` login too, and a link to any other plain http host goes without one. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, which earthdata needs: its archives send you to `urs.earthdata.nasa.gov` to sign in. an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are. a semantic scholar key goes to `api.semanticscholar.org` only, never to the links on S3 it gives for dataset files.
+
+a website's token or header goes to its own host and port alone, and only while a request stays on the origin it started on: once a redirect leaves it, no later hop gets it, not even one back on the same host. data.toml and data.lock can never add a host, a header, a token or a cookie, since a cloned project could point them anywhere: every key comes from you, through `auth login`, a variable or the settings file.
 
 no key appears in data.toml, data.lock, the cache, logs or `--json` output. wherever a link is shown, its query and fragment values are masked unless their names are known to be harmless, such as `dl` or `version`, and recognized secrets, such as `token=`, are refused in a project's references. a key holding a character no request can carry, such as a line break, is left out of every request, and [`fetchloom auth`](commands/auth.md#status) warns about it.

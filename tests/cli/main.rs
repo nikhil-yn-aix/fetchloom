@@ -39,6 +39,7 @@ mod repositories;
 mod scope;
 mod search;
 mod secrets;
+mod sites;
 mod split;
 mod support;
 mod unattended;

@@ -151,7 +151,7 @@ on disk: a key is saved where the source's own tools read it, so one key works i
     pub(super) const LOGIN: &str = "examples:
   fetchloom auth login hf
   fetchloom auth login dataverse --host demo.dataverse.org
-  fetchloom auth login earthdata
+  fetchloom auth login data.example.org --token
   fetchloom auth login hf --with-token
 
 on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in .netrc for curl and wget too, and other keys in the system's credential store. asks before saving";
@@ -750,7 +750,7 @@ pub(crate) enum AuthAction {
 }
 
 /// options of `auth login`.
-#[derive(Clone, Debug, clap::Args)]
+#[derive(Clone, Debug, Default, clap::Args)]
 pub(crate) struct Login {
     /// hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata,
     /// physionet or a host name
@@ -765,6 +765,19 @@ pub(crate) struct Login {
     /// `username:password`
     #[arg(long, help_heading = "options")]
     pub(crate) with_token: bool,
+
+    /// for any website: save a token it gave you, sent as a bearer token
+    #[arg(long, help_heading = "options")]
+    pub(crate) token: bool,
+
+    /// for any website: save a key it reads from this header, such as x-api-key
+    #[arg(
+        long,
+        value_name = "name",
+        help_heading = "options",
+        conflicts_with = "token"
+    )]
+    pub(crate) header: Option<String>,
 }
 
 /// options of `auth logout`.

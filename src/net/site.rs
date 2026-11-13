@@ -1,0 +1,310 @@
+//! a website's saved credential as requests carry it: a token, a header or cookies for one host
+//! and port. it goes over https, or over plain http only to this machine or an origin
+//! `allowed_origins` lists, and only while a request stays on its first origin.
+
+use std::sync::LazyLock;
+use std::time::SystemTime;
+
+use reqwest::StatusCode;
+use reqwest::header::{self, HeaderName, HeaderValue};
+use url::{Host, Url};
+
+use super::{Net, Shown};
+use crate::error::{Error, Kind};
+
+/// what one host's saved credential sends.
+#[derive(Clone, Debug)]
+pub(crate) struct Site {
+    /// lowercase, without its port.
+    host: String,
+    port: u16,
+    /// headers sent as they are, such as `authorization` with a bearer token.
+    headers: Vec<(HeaderName, HeaderValue)>,
+    cookies: Vec<Cookie>,
+    /// what is sent, as a refusal names it, such as "the token".
+    what: String,
+    /// how to save a new one, as a refusal's help says it.
+    again: String,
+}
+
+/// one saved cookie, kept to its site's host: cookie rules still decide its path, its secure
+/// flag and when it expires.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Cookie {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) path: String,
+    pub(crate) secure: bool,
+    /// none for a cookie that ends with the browser's session, which a saved one outlives.
+    pub(crate) expires: Option<SystemTime>,
+}
+
+impl Site {
+    /// the credential for `host`, a host name with `:port` when that is not 443: `headers` and
+    /// `cookies`, `what` naming them in a refusal and `again` saying how to save new ones. none
+    /// for anything but a plain host, or a header no request can carry.
+    pub(crate) fn new(
+        host: &str,
+        headers: Vec<(HeaderName, String)>,
+        cookies: Vec<Cookie>,
+        what: String,
+        again: String,
+    ) -> Option<Site> {
+        let (host, port) = super::key_origin(host)?;
+        let headers = headers
+            .into_iter()
+            .map(|(name, value)| {
+                let mut value = HeaderValue::from_str(&value).ok()?;
+                value.set_sensitive(true);
+                Some((name, value))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Site {
+            host,
+            port,
+            headers,
+            cookies,
+            what,
+            again,
+        })
+    }
+
+    /// whether the credential is for the host and port of `url`.
+    fn is_for(&self, url: &Url) -> bool {
+        url.host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
+            && url.port_or_known_default() == Some(self.port)
+    }
+
+    /// the host as messages name it, with its port when that is not 443.
+    fn named(&self) -> String {
+        if self.port == 443 {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+impl Cookie {
+    /// whether the cookie goes with a request for `url` at `now`: its path holds the link's, it
+    /// is not secure or the link is https, and it has not expired.
+    fn applies(&self, url: &Url, now: SystemTime) -> bool {
+        self.on_path(url) && self.expires.is_none_or(|expires| expires > now)
+    }
+
+    /// whether the cookie would go with a request for `url`, its expiry aside.
+    fn on_path(&self, url: &Url) -> bool {
+        (!self.secure || url.scheme() == "https") && path_matches(&self.path, url.path())
+    }
+}
+
+/// whether a cookie for `cookie`'s path goes to `request`'s, as RFC 6265 matches them: the same
+/// path, or one below it.
+fn path_matches(cookie: &str, request: &str) -> bool {
+    let cookie = if cookie.starts_with('/') { cookie } else { "/" };
+    request == cookie
+        || request.starts_with(cookie)
+            && (cookie.ends_with('/') || request[cookie.len()..].starts_with('/'))
+}
+
+/// every website's saved credential, looked for when the first request needs one.
+pub(crate) struct Sites(LazyLock<Vec<Site>, Box<dyn FnOnce() -> Vec<Site> + Send>>);
+
+impl Default for Sites {
+    fn default() -> Sites {
+        Sites(LazyLock::new(Box::new(Vec::new)))
+    }
+}
+
+/// says a website's saved credential went with a request, as the answer carries it.
+#[derive(Clone, Debug)]
+pub(crate) struct Sent {
+    host: String,
+    what: String,
+    again: String,
+    /// whether the hop that answered carried it, rather than only a hop before a redirect.
+    answered: bool,
+    /// whether every saved cookie that would have gone had expired, so nothing went.
+    expired: bool,
+}
+
+impl Sent {
+    /// the error for an answer of `status` to `url` that refused the credential.
+    pub(crate) fn refusal(&self, url: &Url, status: StatusCode) -> Error {
+        let code = status.as_u16();
+        let message = if self.expired {
+            format!(
+                "{} refused access to {} ({code}), and {} saved for it have expired",
+                self.host,
+                Shown(url),
+                self.what
+            )
+        } else {
+            format!(
+                "{} refused {} saved for it ({code}); it may have expired",
+                self.host, self.what
+            )
+        };
+        Error::new(Kind::AuthRequired, message)
+            .help(format!("{}, then run the same command again", self.again))
+    }
+
+    /// whether the hop that answered carried the credential.
+    pub(crate) fn answered(&self) -> bool {
+        self.answered
+    }
+}
+
+/// whether `url` names this machine: a loopback address, or `localhost`.
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|ip| ip.is_loopback())
+        }
+        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
+/// the cookie header for `cookies` with the run's own `jar` cookies for the same link, which
+/// win over a saved one of the same name since the site set them since. none when the result
+/// cannot be a header.
+fn cookie_header(cookies: &[&Cookie], jar: Option<&HeaderValue>) -> Option<HeaderValue> {
+    let jar = jar
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let set: Vec<&str> = jar
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .collect();
+    let named = |name: &str| {
+        set.iter()
+            .any(|pair| pair.split_once('=').map_or(*pair, |(first, _)| first) == name)
+    };
+    let mut ordered: Vec<&&Cookie> = cookies.iter().collect();
+    // longer paths first, as RFC 6265 orders them
+    ordered.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
+    let pairs: Vec<String> = ordered
+        .into_iter()
+        .filter(|cookie| !named(&cookie.name))
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .chain(set.iter().map(|pair| (*pair).to_owned()))
+        .collect();
+    let mut value = HeaderValue::from_str(&pairs.join("; ")).ok()?;
+    value.set_sensitive(true);
+    Some(value)
+}
+
+impl Net {
+    /// sends each website's saved credential, from `find`, with the requests for its host and
+    /// port, looked for when the first request needs one.
+    pub(crate) fn finding_sites(
+        mut self,
+        find: impl FnOnce() -> Vec<Site> + Send + 'static,
+    ) -> Net {
+        self.sites = Sites(LazyLock::new(Box::new(find)));
+        self
+    }
+
+    /// whether a saved credential may go with a request for `url`: over https, or over plain
+    /// http to this machine or to an origin `allowed_origins` lists, a network a person vouched
+    /// for. anywhere else plain http would show the credential to everyone on the way.
+    pub(super) fn carries(&self, url: &Url) -> bool {
+        match url.scheme() {
+            "https" => true,
+            "http" => is_loopback(url) || self.typed.allows(url),
+            _ => false,
+        }
+    }
+
+    /// the saved credential for the host and port of `url`, when one may go with a request on
+    /// its `first_origin`.
+    fn site(&self, url: &Url, first_origin: bool) -> Option<&Site> {
+        if !first_origin || !self.carries(url) {
+            return None;
+        }
+        self.sites.0.iter().find(|site| site.is_for(url))
+    }
+
+    /// the headers a website's saved credential adds to a request for `url` on its
+    /// `first_origin`: its own, and a cookie header with its cookies that apply and the run's
+    /// own cookies for the link.
+    pub(super) fn site_headers(
+        &self,
+        url: &Url,
+        first_origin: bool,
+    ) -> Vec<(HeaderName, HeaderValue)> {
+        let Some(site) = self.site(url, first_origin) else {
+            return Vec::new();
+        };
+        let mut headers = site.headers.clone();
+        let now = SystemTime::now();
+        let cookies: Vec<&Cookie> = site
+            .cookies
+            .iter()
+            .filter(|cookie| cookie.applies(url, now))
+            .collect();
+        if !cookies.is_empty() {
+            let jar = self
+                .wire()
+                .ok()
+                .and_then(|wire| wire.cookies.snapshot(url).0);
+            if let Some(value) = cookie_header(&cookies, jar.as_ref()) {
+                headers.push((header::COOKIE, value));
+            }
+        }
+        // the header names only; the values are the secret
+        tracing::debug!(
+            host = site.host,
+            headers = headers.len(),
+            "sending a site's saved credential"
+        );
+        headers
+    }
+
+    /// marks `response`, the answer to `hop`, with what a website's saved credential sent: on this
+    /// hop, or kept in `carried` from an earlier one.
+    pub(super) fn mark_site(
+        &self,
+        response: &mut reqwest::Response,
+        hop: &Url,
+        first_origin: bool,
+        carried: &mut Option<Sent>,
+    ) {
+        let here = self.site(hop, first_origin).and_then(|site| {
+            let now = SystemTime::now();
+            let sent = !site.headers.is_empty()
+                || site.cookies.iter().any(|cookie| cookie.applies(hop, now));
+            let expired = !sent && site.cookies.iter().any(|cookie| cookie.on_path(hop));
+            (sent || expired).then(|| Sent {
+                host: site.named(),
+                what: site.what.clone(),
+                again: site.again.clone(),
+                answered: true,
+                expired,
+            })
+        });
+        let marked = here.or_else(|| {
+            carried.clone().map(|earlier| Sent {
+                answered: false,
+                ..earlier
+            })
+        });
+        if let Some(sent) = marked {
+            response.extensions_mut().insert(sent.clone());
+            *carried = Some(sent);
+        }
+    }
+
+    /// the hosts a website's credential goes to, for tests.
+    #[cfg(test)]
+    pub(crate) fn site_hosts(&self) -> Vec<String> {
+        self.sites.0.iter().map(Site::named).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -16,6 +16,7 @@ mod relink;
 mod roots;
 mod shown;
 pub(crate) mod sign;
+pub(crate) mod site;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -236,6 +237,8 @@ pub(crate) struct Net {
     /// the keys requests may carry, looked for when the first request needs one, so a run that
     /// sends none reads no key files and asks no credential store.
     credentials: LazyLock<Vec<Key>, Box<dyn FnOnce() -> Vec<Key> + Send>>,
+    /// the tokens, headers and cookies people saved for websites, looked for as `credentials`.
+    sites: site::Sites,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: crate::source::Signing,
     /// which requests to cloud storage buckets carry a google token.
@@ -426,6 +429,7 @@ impl Net {
             metadata: api::Memo::new(crate::settings::LEAST_MEMORY / 16),
             typed: address::Typed::default(),
             credentials: LazyLock::new(Box::new(move || keys(given))),
+            sites: site::Sites::default(),
             signing: crate::source::Signing::default(),
             google: Google::default(),
             azure: Azure::default(),
@@ -617,6 +621,7 @@ impl Net {
         let mut first_origin = true;
         let mut asked_signed = false;
         let mut renewed = false;
+        let mut site_sent = None;
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
@@ -660,6 +665,7 @@ impl Net {
             };
             self.paces.answered(&paced(&hop), &answer);
             pace::Paces::heard(ticket, limits, at);
+            self.mark_site(&mut response, &hop, first_origin, &mut site_sent);
             if !renewed
                 && self
                     .keys_expired(signer.as_ref(), &hop, &mut response)
@@ -878,7 +884,9 @@ impl Net {
     }
 
     /// a GET with, when `credentials` allows, the credential for this exact host and port, over
-    /// https only, so a key for port 443 never reaches another port (curl's CVE-2022-27776).
+    /// https, or plain http where [`Net::carries`] allows, so a key for port 443 never reaches
+    /// another port (curl's CVE-2022-27776). a website's own saved credential wins over a stored
+    /// one for the same header.
     fn request(
         &self,
         client: &reqwest::Client,
@@ -886,7 +894,8 @@ impl Net {
         credentials: bool,
     ) -> reqwest::RequestBuilder {
         let mut request = client.get(url.clone());
-        if url.scheme() == "https"
+        let site = self.site_headers(url, credentials);
+        if self.carries(url)
             && let Some(host) = url.host_str()
         {
             let port = url.port_or_known_default();
@@ -894,12 +903,16 @@ impl Net {
                 if (credentials || key.every_hop)
                     && port == Some(key.port)
                     && host.eq_ignore_ascii_case(&key.host)
+                    && !site.iter().any(|(name, _)| *name == key.name)
                 {
                     // the header name only; the value is the secret
                     tracing::debug!(host, header = %key.name, "sending a stored credential");
                     request = request.header(key.name.clone(), key.value.clone());
                 }
             }
+        }
+        for (name, value) in site {
+            request = request.header(name, value);
         }
         request
     }

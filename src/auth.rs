@@ -7,6 +7,7 @@ pub(crate) mod google;
 pub(crate) mod lease;
 pub(crate) mod netrc;
 pub(crate) mod process;
+pub(crate) mod site;
 pub(crate) mod store;
 
 use std::collections::BTreeMap;
