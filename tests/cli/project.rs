@@ -2279,21 +2279,34 @@ pub(crate) fn partial_bytes(cache: &std::path::Path) -> u64 {
 /// `stopped` and that line last, and no `error:`.
 #[cfg(unix)]
 pub(crate) fn told_a_stop<'s>(stderr: &'s str, stopped: &str) -> Result<&'s str> {
+    told_a_stop_kept_or_not(stderr, stopped)?
+        .ok_or_else(|| format!("stderr says nothing was kept: {stderr}").into())
+}
+
+/// [`told_a_stop`] for a stop that may land before a download's first write reaches the disk,
+/// when there is nothing kept to tell, so `stopped` may be the last line.
+#[cfg(unix)]
+pub(crate) fn told_a_stop_kept_or_not<'s>(
+    stderr: &'s str,
+    stopped: &str,
+) -> Result<Option<&'s str>> {
     let told: Vec<&str> = stderr.lines().collect();
     assert!(
         told.contains(&"   Stopping (press ctrl-c again to quit at once)"),
         "{stderr}"
     );
     assert!(!stderr.contains("error:"), "{stderr}");
-    let [.., last, kept] = told.as_slice() else {
-        return Err(format!("stderr ends before the stop's lines: {stderr}").into());
-    };
-    assert_eq!(*last, stopped, "{stderr}");
-    assert!(
-        kept.ends_with(" downloaded so far is kept, and the next run continues from there"),
-        "{stderr}"
-    );
-    Ok(kept)
+    match told.as_slice() {
+        [.., last] if *last == stopped => Ok(None),
+        [.., last, kept] if *last == stopped => {
+            assert!(
+                kept.ends_with(" downloaded so far is kept, and the next run continues from there"),
+                "{stderr}"
+            );
+            Ok(Some(*kept))
+        }
+        _ => Err(format!("stderr does not end with the stop's lines: {stderr}").into()),
+    }
 }
 
 /// the sync here writes neither data.lock nor data/ until every file is in.
@@ -2505,7 +2518,7 @@ fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Resu
     let output = running.finish()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(130), "{stderr}");
-    told_a_stop(
+    told_a_stop_kept_or_not(
         &stderr,
         "    Stopped while talking to 127.0.0.1, so nothing changed",
     )?;
