@@ -1,5 +1,4 @@
-//! the project loop: sync, lock and status, and what spans several commands, against servers on
-//! this machine.
+//! the project loop: sync, lock and status, and what spans several commands.
 
 use std::fs;
 
@@ -84,8 +83,6 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     Ok(())
 }
 
-/// after a change, a person at a terminal is told the usual next step. a pipe, `-q` and `--json`
-/// never are, so what scripts read stays the same.
 #[cfg(target_os = "linux")]
 #[test]
 fn get_offers_to_pin_a_download_in_the_project_it_ran_in() -> Result {
@@ -116,6 +113,7 @@ fn get_offers_to_pin_a_download_in_the_project_it_ran_in() -> Result {
     Ok(())
 }
 
+/// a pipe, `-q` and `--json` never get a `next:` line, so what scripts read stays the same.
 #[test]
 fn the_next_step_is_told_only_at_a_terminal() -> Result {
     let sandbox = Sandbox::new()?;
@@ -180,8 +178,7 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     Ok(())
 }
 
-/// a sync's last line follows what it did: taking files that already hold the pinned bytes as
-/// placed is work, and a dataset with `place = false` has no files in the data folder to be in
+/// adopting files that hold the pinned bytes is work, and `place = false` has nothing to be in
 /// place, so neither ends with all files in place and nothing to do.
 #[test]
 fn a_sync_that_adopts_or_places_nothing_says_so() -> Result {
@@ -310,9 +307,7 @@ fn named_folder(told: &str, then: &str) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(unquoted))
 }
 
-/// a run that reached its project with -C suggests a force that names the same project, so a
-/// person who pastes it into the folder they ran fetchloom from never forces another project's
-/// files. a run inside the project keeps the plain command.
+/// a plain `sync --force` pasted where fetchloom ran could force another project's files.
 #[test]
 fn a_force_after_a_run_with_c_names_its_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -357,9 +352,7 @@ fn birds_and_cows(sandbox: &Sandbox) -> Result {
     Ok(())
 }
 
-/// after a run with -C, each hint and `next:` that names a fetchloom command for the project
-/// names it after -C too, so it works as typed in the folder the person ran it from; the sync's
-/// `next:` names the dataset it just placed.
+/// a hint must work as typed in the folder the person ran fetchloom from.
 #[cfg(target_os = "linux")]
 #[test]
 fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result {
@@ -416,9 +409,7 @@ fn folder_before(told: &str, then: &str) -> Option<std::path::PathBuf> {
 /// the command it suggests.
 type WithC<'a> = (Option<(&'a str, &'a str)>, Vec<&'a str>, &'a str);
 
-/// after a run with -C, the command a hint, a help or an error names for the project names it
-/// after -C too, whichever command gave it, so each works as typed in the folder the person ran
-/// fetchloom from.
+/// a help or an error names the project after -C as a hint does, whichever command gave it.
 #[test]
 fn every_command_a_run_with_c_suggests_names_the_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -482,10 +473,8 @@ fn every_command_a_run_with_c_suggests_names_the_project() -> Result {
     Ok(())
 }
 
-/// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
-/// made in place through it is damage to that copy: status says so, and sync puts the pinned file
-/// back and keeps the changed copy beside it. a reflink or a copy is the project's own, and its
-/// edit stays.
+/// a hardlink is the cache's own copy, shared by every project placing the file, so an edit
+/// through it damages that copy. a reflink or a copy is the project's own, and its edit stays.
 #[test]
 fn an_edit_in_place_through_a_shared_link_is_put_back_and_kept_beside_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -600,9 +589,7 @@ fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     Ok(())
 }
 
-/// bytes that changed upstream stop a sync, which names both ways on: the pinned bytes from a
-/// folder mirror, or the new ones by an upgrade. only a person may choose the new bytes, so JSON
-/// gives no fix a script would run.
+/// only a person may choose the new bytes, so JSON gives no fix a script would run.
 #[test]
 fn changed_bytes_upstream_stop_sync_with_both_ways_on() -> Result {
     let sandbox = Sandbox::new()?;
@@ -758,8 +745,7 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
     Ok(())
 }
 
-/// a clone whose owner never committed data.lock: nothing pins the files' bytes yet, which sync
-/// and status both say, with the two ways on, rather than calling data.toml changed.
+/// sync and status must not call data.toml changed when the owner never committed data.lock.
 #[test]
 fn a_clone_without_data_lock_says_nothing_pins_its_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -809,9 +795,7 @@ fn git_warnings(value: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// a commit of changed files alone, as `git commit -a` makes, leaves a new list in data.lock.d
-/// out, and a clone of it cannot read data.lock: status names each list git does not have, with
-/// the git command that adds it, and says nothing once git has it.
+/// committing data.toml and data.lock alone, as `git commit -a` would, leaves the new list out.
 #[test]
 fn status_names_lists_git_does_not_have() -> Result {
     let sandbox = Sandbox::new()?;
@@ -853,10 +837,8 @@ fn code_warnings(value: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// a recipe's code is part of what its key answers, so a commit that leaves out a code file, a
-/// new file in a code folder or one .gitignore leaves out, leaves a clone unable to build the
-/// recipe from the same code: status names each, with the git command that adds it, and says
-/// nothing of what the code's hash skips, once git has them all, or with no git.
+/// a recipe's code is in its key, so a clone needs all of it. what the code's hash skips, as
+/// `__pycache__`, is never named, and with no git on PATH status names nothing.
 #[test]
 fn status_names_recipe_code_git_does_not_have() -> Result {
     let sandbox = Sandbox::new()?;
@@ -922,9 +904,7 @@ fn status_names_recipe_code_git_does_not_have() -> Result {
     Ok(())
 }
 
-/// a command that writes a list git does not have ends by saying so, as a warning for a script
-/// and as a `next:` line for a person at a terminal. outside a git repository, or once git has
-/// the list, it says nothing.
+/// a script is told by a warning and a person at a terminal by the `next:` line.
 #[test]
 fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
     let sandbox = Sandbox::new()?;
@@ -988,10 +968,8 @@ fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
     Ok(())
 }
 
-/// renaming a dataset's table in data.toml keeps its pin: relocking carries the entry over to the
-/// new name without asking the source, which here serves other bytes now, and says so. a sync of
-/// the new name alone, as `path` makes, copies it, since it changes no other entry, and the next
-/// lock of every dataset removes the old one.
+/// the source serves other bytes now, which a relock that asked it would pin. a sync of one name,
+/// as `path` runs, changes no other entry, so it copies the pin; the next lock drops the old one.
 #[test]
 fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1044,10 +1022,7 @@ fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     Ok(())
 }
 
-/// a run asked to leave data.lock as it is, with `--locked`, never ends with a JSON `fix` that
-/// would change it, whatever stops it: a script that runs `fix` would undo `--locked`. each state
-/// stops `sync`, `path` or `build` with `--locked` and the kind named, and the help still names
-/// the ways on for a person.
+/// a script running the `fix` would undo `--locked`, so only the help names the ways on.
 #[test]
 fn a_locked_run_never_offers_a_fix_that_changes_data_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1180,9 +1155,7 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
-/// a project that became a git repository after its first add gets the ignore rule from the next
-/// command that places files, for the folder `data_dir` names: `add` again, `sync`, whose dry run
-/// only says it would, and `path`, which places the files it answers with first.
+/// `path` places the files it answers with first, so it adds the ignore rule too.
 #[test]
 fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
     for (command, data_dir) in [("add", "data"), ("sync", "data"), ("path", "inputs/raw")] {
@@ -1245,9 +1218,8 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
     Ok(())
 }
 
-/// status prints each difference as a row on stdout, where a pipe or a file gets it, and its
-/// closing line and hints on stderr, so `fetchloom status | grep Missing` finds what is missing.
-/// `-v` rows go with their row, quiet prints none, and `--json` keeps stdout one document.
+/// each row goes to stdout, where a pipe gets it, and the closing line and hints to stderr, so
+/// `fetchloom status | grep Missing` finds what is missing.
 #[test]
 fn status_lists_what_differs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1362,8 +1334,7 @@ fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
     Ok(())
 }
 
-/// a git repository made inside a project is a project of its own, since data.toml belongs to
-/// the repository that commits it: `add` there starts one and leaves the outer data.toml alone.
+/// data.toml belongs to the repository that commits it, so the outer data.toml is left alone.
 #[test]
 fn a_git_repository_inside_a_project_starts_its_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1389,8 +1360,7 @@ fn a_git_repository_inside_a_project_starts_its_own() -> Result {
     Ok(())
 }
 
-/// in a git repository without a data.toml, the search stops at the repository and says so; a
-/// project outside it is used only when -C names its folder.
+/// the search for data.toml stops at the root of the git repository and says so.
 #[test]
 fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1428,8 +1398,7 @@ fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {
     Ok(())
 }
 
-/// a merge git could not finish in data.toml or data.lock stops a command before any request and
-/// names `fetchloom lock`, which merges both sides and never picks one for a person.
+/// the fix, `fetchloom lock`, merges both sides and never picks one for a person.
 #[test]
 fn an_unfinished_merge_says_how_to_finish_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1698,8 +1667,8 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     Ok(())
 }
 
-/// a project whose data.lock pins 25 files in data/set/a and one in data/set/b, with only the one
-/// in b in place and 25 files of a person's own in data, for status to list.
+/// a project whose data.lock pins 25 files in data/set/a and one each in data/set/b and c, with
+/// only b's in place and 25 files of a person's own in data, for status to list.
 fn many_differences(sandbox: &Sandbox) -> Result {
     use std::fmt::Write as _;
 
@@ -1747,8 +1716,6 @@ fn status_lists_every_row_for_a_script() -> Result {
     Ok(())
 }
 
-/// at a terminal, a folder whose files are all gone is one row, each kind shows 20 rows, and the
-/// line after them says how to see the rest.
 #[cfg(target_os = "linux")]
 #[test]
 fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result {
@@ -2047,8 +2014,7 @@ fn path_and_status_refuse_case_collisions_before_reporting_locations() -> Result
     Ok(())
 }
 
-/// a data folder that links elsewhere is refused. `data_dir` cannot lead out of the project, so
-/// the help says what works: a real folder there, or the whole project on the other disk.
+/// `data_dir` cannot lead out of the project, so the help never suggests setting it.
 #[cfg(unix)]
 #[test]
 fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
@@ -2066,9 +2032,7 @@ fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
     Ok(())
 }
 
-/// a project fetchloom cannot lock is named as the project, not by the files fetchloom keeps
-/// inside `.fetchloom` to lock it, and the help names the one file to delete when nothing else
-/// holds it. a file far larger than any fetchloom writes there stands in for a damaged one.
+/// an owner file far larger than any fetchloom writes stands in for a damaged one.
 #[test]
 fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2097,8 +2061,7 @@ fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {
     Ok(())
 }
 
-/// a sync that cannot save its list of placed files names that file and what it holds, with no
-/// internal name for it. a folder this test cannot write stands in for a full disk.
+/// a folder this test cannot write stands in for a full disk.
 #[cfg(unix)]
 #[test]
 fn a_sync_that_cannot_save_what_it_placed_names_the_file() -> Result {
@@ -2130,11 +2093,8 @@ fn a_sync_that_cannot_save_what_it_placed_names_the_file() -> Result {
     Ok(())
 }
 
-/// the owner record only tells a waiting command who holds the project, so a sync that cannot
-/// write it, as on a full disk, still runs under the project lock. so does one that cannot write
-/// the state when all it would record is that files hashed as unchanged, as a filesystem that
-/// keeps whole seconds asks right after an add. a folder this test cannot write stands in for
-/// the full disk.
+/// the owner record only tells a waiting command who holds the project, and the state here would
+/// only note files hashed as unchanged. an unwritable folder stands in for a full disk.
 #[cfg(unix)]
 #[test]
 fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
@@ -2175,8 +2135,7 @@ fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
     Ok(())
 }
 
-/// a dataset that `lock` or `sync` pins for the first time gets a line of its own with what it
-/// pinned, so a typo in data.toml that pins an unrelated record stands out.
+/// naming what was pinned makes a typo in data.toml that pins an unrelated record stand out.
 #[test]
 fn a_first_pin_by_lock_or_sync_gets_a_line_of_its_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2211,8 +2170,7 @@ fn a_first_pin_by_lock_or_sync_gets_a_line_of_its_own() -> Result {
     Ok(())
 }
 
-/// `sync`, `sync --dry-run` and `lock` name in JSON the datasets whose pins changed: pinned for
-/// the first time, pinned to other data, or no longer pinned.
+/// a pin counts as changed when it is new, pins other data or is gone.
 #[test]
 fn json_names_the_datasets_whose_pins_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2255,9 +2213,7 @@ fn json_names_the_datasets_whose_pins_changed() -> Result {
     Ok(())
 }
 
-/// `lock --upgrade --dry-run`, or `-n`, tells what would change without writing data.lock or
-/// downloading. a link no checksum pins is listed as a file to fetch, not as a change, since
-/// only its bytes can tell.
+/// a link no checksum pins is a file to fetch, not a change, since only its bytes can tell.
 #[test]
 fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2301,7 +2257,7 @@ fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
     Ok(())
 }
 
-/// the sizes of the partial downloads in `cache`.
+/// how many bytes the partial downloads in `cache` hold.
 #[cfg(unix)]
 pub(crate) fn partial_bytes(cache: &std::path::Path) -> u64 {
     crate::support::partial_files(cache)
@@ -2337,10 +2293,7 @@ pub(crate) fn told_a_stop<'s>(stderr: &'s str, stopped: &str) -> Result<&'s str>
     Ok(kept)
 }
 
-/// ctrl-c during a sync's download is a stop, not an error: one `Stopped` line says where it
-/// stopped and that nothing changed, since the sync wrote neither data.lock nor the data folder
-/// before every file was in, and a dim line under it what the download kept. the exit code stays
-/// 130.
+/// the sync here writes neither data.lock nor data/ until every file is in.
 #[cfg(unix)]
 #[test]
 fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
@@ -2370,9 +2323,7 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
-/// a SIGTERM, which a scheduler sends a job it ends, stops a sync as a first ctrl-c does: it says
-/// what a second SIGTERM does, ends with one `Stopped` line that names the SIGTERM and exits 130,
-/// and with `--json` still prints its one document, an `interrupted` error.
+/// a scheduler sends a SIGTERM to a job it ends, and `--json` still gets its one document.
 #[cfg(unix)]
 #[test]
 fn a_sigterm_stops_a_sync_as_a_first_ctrl_c_does() -> Result {
@@ -2417,8 +2368,7 @@ fn a_sigterm_stops_a_sync_as_a_first_ctrl_c_does() -> Result {
     Ok(())
 }
 
-/// a sync stopped while it downloads several files says what all of them keep, which is what the
-/// next sync goes on from, not what one of them keeps.
+/// the next sync goes on from all of them, so the stop names their total.
 #[cfg(unix)]
 #[test]
 fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
@@ -2476,8 +2426,7 @@ fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
     Ok(())
 }
 
-/// ctrl-c at the question about a large download stops the downloads already running too,
-/// rather than waiting for them to finish.
+/// ctrl-c at the question stops downloads already running rather than waiting for them.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
@@ -2521,8 +2470,7 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
     Ok(())
 }
 
-/// a sync stopped while it downloads the files data.lock already pins, as after a clone, says
-/// that nothing changed: it places files only once every one is in the cache.
+/// a sync places files only once all are in the cache, so a fresh clone's stop changes nothing.
 #[cfg(unix)]
 #[test]
 fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Result {
@@ -2563,9 +2511,7 @@ fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Resu
     Ok(())
 }
 
-/// a sync asks before it downloads what placing needs, once data.lock is as data.toml asks. no
-/// to that question says nothing changed when data.lock was already so, and does not say it
-/// when the same sync just wrote data.lock.
+/// the sync asks only after it brings data.lock in line with data.toml, which may write it.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result {
@@ -2648,8 +2594,7 @@ pub(crate) fn writable(root: &std::path::Path, yes: bool) -> Result {
     Ok(())
 }
 
-/// a job that syncs before it reads, on a checkout it may not write, works when nothing needs
-/// writing. one that would write still fails, naming the folder it could not write.
+/// a job often syncs before it reads, on a checkout it may not write.
 #[cfg(unix)]
 #[test]
 fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
@@ -2710,8 +2655,7 @@ fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     Ok(())
 }
 
-/// a sync whose downloads each fit on the cache's disk but together do not is told once, before
-/// any of them starts.
+/// each download fits on its own, so only their sum shows the shortfall.
 #[test]
 fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2745,9 +2689,7 @@ fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
     Ok(())
 }
 
-/// FAT32 holds no file of 4 GiB or more, so a sync refuses a pinned file that large before it
-/// asks or downloads anything, even when the disk is short of room, since freeing space cannot
-/// help. a file one byte smaller, or exFAT, goes on to ask.
+/// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2790,9 +2732,8 @@ fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Res
     Ok(())
 }
 
-/// kaggle serves `train.csv` beside `train.csv.zip`, a zip of it. the exclude the clash's help
-/// gives leaves out the listed train.csv, so the zip's lands, and no later run calls that
-/// exclude one that missed or offers the drop, which would leave out the wanted file too.
+/// kaggle serves `train.csv` beside `train.csv.zip`, a zip of it. a drop of data/kag/train.csv
+/// would leave out the zip's copy, the wanted file, so no run may offer one.
 #[cfg(debug_assertions)]
 #[test]
 fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> Result {
@@ -2845,10 +2786,8 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     Ok(())
 }
 
-/// a size in data.lock edited by hand, its SHA-256 left as it was. the file fetchloom placed
-/// hashes to that SHA-256 at its real size, so no source or mirror can send bytes that have
-/// both: status, lock --check and sync say data.lock is wrong rather than find everything in
-/// place, and once it is restored, sync has nothing to do.
+/// the edited size and the old SHA-256 fit no bytes a source or mirror could send, so data.lock
+/// itself is wrong rather than the files in place.
 #[test]
 fn a_size_the_pinned_bytes_do_not_have_stops_until_data_lock_is_restored() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2891,8 +2830,8 @@ fn a_size_the_pinned_bytes_do_not_have_stops_until_data_lock_is_restored() -> Re
     Ok(())
 }
 
-/// a fresh clone of a project with a recipe, on an empty cache, as a CI runner has it, the files
-/// a clone has: data.toml, data.lock, data.lock.d and the recipe's code.
+/// a fresh clone of a project with a recipe, as a CI runner checks it out: data.toml, data.lock,
+/// data.lock.d and the recipe's code.
 fn fresh_with_recipe(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf> {
     let folder = clone(sandbox, name)?;
     fs::copy(sandbox.work().join("clean.py"), folder.join("clean.py"))?;
@@ -2907,10 +2846,8 @@ fn fresh_with_recipe(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf
     Ok(folder)
 }
 
-/// a locked sync on a fresh runner: data.lock pins clean's result, which only a build makes
-/// here, beside iris, which its source serves. the sync places iris before it stops with
-/// build.needed, and its JSON keeps what it placed, so a job that checks its sources still
-/// checks them: a source that changed iris fails with the mismatch instead.
+/// placing iris first means a job that checks its sources still checks them, so a source that
+/// changed iris fails with the mismatch instead of build.needed.
 #[test]
 fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2951,8 +2888,7 @@ fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Resu
     Ok(())
 }
 
-/// a folder named data.toml still marks its project, so commands there say it is no file rather
-/// than that no project exists and how to start one, and they write nothing.
+/// a folder named data.toml still marks its project, so no command there suggests starting one.
 #[test]
 fn a_folder_named_data_toml_is_told_as_such() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2978,9 +2914,8 @@ fn a_folder_named_data_toml_is_told_as_such() -> Result {
     Ok(())
 }
 
-/// a dataset renamed in data.lock alone keeps its pin, since sync carries it over to the name
-/// data.toml has and keeps its files, so status forecasts that: no name data.toml never had is
-/// told as removed from it, and no file sync keeps is told as one it removes.
+/// sync carries the pin over to the name data.toml has and keeps the files, so status tells no
+/// name as removed from data.toml and no kept file as one sync removes.
 #[test]
 fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -3024,10 +2959,8 @@ fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
     Ok(())
 }
 
-/// in git, the add that starts a project writes a .gitignore beside data.toml that keeps the data
-/// folder out, so the commit it suggests names that file too, and committing what it names leaves
-/// nothing untracked. outside git no .gitignore is written or named, as
-/// `the_next_step_is_told_only_at_a_terminal` shows.
+/// committing what the suggestion names leaves nothing untracked. outside git no .gitignore is
+/// written or named, as `the_next_step_is_told_only_at_a_terminal` shows.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
@@ -3057,9 +2990,7 @@ fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
     Ok(())
 }
 
-/// a list in data.lock.d that data.lock no longer names, as one a build wrote before `git
-/// checkout` put the older data.lock back, is read by nothing: status names it with the exact
-/// command that takes it away, `git rm` once git has it, and deletes nothing itself.
+/// a build before a `git checkout` of an older data.lock can leave a list nothing reads.
 #[test]
 fn status_names_a_list_data_lock_no_longer_names() -> Result {
     let sandbox = Sandbox::new()?;
