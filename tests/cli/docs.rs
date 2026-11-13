@@ -1,5 +1,6 @@
 //! the documentation against the binary: options on their pages, commands and options in the
-//! agent guides, only real ones in shell examples, every setting, and each JSON result.
+//! agent guides, only real ones in shell examples, every setting, each JSON result, and every
+//! source file on the code map.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -368,6 +369,83 @@ fn every_command_result_is_in_the_json_reference() -> Result {
         missing.is_empty(),
         "docs/user/reference/json-output.md has no result row for {missing:?}"
     );
+    Ok(())
+}
+
+/// the files of modules declared under `#[cfg(test)]`, which build only for tests.
+fn test_modules(sources: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
+    let mut found = BTreeSet::new();
+    for source in sources {
+        let folder = source.parent().ok_or("a source file outside any folder")?;
+        let root = ["lib.rs", "main.rs", "mod.rs"]
+            .iter()
+            .any(|name| source.ends_with(name));
+        let children = if root {
+            folder.to_path_buf()
+        } else {
+            source.with_extension("")
+        };
+        let (mut gated, mut path) = (false, None);
+        for line in fs::read_to_string(source)?.lines().map(str::trim) {
+            if line == "#[cfg(test)]" {
+                gated = true;
+            } else if let Some(rest) = line.strip_prefix("#[path = \"") {
+                path = rest.strip_suffix("\"]").map(|named| folder.join(named));
+            } else if !line.starts_with("#[") && !line.starts_with("//") {
+                let words: Vec<&str> = line.trim_end_matches(';').split(' ').collect();
+                if gated
+                    && line.ends_with(';')
+                    && let [.., "mod", name] = words.as_slice()
+                {
+                    found.insert(
+                        path.take()
+                            .unwrap_or_else(|| children.join(format!("{name}.rs"))),
+                    );
+                }
+                (gated, path) = (false, None);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// a file added, moved or removed under `src` changes the code map in the same commit.
+#[test]
+fn every_source_file_is_on_the_code_map() -> Result {
+    let root = repository();
+    let page = "docs/dev/architecture/codemap.md";
+    let text = fs::read_to_string(root.join(page))?;
+    let mapped: BTreeSet<&str> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("| `")?.split_once('`'))
+        .map(|(path, _)| path)
+        .filter(|path| {
+            Path::new(path)
+                .extension()
+                .is_some_and(|extension| extension == "rs")
+        })
+        .collect();
+    let mut sources = Vec::new();
+    collect_rust(&root.join("src"), &mut sources)?;
+    let tests = test_modules(&sources)?;
+    let mut problems = Vec::new();
+    for source in sources.iter().filter(|source| !tests.contains(*source)) {
+        let named: Vec<String> = source
+            .strip_prefix(&root)?
+            .iter()
+            .map(|part| part.to_string_lossy().into_owned())
+            .collect();
+        let named = named.join("/");
+        if !mapped.contains(named.as_str()) {
+            problems.push(format!("{named} has no row on {page}"));
+        }
+    }
+    for path in mapped {
+        if !root.join(path).is_file() {
+            problems.push(format!("{page} names {path}, which does not exist"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
     Ok(())
 }
 

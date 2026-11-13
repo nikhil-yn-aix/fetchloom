@@ -72,6 +72,7 @@
 
 - [developer guide](dev/README.md)
   - [architecture](dev/architecture/README.md)
+    - [code map](dev/architecture/codemap.md)
     - [primitives](dev/architecture/primitives.md)
     - [CLI](dev/architecture/cli.md)
     - [sync loop](dev/architecture/sync-loop.md)
