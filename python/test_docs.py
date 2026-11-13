@@ -158,7 +158,7 @@ class DocumentationLinks(unittest.TestCase):
 
     def test_every_user_page_is_listed(self):
         """the site's sidebar, the user guide's index and llms.txt each name every user page; a page
-        SUMMARY.md leaves out is not published."""
+        SUMMARY.md leaves out is still built, with no place in the site's navigation."""
         user = ROOT / "docs" / "user"
         pages = {page.resolve() for page in user.rglob("*.md")}
         for index in (ROOT / "docs" / "SUMMARY.md", user / "README.md", ROOT / "llms.txt"):
