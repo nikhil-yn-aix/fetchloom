@@ -10,8 +10,7 @@ use crate::output::{ColorChoice, Style};
 
 const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 
-/// what each command's help ends with: command lines to copy, then what the command changes on
-/// disk.
+/// what each command's help ends with: command lines to copy, then what it changes on disk.
 mod examples {
     pub(super) const ADD: &str = "examples:
   fetchloom add iris    # at a terminal, pick one from a list
@@ -180,9 +179,8 @@ on disk: nothing";
 on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
 
-/// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
-/// fetchloom does, each thing by its own name with `pin` explained where it first appears,
-/// commands to copy and where to learn more. the analogy belongs to `help concepts`.
+/// what a beginner meets first, on the first run and atop `fetchloom --help`: each thing by its
+/// own name, `pin` explained where it first appears. the analogy belongs to `help concepts`.
 pub(crate) const INTRO: &str =
     "fetchloom puts the exact research data a project needs into its data/ folder.
 
@@ -281,8 +279,7 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
     help_topic(command, line)
 }
 
-/// the command a line asking for `-h` or `--help` is about, as `help` takes it, or nothing when
-/// it asks for no help.
+/// the command a line asking for `-h` or `--help` is about, as `help` takes it.
 fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
     help_request(command, line).map(|(topic, _)| topic)
 }
@@ -615,7 +612,7 @@ impl Command {
         }
     }
 
-    /// whether the command was asked to leave data.lock as it is, as `--locked` asks.
+    /// whether `--locked` asked to leave data.lock as it is.
     pub(crate) fn locked(&self) -> bool {
         match self {
             Command::Sync(sync) => sync.locked,
@@ -625,8 +622,7 @@ impl Command {
         }
     }
 
-    /// whether the command may write data.lock: a lock, an add, a remove, a drop, a build that
-    /// pins, or a sync or path that may relock, none of them a dry run, a check or locked.
+    /// whether the command may write data.lock, as no dry run, check or locked run does.
     pub(crate) fn writes_lock(&self) -> bool {
         match self {
             Command::Lock(lock) => !lock.check && !lock.dry.dry_run,
@@ -642,10 +638,9 @@ impl Command {
         }
     }
 
-    /// whether a script may run the command as the next step a help names, with no person to
-    /// ask: it adds, reads, checks or fetches. one that deletes, overwrites or repins what a
-    /// person keeps, or runs the project's code, is a choice only a person makes, unless
-    /// `--dry-run` only shows it, and signing in needs a person to paste the key.
+    /// whether a script may run the command as the next step a help names: one that deletes,
+    /// overwrites or repins what a person keeps, runs project code or signs in is their choice,
+    /// unless `--dry-run` only shows it.
     pub(crate) fn harmless(&self) -> bool {
         match self {
             Command::Add(_)
@@ -1208,8 +1203,7 @@ mod tests {
         }
     }
 
-    /// -o writes one file and --dir fills a folder, so a get takes one of them, and --force
-    /// replaces only the file -o names.
+    /// -o writes one file and --dir fills a folder, and --force replaces only the file -o names.
     #[test]
     fn output_and_dir_exclude_each_other_and_force_needs_output() {
         for (line, kind) in [
@@ -1266,9 +1260,8 @@ mod tests {
         }
     }
 
-    /// help is lowercase, as all of fetchloom's prose is: capitals belong only to acronyms such
-    /// as JSON and SHA-256, setting names such as `FETCHLOOM_CACHE` and option letters such as
-    /// `-C`. an example keeps what it runs as it is spelled, as `iris/Iris.csv` or `Out-String`.
+    /// capitals belong to acronyms such as JSON, setting names such as `FETCHLOOM_CACHE`, option
+    /// letters such as `-C` and what an example runs, as `iris/Iris.csv` or `Out-String`.
     #[test]
     fn help_screens_are_lowercase_but_for_acronyms_and_option_letters() {
         let mut screens = every_help();
@@ -1319,10 +1312,8 @@ mod tests {
             .collect()
     }
 
-    /// help wraps at the terminal's width between words: no width from 40 to 100 columns, the
-    /// range help uses, splits a word or loses one. an example goes on after the mark a shell
-    /// continues a command at, its comment on lines that each start with `#`, and those marks
-    /// are all wrapping adds.
+    /// from 40 to 100 columns, the widths help uses. wrapping adds only a shell's continuation
+    /// mark in an example, and `#` before each line of its comment.
     #[test]
     fn help_wraps_between_words_and_never_inside_one() {
         let mut screens = every_help();
@@ -1350,9 +1341,8 @@ mod tests {
         }
     }
 
-    /// help is read by people whose first language is not english: a screen that says "pin"
-    /// explains it, and no screen uses the kitchen analogy, which belongs to `help concepts`, or
-    /// other words that stand for a thing instead of naming it.
+    /// for people whose first language is not english: a screen that says "pin" explains it, and
+    /// none uses the kitchen analogy, which belongs to `help concepts`, or words in place of names.
     #[test]
     fn help_screens_name_things_plainly() {
         let mut screens = every_help();

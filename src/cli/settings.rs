@@ -95,9 +95,8 @@ pub(super) fn run(context: &Context) -> Report {
     }
 }
 
-/// tells, at `-v`, what a run spends as it starts: downloads at once and to one host, local
-/// workers, the memory budget and hash lanes, each with what holds it where it is when that is
-/// not fetchloom's own default.
+/// tells, at `-v`, what a run spends as it starts: downloads, workers, the memory budget and hash
+/// lanes, each with what holds it there when that is not fetchloom's own default.
 pub(super) fn tell_spending(context: &Context) {
     let output = &context.output;
     if !output.shows_details() {
@@ -149,8 +148,7 @@ const DISPLAY_VARIABLES: [(&str, &str); 2] = [
     ),
 ];
 
-/// warns about each variable that changes only what a person sees and holds neither true nor
-/// false, which leaves it off.
+/// warns about each of [`DISPLAY_VARIABLES`] that holds neither true nor false.
 pub(super) fn warn_unread(output: &Output, var: crate::settings::Var<'_>) {
     for (name, help) in DISPLAY_VARIABLES {
         if let Err(error) = crate::settings::switched(name, var(name).as_deref()) {
@@ -354,7 +352,6 @@ where
     }
 }
 
-/// a setting that holds a list, shown as its items separated by commas, or none.
 /// a list setting of what a credential may go to, each item as its text.
 fn targets<T: ToString>(name: &'static str, set: &Set<Vec<T>>) -> Shown {
     list(
@@ -364,6 +361,7 @@ fn targets<T: ToString>(name: &'static str, set: &Set<Vec<T>>) -> Shown {
     )
 }
 
+/// a setting that holds a list, shown as its items separated by commas, or none.
 fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Vec<Origin>) -> Shown {
     let items: Vec<String> = items.collect();
     Shown {
@@ -422,16 +420,12 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
     }
 }
 
-/// the settings in aligned columns: name, value, where it came from, and the variable that sets
-/// it.
 /// the widest a value may make its column. a longer one, such as a deep cache folder, runs past
-/// it, and its origin and variable go on a line of their own, so one long value does not push
-/// every other row off the terminal.
+/// it, its origin and variable on a line of their own, so the other rows keep their columns.
 const VALUE: usize = 24;
 
 /// the settings as aligned columns, one per line, for a person or for `grep`. a terminal `width`
-/// columns wide shows a path below the home folder from `~`, and when it is too narrow for every
-/// column it leaves out the variable, which is always `FETCHLOOM_` and the setting's name.
+/// shows a home path from `~`, and too narrow leaves out the variable, `FETCHLOOM_` and the name.
 fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()
@@ -511,9 +505,7 @@ mod tests {
         Location::Folder(PathBuf::from(path))
     }
 
-    /// a value too long for its column, such as a deep cache folder, runs past it with its
-    /// origin and variable on a line of their own, so every other row stays one line; a terminal
-    /// too narrow for every column leaves out the variable.
+    /// and a terminal too narrow for every column leaves out the variable.
     #[test]
     fn a_long_value_keeps_the_other_rows_in_their_columns() {
         let row = |name: &'static str, said: &str, variable: &'static str| Shown {
@@ -540,8 +532,7 @@ mod tests {
         );
     }
 
-    /// a count reads with its thousands apart, as every count fetchloom prints does, while
-    /// `--json` keeps the number.
+    /// while `--json` keeps the number.
     #[test]
     fn counts_read_with_their_thousands_apart() {
         let files = count("archive_files", 10_000_000_u64, Origin::Default);
@@ -573,8 +564,7 @@ mod tests {
         context
     }
 
-    /// the mirrors row shows what a run asks: those `--mirror` names first, then those of the
-    /// setting it did not name, each once, and where each part came from.
+    /// those `--mirror` names first, then those of the setting it did not name, each once.
     #[test]
     fn the_mirrors_row_shows_what_a_run_asks_and_where_each_part_came_from() {
         for (flagged, listed, origin, value, json, said) in [

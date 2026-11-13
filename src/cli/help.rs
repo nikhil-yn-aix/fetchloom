@@ -1,6 +1,5 @@
-//! `fetchloom help`: the ideas behind fetchloom, or the help of one command. like `--help`, it
-//! prints text for people. `fetchloom help --json` instead describes every command, so a script
-//! or an agent learns all of them in one call.
+//! `fetchloom help`: the ideas behind fetchloom, or one command's help, as text for people.
+//! `fetchloom help --json` instead describes every command, so a script learns them in one call.
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -290,7 +289,7 @@ struct Topic {
 /// what `fetchloom help --json` returns.
 #[derive(Serialize)]
 struct Tree {
-    /// the options fetchloom itself takes: those every command takes, and `--version`
+    /// the options fetchloom itself takes: those every command takes, and `--version`.
     options: Vec<Argument>,
     commands: Vec<Described>,
 }
@@ -307,7 +306,7 @@ struct Described {
 
 #[derive(Serialize)]
 struct Argument {
-    /// `--select`, `-C` for an option with no long spelling, or `<link>` for a positional argument
+    /// `--select`, `-C` for an option with no long spelling, or `<link>` for a positional argument.
     name: String,
     short: Option<String>,
     value: Option<String>,
@@ -356,8 +355,7 @@ fn described(command: &clap::Command, parent: &str) -> Vec<Described> {
     found
 }
 
-/// `command`'s own arguments, or with `top` the options fetchloom itself takes: those every
-/// command takes, and `--version`.
+/// `command`'s own arguments, or with `top` the options fetchloom itself takes.
 fn arguments(command: &clap::Command, top: bool) -> Vec<Argument> {
     command
         .get_arguments()
@@ -377,7 +375,6 @@ fn arguments(command: &clap::Command, top: bool) -> Vec<Argument> {
                 .get_num_args()
                 .is_some_and(|range| range.max_values() > 1);
             let short = arg.get_short().map(|short| format!("-{short}"));
-            // an option without a long spelling, such as -C, is named by its short one
             let name = if arg.is_positional() {
                 format!(
                     "<{}>",
@@ -401,7 +398,7 @@ fn arguments(command: &clap::Command, top: bool) -> Vec<Argument> {
         .collect()
 }
 
-/// the error for a topic that is neither `concepts` nor a command, suggesting the closest one.
+/// the error for a topic that names no help topic or command, suggesting the closest one.
 fn unknown(topic: &[String]) -> Error {
     let asked = topic.join(" ");
     let shown = crate::net::mask_query(&asked);
@@ -453,9 +450,8 @@ const COMMON_OPTIONS: [&str; 7] = [
     "version",
 ];
 
-/// what `-h` shows: for fetchloom itself what it does, the commands and options used most, and
-/// for a command `topic` names its usage, examples and own options, each then saying where the
-/// rest is, which `--help` shows. none when `topic` names no command.
+/// what `-h` shows: the commands and options used most, or a command's usage, examples and own
+/// options, then where `--help` shows the rest. none when `topic` names no command.
 pub(super) fn short(topic: &[String]) -> Option<String> {
     let mut root = args::command();
     let global: Vec<String> = root
@@ -618,8 +614,7 @@ mod tests {
         assert_eq!(variables(ENVIRONMENT), variables(docs));
     }
 
-    /// a person whose download fails behind a company proxy looks here for where the proxy is
-    /// set, so the topic and the docs page both name the proxy variables.
+    /// a person whose download fails behind a company proxy looks here for where it is set.
     #[test]
     fn the_environment_topic_names_the_proxy_variables() {
         let docs = include_str!("../../docs/user/reference/environment.md");
@@ -629,8 +624,7 @@ mod tests {
         }
     }
 
-    /// each code the reference lists, with each kind it gives the code, by its name or as one of
-    /// a family such as `network.*`.
+    /// each kind by its name, or as one of a family such as `network.*`.
     #[test]
     fn the_exit_codes_topic_lists_every_documented_code_and_kind() {
         let docs = include_str!("../../docs/user/reference/exit-codes.md");
@@ -682,8 +676,7 @@ mod tests {
         }
     }
 
-    /// every topic is named where a person looks for one: the argument of `help --help`, the
-    /// help of a topic that does not exist, and the welcome.
+    /// the argument of `help --help`, the help of a topic that does not exist, and the welcome.
     #[test]
     fn every_topic_is_named_where_topics_are_listed() {
         let command = args::Args::command();
@@ -709,8 +702,7 @@ mod tests {
         }
     }
 
-    /// a command's help puts its examples right below its usage and before its options, and
-    /// keeps every line it had.
+    /// and keeps every line it had.
     #[test]
     fn a_command_help_shows_its_examples_before_its_options() {
         let rendered = args::command()
@@ -745,8 +737,7 @@ mod tests {
         }
     }
 
-    /// a build keeps every recipe's file list in data.lock.d, even a result of one file, so the
-    /// concepts ask to commit it for recipes too, not only for a big dataset.
+    /// even a result of one file, so the concepts ask to commit it for recipes too.
     #[test]
     fn the_concepts_say_recipes_keep_their_lists_in_data_lock_d() {
         let flat = CONCEPTS.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -756,8 +747,7 @@ mod tests {
         );
     }
 
-    /// `help recipes` shows a data.toml with a recipe, which fetchloom reads as written, and
-    /// `build --help` points at it.
+    /// and `build --help` points at it.
     #[test]
     fn the_recipes_topic_shows_a_recipe_that_reads() {
         let recipes = super::topic_text(&["recipes".to_owned()]).unwrap_or_default();

@@ -1,6 +1,5 @@
-//! `fetchloom path`: where a dataset, or a file or folder in it, is. it answers from data.lock and
-//! the data folder when the files are in place, and syncs that dataset alone first when they are
-//! not. a recipe's result is placed as data.lock pins it, and never built here.
+//! `fetchloom path`: where a dataset, or a file or folder in it, is, syncing that dataset alone
+//! first when its files are not in place. a recipe's result is placed as pinned, never built here.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -156,9 +155,8 @@ fn named(manifest: &Manifest, target: &str) -> Result<(), Error> {
     )))
 }
 
-/// refuses a dataset data.toml does not have, as [`known_with_rest`] does, and one it keeps out
-/// of the data folder with `place = false`, which has no folder there. `rest` is what was typed
-/// after the name, such as `/iris.csv`.
+/// refuses a dataset data.toml does not have, as [`known_with_rest`] does, or keeps out of the data
+/// folder with `place = false`. `rest` is what was typed after the name, such as `/iris.csv`.
 fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> {
     known_with_rest(manifest, name, rest, "path")?;
     let entry = &manifest.datasets[name];
@@ -190,9 +188,8 @@ fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Loc
         .map(|(lock, _)| lock))
 }
 
-/// the datasets path reads from data.lock to answer for `name`: it, and those whose folders are
-/// its own, hold it or lie in it, so planning them finds every clash with its files, with the
-/// datasets the recipes among them read.
+/// the datasets path reads from data.lock for `name`: it, those whose folders meet its folder, so
+/// planning finds every clash with its files, and what the recipes among them read.
 fn needed(manifest: &Manifest, name: &str) -> BTreeSet<String> {
     let folder = crate::name::fold(&plan::folder(manifest, name));
     let touching = manifest
@@ -357,7 +354,7 @@ fn ready_path(
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(None);
     }
-    // reject a known impossible member before a missing file can trigger downloads.
+    // reject a known impossible member before a missing file can trigger downloads
     let answer = planned_path(project, manifest, &planned, name, file)?;
     let survey = Survey::read_within(
         project,
@@ -488,8 +485,7 @@ mod tests {
         state
     }
 
-    /// path reads the pins of its dataset, of those whose folders meet its folder, which a clash
-    /// could involve, and of what the recipes among them read: never the rest.
+    /// its dataset's, those whose folders meet its folder, and what the recipes among them read.
     #[test]
     fn path_reads_only_the_pins_its_dataset_needs() {
         let text = concat!(
