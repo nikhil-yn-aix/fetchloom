@@ -77,6 +77,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | a drop across datasets written in one edit, its planned files counted once | drop of a file from each of 2,000 datasets 8.8 to 0.07 s; 1 and 10 flat | kept | [drop](#a-drop-across-many-datasets-2026-11-12) |
 | lock and names | `list` builds only the view it shows | `--json list <name>` of 100,000 files 0.815, peak memory 0.746; `list` of them 0.899; 1 and 10 flat | kept | [list](#listing-only-what-is-shown-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
+| cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | build | memoized immutable recipe-input contents, three versions | 4,000-recipe status ratios 0.0140 glibc and 0.0092 musl, but no-reuse controls slowed about 1% | dropped, control time | [recipe inputs](#memoizing-recipe-input-contents-2026-11-12) |
@@ -551,6 +552,19 @@ none of them sets a delay for lean alone, so nothing was built. the delay can on
 | sync of 40,000 one-file datasets into an empty folder | 15 | 1.068 [1.063, 1.076], 184.8 to 160.0 MiB, 0.867 | 1.125 [1.111, 1.136], 150.5 MiB, 0.815 |
 | `add -i` of 1,000 links of 90 to 110 kB | 20 | 1.013 [0.992, 1.058], 71.3 to 50.6 MiB, 0.703 | 1.106 [1.069, 1.147], 40.5 MiB, 0.568 |
 | status of 100,000 files on ext4 | 20 | 1.027 [1.009, 1.033], 86.1 to 79.3 MiB, 0.922 | 1.067 [1.055, 1.076], 78.2 MiB, 0.908 |
+
+## the syscalls a new object costs, 2026-11-12
+
+the perf-io2 branch left a half-built change that asks the file system less while storing and placing a file. a file's size, and a reflink's mode, come from the check its open already made; a new object reads its details once when it is made, for both its start and its birth, and seals with that birth instead of asking again; and on linux the cache opens a new object to read as well as write, so a clone is hashed through that file, rewound, instead of opened again by its path. `strace -c -f` of an import of 10,000 files on xfs counted 413,887 syscalls before and 373,860 after: 30,001 fewer `statx`, 10,001 fewer `openat` and as many fewer `close`, 10,001 more `lseek`. that is 4 of the 41 syscalls a file costs, but 1.8% of the cpu and none of the time.
+
+| run | pairs | time [95%] | cpu [95%] | peak memory [95%] |
+|---|---:|---|---|---|
+| import of 10,000 files of 1 to 8 KiB on xfs | 19 | 1.021 [0.980, 1.036] | 0.982 [0.979, 0.986] | 1.001 [0.993, 1.013] |
+| the same on ext4 | 20 | 0.995 [0.985, 1.011] | 0.993 [0.989, 0.996] | 1.003 [0.994, 1.010] |
+| a sync placing them again by reflink on xfs | 20 | 1.004 [0.991, 1.017] | 0.999 [0.994, 1.004] | 0.995 [0.986, 1.008] |
+| `add -i` of 1,000 links of 90 to 110 kB on tmpfs | 20 | 0.997 [0.975, 1.022] | 1.009 [0.986, 1.018] | 1.007 [0.990, 1.018] |
+
+one glibc release build of the [scans](#scans-inside-per-file-loops-2026-11-12) change with this one behind a run-time switch, `FETCHLOOM_EXP_CHECKED_IO`, against itself without it; rounds interleaved after a warmup under the measure lock on cores 12-23, on ext4 over nvme and on xfs loop-mounted there. one xfs import round had a load burst and is left out. nothing nears the 10% bar, so the change and its two tests were dropped; the patch stays outside the repository.
 
 ## pending archive reader budgets, 2026-11-12
 
