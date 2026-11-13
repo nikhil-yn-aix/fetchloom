@@ -1259,9 +1259,17 @@ fn status_lists_what_differs() -> Result {
         text(&output.stderr)?
     );
     sandbox.filters().bind(|| insta::assert_snapshot!(streams));
+    // the rows are the answer -q keeps; the closing line and hints are what it drops
     let quiet = sandbox.run(&["-q", "status"])?;
     assert_eq!(quiet.status.code(), Some(0));
-    assert!(quiet.stdout.is_empty(), "{}", text(&quiet.stdout)?);
+    assert_eq!(
+        text(&quiet.stdout)?,
+        "    Missing data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
+    );
+    assert_eq!(
+        crate::support::without_copy_warning(&text(&quiet.stderr)?),
+        ""
+    );
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
     assert_eq!(document["result"]["extra"][0], "data/iris/notes.txt");

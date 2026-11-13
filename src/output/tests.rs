@@ -631,7 +631,8 @@ fn lines(name: &str, command: &clap::Command) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// report rows are colored as stdout decides, apart from stderr; quiet and `--json` print none.
+/// report rows are colored as stdout decides, apart from stderr; quiet keeps them, as the answer,
+/// and `--json` prints none.
 #[test]
 fn report_rows_follow_stdout_alone() {
     let style = |color| Style {
@@ -681,11 +682,18 @@ fn report_rows_follow_stdout_alone() {
             tone == super::Tone::Fail
         );
     }
-    for (level, json) in [(Level::Quiet, false), (Level::Normal, true)] {
-        let silent = Output::new(style(false), level, json, false);
-        assert_eq!(silent.report_text("Missing", "data/iris/iris.csv"), None);
-        silent.report("Missing", "data/iris/iris.csv");
-    }
+    // a row is the answer, which -q keeps, and JSON holds it in its own document
+    let mut quiet = Output::new(style(false), Level::Quiet, false, false);
+    quiet.report_color = false;
+    assert_eq!(
+        quiet
+            .report_text("Missing", "data/iris/iris.csv")
+            .as_deref(),
+        Some("    Missing data/iris/iris.csv")
+    );
+    let json = Output::new(style(false), Level::Normal, true, false);
+    assert_eq!(json.report_text("Missing", "data/iris/iris.csv"), None);
+    json.report("Missing", "data/iris/iris.csv");
 }
 
 /// a placement from bytes the cache held is not a skipped download, and a file a one-off

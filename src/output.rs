@@ -1325,7 +1325,8 @@ impl Output {
 
 impl Output {
     /// one row of a report on stdout, as `mark` draws it on stderr, such as `Missing` and its
-    /// subject, so a pipe or a file gets the rows. quiet and `--json` print none.
+    /// subject, so a pipe or a file gets the rows. they are the answer, which `-q` keeps;
+    /// `--json` prints none.
     pub(crate) fn report(&self, verb: &str, text: &str) {
         let Some(line) = self.report_text(verb, text) else {
             return;
@@ -1338,7 +1339,7 @@ impl Output {
     }
 
     fn report_text(&self, verb: &str, text: &str) -> Option<String> {
-        self.tells(Level::Normal).then(|| {
+        self.tells(Level::Quiet).then(|| {
             shown(
                 &verb_line(verb, text, difference(verb), self.report_color),
                 self.style.unicode,
