@@ -1,7 +1,6 @@
-//! DOIs: doi.org is asked where one points, without following the link, and the host it lands
-//! on picks the source. only kaggle's short version links are followed, since they name no
-//! dataset themselves. a DOI's prefix is never trusted, since every dataverse install and
-//! repository registers its own.
+//! DOIs: doi.org is asked where one points, and the host it names picks the source; only kaggle's
+//! short version links are followed. a DOI's prefix is never trusted, since every dataverse
+//! install and repository registers its own.
 
 use std::fmt;
 
@@ -55,7 +54,7 @@ impl Doi {
     pub(super) async fn locate(&self, api: &impl Api) -> Result<Reference, Error> {
         let mut url = Url::parse("https://doi.org/api/handles/")
             .map_err(|_| self.invalid("the handles API URL is invalid"))?;
-        // a DOI is opaque, so its slashes, query marks and fragments belong to one path segment.
+        // a DOI is opaque, so its slashes, query marks and fragments belong to one path segment
         url.path_segments_mut()
             .map_err(|()| self.invalid("the handles API URL has no path"))?
             .pop_if_empty()

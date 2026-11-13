@@ -1,8 +1,6 @@
-//! text that names something on this machine rather than data published elsewhere: a path such
-//! as `./x.csv`, `~/data` or `C:\data`, a `file:` link, or a bare word that names a file or
-//! folder in the current folder. fetchloom never searches for these or sends them anywhere.
-//! `fetchloom add <path>` imports such files: data.lock pins their bytes under the ref
-//! [`IMPORTED`], and no source can list them again.
+//! text that names something on this machine: a path such as `./x.csv` or `C:\data`, a `file:`
+//! link, or a bare word naming a file here. fetchloom never searches for these or sends them
+//! anywhere; `fetchloom add <path>` imports them under the ref [`IMPORTED`].
 
 use std::path::Path;
 
@@ -70,9 +68,8 @@ pub(crate) fn no_newer(name: &str) -> Error {
     ))
 }
 
-/// the error for files of `name`, an import, that this machine's cache lacks, as a clone of the
-/// project's repository does, and the mirrors too when `mirrored` says a run asked some: no link
-/// fetches them. `folder` is where the dataset's files go in the project.
+/// the error for files of `name`, an import, that this machine's cache lacks, as a clone's does,
+/// and the mirrors too when `mirrored`: no link fetches them. `folder` is where they go.
 pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Error {
     let lacking = if mirrored {
         "neither this machine's cache nor a mirror holds them"
@@ -90,9 +87,8 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
     ))
 }
 
-/// whether `text` is written as a path on this machine: from the root, `.`, `..` or `~`, on a
-/// drive such as `C:`, or as a `file:` link. this reads the text alone, never the disk, so a
-/// reference in data.toml means the same in every folder.
+/// whether `text` is written as a path on this machine, from the root, `.`, `..`, `~`, a drive
+/// or `file:`. it reads the text alone, never the disk, so data.toml means the same everywhere.
 pub(crate) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
     let relative = [".", ".."].iter().any(|dots| {
@@ -109,9 +105,8 @@ pub(crate) fn is_path(text: &str) -> bool {
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }
 
-/// what `word` names in `folder`, `file` or `folder`, when it names something there. a word that
-/// could be a search is looked up here first, so the name of a local file never leaves the
-/// machine as search words.
+/// what `word` names in `folder`, `file` or `folder`, when it names something there, so a local
+/// file's name is never sent off as search words.
 pub(crate) fn here(word: &str, folder: &Path) -> Option<&'static str> {
     let path = folder.join(word);
     std::fs::symlink_metadata(&path).ok()?;

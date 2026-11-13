@@ -1,7 +1,6 @@
-//! sources: where datasets live, how a person names one, and how each lists its files. a source
-//! says what to download and how to check it, and leaves file bodies to the downloader; the one
-//! exception is kaggle, which reads a competition's smallest file to learn whether its rules
-//! were accepted.
+//! sources: how a person names a dataset and how each source lists its files, saying what to
+//! download and how to check it. file bodies are left to the downloader, but kaggle reads a
+//! competition's smallest file to learn whether its rules were accepted.
 
 mod bucket;
 mod dandi;
@@ -75,10 +74,9 @@ pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
     too_many_of(subject, most_files(), instead)
 }
 
-/// the pages of one listing, which a source names one after another by a token, a link or a
-/// number. a page named again would loop, and more pages than a listing of the most files it may
-/// hold needs would never end, nor would pages that bring nothing new, so the pages of every
-/// source are refused for any of these in one wording, which the source's own error carries.
+/// the pages of one listing, named by a token, a link or a number. a page named again, more pages
+/// than its most files need, or a long run of pages that bring nothing new is refused, in one
+/// wording every source's error carries.
 pub(crate) struct Pages<K> {
     asked: HashSet<K>,
     most: usize,
@@ -167,9 +165,8 @@ pub(crate) fn too_many_of(subject: impl fmt::Display, most: usize, instead: &str
 /// reads the environment, so tests can give each run its own.
 pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
-/// the environment a source reads to tell whether its requests go signed in, as the network
-/// that sends them found its credentials there. unit tests read an empty one instead, so a key
-/// saved on the machine running them changes nothing, and pass their own where it matters.
+/// the environment a source reads to tell whether its requests go signed in. unit tests read an
+/// empty one, so a key saved on the machine running them changes nothing.
 fn env(name: &str) -> Option<OsString> {
     if cfg!(test) {
         None
@@ -228,9 +225,8 @@ impl Parsed {
         file.chain(folder).collect()
     }
 
-    /// refuses a link that carries a value granting access, such as a token or the signature of
-    /// a presigned storage link: data.toml keeps a reference as written, data.lock copies it, git
-    /// would share both, and a signature stops working within days anyway.
+    /// refuses a link that carries a value granting access, such as a token or a presigned link's
+    /// signature: data.toml keeps a reference as written, data.lock copies it, and git shares both.
     pub(crate) fn check_shareable(&self) -> Result<(), Error> {
         let Some(key) = &self.secret else {
             return Ok(());
@@ -287,10 +283,8 @@ pub(crate) struct Listing {
     /// what a person should know about the listing, told as warnings once it resolves, such as
     /// files it leaves out.
     pub(crate) warnings: Vec<String>,
-    /// the folders listed when only those were, as they held every file wanted, written as
-    /// [`Glob::scope`] writes them, so `sub-*/anat` stands for each folder it matches and an
-    /// empty one for the files at the top alone; empty when the listing covers the whole
-    /// dataset.
+    /// the folders listed when only those were, as [`Glob::scope`] writes them: `sub-*/anat` stands
+    /// for each folder it matches and an empty one for the top's files. empty for a whole listing.
     pub(crate) within: Vec<String>,
 }
 
@@ -360,9 +354,8 @@ pub(crate) struct Remote {
     pub(crate) url: Url,
     /// the path is only a guess from the link, and the name the server sends replaces it.
     pub(crate) named_by_server: bool,
-    /// the `ETag` the listing gives, which the service also sends with the file's bytes. a
-    /// relock reuses what this machine downloaded from the link before, while the listing
-    /// still gives the `ETag` and size the cache recorded with it.
+    /// the `ETag` the listing gives, as the service sends it with the bytes: a relock reuses an
+    /// earlier download of the link while the listing gives the `ETag` and size the cache recorded.
     pub(crate) etag: Option<String>,
 }
 
@@ -438,9 +431,8 @@ impl Reference {
         }
     }
 
-    /// the origin a person names by writing this reference, when it is not one of the fixed
-    /// public services. it may be on a private network, and only it: another port or scheme of
-    /// its host is not named.
+    /// the origin a person names by writing this reference, when it is no fixed public service. it
+    /// alone may be on a private network: another port or scheme of its host is not named.
     pub(crate) fn written_origin(&self) -> Option<url::Origin> {
         match self {
             Reference::Url(url) => Some(url.origin()),
@@ -456,9 +448,8 @@ impl Reference {
         matches!(self, Reference::Bucket(prefix) if prefix.keeps_versions())
     }
 
-    /// whether this reference, as a listing resolved it, names bytes nobody can change: a hugging
-    /// face commit, a version of a kaggle dataset or an openneuro snapshot. resolved to it again,
-    /// a dataset lists the same bytes, even of files no checksum pins.
+    /// whether this resolved reference names bytes nobody can change, as a hugging face commit, a
+    /// kaggle dataset's version or an openneuro snapshot does, even for files no checksum pins.
     pub(crate) fn fixes_bytes(&self) -> bool {
         match self {
             Reference::HuggingFace(repo) => repo.is_at_commit(),
@@ -483,8 +474,7 @@ impl Reference {
     }
 
     /// [`Reference::resolve`], listing only the folders that may hold a file the `select`
-    /// patterns match, where the source can and they hold a file for each pattern. the listing
-    /// names the folders it covers.
+    /// patterns match, where the source can. the listing names the folders it covers.
     pub(crate) async fn resolve_in(
         &self,
         api: &impl Api,
@@ -593,9 +583,8 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
     }
 }
 
-/// whether the source behind `url` may send the file wrapped in a zip of its own, `train.csv` as
-/// `train.csv.zip`, as kaggle does with large competition files. such a file unpacks once its
-/// bytes show the wrapper, and its listed size is no expectation for them.
+/// whether the source behind `url` may send the file wrapped in a zip, `train.csv` as
+/// `train.csv.zip`, as kaggle does with large competition files, so its listed size binds nothing.
 pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
 }
@@ -837,9 +826,8 @@ pub(crate) fn lfs_pointer(url: &Url) -> Error {
     }
 }
 
-/// the link that serves the file git-lfs keeps for a raw link to a repository's file: github's
-/// media host, or gitlab's api asked for the file rather than its pointer. it leaves out the
-/// link's query, which may hold a token.
+/// the link that serves the file git-lfs keeps for a raw repository link: github's media host,
+/// or gitlab's api asked for the file. it leaves out the link's query, which may hold a token.
 fn lfs_link(url: &Url) -> Option<String> {
     match url.host_str()? {
         "raw.githubusercontent.com" => Some(format!(
@@ -915,9 +903,8 @@ fn single(url: &Url) -> Listing {
     }
 }
 
-/// a listing is hostile input: every path must stay inside the dataset, and no path may appear
-/// twice. a dataset with nothing but its readme and git files is told, since its data has
-/// usually moved elsewhere.
+/// a listing is hostile input: every path must stay inside the dataset and appear once. a dataset
+/// of only its readme and git files is told, since its data has usually moved elsewhere.
 fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> {
     let only_about = !matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
         && !listing.files.is_empty()
@@ -1088,9 +1075,8 @@ mod tests {
         Reference::parse(text).unwrap()
     }
 
-    /// a value granting access in a link is refused whichever source reads the link, since
-    /// data.toml keeps the link as written and data.lock copies it. the help names the reference
-    /// fetchloom reads without it.
+    /// since data.toml keeps the link as written and data.lock copies it. the help names the
+    /// reference fetchloom reads without it.
     #[test]
     fn a_secret_in_a_link_is_refused_whichever_source_reads_it() {
         for (link, read) in [
@@ -1135,8 +1121,7 @@ mod tests {
         );
     }
 
-    /// a page named again would loop, and more pages than a listing needs, or pages that bring
-    /// nothing, would never end, so each is refused, in the words every source's error carries.
+    /// or a long run of pages that bring nothing, each in the words every source's error carries.
     #[test]
     fn pages_refuse_a_page_named_again_and_more_than_a_listing_needs() {
         let mut pages = Pages::most(2);
@@ -1192,8 +1177,7 @@ mod tests {
         }
     }
 
-    /// a git-lfs pointer's help names the link that serves the file itself, where the repository's
-    /// site has one, and never repeats the link's query.
+    /// where the repository's site has one, never repeating the link's query.
     #[test]
     fn a_git_lfs_pointer_is_answered_with_the_link_of_its_file() {
         for (link, help) in [

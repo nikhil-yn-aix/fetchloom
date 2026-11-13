@@ -206,7 +206,7 @@ fn access_refusals_use_the_shared_error() {
     }
 }
 
-/// a handle answer fetchloom cannot use is refused for its reason, with help to report it.
+/// refused for its reason, with help to report it.
 #[test]
 fn a_handle_answer_that_cannot_be_used_says_why() {
     type Change = fn(&mut serde_json::Value);
