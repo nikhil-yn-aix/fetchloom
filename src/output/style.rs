@@ -283,6 +283,11 @@ impl Style {
     pub(crate) fn more(self) -> &'static str {
         if self.unicode { "…" } else { "..." }
     }
+
+    /// what parts the facts on a line.
+    pub(crate) fn dot(self) -> &'static str {
+        if self.unicode { "\u{b7}" } else { "-" }
+    }
 }
 
 fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {

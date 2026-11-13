@@ -930,6 +930,25 @@ fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
     Ok(())
 }
 
+/// where the locale shows no unicode, fetchloom's own marks on stdout turn ascii as the story's do,
+/// as the `·` of the list and of `--version -v`.
+#[test]
+fn stdout_answers_use_ascii_marks_where_the_locale_has_no_unicode() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("notes")?;
+    std::fs::write(folder.join("a.csv"), b"a\n")?;
+    let added = sandbox.run(&["add", &folder.display().to_string()])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    for args in [&["list"][..], &["--version", "-v"]] {
+        let output = sandbox.command(args).env("LC_ALL", "C").output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let shown = text(&output.stdout)?;
+        assert!(shown.is_ascii(), "{args:?}: {shown}");
+        assert!(shown.contains(" - "), "{args:?}: {shown}");
+    }
+    Ok(())
+}
+
 /// a terminal wraps inside a word, so fetchloom wraps itself: an example goes on after the mark a
 /// shell continues it at, and a word wider than the terminal gets a line of its own.
 #[cfg(target_os = "linux")]

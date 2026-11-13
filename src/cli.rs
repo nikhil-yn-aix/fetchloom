@@ -587,9 +587,10 @@ pub(crate) fn run() -> ExitCode {
         let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
         // what a bug report needs: which build, on which system
         if level >= Level::Verbose {
+            let dot = context.output.dot();
             let _ = write!(
                 text,
-                "\n{} {} \u{b7} commit {} \u{b7} cache {}",
+                "\n{} {} {dot} commit {} {dot} cache {}",
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 commit().unwrap_or("unknown, built outside git"),

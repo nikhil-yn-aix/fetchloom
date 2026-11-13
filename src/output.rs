@@ -614,6 +614,11 @@ impl Output {
         self.style.more()
     }
 
+    /// what parts the facts on a line: `·`, or `-` on a terminal that shows only ascii.
+    pub(crate) fn dot(&self) -> &'static str {
+        self.style.dot()
+    }
+
     /// the width of the terminal a person watches the story on, or none for a pipe or a file.
     pub(crate) fn width(&self) -> Option<usize> {
         self.style

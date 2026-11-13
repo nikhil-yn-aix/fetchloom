@@ -91,7 +91,11 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
             super::project::command("add <link>")
         ));
     } else {
-        output.answer(&table(&report.datasets, output.answer_width()));
+        let marks = Marks {
+            dot: output.dot(),
+            more: output.more(),
+        };
+        output.answer(&table(&report.datasets, output.answer_width(), marks));
     }
     Ok(report)
 }
@@ -359,30 +363,39 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
 /// a license longer than this is cut, so one long statement does not push the table off screen.
 const LICENSE: usize = 32;
 
+/// the marks the table writes itself, ascii where the terminal or locale shows no unicode: what
+/// parts a file count from its size, and what ends a license cut short.
+#[derive(Clone, Copy)]
+struct Marks {
+    dot: &'static str,
+    more: &'static str,
+}
+
 /// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
 /// the source gives way, then the license, since `--json` and `list <name>` keep them.
-fn table(datasets: &[Listed], width: Option<usize>) -> String {
+fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
-    let full = columns(datasets, true, true);
+    let full = columns(datasets, true, true, marks);
     let Some(width) = width.filter(|width| widest(&full) > *width) else {
         return full;
     };
-    let licensed = columns(datasets, false, true);
+    let licensed = columns(datasets, false, true, marks);
     if widest(&licensed) <= width {
         return licensed;
     }
-    columns(datasets, false, false)
+    columns(datasets, false, false, marks)
 }
 
-fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String {
+fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Marks) -> String {
     let licensed = with_license && datasets.iter().any(|dataset| dataset.license.is_some());
     let rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
             let contents = match (dataset.files, dataset.bytes) {
                 (Some(files), Some(bytes)) => format!(
-                    "{} \u{b7} {}",
+                    "{} {} {}",
                     units::count(files, "file", "files"),
+                    marks.dot,
                     units::size(bytes)
                 ),
                 _ if dataset.from.is_some() => "not built yet".to_owned(),
@@ -404,7 +417,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
             row.extend([contents, folder]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
-                row.push(units::clip(license, LICENSE, "\u{2026}"));
+                row.push(units::clip(license, LICENSE, marks.more));
             }
             row
         })
@@ -439,6 +452,11 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UNICODE: Marks = Marks {
+        dot: "\u{b7}",
+        more: "\u{2026}",
+    };
 
     #[test]
     fn one_dataset_lists_a_path_and_a_size_per_line() {
@@ -499,12 +517,12 @@ mod tests {
         .unwrap();
         let report = report(&manifest, &Lock::default(), None, None, true);
         assert_eq!(
-            table(&report.datasets, None),
+            table(&report.datasets, None, UNICODE),
             "iris          zenodo:3608990            not locked yet  data/iris\n\
              mnist-digits  hf:datasets/ylecun/mnist  not locked yet  data/mnist-digits"
         );
         assert_eq!(
-            table(&report.datasets, Some(50)),
+            table(&report.datasets, Some(50), UNICODE),
             "iris          not locked yet  data/iris\n\
              mnist-digits  not locked yet  data/mnist-digits",
             "a narrow terminal drops the source"
@@ -520,7 +538,7 @@ mod tests {
         .unwrap();
         let report = report(&manifest, &Lock::default(), None, None, true);
         assert_eq!(
-            table(&report.datasets, None),
+            table(&report.datasets, None, UNICODE),
             "iris  zenodo:3608990  not locked yet  not placed\n\
              wine  zenodo:1        not locked yet  data/wine"
         );
@@ -557,29 +575,38 @@ mod tests {
             listed("wine", None),
         ];
         assert_eq!(
-            table(&datasets, None),
+            table(&datasets, None, UNICODE),
             "iris    zenodo:4  1 file · 4.4 KiB  data/iris    cc-by-4.0\n\
              tweets  zenodo:6  1 file · 4.4 KiB  data/tweets  Data files © Original Authors…\n\
              wine    zenodo:4  1 file · 4.4 KiB  data/wine"
         );
         assert_eq!(
-            table(&datasets, Some(70)),
+            table(&datasets, Some(70), UNICODE),
             "iris    1 file · 4.4 KiB  data/iris    cc-by-4.0\n\
              tweets  1 file · 4.4 KiB  data/tweets  Data files © Original Authors…\n\
              wine    1 file · 4.4 KiB  data/wine",
             "the source gives way first"
         );
         assert_eq!(
-            table(&datasets, Some(40)),
+            table(&datasets, Some(40), UNICODE),
             "iris    1 file · 4.4 KiB  data/iris\n\
              tweets  1 file · 4.4 KiB  data/tweets\n\
              wine    1 file · 4.4 KiB  data/wine",
             "then the license"
         );
+        let ascii = Marks {
+            dot: "-",
+            more: "...",
+        };
+        assert_eq!(
+            table(&datasets[1..2], None, ascii),
+            "tweets  zenodo:6  1 file - 4.4 KiB  data/tweets  Data files © Original Authors...",
+            "a terminal that shows only ascii gets its marks"
+        );
         let mut wide = listed("iris", Some("cc-by-4.0"));
         wide.folder = "data/鸢尾花".to_owned();
         let datasets = [wide, listed("wine", Some("cc-by-4.0"))];
-        let shown = table(&datasets, None);
+        let shown = table(&datasets, None, UNICODE);
         let starts: Vec<usize> = shown
             .lines()
             .map(|line| console::measure_text_width(&line[..line.find("cc-by").unwrap()]))
@@ -653,7 +680,7 @@ mod tests {
         .unwrap();
         let report = report(&manifest, &lock, Some(&cache), None, true);
         assert_eq!(
-            table(&report.datasets, None),
+            table(&report.datasets, None, UNICODE),
             "images  https://example.org/images.zip  2 files · 1.0 KiB  data/images\n\
              other   https://example.org/other.zip   1 file · 512 B     data/other"
         );
@@ -827,7 +854,10 @@ mod tests {
             ),
         ];
         assert_eq!(each(&shown(None, true)), expected);
-        assert_eq!(table(&shown(None, false).datasets, None), table_text);
+        assert_eq!(
+            table(&shown(None, false).datasets, None, UNICODE),
+            table_text
+        );
         for ((name, heading_text, lines), expected) in views.into_iter().zip(expected) {
             assert_eq!(each(&shown(Some(name), true)), [expected], "{name}");
             let one = shown(Some(name), false);
