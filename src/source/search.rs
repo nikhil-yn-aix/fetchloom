@@ -118,9 +118,14 @@ pub(crate) const LIMIT: usize = 3;
 /// terminal 24 rows high.
 pub(crate) const MOST: usize = 12;
 
-/// how long the other catalogs may take once one answered, so one slow site cannot hold up the
-/// rest: a healthy zenodo answered in 0.7 to 7 s, and a failing one retried for 76 s.
-const GRACE: Duration = Duration::from_secs(10);
+/// how long the other sites may take once one answered a search of every site, so the search ends
+/// in about 3 s: of 24 new search words, five sites answered within 3.1 s and dandi within 4.6 s,
+/// while ENA missed even 10 s in 13 of 16 searches.
+const GRACE: Duration = Duration::from_secs(3);
+
+/// the grace of sites named with `--source`, asked for by name: a healthy zenodo answered in 0.7
+/// to 7 s, and a failing one retried for 76 s.
+const NAMED_GRACE: Duration = Duration::from_secs(10);
 
 /// asks the `catalogs` together for `limit` matches each, taking turns in rank order, with exact
 /// names moved to the front; with no `limit`, each gives [`LIMIT`] and [`MOST`] of them are shown.
@@ -144,6 +149,11 @@ pub(crate) async fn search(
         .collect();
     let mut answers: Vec<Option<Result<Vec<Candidate>, Error>>> =
         asked.iter().map(|_| None).collect();
+    let grace = if catalogs.is_empty() {
+        GRACE
+    } else {
+        NAMED_GRACE
+    };
     let mut late = None;
     while !asking.is_empty() {
         tokio::select! {
@@ -157,7 +167,7 @@ pub(crate) async fn search(
                 Poll::Pending
             }) => {
                 answers[place] = Some(answer);
-                late.get_or_insert_with(|| Instant::now() + GRACE);
+                late.get_or_insert_with(|| Instant::now() + grace);
             }
             () = tokio::time::sleep_until(late.unwrap_or_else(Instant::now)), if late.is_some() => {
                 break;
@@ -173,7 +183,7 @@ pub(crate) async fn search(
             None => result.warnings.push(format!(
                 "{source} did not answer within {} s of the others; \
                  `fetchloom search \"{words}\" --source {}` waits for it",
-                GRACE.as_secs(),
+                grace.as_secs(),
                 catalog.name()
             )),
             Some(Ok(candidates)) => lists.push(candidates.into_iter()),

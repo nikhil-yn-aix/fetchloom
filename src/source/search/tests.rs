@@ -262,8 +262,9 @@ fn kaggle_zero_bytes_are_an_unknown_size_and_count() {
     assert_eq!(result.candidates.len(), 3);
 }
 
-/// once one catalog answered, the others get a grace period and no more, and no grace starts before
-/// the first answer, however slow every catalog is.
+/// once one catalog answered, the others get a grace period and no more: 3 s in a search of every
+/// site, 10 s for sites named with `--source`. no grace starts before the first answer, however
+/// slow every catalog is.
 #[test]
 fn a_slow_catalog_cannot_hold_up_the_others() {
     use std::time::Duration;
@@ -295,11 +296,21 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
         }
     }
     let minute = Duration::from_secs(60);
-    let soon = GRACE.checked_sub(Duration::from_secs(1)).unwrap();
-    for (zenodo, others, found, took) in [
-        (None, Duration::ZERO, 14, GRACE),
-        (Some(soon), Duration::ZERO, 17, soon),
-        (Some(minute), minute, 17, minute),
+    let (every, named) = (Duration::from_secs(3), Duration::from_secs(10));
+    // zenodo's answer a second before each grace ends
+    let (every_soon, named_soon) = (Duration::from_secs(2), Duration::from_secs(9));
+    for (catalogs, zenodo, others, found, took) in [
+        (&[][..], None, Duration::ZERO, 14, every),
+        (&[][..], Some(every_soon), Duration::ZERO, 17, every_soon),
+        (&Catalog::ALL[..], None, Duration::ZERO, 14, named),
+        (
+            &Catalog::ALL[..],
+            Some(named_soon),
+            Duration::ZERO,
+            17,
+            named_soon,
+        ),
+        (&[][..], Some(minute), minute, 17, minute),
     ] {
         let api = Late {
             recorded: recorded(),
@@ -315,7 +326,7 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
         let (result, elapsed) = runtime.block_on(async {
             let start = tokio::time::Instant::now();
             let searched =
-                tokio::time::timeout(minute * 60, search(&api, "iris", &[], Some(LIMIT)));
+                tokio::time::timeout(minute * 60, search(&api, "iris", catalogs, Some(LIMIT)));
             let result = searched
                 .await
                 .expect("the search waited for zenodo")
@@ -326,13 +337,16 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
         assert_eq!(
             (result.candidates.len(), elapsed),
             (found, took),
-            "{zenodo:?}"
+            "{catalogs:?} {zenodo:?}"
         );
         if found == 14 {
             assert_eq!(
                 result.warnings,
-                ["zenodo did not answer within 10 s of the others; \
-                  `fetchloom search \"iris\" --source zenodo` waits for it"]
+                [format!(
+                    "zenodo did not answer within {} s of the others; \
+                     `fetchloom search \"iris\" --source zenodo` waits for it",
+                    took.as_secs()
+                )]
             );
         } else {
             assert!(result.warnings.is_empty(), "{:?}", result.warnings);

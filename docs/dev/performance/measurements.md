@@ -26,6 +26,7 @@ every change measured with the current harness, one row each: what it gained whe
 | network | a split download's later streams written in batches, and its read-back buffer kept between ranges | 96 MiB split from a server holding each connection to 0.8 MB/s: 36.8 s for 0.27 s of cpu, 0.7%, hashing every byte and reading three quarters back | dropped: the network sets a split download's pace | [small leftovers](#small-leftovers-from-the-perf-maps-2026-11-13) |
 | network | lean against default: 2 requests at once, 2 to one host | 100 links from a server that waits 50 ms: time 2.006, peak memory 0.998; `add -i` of 1,000 local links 1.081 and 0.887 glibc, 1.085 and 0.679 musl; 1 GiB `get` 0.977 and 0.862 glibc, 0.997 and 0.991 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | network | max against default: 32 requests at once, 16 to one host | 100 links at 50 ms: time 0.281, peak memory 1.077; `add -i` of 1,000 local links 1.046 and 1.274 glibc, 1.040 and 1.141 musl; 1 GiB `get` 1.005 and 1.069 glibc, 0.999 and 1.074 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| search | a 3 s grace for the sites still searching once one has answered a search of every site, 10 s when `--source` names them | 12 pairs of new search words: wall 0.307 [0.306, 0.420], 10.08 to 3.08 s at the median; peak memory 1.002 [0.972, 1.033]; dandi left out in 7 of 12, openneuro in 1, ENA in 11 against 8 | kept, a site later than 3 s left out with its warning | [search grace](#a-shorter-search-grace-2026-11-13) |
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | SHA-256 and a required MD5 on separate workers | 512 MiB 0.776 glibc, 0.767 musl; musl median RSS 106.3 to 120.3 MiB, maximum 168.6 to 154.3 MiB | kept | [paired checksums](#overlapping-required-checksums-2026-11-12) |
@@ -1436,3 +1437,20 @@ one bounded retry prefetched at most 64 names on the caller, kept worker-local r
 functional CLI checks compared all errors, totals, changed marks and bytes for a damaged object, a link, a directory and an unreadable fan: eight comparisons in the first version and four glibc comparisons in the retry. the streaming regression failed against the eager scan. deliberately collecting the full name walk and disabling the one-shot total guard then failed both `verification_reads_before_finishing_the_name_walk` and `discovered_total_waits_for_metadata_and_is_reported_once`. after restoration, 91 upkeep, partial and link tests and all-target clippy passed.
 
 reproduction records stay under `/datadisk/fl-perf/io/impl2/`: immutable `bin/p8-*` builds, both source patches and base identities, `results/p8-ab/` and `p8-v2-ab/`, the corresponding analysis JSON, syscall counts, contract outputs and red/restored logs. `scripts/run_p8.py`, `ab_p8.py` and `analyze_p8.py` select `--experiment v1` or `v2`; the unchanged sweep harness's identity is recorded with each batch.
+
+## a shorter search grace, 2026-11-13
+
+kept. a search of every site, as `add iris` makes, gives the sites still searching 3 s once one has answered, down from 10 s; sites named with `--source` keep 10 s, and one named alone is waited for. ENA's search through EBI is slow on words it has not seen of late: of 16 searches of new words with the 10 s grace, 13 waited the whole 10 s for it after the six other sites had answered.
+
+each site's answer, from the `-vv` answer lines of 24 default searches of new words, in seconds from the start: hugging face 0.08–0.15, kaggle 0.14–0.36, GEO 0.09–0.66, openneuro 0.10–1.00, zenodo 0.83–3.08 (median 1.45), dandi 0.44–4.53 (median 2.17), and ENA in 3 of the 24, at 0.57–0.77. figshare, which fetchloom does not search, answered its own search API in 0.54–0.58 s to curl. with words searched before, `iris` and `brain`, every site answered within 1.8 s in 7 of 8 searches, and ENA alone in 0.55–3.5 s.
+
+the a/b ran one glibc release build per arm, 585a2a7b with the 10 s grace against the change: 13 rounds, the first a warmup, each with two new search words, one per arm in a shuffled order, every run under the measurement lock on cores 12–23. `bench/ab.py` with a 10% threshold:
+
+| metric | ratio | 95% interval | wins |
+|---|---|---|---|
+| wall | 0.307 | [0.306, 0.420] | 11/12 |
+| peak memory | 1.002 | [0.972, 1.033] | 6/12 |
+
+the change took 3.08–3.11 s in every round, and the 10 s grace 2.68–10.10 s, 10.08 s at the median. the cost is coverage: the change left out ENA in 11 rounds, dandi in 7 and openneuro in 1, each with the warning that names `--source`, where the 10 s grace left out ENA in 8. dandi answered in 2–4.5 s in these later runs, against 0.4–1.2 s in the first ones that night.
+
+raw evidence: `fix-a-search-grace/` beside the lab notes, with `runs.jsonl` and the per-site timings. these are live sites from one machine on one night, not a claim about every network.
