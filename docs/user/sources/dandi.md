@@ -39,7 +39,7 @@ an asset's link is its blob on dandi's S3 bucket, `https://dandiarchive.s3.amazo
 
 ## listing
 
-the assets come from `api.dandiarchive.org`, 1,000 to a page, each page by the link the one before gives, which must be this version's listing; a page that names an earlier page, or leads elsewhere, is refused. a version that lists more assets than `most_files` stops before its pages are read. a dandiset is asked about once, for its newest version, unless the reference names one, then its version once, for its title, license and DOI.
+the assets come from `api.dandiarchive.org`, page by page, as [sources](../../dev/architecture/sources.md#source-listings) describes; a version that lists more assets than `most_files` stops before its pages are read.
 
 ## access and limits
 

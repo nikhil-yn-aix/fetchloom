@@ -50,7 +50,7 @@ drive_folders = ["https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv
 fetchloom add drive:folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345 --as raw
 ```
 
-the folder's page is refused, so drive's api lists it, `files.list`, page by page and folder by folder, with at most [`FETCHLOOM_MOST_FILES`](../reference/environment.md) files and folders. each file is pinned with the size and the `sha256Checksum` and `md5Checksum` drive states, and downloaded with `files.get` and `alt=media`. a file on its own is named by its `files.get` entry, since drive's api sends no file name with the bytes. data.lock keeps the same `https://drive.google.com/uc?id=` link as for a shared file, so it says nothing about who may read it. on another machine, a sync finds the files again the same way: the download is refused, the listed folder is listed with the token, then the files come from drive's api. one listing a run serves every file.
+the folder's page is refused, so drive's api lists it, with at most [`FETCHLOOM_MOST_FILES`](../reference/environment.md) files and folders, and each file is pinned with the size, SHA-256 and MD5 drive states. data.lock keeps the same `https://drive.google.com/uc?id=` link as for a shared file, so it says nothing about who may read it, and a sync on another machine finds the files again the same way, through that machine's own `drive_folders` and credentials. items in shared drives work too, and an account an item is shared with needs no resource key. [sources](../../dev/architecture/sources.md#google-credentials-for-private-drive-items) has how drive's api is asked.
 
 google docs, sheets and slides in a private folder are listed as unavailable, as in a shared one, and so are shortcuts: add the item a shortcut points to by its own link.
 
@@ -95,5 +95,3 @@ a login made with gcloud's own client, without the drive scope, is told apart: t
 | `... its token lacks the drive.readonly scope` | a login made without a drive scope, such as with gcloud's own client |
 | `google drive's api is turned off in the google cloud project of ...` | turn on the google drive api in the project of the key or the oauth client |
 | `google refused the google login in ...` | the login expired or was revoked, as one of an app in testing is after 7 days: sign in again through your oauth client |
-
-drive's api is asked with `supportsAllDrives` and `includeItemsFromAllDrives`, which items in shared drives need. resource keys are not sent to it: an account an item is shared with needs none.

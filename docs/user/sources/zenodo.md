@@ -25,7 +25,7 @@ a record may hold one large archive cut into parts, such as `scans.zip.001` to `
 
 ## pins
 
-`resolved` is `zenodo:` and the record's id. zenodo's answer must name the record asked for, or name the concept asked for as that record's parent; any other record is refused. files download from the record's API, and the MD5 zenodo states is checked while SHA-256 and size are learned.
+`resolved` is `zenodo:` and the record's id, and the MD5 zenodo states is checked while SHA-256 and size are learned.
 
 zenodo lets owners make [minor file corrections](https://help.zenodo.org/docs/deposit/manage-files/#modify) within 30 days of publication, and republish within 45, without a new DOI. so resolving a record again, also after a filter change, can pin corrected bytes: read the lock's diff before you commit it. a sync of an unchanged lock still wants the pinned size and hashes.
 

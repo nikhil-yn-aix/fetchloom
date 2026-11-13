@@ -52,7 +52,7 @@ $ fetchloom add http://127.0.0.1:19353/many.tar.gz
 
 ## dry runs
 
-`add --dry-run` with a link asks its server nothing, so it says `size unknown`, and what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses. from real runs against a server on this machine, where `--json` counted 0 requests for the dry run:
+`add --dry-run` with a link asks its server nothing, so it says `size unknown`, and what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses, as the folder link above is refused. from a real run against a server on this machine, where `--json` counted 0 requests:
 
 ```sh
 $ fetchloom add --dry-run http://127.0.0.1:19354/many/
@@ -61,9 +61,6 @@ $ fetchloom add --dry-run http://127.0.0.1:19354/many/
       Would place data/many · 1 file
       Would add many to data.toml, its files in data/many
          Ok dry run, nothing was changed
-$ fetchloom add http://127.0.0.1:19354/many/
-error: http://127.0.0.1:19354/many/ answered with a web page, such as a folder listing, not a file
-  help: open it in a browser, copy the link of each file you want, and give fetchloom those links
 ```
 
 ## pins

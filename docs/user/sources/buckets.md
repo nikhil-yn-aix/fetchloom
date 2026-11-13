@@ -21,7 +21,7 @@ fetchloom add s3:https://minio.lab.example:9000/scans/raw/
 | `https://storage.googleapis.com/<bucket>/<prefix>/` or `https://<bucket>.storage.googleapis.com/<prefix>/` | `gs://<bucket>/<prefix>/` |
 | `s3:https://<host>[:<port>]/<bucket>/<prefix>/`, or `s3:http://…` | the same, with the host in lowercase and a usual port left out |
 
-a bucket at another service that speaks S3's API, such as minio, cloudflare r2, backblaze b2, wasabi or ceph, is written `s3:` followed by the service's own link, its host and port, then the bucket and prefix. it may hold no login, query or fragment. its buckets are addressed by path on that host. the endpoint written on the command line may be on this machine or your network for that run, at its own origin; one only data.toml or data.lock names reaches such a server when [`allowed_origins`](../reference/environment.md) lists its origin, as for any link.
+a bucket at another service that speaks S3's API, such as minio, cloudflare r2, backblaze b2, wasabi or ceph, is written `s3:` followed by the service's own link, its host and port, then the bucket and prefix. it may hold no login, query or fragment. the endpoint written on the command line may be on this machine or your network for that run, at its own origin; one only data.toml or data.lock names reaches such a server when [`allowed_origins`](../reference/environment.md) lists its origin, as for any link.
 
 a pasted HTTPS link names a prefix only when its path ends in `/`, or names the bucket alone. a link to one object stays a plain [URL](urls-and-dois.md) and downloads that object. a link with a query string, such as a presigned link, also stays a plain URL, as do website, dualstack and other S3 endpoint hosts.
 
@@ -31,11 +31,7 @@ an `s3://` or `gs://` reference without a final `/` names the object with exactl
 
 ## listing
 
-S3 buckets are listed with ListObjectsV2, up to 1,000 keys a page, following continuation tokens. a bucket whose name contains a dot is addressed by path on `s3.amazonaws.com`, because the service's certificate does not cover dotted host names; other buckets use their own host. an object whose whole key is `soap` downloads by path on the service's host, as [S3 requires](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html). when S3 answers that a bucket lives in another region, through its `x-amz-bucket-region` header or the region named in its error, fetchloom asks that region's endpoint once.
-
-a bucket at another service is listed the same way, by path on its host. no region move applies there.
-
-cloud storage buckets are listed through the JSON API at `storage.googleapis.com/storage/v1/b/<bucket>/o`, following page tokens. for either store, an empty page partway through is fine, but a token sent again, or 100 empty pages in a row, end the listing as broken, with `source.invalid`.
+fetchloom lists a bucket page by page, and a bucket in another AWS region than it first asked is found there. a listing whose service sends a page token again, or 100 empty pages in a row, is broken and fails with `source.invalid`; an empty page partway through is fine. [sources](../../dev/architecture/sources.md#buckets) has how each store is listed.
 
 zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty object ending in `/` cannot name a file on disk, so the listing fails with `source.invalid` before selection or downloads. ask the owner to rename it, or choose a prefix that leaves it out. the limit on how many files a dataset lists, [`FETCHLOOM_MOST_FILES`](../reference/environment.md), applies before `--select` and `--exclude`, so name a narrower prefix inside a large bucket. a prefix that holds no objects fails with `reference.unresolved`.
 
@@ -47,13 +43,13 @@ zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty
 | another S3 service | the `s3:https://` reference | the object's link on that service, `https://<host>[:<port>]/<bucket>/<key>`, with `?versionId=<id>` when the bucket keeps versions | none |
 | cloud storage | the `gs://` reference | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` | the listed `md5Hash` |
 
-an ETag with a `-` belongs to an object uploaded in parts and is not an MD5 of its bytes, so such files are pinned by SHA-256 and size alone. a bucket that needs a key may encrypt objects with keys of its own, whose ETags are no MD5 either, and other services promise nothing about theirs, so those files are pinned the same way. a stated MD5 is checked against the downloaded bytes.
+a stated MD5 is checked against the downloaded bytes; the other files are pinned by SHA-256 and size alone, since an ETag with a `-`, one from a bucket that needs a key, or one from another service is no MD5 of the bytes.
 
 `lock --upgrade` lists the prefix again and downloads only the objects it has no proof are unchanged. an object without an MD5 counts as unchanged when the listing gives the ETag and size this machine's cache recorded at its last download of that link, and the cache still holds those bytes; the record lives in the cache, not in `data.lock`, so a teammate without it downloads the object again. this trusts the service to give an object a new ETag whenever its bytes change, as S3 does, as an answer that a file is unchanged since an ETag is trusted. a service that keeps the ETag and size while the bytes change keeps the old pin here, and the change shows wherever the bytes are downloaded, as in a teammate's `sync`, which refuses them with `integrity.mismatch`, exit 30, and places nothing from them.
 
-an S3 bucket that keeps versions names each object's version, which the lock URL pins, so `sync` gets the same bytes after someone replaces the object; bytes from the cache keep the version an earlier download of that link recorded. a pinned version that is gone, or that the key may not read, is fetched from the object as it is now, and the locked SHA-256 decides: the same bytes are used, and other bytes fail with `integrity.mismatch`, exit 30, saying the version could not be read. a bucket that refuses old versions to anyone without a key, as many public ones do, refuses them all, so once one file of a run came that way, its later files ask for the object as it is now first, and for their pinned version only when those bytes differ. a bucket that keeps no versions serves whatever the key holds now, and sync refuses bytes that differ from the locked SHA-256.
+an S3 bucket that keeps versions names each object's version, which the lock URL pins, so `sync` gets the same bytes after someone replaces the object; bytes from the cache keep the version an earlier download of that link recorded. a pinned version that is gone, or that the key may not read, as many public buckets refuse old versions to anyone without a key, is fetched from the object as it is now, and the locked SHA-256 decides: the same bytes are used, and other bytes fail with `integrity.mismatch`, exit 30, saying the version could not be read. a bucket that keeps no versions serves whatever the key holds now, and sync refuses bytes that differ from the locked SHA-256.
 
-a cloud storage URL keeps the object's generation. a listing with a missing, empty or nonnumeric generation fails with `source.invalid`; fetchloom does not replace it with an unversioned URL. object names in generation errors have control characters escaped. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not.
+a cloud storage URL keeps the object's generation. a listing with a missing, empty or nonnumeric generation fails with `source.invalid`; fetchloom does not replace it with an unversioned URL. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not.
 
 ## private S3 buckets
 
@@ -63,7 +59,7 @@ the `s3_buckets` setting lists the buckets fetchloom may sign for with your AWS 
 s3_buckets = ["s3://lab-raw", "s3:https://minio.lab.example:9000/scans"]
 ```
 
-each run asks a bucket without a key first, so a public bucket never sees your key. when S3 refuses a listed bucket, with 401 or 403, fetchloom asks again once, signed with AWS signature version 4, and signs that bucket's later requests from the start. this costs one extra request for each such bucket in each run, or one for each download that was already on its way when the first refusal came. a link that carries its own signature, as a presigned link does, is never signed again, and a signature never follows a redirect.
+each run asks a bucket without a key first, so a public bucket never sees your key. when S3 refuses a listed bucket, with 401 or 403, fetchloom asks once more with a signature and signs that bucket's later requests from the start. a link that carries its own signature, as a presigned link does, is never signed again, and a signature never follows a redirect; [network](../../dev/architecture/network.md#trust-boundaries) has the details.
 
 keys come from where the AWS tools keep them, in this order:
 
@@ -76,7 +72,7 @@ keys come from where the AWS tools keep them, in this order:
 
 a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
 
-the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`. a signed listing names the bucket's region in its object links, so a later run signs them for it. cloudflare r2 signs for `auto`, and backblaze and wasabi take the region in their host.
+the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`.
 
 keys reach another service only where your AWS settings send them: `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` sends the keys above to that endpoint, and so does a profile's `endpoint_url`, set in the profile or for `s3` in the `services` section it names. a bucket there takes the keys of the one profile whose endpoint names it, so `AWS_PROFILE` can stay on your AWS profile. keys sent to an endpoint are never sent to AWS. `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` turns endpoint settings off. a plain `http` service is signed only when your settings name its `http` link.
 
@@ -87,8 +83,8 @@ the secret never leaves the machine: a request carries the key id and a signatur
 a `credential_process`, or the AWS CLI for a sign-in or a role, runs only once a bucket `s3_buckets` lists has refused a request without a key, when its requests first need keys. nothing in data.toml or data.lock chooses a profile, a program or a command.
 
 - the setting is split into words as the AWS CLI splits it, by shell quoting on linux and macos and by the windows rules on windows. no shell runs it, so `$HOME`, `~`, pipes and `;` reach the program as written. the program is a full path, or a name found in a folder on PATH. a folder PATH names relatively, such as `.`, is never searched, since it would be whatever folder fetchloom runs in, and a program named by a relative path fails with `usage`, exit 2. the AWS CLI is found the same way.
-- the program runs from its own folder with nothing on its input. fetchloom reads up to 64 KiB of what it prints on stdout as the JSON AWS defines for `credential_process`: `Version` 1, `AccessKeyId`, `SecretAccessKey`, and `SessionToken` and `Expiration` for keys that expire. stderr is never read. nothing the program prints reaches a message, a log, `--json` output or a file, and the keys stay in memory for the run.
-- one run serves every request for the buckets those keys sign for. keys with an `Expiration` are asked for again 5 minutes before it, or halfway for keys that hold less than 10 minutes. requests that need new keys at the same moment wait for one run. when S3 refuses a request because its keys expired anyway, as after a jump in this machine's clock, saying `ExpiredToken`, the program runs again and the request goes once more with the new keys; requests refused at the same moment share that run. a second refusal is the answer. keys written in the environment or a profile have nothing to give new ones, so their refusal is the answer at once.
+- the program prints the JSON AWS defines for `credential_process`: `Version` 1, `AccessKeyId`, `SecretAccessKey`, and `SessionToken` and `Expiration` for keys that expire. nothing it prints reaches a message, a log, `--json` output or a file, and the keys stay in memory for the run.
+- keys with an `Expiration` are asked for again before they run out, and keys S3 calls expired are asked for once more; written keys have nothing to give new ones, so their refusal is the answer at once. [sources](../../dev/architecture/sources.md#signing-private-s3-buckets) has how the program runs and when it runs again.
 - a program that fails, prints no keys fetchloom can read, gives keys that have expired or has given none within a minute fails the request with `auth.required`, exit 40, and every later request for that bucket fails the same way. no request goes without a key or with other keys instead. ctrl-c ends the program.
 
 a profile whose sign-in has expired, as the AWS CLI reports with exit code 255:
@@ -108,9 +104,9 @@ the `gcs_buckets` setting lists the cloud storage buckets fetchloom may send you
 gcs_buckets = ["gs://lab-private"]
 ```
 
-each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom asks google for an access token, asks again once with it, and sends it with that bucket's later requests from the start. this costs one extra request for each such bucket in each run, or one for each download already on its way when the first refusal came, and one request to google's token endpoint, `https://oauth2.googleapis.com/token`, for all of them. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
+each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom gets an access token from google's token endpoint, `https://oauth2.googleapis.com/token`, asks once more with it and sends it with that bucket's later requests. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
 
-the credentials are google's [application default credentials](../reference/environment.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. fetchloom keeps a token until 5 minutes before it expires, then asks for a new one, and a token cloud storage refuses with 401, as an expired or revoked one, is replaced once. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
+the credentials are google's [application default credentials](../reference/environment.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. a token that expires or is refused with 401 is replaced. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
 
 the same credentials read the [private google drive folders and files](google-drive.md#private-files-and-folders) that `drive_folders` lists, with a scope of their own.
 
@@ -130,19 +126,7 @@ error: s3://lab-raw/2026/ is private: S3 refused to list it without a key, and n
   help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets
 ```
 
-a cloud storage bucket `gcs_buckets` does not list:
-
-```text
-error: gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials
-  help: if you trust gs://lab-private with your google credentials, add it to gcs_buckets in the settings file or FETCHLOOM_GCS_BUCKETS
-```
-
-a listed one with no application default credentials on this machine:
-
-```text
-error: gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials, and no google application default credentials were found
-  help: run `gcloud auth application-default login`, or set GOOGLE_APPLICATION_CREDENTIALS to a service account's key file
-```
+cloud storage says the same of a bucket `gcs_buckets` does not list, `gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials`, with help to add it to `gcs_buckets` or `FETCHLOOM_GCS_BUCKETS`, and of a listed one with none on this machine, `... and no google application default credentials were found`, with help to run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account's key file.
 
 a login google no longer takes, here one that was revoked, fails before any download:
 

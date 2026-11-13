@@ -38,9 +38,7 @@ a file in git-annex comes from openneuro's S3 bucket at the object version the s
 
 ## listing
 
-openneuro lists a snapshot one folder at a time, so the top folder takes a request, and each folder in it another, up to `most_files`. `--select` patterns list only the folders they can reach, so a dataset of hundreds of subjects takes a few requests: `*.tsv` names no folder and needs the top folder alone, one request; `sub-01/anat/*` lists `sub-01/anat` and the folders on the way to it; `sub-*/anat/*` lists each subject's folder and the `anat` folder in it, never `func`. `Resolved` then says what it listed, as `1 file in the top folder` or `2 files in sub-01/anat`. a pattern that starts with `**` can match anywhere, so the whole snapshot is listed, and a pattern that matches none of the files listed has the whole snapshot listed instead, so it is told against all the snapshot holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.
-
-the API refuses a query sent by a plain GET as a request another site may have forged, so each query carries the header it asks for, `apollo-require-preflight`. the run keeps the answers it reads by the query's link and that header, so the same query asked again is answered from them.
+openneuro lists a snapshot one folder at a time, up to `most_files`, and `--select` patterns list only the folders they can reach, so a dataset of hundreds of subjects takes a few requests: `sub-*/anat/*` lists each subject's folder and the `anat` folder in it, never `func`, and `*.tsv` the top folder alone. `Resolved` then says what it listed, as `1 file in the top folder` or `2 files in sub-01/anat`. a pattern that starts with `**` can match anywhere, so the whole snapshot is listed, and a pattern that matches none of the files listed has the whole snapshot listed instead, so it is told against all the snapshot holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.
 
 `s3://openneuro.org/ds000001/` lists the same files from the bucket as they are now, the newest snapshot, without its digests or a pin to one snapshot.
 

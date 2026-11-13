@@ -29,7 +29,7 @@ Downloading mnist-labels/t10k-labels-idx1-ubyte.gz · 4.4 KiB
 
 ## listing
 
-fetchloom asks azure's `List Blobs` for the prefix, a page of up to 5,000 blobs at a time, and follows each page's marker, never one it followed before, up to the `most_files` limit. an empty page partway through is fine, but 100 in a row end the listing as broken. every request to a blob host asks for version 2020-10-02 of azure's API. without a version, azure answers an anonymous request in the account's default, which can be as old as 2009-09-19, and a container holding newer kinds of blob then refuses to list.
+a listing reads up to the `most_files` limit. one that sends a page marker again, or 100 empty pages in a row, is broken; an empty page partway through is fine. [sources](../../dev/architecture/sources.md#a-sas-for-private-azure-containers) and [network](../../dev/architecture/network.md#trust-boundaries) have how azure is listed and which version of its API is asked.
 
 an empty blob named like a folder that other blobs are in is a mark some tools leave for the folder, not a file, so it is left out: `processedManifest/` lists 4 files, not the 5 blobs under it.
 
@@ -62,13 +62,13 @@ each listed container takes the first of these it has:
 
 a SAS is one account's, so when `AZURE_STORAGE_ACCOUNT` names none, the listed containers without a SAS of their own must all be in one account. listed containers in two accounts, with `AZURE_STORAGE_ACCOUNT` unset, fail the first request that needs the SAS with `auth.required`, exit 40, asking for `AZURE_STORAGE_ACCOUNT`, before the SAS goes to either. a SAS needs read and list permission, `sp=rl`, for a container's listing.
 
-a key signs each request as azure's shared key defines it: the request's time in `x-ms-date`, and an `Authorization: SharedKey <account>:<signature>` header worked out from the key. the key itself never leaves this machine. a key reads every container of its account, and an account whose owner turned off access with keys refuses it.
+a key signs each request as azure's shared key defines it, and never leaves this machine. a key reads every container of its account, and an account whose owner turned off access with keys refuses it.
 
 ### the az cli's login
 
-with no SAS or key for a listed container, fetchloom asks the az cli, version 2.54 or later, for a token that reads azure storage: `az account get-access-token --resource https://storage.azure.com/ --output json`. sign in first with `az login`. the az cli is found in a folder PATH names by its full path, never one named relatively such as `.`, and runs as a `credential_process` does for S3, as [keys from a program](buckets.md#keys-from-a-program) says: no shell, nothing on its input, its stderr never read, and nothing it prints in a message, a log or a file. the token goes in `Authorization: Bearer`, and it reads the listed containers on which your login has a role that reads blobs, such as Storage Blob Data Reader.
+with no SAS or key for a listed container, fetchloom asks the az cli, version 2.54 or later, for a token that reads azure storage: `az account get-access-token --resource https://storage.azure.com/ --output json`. sign in first with `az login`. the az cli is found in a folder PATH names by its full path, never one named relatively such as `.`, and runs as a `credential_process` does for S3, as [keys from a program](buckets.md#keys-from-a-program) says, so nothing it prints reaches a message, a log or a file. the token reads the listed containers on which your login has a role that reads blobs, such as Storage Blob Data Reader.
 
-one run gives a token for every listed container. `fetchloom auth` names the SAS, key or sign-in the environment gives, from the variables and the az cli's saved login alone, without running the az cli or asking for a token. it is asked for again 5 minutes before it expires, and once when azure turns it away with 401, as an expired one is. an az cli without a login exits with an error, which fails the request with `auth.required`, exit 40, and help to sign in with `az login`; a role azure refuses fails the same way and names the role to ask for.
+an az cli without a login fails the request with `auth.required`, exit 40, and help to sign in with `az login`; a role azure refuses fails the same way and names the role to ask for. [`fetchloom auth`](../commands/auth.md#status) names the SAS, key or sign-in the environment gives, without running the az cli or asking for a token.
 
 `AZURE_TOKEN_CREDENTIALS`, which azure's own libraries read, chooses the sign-in: unset, `AzureCliCredential` or `dev` take the az cli's login, `ManagedIdentityCredential` or `prod` take this machine's managed identity, and any other credential it names fails with `auth.required` once a container needs a token, as [environment](../reference/environment.md#azure-credentials) lists.
 
@@ -81,9 +81,9 @@ export AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
 FETCHLOOM_AZURE_CONTAINERS=azure:lab/raw fetchloom add azure:lab/raw/scans/
 ```
 
-the token comes from the machine's instance metadata service, `http://169.254.169.254/metadata/identity/oauth2/token`, asked with `metadata: true` for azure storage. that address is on the machine's own network, which fetchloom refuses for every link, so only this request, made with no proxy, no redirect and no other credential, reaches it, and only when your environment names the identity: nothing in `data.toml` or `data.lock` can. `AZURE_CLIENT_ID` picks a user-assigned identity by its client id, as azure's libraries read it; unset takes the machine's own. `prod` does the same unless the environment names a service principal's secret or certificate, or a federated token, which azure's libraries would sign in with first: then it fails with `auth.required`, and `ManagedIdentityCredential` asks for the identity alone.
+the token comes from the machine's instance metadata service, which fetchloom asks only when your environment names the identity, never because `data.toml` or `data.lock` does, as [network](../../dev/architecture/network.md#trust-boundaries) describes. `AZURE_CLIENT_ID` picks a user-assigned identity by its client id, as azure's libraries read it; unset takes the machine's own. `prod` does the same unless the environment names a service principal's secret or certificate, or a federated token, which azure's libraries would sign in with first: then it fails with `auth.required`, and `ManagedIdentityCredential` asks for the identity alone.
 
-the token is kept and asked for again as the az cli's is. a machine without that identity fails with `auth.required`, exit 40, in azure's words, and a machine where no metadata service answers, as off azure, fails at once and says so.
+a machine without that identity fails with `auth.required`, exit 40, in azure's words, and a machine where no metadata service answers, as off azure, fails at once and says so.
 
 ```console
 $ fetchloom add https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/01/C/CV/ --dry-run

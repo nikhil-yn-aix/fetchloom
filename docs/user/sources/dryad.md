@@ -27,7 +27,7 @@ other datadryad.org pages, such as a search or a file's download link, are refus
 
 downloads check the MD5 or SHA-256 dryad states before the lock records each file's SHA-256 and size. bytes that differ stop with `integrity.mismatch` and are never placed. the license dryad states, CC0 for the datasets it publishes, is recorded as `license = "CC0-1.0"`, and `access` is `public` for a version dryad shows to anyone.
 
-files are listed 100 to a request, until the listing holds as many as dryad counts for the version; a listing that ends sooner is refused with `source.invalid` rather than shortened.
+a listing that holds fewer files than dryad counts for the version is refused with `source.invalid` rather than shortened.
 
 ## credentials and limits
 

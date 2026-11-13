@@ -12,9 +12,7 @@ fetchloom add kaggle:competitions/titanic --select "*.csv"
 
 write `kaggle:` and the owner and dataset name, with `@<version>` for one version; without it, the newest. `resolved` records the version, and a reference that names one keeps it under `lock --upgrade`.
 
-a kaggle DOI such as `doi:10.34740/kaggle/dsv/2736749` names one dataset version. fetchloom follows the `kaggle.com/dsv/` link it points to, one extra request, and resolves the dataset at that version.
-
-each file downloads through the kaggle API with `datasetVersionNumber` and `raw=true`, its whole path encoded as one part of the link, and SHA-256 and size pin the bytes.
+a kaggle DOI such as `doi:10.34740/kaggle/dsv/2736749` names one dataset version, which fetchloom resolves through the `kaggle.com/dsv/` link it points to. each file downloads through the kaggle API, and SHA-256 and size pin the bytes.
 
 ## competitions
 

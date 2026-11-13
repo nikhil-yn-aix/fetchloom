@@ -36,7 +36,7 @@ a run without files of the kind asked for is left out with a warning, which name
 
 ## limits
 
-ENA sends a report whole: its portal API has no pages and refuses an `offset`. so fetchloom first asks how many runs an accession has, then asks for exactly that many, and refuses a report that holds fewer. a study with more runs than [`most_files`](../reference/environment.md) allows is refused before its report is downloaded; add the runs you need by their own accessions. listing a study of 1,153 runs takes two requests.
+a report that holds fewer runs than ENA counted for the accession is refused, and a study with more runs than [`most_files`](../reference/environment.md) allows is refused before its report is downloaded: add the runs you need by their own accessions. [sources](../../dev/architecture/sources.md#source-listings) has how ENA is asked.
 
 ENA's file server can take half a minute to start sending a file, small ones too, as ENA's own documentation warns of downloads under load. fetchloom waits for the answer as long as `FETCHLOOM_TIMEOUT` allows after connecting, then tries again.
 

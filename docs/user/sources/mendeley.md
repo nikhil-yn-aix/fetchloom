@@ -31,6 +31,6 @@ files keep the folders mendeley shows them in, below the dataset's folder. each 
 
 ## access and limits
 
-fetchloom reads the public API that mendeley's own site uses, which lists any published version to anyone. the API mendeley documents asks every caller to register an OAuth client with mendeley first, so fetchloom does not use it, and it has no mendeley key to send. the public API's routes and fields match the documented API's, but mendeley does not promise to keep them; a [weekly live check](../../dev/engineering/ci.md#live-source-checks) notices when they change.
+fetchloom reads the public API mendeley's own site uses, which lists any published version to anyone, so it sends no mendeley key; [sources](../../dev/architecture/sources.md#source-listings) says why it leaves the documented API alone, and a [weekly live check](../../dev/engineering/ci.md#live-source-checks) notices when mendeley changes the public one.
 
 a version under an embargo stops with `auth.required`, exit 40, naming the dataset's page, which says when the embargo ends; no sign-in lifts it. mendeley is not in [search](../commands/search.md).
