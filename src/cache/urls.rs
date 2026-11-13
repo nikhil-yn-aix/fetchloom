@@ -160,14 +160,36 @@ impl Shards {
         Some(record)
     }
 
-    /// appends `record` to its shard, then its entry to the shard's index, under the shard's lock,
-    /// which a second writer waits for.
+    /// appends `record` to its shard, then its entry to the shard's index, holding the shard's
+    /// lock, which a second writer waits for.
     pub(crate) fn save(&self, root: &Path, record: &UrlRecord) -> io::Result<()> {
+        self.save_with(root, record, &File::lock)
+    }
+
+    /// [`Shards::save`], taking the shard's lock with `lock`. where the filesystem cannot lock, the
+    /// save goes on without it, as runs sharing the cache do: two saves at once may then lose a
+    /// record, but a record names its link, so neither is ever taken for the other.
+    fn save_with(
+        &self,
+        root: &Path,
+        record: &UrlRecord,
+        lock: &dyn Fn(&File) -> io::Result<()>,
+    ) -> io::Result<()> {
         let (shard, key) = place(&record.url);
         let json = serde_json::to_vec(record).map_err(io::Error::other)?;
         let (records, entries) = paths(root, shard);
+        // windows locks keep other handles off what they cover and refuse one opened to append
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path(root, shard))?;
+        match lock(&held) {
+            Err(err) if err.kind() != io::ErrorKind::Unsupported => return Err(err),
+            _ => {}
+        }
         let mut log = OpenOptions::new().append(true).create(true).open(records)?;
-        log.lock()?;
         // a shard holds 4 GiB; past that its links go unrecorded until gc writes it again
         let start = u32::try_from(log.metadata()?.len()).map_err(io::Error::other)?;
         let mut line = Vec::with_capacity(CHECK + json.len() + 1);
@@ -324,6 +346,11 @@ fn parse(entry: &[u8; ENTRY]) -> (u64, u32) {
         u64::from_le_bytes(key.try_into().unwrap_or_default()),
         u32::from_le_bytes(start.try_into().unwrap_or_default()),
     )
+}
+
+/// the empty file a shard's writers lock, so that no lock ever covers its lines or index.
+fn lock_path(root: &Path, shard: usize) -> PathBuf {
+    root.join("urls").join(format!("{shard:x}.lock"))
 }
 
 /// a shard's file of lines and its index.
@@ -573,6 +600,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// a save goes through while other handles read the shard's lines and index, as other runs'
+    /// lookups do. it locks a file of its own that holds nothing: windows locks keep every other
+    /// handle off the bytes they cover, and refuse a handle opened only to append.
+    #[test]
+    fn a_save_leaves_its_shard_readable_while_it_holds_the_lock() {
+        let folder = store();
+        let root = folder.path();
+        let urls = crowded(2, "0");
+        let shards = Shards::default();
+        shards.save(root, &record(&urls[0], 1)).unwrap();
+        let (records, entries) = paths(root, 0);
+        let other = Shards::default();
+        let read = std::cell::Cell::new(false);
+        let lock = |held: &File| {
+            held.lock()?;
+            assert_eq!(
+                held.metadata()?.len(),
+                0,
+                "the lock is on a file of its own"
+            );
+            let mut lines = Vec::new();
+            File::open(&records)?.read_to_end(&mut lines)?;
+            let mut index = Vec::new();
+            File::open(&entries)?.read_to_end(&mut index)?;
+            assert_eq!((lines.is_empty(), index.len()), (false, ENTRY));
+            assert_eq!(other.find(root, &urls[0]), Some(record(&urls[0], 1)));
+            read.set(true);
+            Ok(())
+        };
+        shards.save_with(root, &record(&urls[1], 2), &lock).unwrap();
+        assert!(read.get());
+        assert_eq!(other.find(root, &urls[1]), Some(record(&urls[1], 2)));
+    }
+
+    /// where the filesystem cannot lock, a save goes on without the lock, as runs sharing the
+    /// cache do; any other lock error stops it before it writes.
+    #[test]
+    fn a_save_goes_on_unlocked_only_where_locking_is_unsupported() {
+        let folder = store();
+        let root = folder.path();
+        let urls = crowded(2, "0");
+        let shards = Shards::default();
+        let unsupported = |_: &File| Err(io::ErrorKind::Unsupported.into());
+        shards
+            .save_with(root, &record(&urls[0], 1), &unsupported)
+            .unwrap();
+        assert_eq!(
+            Shards::default().find(root, &urls[0]),
+            Some(record(&urls[0], 1))
+        );
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            let refused = |_: &File| Err(kind.into());
+            let error = shards
+                .save_with(root, &record(&urls[1], 2), &refused)
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+        }
+        assert_eq!(Shards::default().find(root, &urls[1]), None);
+        let lines = fs::read_to_string(paths(root, 0).0).unwrap();
+        assert_eq!(
+            lines.lines().count(),
+            1,
+            "a refused save writes nothing: {lines}"
+        );
     }
 
     /// a rewrite keeps the latest good record of each link it is asked to keep, and nothing else;

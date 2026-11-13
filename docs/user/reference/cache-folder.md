@@ -29,6 +29,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   partial/<first sha256 digit>/<sha256 of URL>.lock
   urls/<first sha256 digit of URL>.log
   urls/<first sha256 digit of URL>.idx
+  urls/<first sha256 digit of URL>.lock
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>-<sha256 of URL>
   unpacked/<archive sha256, or the key a split archive's parts give>
   projects/<sha256 of project root>.json
@@ -49,7 +50,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 ## URL and partial records
 
-`urls/` records what a link served last, so a later run can ask the server only whether it changed, and an offline `get` can do without a site's listing. a record is one line of JSON in one of 16 `.log` files, picked by the first digit of the SHA-256 of the link, after the first 16 digits of the SHA-256 of the JSON and a space; a line that does not match its digits, as one a killed run cut short, is passed over. beside each `.log`, its `.idx` holds a 12-byte entry for each line: the first 8 bytes of the link's SHA-256, then where the line starts, both little-endian. a new record for a link is appended, and the last one counts. gc writes each file again with only the last record of each link, and drops a record once neither its file nor what it unpacked to is left:
+`urls/` records what a link served last, so a later run can ask the server only whether it changed, and an offline `get` can do without a site's listing. a record is one line of JSON in one of 16 `.log` files, picked by the first digit of the SHA-256 of the link, after the first 16 digits of the SHA-256 of the JSON and a space; a line that does not match its digits, as one a killed run cut short, is passed over. beside each `.log`, its `.idx` holds a 12-byte entry for each line: the first 8 bytes of the link's SHA-256, then where the line starts, both little-endian. a new record for a link is appended, and the last one counts. a run appending holds a lock on the shard's empty `.lock` file, never on the records, so other runs read them meanwhile even on windows, whose locks keep every other reader off what they cover; where the filesystem cannot lock, runs append without it, and two at once may lose a record but never mix one up, since each names its link. gc writes each file again with only the last record of each link, and drops a record once neither its file nor what it unpacked to is left:
 
 | field | value |
 |---|---|
