@@ -126,9 +126,8 @@ fi
 tar -xzf "$work/$asset" -C "$work"
 folder=$work/${asset%.tar.gz}
 [ -f "$folder/fetchloom" ] || fail "$asset holds no fetchloom. nothing was installed"
-# run the staged program before it replaces anything. it sits inside the destination folder, so
-# a disk mounted noexec or a build this machine cannot run fails here, leaving a working fetchloom
-# in place
+# run the staged program, which sits in the destination folder, before it replaces anything: a
+# noexec disk or a build this machine cannot run fails here, leaving a working fetchloom in place
 installed=$("$folder/fetchloom" --version) ||
     fail "the downloaded fetchloom does not run on this machine. nothing was installed"
 check_destination
