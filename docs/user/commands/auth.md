@@ -37,7 +37,7 @@ save it to ~/.cache/huggingface/token? [Y/n] yes
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
-it asks before replacing a saved key; `--yes` answers both questions yes, and a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github and earthdata check a key without naming whose it is, and a login for any other host is not checked.
+it asks before replacing a saved key; `--yes` answers both questions yes, and a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github and earthdata check a key without naming whose it is, and a login for any other host is not checked. a source that gives no answer, as a host this machine cannot reach, leaves a key unchecked: it is saved all the same, and the last line says `Saved a key for <source> to <file>, not checked` instead of `Signed in`, with a hint that `fetchloom auth` checks it once the host answers.
 
 | account | where the key goes | also read by |
 |---|---|---|

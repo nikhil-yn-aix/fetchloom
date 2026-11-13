@@ -395,11 +395,7 @@ async fn sign_in(
         secret: secret.clone(),
         login: user_name.clone(),
     };
-    let (user, valid) = if context.offline.enabled() || context.mirrors.mirrors.only {
-        (None, None)
-    } else {
-        check(context, account, &found).await
-    };
+    let (user, valid, unanswered) = asked_about(context, account, &found).await;
     if valid == Some(false) {
         return Err(refused(account));
     }
@@ -432,16 +428,12 @@ async fn sign_in(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(account.credentials(&found));
     }
-    let place = saved_to.as_ref().map_or_else(
-        || "not saved, so it ends with this command".to_owned(),
-        |to| format!("saved to {}", units::path(std::path::Path::new(to))),
-    );
-    let who = user
-        .as_ref()
-        .map_or_else(String::new, |user| format!(" as {user}"));
-    output.done(
-        "Signed in",
-        &format!("to {}{who} \u{b7} {place}", login_name(account)),
+    told_signed_in(
+        output,
+        account,
+        user.as_deref(),
+        saved_to.as_deref(),
+        unanswered.as_deref(),
     );
     if saved_to.is_some()
         && let Some(tools) = account.shared_with()
@@ -453,6 +445,42 @@ async fn sign_in(
         user,
         saved_to,
     })
+}
+
+/// the line that ends a sign-in: who signed in and where the key went, or, when the source was
+/// asked and gave no answer from `unanswered`, that the key was kept without its check.
+fn told_signed_in(
+    output: &crate::output::Output,
+    account: &Account,
+    user: Option<&str>,
+    saved_to: Option<&str>,
+    unanswered: Option<&str>,
+) {
+    if let Some(host) = unanswered {
+        let told = match saved_to {
+            Some(to) => format!(
+                "a key for {} to {}, not checked, as {host} gave no answer",
+                title(account),
+                units::path(std::path::Path::new(to))
+            ),
+            None => format!(
+                "a key for {} for this command alone, not checked, as {host} gave no answer",
+                title(account)
+            ),
+        };
+        output.done(if saved_to.is_some() { "Saved" } else { "Kept" }, &told);
+        output.hint(&format!("`fetchloom auth` checks it once {host} answers"));
+        return;
+    }
+    let place = saved_to.map_or_else(
+        || "not saved, so it ends with this command".to_owned(),
+        |to| format!("saved to {}", units::path(std::path::Path::new(to))),
+    );
+    let who = user.map_or_else(String::new, |user| format!(" as {user}"));
+    output.done(
+        "Signed in",
+        &format!("to {}{who} \u{b7} {place}", login_name(account)),
+    );
 }
 
 /// what a no while signing in leaves: with `rerun` the command goes on with the key it has, while
@@ -579,6 +607,30 @@ fn read_stdin(
         }
         Secret::Token => Ok(token_from(account, &text)),
     }
+}
+
+/// what the source said of `found`: whose key it is and whether it works, as [`check`] tells, and
+/// the host that was asked and said nothing either way, as one this machine cannot reach. an
+/// offline run, or one that may ask only mirrors, asks nothing.
+async fn asked_about(
+    context: &Arc<Context>,
+    account: &Account,
+    found: &Found,
+) -> (Option<String>, Option<bool>, Option<String>) {
+    if context.offline.enabled() || context.mirrors.mirrors.only {
+        return (None, None, None);
+    }
+    let (user, valid) = check(context, account, found).await;
+    let unanswered = valid
+        .is_none()
+        .then(|| {
+            account
+                .check()
+                .filter(|_| account.credential(found).is_some())
+        })
+        .flatten()
+        .and_then(|check| check.url.host_str().map(str::to_owned));
+    (user, valid, unanswered)
 }
 
 /// asks the source who the key belongs to: the name and whether it was accepted, or nothing

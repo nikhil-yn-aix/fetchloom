@@ -3,7 +3,9 @@
 
 use std::process::Output;
 
-use crate::support::{Fetchloom, Result, Routes, Sandbox, Server, json, reply, text, workspace};
+use crate::support::{
+    Fetchloom, Refusing, Result, Routes, Sandbox, Server, json, reply, text, workspace,
+};
 
 pub(crate) fn with_stdin(mut command: Fetchloom, input: &str) -> Result<Output> {
     Ok(command.output_with(Some(input.as_bytes()))?)
@@ -246,6 +248,37 @@ fn signing_in_without_a_terminal_names_the_scripted_way() -> Result {
             .as_str()
             .is_some_and(|help| help.contains("hf, kaggle"))
     );
+    Ok(())
+}
+
+/// a key whose source cannot be reached is saved without its check, and the last line says so
+/// rather than that it signed in.
+#[test]
+fn a_key_no_source_answered_for_is_saved_as_not_checked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let refusing = Refusing::new()?;
+    let mut command = sandbox.command(&["auth", "login", "hf", "--with-token"]);
+    command
+        .env(
+            "FETCHLOOM_TEST_HF_API",
+            format!("http://{}", refusing.address),
+        )
+        .env("FETCHLOOM_RETRIES", "0");
+    let output = with_stdin(command, "hf_example\n")?;
+    let told = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{told}");
+    assert!(!told.contains("Signed in"), "{told}");
+    assert!(
+        told.contains(
+            "Saved a key for hugging face to ~/.cache/huggingface/token, not checked, as huggingface.co gave no answer"
+        ),
+        "{told}"
+    );
+    assert!(
+        told.contains("hint: `fetchloom auth` checks it once huggingface.co answers"),
+        "{told}"
+    );
+    assert!(home(&sandbox).join(".cache/huggingface/token").exists());
     Ok(())
 }
 
