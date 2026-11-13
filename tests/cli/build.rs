@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::project::{IRIS, PATH, added};
 use crate::support::{
-    Result, Running, Sandbox, Server, file, json, sha256_hex, text, wait_until, zip_of,
+    Fetchloom, Result, Running, Sandbox, Server, file, json, sha256_hex, text, wait_until, zip_of,
 };
 
 /// a recipe that makes `clean` from iris with clean.py.
@@ -483,7 +483,7 @@ fn no_other_command_runs_a_step() -> Result {
 }
 
 /// `fetchloom` with `args` in `folder`, with the step program on PATH as `recipe-step`.
-pub(crate) fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Command> {
+pub(crate) fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Fetchloom> {
     let bin = sandbox.folder("bin")?;
     let program = bin.join(format!("recipe-step{}", std::env::consts::EXE_SUFFIX));
     if !program.is_file() {
@@ -1447,27 +1447,29 @@ fn a_result_recorded_under_a_group_umask_is_reused() -> Result {
 
 /// `command`, run by `sh` with the file mode creation mask `mask`.
 #[cfg(unix)]
-fn with_umask(command: &Command, mask: &str) -> Command {
-    let mut shell = Command::new("sh");
-    shell
-        .arg("-c")
-        .arg(format!("umask {mask} && exec \"$0\" \"$@\""))
-        .arg(command.get_program())
-        .args(command.get_args());
-    for (name, value) in command.get_envs() {
-        match value {
-            Some(value) => {
-                shell.env(name, value);
-            }
-            None => {
-                shell.env_remove(name);
+fn with_umask(command: &Fetchloom, mask: &str) -> Fetchloom {
+    command.through(|command| {
+        let mut shell = Command::new("sh");
+        shell
+            .arg("-c")
+            .arg(format!("umask {mask} && exec \"$0\" \"$@\""))
+            .arg(command.get_program())
+            .args(command.get_args());
+        for (name, value) in command.get_envs() {
+            match value {
+                Some(value) => {
+                    shell.env(name, value);
+                }
+                None => {
+                    shell.env_remove(name);
+                }
             }
         }
-    }
-    if let Some(folder) = command.get_current_dir() {
-        shell.current_dir(folder);
-    }
-    shell
+        if let Some(folder) = command.get_current_dir() {
+            shell.current_dir(folder);
+        }
+        shell
+    })
 }
 
 /// a step's log is for its owner alone, and keeps only the latest 16 MiB of its output.
@@ -1865,8 +1867,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// gives `command` a console of its own, so the ctrl-c [`ctrl_c`] presses there reaches no other
 /// process.
 #[cfg(windows)]
-fn own_console(command: &mut Command) {
-    std::os::windows::process::CommandExt::creation_flags(command, CREATE_NO_WINDOW);
+fn own_console(command: &mut Fetchloom) {
+    std::os::windows::process::CommandExt::creation_flags(command.command_mut(), CREATE_NO_WINDOW);
 }
 
 /// presses ctrl-c in the console of the process `pid`, which needs a console of its own, as

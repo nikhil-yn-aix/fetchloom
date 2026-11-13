@@ -1,24 +1,13 @@
 //! signing in: one key, saved where the source's own tools read it, asked for only at a terminal.
 #![cfg(debug_assertions)]
 
-use std::io::Write as _;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
-use crate::support::{Result, Routes, Sandbox, Server, json, reply, text, workspace};
+use crate::support::{Fetchloom, Result, Routes, Sandbox, Server, json, reply, text, workspace};
 
 /// runs `command` with `input` on stdin.
-pub(crate) fn with_stdin(mut command: Command, input: &str) -> Result<Output> {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .ok_or("no stdin")?
-        .write_all(input.as_bytes())?;
-    Ok(child.wait_with_output()?)
+pub(crate) fn with_stdin(mut command: Fetchloom, input: &str) -> Result<Output> {
+    Ok(command.output_with(Some(input.as_bytes()))?)
 }
 
 fn home(sandbox: &Sandbox) -> std::path::PathBuf {

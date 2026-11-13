@@ -3,17 +3,18 @@
 #![cfg(debug_assertions)]
 
 use std::fs;
-use std::process::Command;
 
 use crate::auth::with_stdin;
 use crate::buckets::md5;
-use crate::support::{Part, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text};
+use crate::support::{
+    Fetchloom, Part, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text,
+};
 
 const ROWS: &[u8] = b"site,count\na,1\nb,2\n";
 const NOTES: &[u8] = b"collected in 2020\n";
 
 /// a command whose requests to the repositories' hosts go to `routes`.
-fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
     command.env("FETCHLOOM_TEST_SOURCES", &routes.url);
     command
@@ -1055,7 +1056,7 @@ fn dandi(embargo: &str, assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
 }
 
 /// a command whose requests to dandi's API and its S3 bucket go to `routes`.
-fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = command(sandbox, routes, args);
     command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
     command
@@ -1237,7 +1238,7 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
 }
 
 /// a command whose requests to openneuro's API and its S3 bucket go to `routes`.
-fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = command(sandbox, routes, args);
     command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
     command

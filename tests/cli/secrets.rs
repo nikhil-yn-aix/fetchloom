@@ -646,7 +646,7 @@ fn keyed_command(
     sandbox: &Sandbox,
     args: &[&str],
     trace: &std::path::Path,
-) -> std::process::Command {
+) -> crate::support::Fetchloom {
     let mut command = sandbox.command(args);
     for (name, value) in DUMMY_KEYS {
         command.env(name, value);

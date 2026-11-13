@@ -37,7 +37,8 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
     let timeline = var("FETCHLOOM_TRACE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    if filter.is_none() && timeline.is_none() {
+    let kept = kept(var);
+    if filter.is_none() && timeline.is_none() && kept.is_none() {
         return Logs {
             on_stderr: false,
             _timeline: None,
@@ -75,15 +76,37 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
         }
         None => (None, None),
     };
+    let kept = kept.map(|file| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .with_timer(tracing_subscriber::fmt::time::uptime())
+            .with_filter(Targets::new().with_target("fetchloom", LevelFilter::DEBUG))
+    });
     let _ = tracing_subscriber::registry()
         .with(logs)
         .with(timeline)
+        .with(kept)
         .try_init();
     Logs {
         on_stderr,
         _timeline: guard,
         refused,
     }
+}
+
+/// in a debug build, the file `FETCHLOOM_TEST_LOG` names, which gets the debug log as it happens,
+/// an event a write, so a test that ends a stuck run can show where it waited.
+fn kept(var: &dyn Fn(&str) -> Option<OsString>) -> Option<std::fs::File> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let path = var("FETCHLOOM_TEST_LOG").filter(|path| !path.is_empty())?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
 }
 
 #[cfg(test)]

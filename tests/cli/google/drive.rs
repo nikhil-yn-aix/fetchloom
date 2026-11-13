@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use super::{
     Asked, CLOUD_LOGIN, CLOUD_TOKEN, DRIVE_SERVICE_TOKEN, EMAIL, LOGIN_TOKEN, REFRESH_TOKEN,
     Standin, assert_no_secret, kept_files, login, respond, service_account, token,
 };
-use crate::support::{Result, Sandbox, json, text};
+use crate::support::{Fetchloom, Result, Sandbox, json, text};
 
 /// a private folder, `lab-raw`: participants.tsv, a google doc, and the subfolder scans with
 /// scans.tsv. drive lists the root in two pages.
@@ -220,7 +220,7 @@ fn command(
     standin: &Standin,
     folder: &std::path::Path,
     args: &[&str],
-) -> Command {
+) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
     command.env("FETCHLOOM_TEST_DRIVE", &standin.url).env(
         "FETCHLOOM_TEST_GOOGLE_TOKEN",

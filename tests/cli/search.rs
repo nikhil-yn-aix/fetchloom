@@ -1,8 +1,7 @@
 //! catalog discovery and safe unattended behavior against local catalog responses.
 #![cfg(debug_assertions)]
 
-use crate::support::{Result, Sandbox, Server, command_help, json, reply, text};
-use std::process::Command;
+use crate::support::{Fetchloom, Result, Sandbox, Server, command_help, json, reply, text};
 
 const HF: &[u8] = include_bytes!("../fixtures/sources/search/hf.json");
 const KAGGLE: &[u8] = include_bytes!("../fixtures/sources/search/kaggle.json");
@@ -66,7 +65,7 @@ impl Catalogs {
         })
     }
 
-    fn command(&self, sandbox: &Sandbox, args: &[&str]) -> Command {
+    fn command(&self, sandbox: &Sandbox, args: &[&str]) -> Fetchloom {
         let mut command = sandbox.command(args);
         command
             .env("FETCHLOOM_TEST_HF_API", &self.hf.url)

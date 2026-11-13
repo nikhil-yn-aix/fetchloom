@@ -6,13 +6,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write as _};
 use std::net::TcpListener;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::support::{Result, Sandbox, json, text};
+use crate::support::{Fetchloom, Result, Sandbox, json, text};
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
 pub(crate) const EMAIL: &str = "loader@lab-project.iam.gserviceaccount.com";
@@ -329,7 +328,7 @@ fn command(
     standin: &Standin,
     folder: &std::path::Path,
     args: &[&str],
-) -> Command {
+) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
     command.env("FETCHLOOM_TEST_BUCKETS", &standin.url).env(
         "FETCHLOOM_TEST_GOOGLE_TOKEN",

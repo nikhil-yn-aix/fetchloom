@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+mod command;
 #[path = "../support/paths.rs"]
 mod paths;
 mod programs;
@@ -20,6 +21,7 @@ mod server;
 #[path = "../support/skips.rs"]
 mod skips;
 
+pub(crate) use command::Fetchloom;
 pub(crate) use paths::workspace;
 pub(crate) use programs::{executable, recipe_step};
 pub(crate) use running::Running;
@@ -47,6 +49,8 @@ pub(crate) struct Sandbox {
     /// the origins of servers on this machine that data.toml, data.lock or a list of links may
     /// name, as a person lists them in `allowed_origins`.
     allowed: Mutex<Vec<String>>,
+    /// how many commands the sandbox has made, which numbers their debug logs.
+    commands: AtomicUsize,
     /// removes the folder when the sandbox goes.
     _folder: tempfile::TempDir,
 }
@@ -80,12 +84,13 @@ impl Sandbox {
         } else {
             folder.path().to_path_buf()
         };
-        for name in ["work", "home"] {
+        for name in ["work", "home", "logs"] {
             std::fs::create_dir(root.join(name))?;
         }
         Ok(Sandbox {
             root,
             allowed: Mutex::default(),
+            commands: AtomicUsize::new(0),
             _folder: folder,
         })
     }
@@ -187,14 +192,20 @@ impl Sandbox {
     }
 
     /// the command, run in `folder` instead of the work folder.
-    pub(crate) fn command_in(&self, folder: &std::path::Path, args: &[&str]) -> Command {
+    pub(crate) fn command_in(&self, folder: &std::path::Path, args: &[&str]) -> Fetchloom {
         let mut command = self.command(args);
         command.current_dir(folder);
         command
     }
 
-    pub(crate) fn command(&self, args: &[&str]) -> Command {
+    /// fetchloom with `args`, in the work folder, with nothing of this machine's and its debug
+    /// log in a file of its own, which a stall shows the end of.
+    pub(crate) fn command(&self, args: &[&str]) -> Fetchloom {
         let home = self.root.join("home");
+        let log = self.root.join("logs").join(format!(
+            "{}.log",
+            self.commands.fetch_add(1, Ordering::Relaxed)
+        ));
         let mut command = Command::new(executable());
         // nothing from the machine running the tests may reach fetchloom: its own settings,
         // proxies, colors, synced folders or any source's credentials
@@ -224,7 +235,8 @@ impl Sandbox {
             .env(
                 "AWS_SHARED_CREDENTIALS_FILE",
                 self.root.join("no-aws-credentials"),
-            );
+            )
+            .env("FETCHLOOM_TEST_LOG", &log);
         let allowed = self
             .allowed
             .lock()
@@ -232,7 +244,7 @@ impl Sandbox {
         if !allowed.is_empty() {
             command.env("FETCHLOOM_ALLOWED_ORIGINS", allowed.join(","));
         }
-        command
+        Fetchloom::new(command, Some(log))
     }
 
     pub(crate) fn run(&self, args: &[&str]) -> Result<Output> {
@@ -248,25 +260,28 @@ impl Sandbox {
 
     /// [`Sandbox::on_a_terminal`] for a command built elsewhere, with its arguments and settings.
     #[cfg(target_os = "linux")]
-    pub(crate) fn on_a_terminal_running(&self, inner: &Command) -> Result<Option<String>> {
-        let line: Vec<String> = std::iter::once(inner.get_program())
-            .chain(inner.get_args())
-            .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
-            .collect();
-        let mut script = Command::new("script");
-        script
-            .args(["-qec", &line.join(" "), "/dev/null"])
-            .current_dir(self.work());
-        for (name, value) in inner.get_envs() {
-            match value {
-                Some(value) => script.env(name, value),
-                None => script.env_remove(name),
-            };
-        }
-        script
-            .env("SHELL", "/bin/sh")
-            .env_remove("ENV")
-            .env_remove("BASH_ENV");
+    pub(crate) fn on_a_terminal_running(&self, inner: &Fetchloom) -> Result<Option<String>> {
+        let mut script = inner.through(|inner| {
+            let line: Vec<String> = std::iter::once(inner.get_program())
+                .chain(inner.get_args())
+                .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+                .collect();
+            let mut script = Command::new("script");
+            script
+                .args(["-qec", &line.join(" "), "/dev/null"])
+                .current_dir(self.work());
+            for (name, value) in inner.get_envs() {
+                match value {
+                    Some(value) => script.env(name, value),
+                    None => script.env_remove(name),
+                };
+            }
+            script
+                .env("SHELL", "/bin/sh")
+                .env_remove("ENV")
+                .env_remove("BASH_ENV");
+            script
+        });
         match script.output() {
             Ok(output) if !output.status.success() => Err(format!(
                 "terminal command exited with {}: {}{}",
@@ -327,35 +342,39 @@ pub(crate) fn command_help() -> insta::Settings {
 #[cfg(target_os = "linux")]
 pub(crate) fn typed(
     folder: &Path,
-    inner: &Command,
+    inner: &Fetchloom,
     stty: &str,
     after: &str,
     keys: &str,
 ) -> Result<Option<(Option<i32>, String)>> {
-    let mut line: Vec<String> = std::iter::once(inner.get_program())
-        .chain(inner.get_args())
-        .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
-        .collect();
-    if !stty.is_empty() {
-        line.insert(0, format!("stty {stty} &&"));
-    }
-    let mut script = Command::new("script");
+    let mut script = inner.through(|inner| {
+        let mut line: Vec<String> = std::iter::once(inner.get_program())
+            .chain(inner.get_args())
+            .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+            .collect();
+        if !stty.is_empty() {
+            line.insert(0, format!("stty {stty} &&"));
+        }
+        let mut script = Command::new("script");
+        script
+            .args(["-qec", &line.join(" "), "/dev/null"])
+            .current_dir(folder);
+        for (name, value) in inner.get_envs() {
+            match value {
+                Some(value) => script.env(name, value),
+                None => script.env_remove(name),
+            };
+        }
+        script
+            .env("SHELL", "/bin/sh")
+            .env_remove("ENV")
+            .env_remove("BASH_ENV");
+        script
+    });
     script
-        .args(["-qec", &line.join(" "), "/dev/null"])
-        .current_dir(folder)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    for (name, value) in inner.get_envs() {
-        match value {
-            Some(value) => script.env(name, value),
-            None => script.env_remove(name),
-        };
-    }
-    script
-        .env("SHELL", "/bin/sh")
-        .env_remove("ENV")
-        .env_remove("BASH_ENV");
     let mut child = match script.spawn() {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -1208,7 +1227,7 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
 #[cfg(unix)]
 pub(crate) fn held_at_its_mark(
     sandbox: &Sandbox,
-    command: &mut Command,
+    command: &mut Fetchloom,
 ) -> Result<(Running, PathBuf)> {
     let release = sandbox.folder("hold")?.join("release");
     command.env("FETCHLOOM_TEST_HOLD_FINISH", &release);
@@ -1345,6 +1364,58 @@ fn no_aws_setting_of_the_machine_reaches_a_command() -> Result {
             .and_then(|(_, value)| value)
             .ok_or(name)?;
         assert!(!Path::new(path).exists(), "{name}");
+    }
+    Ok(())
+}
+
+/// a command still running at its deadline is ended, and the test fails with what it wrote to
+/// stderr and the end of its debug log, which shows where it waited: here on a server that never
+/// answers. a command a test started keeps the deadline as the test waits for it.
+#[test]
+fn a_command_past_its_deadline_fails_with_its_stderr_and_debug_log() -> Result {
+    let sandbox = Sandbox::new()?;
+    for started in [false, true] {
+        let (_release, held) = std::sync::mpsc::channel();
+        let server = Server::start("/held.csv", vec![vec![Part::Wait(held)]])?;
+        let mut command = sandbox.command(&["-v", "get", &server.url]);
+        command.deadline(Duration::from_secs(2));
+        let began = Instant::now();
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result {
+            if started {
+                let mut child = command.stdout(std::process::Stdio::null()).spawn()?;
+                child.wait()?;
+            } else {
+                command.output()?;
+            }
+            Ok(())
+        }));
+        let said = match ended {
+            Err(panic) => *panic
+                .downcast::<String>()
+                .map_err(|_| "a panic without words")?,
+            Ok(ended) => return Err(format!("the command ended by itself: {ended:?}").into()),
+        };
+        assert!(began.elapsed() < Duration::from_secs(30), "{said}");
+        assert!(
+            said.contains(&format!(
+                "-v get {}` ran past its deadline of 2 s, so the harness ended it\n",
+                server.url
+            )),
+            "{said}"
+        );
+        let stderr = if started {
+            "its stderr went to the test\n"
+        } else {
+            "its stderr so far:\n  Resources default: "
+        };
+        assert!(said.contains(stderr), "{said}");
+        let (_, log) = said
+            .split_once("the end of its debug log, ")
+            .ok_or_else(|| format!("no debug log: {said}"))?;
+        assert!(
+            log.contains(&format!("download{{url={}}}", server.url)),
+            "{said}"
+        );
     }
     Ok(())
 }

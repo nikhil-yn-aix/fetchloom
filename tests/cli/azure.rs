@@ -5,12 +5,11 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use sha2::Sha256;
 
-use crate::support::{Part, Result, Routes, Sandbox, Server, reply, text};
+use crate::support::{Fetchloom, Part, Result, Routes, Sandbox, Server, reply, text};
 
 const A_CSV: &[u8] = b"site,value\nlab,1\n";
 const A_MD5: &str = "7IgFjUFwc9UPsxF0OL2kYw==";
@@ -101,7 +100,7 @@ fn bytes(body: &[u8]) -> Vec<Part> {
 }
 
 /// a command that sends every azure blob request to `routes`.
-fn command(sandbox: &Sandbox, routes: &Routes, folder: &Path, args: &[&str]) -> Command {
+fn command(sandbox: &Sandbox, routes: &Routes, folder: &Path, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
     command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
     command

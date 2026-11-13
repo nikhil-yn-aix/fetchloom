@@ -16,7 +16,7 @@ const FAST: u64 = 8 << 20;
 
 /// `fetchloom` with `args`, splitting as a debug build does with `FETCHLOOM_TEST_SPLIT`: from
 /// [`LARGE`], after measuring for a fifth of a second.
-fn split_command(sandbox: &Sandbox, args: &[&str]) -> std::process::Command {
+fn split_command(sandbox: &Sandbox, args: &[&str]) -> crate::support::Fetchloom {
     let mut command = sandbox.command(args);
     command.env("FETCHLOOM_TEST_SPLIT", "1");
     command

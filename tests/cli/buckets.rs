@@ -4,14 +4,16 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use hmac::{Hmac, KeyInit, Mac};
 use md5::Digest as _;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, percent_encode};
 use sha2::Sha256;
 
-use crate::support::{Part, Result, Routes, Sandbox, Server, delete, file, json, reply, text};
+use crate::support::{
+    Fetchloom, Part, Result, Routes, Sandbox, Server, delete, file, json, reply, text,
+};
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
 const SCAN: &[u8] = b"onset\tduration\n0\t1\n";
@@ -79,7 +81,7 @@ pub(crate) fn md5(body: &[u8]) -> String {
 
 /// a command that sends every S3 and cloud storage request to `routes`, with AWS and google
 /// credentials set in its environment, which fetchloom must never send.
-fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Command {
+fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
         .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
@@ -579,7 +581,7 @@ fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
 }
 
 /// a command for a bucket test that keeps the keys it is given, with the signed tests' secret.
-fn keyed_command(sandbox: &Sandbox, routes: &str, args: &[&str]) -> Command {
+fn keyed_command(sandbox: &Sandbox, routes: &str, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
         .env("FETCHLOOM_TEST_BUCKETS", routes)
@@ -942,7 +944,7 @@ fn profile_command(
     routes: &str,
     config: &std::path::Path,
     args: &[&str],
-) -> Command {
+) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
         .env("FETCHLOOM_TEST_BUCKETS", routes)

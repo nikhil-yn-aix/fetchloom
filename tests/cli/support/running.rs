@@ -3,18 +3,24 @@
 //! still running after a minute.
 
 use std::io::{self, BufRead, Read};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, ExitStatus, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::Result;
+use super::command::{DEADLINE, tail};
+use super::{Fetchloom, Result};
 
 /// how long [`Running::finish`] waits for a command to close its output.
 const FINISH: Duration = Duration::from_secs(60);
 
 pub(crate) struct Running {
     child: Option<Child>,
+    /// when it started, which [`Running::wait`]'s deadline counts from.
+    started: Instant,
+    /// the file its debug log goes to, which a stuck run shows the end of.
+    log: Option<PathBuf>,
     // open and silent until the command ends, for [`Running::start_with_open_stdin`]
     stdin: Option<ChildStdin>,
     stdout: Option<JoinHandle<io::Result<Vec<u8>>>>,
@@ -25,21 +31,24 @@ pub(crate) struct Running {
 
 impl Running {
     /// starts `command`, its stdin as the command sets it.
-    pub(crate) fn start(command: &mut Command) -> Result<Self> {
+    pub(crate) fn start(command: &mut Fetchloom) -> Result<Self> {
         Self::spawn(command)
     }
 
     /// starts `command` with stdin a pipe that stays open and never sends a byte, as many tool
     /// runners leave it, so a command that read stdin or waited for an answer never finishes.
-    pub(crate) fn start_with_open_stdin(command: &mut Command) -> Result<Self> {
+    pub(crate) fn start_with_open_stdin(command: &mut Fetchloom) -> Result<Self> {
         Self::spawn(command.stdin(Stdio::piped()))
     }
 
-    fn spawn(command: &mut Command) -> Result<Self> {
+    fn spawn(command: &mut Fetchloom) -> Result<Self> {
+        let log = command.log.clone();
         let mut child = command
+            .command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        let started = Instant::now();
         let stdin = child.stdin.take();
         let (done, closed) = mpsc::channel();
         let mut stdout = child.stdout.take().ok_or("child stdout was not piped")?;
@@ -71,6 +80,8 @@ impl Running {
         });
         Ok(Self {
             child: Some(child),
+            started,
+            log,
             stdin,
             stdout: Some(stdout),
             stderr: Some(reader),
@@ -106,7 +117,7 @@ impl Running {
     /// sends `signal`, such as `-TERM`, which a scheduler sends a job it ends, with `kill`.
     #[cfg(unix)]
     pub(crate) fn signal(&self, signal: &str) -> Result {
-        let sent = Command::new("kill")
+        let sent = std::process::Command::new("kill")
             .args([signal, &self.id()?.to_string()])
             .status()?;
         if sent.success() {
@@ -132,13 +143,27 @@ impl Running {
         Ok(child.try_wait()?.is_some())
     }
 
-    /// waits for the command to end, while what it started may still hold its output open.
+    /// waits for the command to end, while what it started may still hold its output open. a
+    /// command still running at the harness's deadline is killed, and the error holds the end of
+    /// its debug log.
     pub(crate) fn wait(&mut self) -> Result<ExitStatus> {
-        Ok(self
-            .child
-            .as_mut()
-            .ok_or("child already finished")?
-            .wait()?)
+        let mut pause = Duration::from_millis(1);
+        loop {
+            let child = self.child.as_mut().ok_or("child already finished")?;
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            if self.started.elapsed() >= DEADLINE {
+                let said = self.give_up(0);
+                return Err(format!(
+                    "the command was still running after {} s\n{said}",
+                    DEADLINE.as_secs()
+                )
+                .into());
+            }
+            std::thread::sleep(pause);
+            pause = (pause * 2).min(Duration::from_millis(20));
+        }
     }
 
     /// the command's status and output, once it has closed its output. a command still running
@@ -177,12 +202,29 @@ impl Running {
         })
     }
 
-    /// kills the command, which had closed `closed` of its two outputs, and gives what it said, the
-    /// only clue to a stuck run on a runner nobody can reach.
+    /// kills the command, which had closed `closed` of its two outputs, and gives what it said and
+    /// the end of its debug log, the only clues to a stuck run on a runner nobody can reach.
     fn give_up(&mut self, closed: usize) -> String {
+        let said = self.what_it_said(closed);
+        match &self.log {
+            Some(log) => format!(
+                "{said}\nthe end of its debug log, {}:\n{}",
+                log.display(),
+                tail(log)
+            ),
+            None => said,
+        }
+    }
+
+    /// kills the command, which had closed `closed` of its two outputs, and gives what it said.
+    fn what_it_said(&mut self, closed: usize) -> String {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
-            let _ = child.wait();
+            // a process stuck in the kernel may outlive its kill, so the test does not wait on it
+            let gone = Instant::now() + Duration::from_secs(5);
+            while matches!(child.try_wait(), Ok(None)) && Instant::now() < gone {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         for _ in closed..2 {
@@ -229,7 +271,7 @@ mod tests {
     use std::io::Write as _;
     use std::process::Command;
 
-    use super::{Result, Running};
+    use super::{Fetchloom, Result, Running};
 
     const CHILD: &str = "FETCHLOOM_TEST_PIPE_CHILD";
     const BYTES: usize = 4 * 1024 * 1024;
@@ -254,7 +296,7 @@ mod tests {
 
     #[test]
     fn stderr_readiness_does_not_wait_for_stdout_collection() -> Result {
-        let mut command = Command::new(std::env::current_exe()?);
+        let mut command = Fetchloom::new(Command::new(std::env::current_exe()?), None);
         command
             .args([
                 "--exact",
