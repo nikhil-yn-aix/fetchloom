@@ -30,6 +30,7 @@ ALIASES = (
 
 
 def selected(document):
+    """the ids of the tests nextest's list ``document`` runs: not ignored, and matching its filter."""
     return {f"{binary}::{name}"
             for binary, suite in document["rust-suites"].items()
             for name, case in suite["testcases"].items()
@@ -37,6 +38,7 @@ def selected(document):
 
 
 def require_same(expected, actual, scope):
+    """raise RuntimeError unless ``actual`` holds tests and they are ``expected``."""
     if not actual or expected != actual:
         missing, extra = sorted(expected - actual), sorted(actual - expected)
         raise RuntimeError(f"{scope}: {len(actual)} tests; missing {missing[:10]}, extra {extra[:10]}")
@@ -48,6 +50,7 @@ def output(command):
 
 
 def options(args):
+    """nextest's source of tests: the archive ``--archive`` names, else a locked build."""
     if args.archive:
         return ["--archive-file", str(args.archive.resolve()), "--extract-to", str(ROOT),
                 "--extract-overwrite", "--workspace-remap", str(ROOT)]
@@ -60,6 +63,7 @@ def listing(args, filters=()):
 
 
 def libtest(binary, filters=(), ignored=False):
+    """the tests the libtest ``binary`` lists for ``filters``, or its ignored ones alone."""
     command = [str(binary), "--list", "--format", "terse", *filters]
     if ignored:
         command.append("--ignored")
@@ -68,6 +72,8 @@ def libtest(binary, filters=(), ignored=False):
 
 
 def record(args):
+    """write target/ci/selection.json, the tests libtest selects for each run, once nextest
+    lists the binaries cargo built and selects their tests as libtest does."""
     messages = output(["cargo", "test", "--locked", "--tests", "--no-run", "--message-format", "json"])
     binaries = {Path(item["executable"]).resolve()
                 for line in messages.splitlines() if line.startswith("{")
@@ -94,6 +100,9 @@ def record(args):
 
 
 def run(args):
+    """run the tests recorded for this run once nextest selects the same, keep its selection,
+    snapshot references and JUnit report in target/ci/<scope>, and return nextest's exit code.
+    a run that passed without running each of them, or that changed Cargo.lock, fails."""
     scope = "disk" if args.disk else "chmod" if args.chmod else "aliases" if args.aliases else "native"
     expected = set(json.loads((RESULTS / "selection.json").read_text(encoding="utf-8"))[scope])
     filters = []

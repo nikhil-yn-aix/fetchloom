@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_referenced(expected, reports):
+    """raise ValueError unless the runs' ``reports`` together name every snapshot in ``expected``
+    and no other."""
     if not expected or not reports:
         raise ValueError("snapshot inventory or reference reports are missing")
     referenced = set().union(*reports)

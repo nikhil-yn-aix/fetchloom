@@ -8,12 +8,15 @@ from ci_journey import ROOT, require
 
 
 def executed(report, root, name):
+    """whether ``report`` has one record of ``name`` under ``root``, and it ran a function."""
     path = (root / name).resolve()
     files = [file for file in report['files'] if Path(file['filename']).resolve() == path]
     return len(files) == 1 and files[0]['summary']['functions']['covered'] > 0
 
 
 def summary(document, root):
+    """the markdown table of an LLVM coverage export's totals, refused unless the CLI's child
+    processes and the library they link were measured."""
     require(document['type'] == 'llvm.coverage.json.export', 'not an LLVM coverage export')
     reports = document['data']
     require(len(reports) == 1, 'expected one coverage report')

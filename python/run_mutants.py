@@ -11,6 +11,7 @@ TESTS = {'lib': '--lib', 'all': '--all-targets'}
 
 
 def source_file(root, requested):
+    """``requested`` as a path from ``root``, refused unless it is one rust file under src."""
     path = (root / requested).resolve()
     require(path.is_relative_to((root / 'src').resolve()) and path.suffix == '.rs' and path.is_file(),
             'mutation scope must name one existing Rust file under src/')
@@ -18,6 +19,8 @@ def source_file(root, requested):
 
 
 def selection(file, text):
+    """the first slice of at most ten of the mutants ``text`` lists, and that slice as
+    cargo-mutants' ``--shard`` names it, refused unless each is ``file``'s own, once and plain."""
     names = [name for name in text.splitlines() if name.strip()]
     require(names and len(names) == len(set(names))
             and all(name.startswith(file + ':') and '\x1b' not in name for name in names),
@@ -28,11 +31,13 @@ def selection(file, text):
 
 
 def require_selection(expected, actual):
+    """refuse ``actual`` unless it names each mutant ``expected`` names, once."""
     require(len(actual) == len(set(actual)) and set(actual) == set(expected),
             'the mutation inventory differs from the announced selection')
 
 
 def mutation_run(command, tests, output):
+    """the cargo-mutants run that judges each mutant by ``tests``, after the unmutated baseline."""
     # no fixed --timeout, which would cap the unmutated baseline too; the multiplier scales from it
     return [*command, '--baseline', 'run', '--jobs', '2', '--timeout-multiplier', '3',
             '--build-timeout', '600', '--no-shuffle', '--test-tool', 'cargo',
