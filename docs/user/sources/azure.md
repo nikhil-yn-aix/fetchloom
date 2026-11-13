@@ -24,6 +24,7 @@ $ fetchloom add azure:azureopendatastorage/mnist/t10k-labels-idx1-ubyte.gz --as 
 Downloading mnist-labels/t10k-labels-idx1-ubyte.gz · 4.4 KiB
  Downloaded 1 file · 4.4 KiB in 184 ms
       Added mnist-labels, its files are in data/mnist-labels
+  hint: scripts can find it with `fetchloom path mnist-labels`
 ```
 
 ## listing
