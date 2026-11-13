@@ -1,6 +1,5 @@
-//! a project copied with its data folder to a machine whose cache never held its files: what the
-//! data folder holds at the paths data.lock places is taken back into the cache, after a check of
-//! its bytes, so push, build and sync need no request and no source.
+//! a project copied with its data folder to a machine whose cache never held its files: the data
+//! folder's bytes, once checked, go back into the cache, so push, build and sync need no request.
 
 use std::fs;
 use std::io::Write as _;
@@ -94,9 +93,8 @@ fn unlinked(path: &Path, cache: &Path) -> Result {
     Ok(())
 }
 
-/// push copies what the cache lacks from the data folder into the cache, then into the mirror,
-/// asking nothing of the source and leaving the data folder's files as they were. its dry run
-/// says so and writes nothing.
+/// the bytes go through the cache to the mirror, leaving the data folder's files as they were,
+/// and the dry run says so and writes nothing.
 #[test]
 fn a_copied_project_pushes_from_its_data_folder_with_no_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -164,7 +162,6 @@ fn an_offline_check_of_a_copied_project_reads_its_data_folder() -> Result {
     Ok(())
 }
 
-/// a recipe never built here runs offline on what the data folder holds of its input.
 #[test]
 fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -186,8 +183,7 @@ fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Re
     Ok(())
 }
 
-/// a file of the pinned size holding other bytes is never taken or changed, so the push
-/// downloads the pinned bytes, as it would with no file there.
+/// the push leaves the edit as it is and downloads the pinned bytes, as with no file there.
 #[test]
 fn an_edit_of_the_same_size_is_never_taken() -> Result {
     let sandbox = Sandbox::new()?;
@@ -214,10 +210,8 @@ fn an_edit_of_the_same_size_is_never_taken() -> Result {
     Ok(())
 }
 
-/// `cp -a` keeps a hardlink between two names of one file, so an edit made in place through one
-/// name is the other's too, and neither holds the pinned bytes, though both have their size: the
-/// dry run promises no copy and names the download instead, and the push downloads the pinned
-/// bytes, changing neither name.
+/// `cp -a` keeps a hardlink, so an edit in place through one name reaches the other; the dry run
+/// names the download instead, and the push changes neither name.
 #[test]
 fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
     let sandbox = Sandbox::new()?;
@@ -264,9 +258,8 @@ fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
     Ok(())
 }
 
-/// a file the cache lacks whose bytes the data folder holds at another path is placed from
-/// there, before any mirror is asked, so a result needs no build: status lists it as missing
-/// rather than unbuilt, a dry run would place it, and sync places it.
+/// the data folder is asked before any mirror, and a result found there needs no build: status
+/// calls it missing, not unbuilt, and a dry run and sync place it offline.
 #[test]
 fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -307,9 +300,8 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     Ok(())
 }
 
-/// a project whose dataset is a zip, settled, then copied to `two` with an empty cache, which
-/// knows neither the zip nor what it holds, and the server that serves the zip `downloads`
-/// times, the add's included.
+/// a settled project of one zip copied to `two` with an empty cache, which knows neither the zip
+/// nor what it holds, and the server that serves the zip `downloads` times, the add's included.
 fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, PathBuf)> {
     let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let responses = (0..downloads).map(|_| file(&zip, "\"z1\"")).collect();
@@ -321,10 +313,8 @@ fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, P
     Ok((server, two, cache))
 }
 
-/// a copy whose cache has no list of what its zip holds cannot tell the zip's files from others:
-/// status says they are not checked, never that the zip, which no sync places, is missing, nor
-/// that the files it placed are extra, and writes nothing. a file of the person's own beside them
-/// is still extra.
+/// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
+/// writes nothing; a file of the person's own beside them is still extra.
 #[test]
 fn status_of_a_copied_zip_says_its_files_are_not_checked() -> Result {
     let sandbox = Sandbox::new()?;
@@ -370,9 +360,8 @@ fn status_of_a_copied_zip_says_its_files_are_not_checked() -> Result {
     Ok(())
 }
 
-/// push downloads the pinned zip the copy's cache lacks, as a sync would, says so, and pushes
-/// what it holds with their list, so a fresh clone then syncs from the mirror alone. no file or
-/// pin of the copy changes.
+/// the zip's files go to the mirror with their list, so a fresh clone syncs from it alone, and no
+/// file or pin of the copy changes.
 #[test]
 fn a_copied_project_pushes_once_it_fetched_what_its_cache_lacks() -> Result {
     let sandbox = Sandbox::new()?;
@@ -413,9 +402,8 @@ fn a_copied_project_pushes_once_it_fetched_what_its_cache_lacks() -> Result {
     Ok(())
 }
 
-/// offline, push cannot fetch what its cache lacks, so it stops before writing anything, naming
-/// the zip, with help that works on the next push: run it online. a sync would have nothing to
-/// do here, so it is never the fix.
+/// the push stops before writing anything, naming the zip; a sync would have nothing to do here,
+/// so it is never the fix.
 #[test]
 fn an_offline_push_says_to_run_it_online() -> Result {
     let sandbox = Sandbox::new()?;
@@ -443,9 +431,8 @@ fn an_offline_push_says_to_run_it_online() -> Result {
     Ok(())
 }
 
-/// a recipe reads iris, which `place = false` keeps out of the data folder, so a copy of the
-/// project to another cache has iris nowhere on this machine, and no sync fetches it. `push
-/// --inputs` downloads it from its source and pushes it with the result the data folder holds.
+/// iris has `place = false`, so a copy has it nowhere on this machine; `push --inputs` downloads
+/// it and pushes it with the result the data folder holds.
 #[test]
 fn push_inputs_fetches_an_input_no_sync_places() -> Result {
     let sandbox = Sandbox::new()?;
@@ -478,7 +465,7 @@ fn push_inputs_fetches_an_input_no_sync_places() -> Result {
     Ok(())
 }
 
-/// the files below `folder`, in every folder inside it, or none when it is not there.
+/// how many files are below `folder` at any depth, or 0 when it is not there.
 fn files_below(folder: &Path) -> Result<usize> {
     let Ok(entries) = fs::read_dir(folder) else {
         return Ok(0);
@@ -495,9 +482,8 @@ fn files_below(folder: &Path) -> Result<usize> {
     Ok(count)
 }
 
-/// push asks about data whose source did not say who may read it before it downloads what its
-/// cache lacks, so a push nobody says yes to costs no request and leaves the cache with nothing
-/// new.
+/// the question about data of unknown access comes first, so a push nobody says yes to costs no
+/// request and adds nothing to the cache.
 #[test]
 fn a_push_asks_before_it_downloads_anything() -> Result {
     let sandbox = Sandbox::new()?;

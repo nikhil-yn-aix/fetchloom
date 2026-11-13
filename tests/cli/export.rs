@@ -10,7 +10,6 @@ const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const A: &[u8] = b"a\n";
 const C: &[u8] = b"c\n";
 
-/// a zip of `pack/a.csv` and `pack/b/c.txt`.
 fn pack() -> Result<Vec<u8>> {
     zip_of(&[("pack/a.csv", A), ("pack/b/c.txt", C)])
 }
@@ -25,7 +24,6 @@ fn server() -> Result<(Routes, Vec<u8>)> {
     Ok((routes, zip))
 }
 
-/// adds each of `files` from `routes` to the project in the sandbox's work folder.
 fn added(sandbox: &Sandbox, routes: &Routes, files: &[&str]) -> Result {
     for name in files {
         let added = sandbox.run(&["add", &format!("{}/{name}", routes.url)])?;
@@ -95,8 +93,7 @@ fn links_and_aria2_name_each_downloaded_file_and_never_an_archive_member() -> Re
     Ok(())
 }
 
-/// `aria2c -d data` puts each file in the folder `path` gives its dataset, as sync does, so the
-/// data folder can be fetched again without fetchloom.
+/// this lets `aria2c -d data` fetch the data folder again without fetchloom.
 #[test]
 fn aria2_puts_each_file_in_the_folder_its_dataset_is_placed_in() -> Result {
     let sandbox = Sandbox::new()?;
@@ -162,8 +159,7 @@ fn json_lists_placed_files_and_downloaded_ones_with_their_hashes() -> Result {
     Ok(())
 }
 
-/// a clone whose cache never unpacked an archive cannot list its files. text refuses rather than
-/// leave them out, json names the archive, and links need no unpacking.
+/// text refuses rather than leave the archive's files out, and links need no unpacking.
 #[test]
 fn an_archive_never_unpacked_here_stops_text_and_is_named_in_json() -> Result {
     let sandbox = Sandbox::new()?;
@@ -231,9 +227,8 @@ fn a_dataset_not_pinned_yet_stops_text_and_is_named_in_json() -> Result {
     Ok(())
 }
 
-/// files imported from a folder have no link, since no source holds them. the links and aria2
-/// forms list the rest and say once how many files they leave out and why, and `--json` names
-/// those files under `no_link`.
+/// no source holds imported files, so they have no link; the warning counts them once, and
+/// `--json` names them under `no_link`.
 #[test]
 fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     let sandbox = Sandbox::new()?;
@@ -284,9 +279,8 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     Ok(())
 }
 
-/// nothing downloads a recipe's result, so a list of links has none of its files, and a dataset
-/// with `place = false` has no file in the data folder to check. a form that leaves a dataset out
-/// says so on one line and names it with why under `left_out`; an empty answer is still a success.
+/// links leave out a recipe's result, which nothing downloads, and checksums a dataset with
+/// `place = false`; each gets one warning line and a `left_out` entry, and an empty list passes.
 #[test]
 fn a_form_names_each_dataset_it_leaves_out() -> Result {
     let sandbox = Sandbox::new()?;
@@ -329,9 +323,8 @@ fn a_form_names_each_dataset_it_leaves_out() -> Result {
     Ok(())
 }
 
-/// fetchloom never pins a link one line cannot hold, so one in data.lock was written by hand or by
-/// someone else, and its line break could add an option to aria2's input. export writes no such
-/// link, and never shows it. a link with a login or a secret stops sooner, as data.lock is read.
+/// fetchloom never pins such a link, so one was edited in, and its line break could add an option
+/// to aria2's input; no output shows it. a link with a secret stops sooner, as data.lock is read.
 #[test]
 fn a_link_one_line_cannot_hold_is_never_written() -> Result {
     let sandbox = Sandbox::new()?;
@@ -437,9 +430,8 @@ fn output_writes_the_file_whole_and_replaces_one_only_with_force() -> Result {
     Ok(())
 }
 
-/// a ctrl-c once `export -o` has checked its inventory and marked its work as finishing lets it
-/// write the file and end with its closing line, exit 0, rather than say it stops and then that it
-/// stopped, with the file written.
+/// the mark comes once the inventory is checked, and the export ends with its closing line and
+/// exit 0, never saying it stops while it writes the file anyway.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_past_the_exports_mark_lets_it_write_the_file() -> Result {
