@@ -152,6 +152,19 @@ impl State {
         Ok((State::parse_only(&bytes, keep), reading.bytes))
     }
 
+    /// [`State::parse`] of `file`, read a block at a time through its index, so the document is
+    /// never held whole, with how many bytes it read; a state whose index does not fit is read
+    /// whole.
+    pub(crate) fn read_whole(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
+        let mut reading = Reading { file, bytes: 0 };
+        match by_blocks(&mut reading) {
+            Ok(state) => return Ok((state, reading.bytes)),
+            Err(reason) => tracing::debug!(reason, "the state is read whole"),
+        }
+        let bytes = reading.rest(0)?;
+        Ok((State::parse(&bytes), reading.bytes))
+    }
+
     /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
     /// recipe's pin, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
@@ -389,53 +402,15 @@ fn indexed(
     folders: &[String],
     keep: &dyn Fn(&str) -> bool,
 ) -> Result<State, &'static str> {
-    let mut head = Vec::new();
-    reading
-        .append(0, START as u64, &mut head)
-        .map_err(|_| "it is shorter than its header")?;
-    let at = records_end(&head).ok_or("its header is not this version's")?;
-    let mut tail = reading
-        .rest(at)
-        .map_err(|_| "what follows its records cannot be read")?;
-    // the comma that ends the records opens what follows them as an object of its own
-    match tail.first_mut() {
-        Some(comma @ b',') => *comma = b'{',
-        _ => return Err("its records do not end where its header says"),
-    }
     let Tail {
         synced,
         candidates,
         blocks,
-    } = serde_json::from_slice(&tail).map_err(|_| "what follows its records is not its index")?;
-    drop(tail);
-    if !chained(&blocks, at) {
-        return Err("its blocks do not cover its records");
-    }
+    } = index(reading)?;
     let mut files = BTreeMap::new();
+    let mut bytes = Vec::new();
     for run in runs(&blocks, folders) {
-        let (first, start, _) = &blocks[run.start];
-        let end = blocks[run.end - 1].2;
-        let next = blocks.get(run.end).map(|(first, ..)| first.as_str());
-        // the bytes right after the run, read along with it: the next block's first path, or
-        // the end of the records
-        let after = match next {
-            Some(next) => {
-                let mut key = vec![b','];
-                serde_json::to_writer(&mut key, next).map_err(|_| "a path cannot be written")?;
-                key.push(b':');
-                key
-            }
-            None => b"}".to_vec(),
-        };
-        let mut bytes = vec![b'{'];
-        reading
-            .append(*start, end - start + after.len() as u64, &mut bytes)
-            .map_err(|_| "a block cannot be read")?;
-        if !bytes.ends_with(&after) {
-            return Err("a block does not end where its index says");
-        }
-        bytes.truncate(bytes.len() - after.len());
-        bytes.push(b'}');
+        let (first, next) = framed(reading, &blocks, run, &mut bytes)?;
         let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
         let run = Run { first, next, keep };
         let kept = serde::de::DeserializeSeed::deserialize(run, &mut deserializer)
@@ -449,6 +424,94 @@ fn indexed(
         synced,
         candidates,
     })
+}
+
+/// every record, read a block at a time through the state's index into one list in path order,
+/// which builds the map at once, or why it declines as [`indexed`] does.
+fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'static str> {
+    let Tail {
+        synced,
+        candidates,
+        blocks,
+    } = index(reading)?;
+    let mut records = Vec::new();
+    let mut bytes = Vec::new();
+    for at in 0..blocks.len() {
+        let (first, next) = framed(reading, &blocks, at..at + 1, &mut bytes)?;
+        let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+        let block = OneBlock {
+            first,
+            next,
+            into: &mut records,
+        };
+        serde::de::DeserializeSeed::deserialize(block, &mut deserializer)
+            .and_then(|()| deserializer.end())
+            .map_err(|_| "a block does not hold the paths its index says")?;
+    }
+    Ok(State {
+        version: VERSION,
+        files: records.into_iter().collect(),
+        synced,
+        candidates,
+    })
+}
+
+/// what follows a state's records, once its blocks are found to cover them.
+fn index(reading: &mut Reading<'_, impl Read + Seek>) -> Result<Tail, &'static str> {
+    let mut head = Vec::new();
+    reading
+        .append(0, START as u64, &mut head)
+        .map_err(|_| "it is shorter than its header")?;
+    let at = records_end(&head).ok_or("its header is not this version's")?;
+    let mut tail = reading
+        .rest(at)
+        .map_err(|_| "what follows its records cannot be read")?;
+    // the comma that ends the records opens what follows them as an object of its own
+    match tail.first_mut() {
+        Some(comma @ b',') => *comma = b'{',
+        _ => return Err("its records do not end where its header says"),
+    }
+    let found: Tail =
+        serde_json::from_slice(&tail).map_err(|_| "what follows its records is not its index")?;
+    if !chained(&found.blocks, at) {
+        return Err("its blocks do not cover its records");
+    }
+    Ok(found)
+}
+
+/// the records of the blocks `run` read into `bytes` as one json object, with the first path of
+/// the run and of the block after it.
+fn framed<'b>(
+    reading: &mut Reading<'_, impl Read + Seek>,
+    blocks: &'b [Block],
+    run: Range<usize>,
+    bytes: &mut Vec<u8>,
+) -> Result<(&'b str, Option<&'b str>), &'static str> {
+    let (first, start, _) = &blocks[run.start];
+    let end = blocks[run.end - 1].2;
+    let next = blocks.get(run.end).map(|(first, ..)| first.as_str());
+    // the bytes right after the run, read along with it: the next block's first path, or the end
+    // of the records
+    let after = match next {
+        Some(next) => {
+            let mut key = vec![b','];
+            serde_json::to_writer(&mut key, next).map_err(|_| "a path cannot be written")?;
+            key.push(b':');
+            key
+        }
+        None => b"}".to_vec(),
+    };
+    bytes.clear();
+    bytes.push(b'{');
+    reading
+        .append(*start, end - start + after.len() as u64, bytes)
+        .map_err(|_| "a block cannot be read")?;
+    if !bytes.ends_with(&after) {
+        return Err("a block does not end where its index says");
+    }
+    bytes.truncate(bytes.len() - after.len());
+    bytes.push(b'}');
+    Ok((first, next))
 }
 
 /// the number in a state's first bytes: where its records end, padded with spaces.
@@ -561,6 +624,50 @@ impl<'de> serde::de::Visitor<'de> for Run<'_> {
             return Err(A::Error::custom("an empty block"));
         }
         Ok(records)
+    }
+}
+
+/// the records of one block, checked against the index as [`Run`] checks them, pushed onto `into`
+/// in path order without a copy of each path.
+struct OneBlock<'a, 'v> {
+    first: &'a str,
+    next: Option<&'a str>,
+    into: &'v mut Vec<(String, Placed)>,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for OneBlock<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for OneBlock<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a block of fetchloom's state")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        use serde::de::Error;
+        let start = self.into.len();
+        while let Some(path) = map.next_key::<String>()? {
+            let rising = match self.into[start..].last() {
+                None => path == self.first,
+                Some((last, _)) => *last < path,
+            };
+            if !rising || self.next.is_some_and(|next| path.as_str() >= next) {
+                return Err(A::Error::custom("a path outside its block"));
+            }
+            let placed = map.next_value()?;
+            self.into.push((path, placed));
+        }
+        if self.into.len() == start {
+            return Err(A::Error::custom("an empty block"));
+        }
+        Ok(())
     }
 }
 
@@ -916,12 +1023,20 @@ mod tests {
         }
     }
 
-    /// a read within folders goes through the index, at any block size.
+    /// a read within folders goes through the index, at any block size, and so does a read of
+    /// every record, a block at a time.
     #[test]
     fn a_read_within_folders_answers_as_a_whole_read() {
         let state = crowded();
         for block in [1, 300, 4096, usize::MAX] {
             let bytes = state.render_in(block);
+            let mut file = io::Cursor::new(&bytes);
+            let mut reading = Reading {
+                file: &mut file,
+                bytes: 0,
+            };
+            let read = by_blocks(&mut reading).expect("its index fits");
+            assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");
@@ -1021,6 +1136,12 @@ mod tests {
             .collect();
         sets.push(vec![first]);
         for (number, state) in states.iter().enumerate() {
+            let (read, _) = State::read_whole(&mut io::Cursor::new(state)).unwrap();
+            assert_same(
+                &read,
+                &State::parse(state),
+                &format!("change {number}, every block"),
+            );
             for folders in &sets {
                 let keep = |path: &str| inside(path, folders);
                 let (read, _) =

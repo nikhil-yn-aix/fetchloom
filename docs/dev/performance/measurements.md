@@ -77,6 +77,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | a whole dataset a command hands over, and a draft, found through sets while drafting | `add -i` of 40,000 small links 1.013 [0.985, 1.017] | dropped, no win | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | an unplaced dataset's files told through a set of the unplaced | status with 40,000 datasets set to `place = false`: 4.42 to 1.38 s, 0.315 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | each blocker listed once through a set, not a search of those listed | status with 40,000 folders where files belong: 5.04 to 1.54 s, with the scans below already gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
+| project state | a whole read of the state goes through its index a block at a time into one list, which builds the map at once, not the whole document held and parsed into a map one record at a time | settled sync of 100,000 files 0.839 [0.817, 0.849], peak memory 0.834; status 0.838, peak 0.904; `status --verify` 0.882; 10,000 files 0.899 and 0.894, a no-op's peak 2 MiB more | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
 | placement | whether a folder in a file's way holds anything, from the folders the scan found something in | the same status: 7.26 to 1.54 s, with the other scans gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | what removing a run's unneeded files frees, worked out once for every blocker | 40,000 folders holding a file where files belong: status 10.45 to 1.75 s, `sync --dry-run` 10.22 to 1.55 s | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | a changed copy's name checked against a set of the target paths | `sync --verify --dry-run` of 10,000 files edited through other links beside 100,000: 0.403 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
@@ -1553,3 +1554,17 @@ once a sync has placed an archive's files, it drops the archive's own bytes unle
 | `--json cache` beside 100,000 placed files | 12 | 0.834 [0.830, 0.839] | 1.000 [0.992, 1.013] | 0.867 | 1.000 [0.999, 1.000] |
 
 the base medians were 2.094 s and 102.5 MiB, 0.297 s and 132.8 MiB, 0.356 s and 125.1 MiB, 0.811 s and 146.9 MiB; the cache report's row comes from an earlier build of the same switch. the members' checks on the workers cost the memory: checked on one thread the three syncs gave 0.115, 1.015 and 1.019 at 0.98 to 1.01 of the peak, on two workers 0.098, 0.876 and 0.898 at 0.99 to 1.01. kept on the run's workers, `FETCHLOOM_THREADS` capping them, for at most 5.6 MiB more at a peak of 133 MiB.
+
+### reading the whole state
+
+a status or a settled sync reads the project's whole state, about 247 bytes a record: at 100,000 files 24.7 MB read into one buffer and parsed into a map one record at a time, some 0.13 s of a 0.40 s no-op. the state already holds an index of its blocks of about 64 KiB for [reads within folders](#an-indexed-project-state-2026-11-12). a whole read now goes through it too: one block at a time into one reused buffer, each record checked against the index and pushed onto one list in path order, and the map built from the sorted list at once. a state whose index does not fit is read whole, as before. a first build that read each block into a map of its own and merged them was 7 to 11% slower than the base.
+
+| case | pairs | wall | a/a wall | cpu | peak memory |
+|---|---:|---|---|---|---|
+| settled sync, 100,000 files | 12 | 0.839 [0.817, 0.849] | 0.997 [0.983, 1.008] | 0.889 | 0.834 [0.779, 0.838] |
+| `--json status`, 100,000 files | 12 | 0.838 [0.827, 0.852] | 1.001 [0.982, 1.024] | 0.898 | 0.904 [0.897, 0.916] |
+| `--json status --verify`, 100,000 files | 12 | 0.882 [0.876, 0.892] | 1.001 [0.995, 1.014] | 0.965 | 0.970 [0.968, 0.974] |
+| settled sync, 10,000 files | 12 | 0.899 [0.882, 0.903] | 1.009 [0.996, 1.013] | 1.000 | 1.054 [1.041, 1.061] |
+| `--json status`, 10,000 files | 12 | 0.894 [0.890, 0.898] | 0.999 [0.988, 1.010] | 0.926 | 0.953 [0.949, 0.959] |
+
+the base medians were 0.400 s and 99.1 MiB, 0.399 s and 94.9 MiB, 0.547 s and 133.3 MiB, 0.041 s and 37.1 MiB, 0.048 s and 40.6 MiB. kept: every interval at 100,000 files clears the bar and the a/a spread, and so do the 10,000-file status and the no-op's median; the no-op's peak at 10,000 files is 2 MiB more.

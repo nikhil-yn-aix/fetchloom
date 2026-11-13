@@ -90,7 +90,7 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 | `src/project/lock/lists.rs` | the compressed file lists in `data.lock.d`, never a link, for sources past 50,000 files and every recipe result, each typed by its header line | `Listed`, `read` | `Row`, `texts`, `listed`, `compress`, `is_part`, `inline`, `folder` |
 | `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
 | `src/project/lock/merge/markers.rs` | each side, and the base, read back from git's conflict lines without the tables a conflict cuts, beside the sides whole from git | `split` | `Sides`, `first` |
-| `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`), the last sync's inputs (`Synced`), and each rebuild of a recipe that differs from its pin (`State.candidates`) | `State`, `Placed` | `nanos`, `render`, `read_within` |
+| `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`), the last sync's inputs (`Synced`), and each rebuild of a recipe that differs from its pin (`State.candidates`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |
 | `src/project/git.rs` | git found and run as a bounded reader with no shell: each side of an unfinished merge whole, with the base, from its index or the commits being merged, and the files git tracks | `stages`, `known` | `find`, `Stages`, `committed`, `tracked`, `Known` |
 
 ## recipe and build

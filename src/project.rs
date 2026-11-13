@@ -319,7 +319,7 @@ impl Project {
     /// the state, and when it was written in nanoseconds since 1970, like the times it records. a
     /// missing or unreadable state is empty.
     pub(crate) fn state(&self) -> (State, u64) {
-        self.state_by(State::parse)
+        self.state_read(State::read_whole)
     }
 
     /// [`Project::state`] with only the records at or below `folders` that `keep` accepts. `keep`
@@ -329,37 +329,24 @@ impl Project {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> (State, u64) {
+        self.state_read(|file| State::read_within(file, folders, keep))
+    }
+
+    fn state_read(
+        &self,
+        read: impl FnOnce(&mut fs::File) -> io::Result<(State, u64)>,
+    ) -> (State, u64) {
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
         // a planted link to a device or a fifo would never end; it reads as no state at all
         let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
             |mut file| {
                 let written = Look::of(&file.metadata()?).modified;
-                let (state, bytes) = State::read_within(&mut file, folders, keep)?;
+                let (state, bytes) = read(&mut file)?;
                 span.record("bytes", bytes);
                 Ok((state, written))
             },
         );
         read.unwrap_or_default()
-    }
-
-    fn state_by(&self, parse: impl FnOnce(&[u8]) -> State) -> (State, u64) {
-        let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        // a planted link to a device or a fifo would never end; it reads as no state at all
-        let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
-            |mut file| {
-                let written = Look::of(&file.metadata()?).modified;
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes)?;
-                Ok((bytes, written))
-            },
-        );
-        match read {
-            Ok((bytes, written)) => {
-                span.record("bytes", bytes.len());
-                (parse(&bytes), written)
-            }
-            Err(_) => (State::default(), 0),
-        }
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.
