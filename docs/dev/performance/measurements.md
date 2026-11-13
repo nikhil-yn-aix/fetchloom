@@ -127,6 +127,7 @@ every change measured with the current harness, one row each: what it gained whe
 | process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
 | process | none: the release candidate 7daf4747 against a8f9dad7 on commands of a few milliseconds | glibc `help` 1.030 and 1.036 [1.032, 1.041] in a second batch, `--version` 1.020 and 1.016 [1.011, 1.021], a settled sync of 3 files 1.010 and 1.017 [1.011, 1.022], 0.04 to 0.1 ms; a copy of a8f9dad7 against itself 1.000 to 1.005; musl flat | recorded, not chased: glibc only, 4 to 8% more startup instructions in a binary 1.5 MB larger | [tiny commands at the release](#tiny-commands-at-the-release-candidate-2026-11-13) |
 | process | none: the pinnacle pass's four kept changes together, its last commit against 8580a81e | cold sync of 10,000 small files 0.881, of 100,000 0.906; zip 0.804, tar.gz 0.830, a zip 20 projects share 0.086; no-op of 100,000 files 0.823, status 0.839, `status --verify` 0.895; `cache verify` 0.377, cold on ext4 0.793; cache report 0.399; `add`, `get`, `path`, push and a few large files within 0.97 to 1.02; peak memory 0.84 to 1.09 | recorded | [the whole branch](#the-whole-branch) |
+| process | none: part four's changes together, 6a580e98 against f03ffccd, on the release recheck's cases | musl: the 3-file sync 0.994, `version` 0.990, `help` 0.996, drop 0.995, merge 1.011 beside an a/a arm at 1.007, placing 40,000 datasets 1.011 beside 1.004; against the a/a arm directly merge 1.002 and placing 1.003; glibc: the 3-file sync 1.006 beside 1.005, `version` 0.994, `help` 0.999; peak memory 0.992 to 1.016 | recorded | [pinnacle pass](#the-release-recheck-after-part-four) |
 
 ## final benchmark on the linux lab, 2026-11-09
 
@@ -1812,3 +1813,21 @@ the 30,000 and 50,000-file projects are three and five 10,000-file listings. up 
 | status, 1,000,000 files | 0.842 [0.826, 0.846] | 1.002 [0.994, 1.005] | 1.059 [1.045, 1.075], 567.2 to 602.6 MiB | 1.003 [0.995, 1.006] |
 
 below 16 MiB the survey takes the parent's path, the same reads in the same order. the 50,000-file no-op's 1.6 to 2.7% is not work: `perf stat` over 15 runs of each build twice counted 1,027.94 million user instructions against 1,027.71 million, 0.02% more, and cycles of 371 to 379 million against 369 to 383 million. kept: 100,000 files and more 0.79 to 0.84 of their time, with 2.0 to 3.7 MiB more peak memory at 100,000 files and 35 to 40 MiB, 6 to 7%, at 1,000,000. `resources = lean` keeps the read before the walk at any size, since lean spends memory before time; a run there takes the parent's path, as below 16 MiB, and starts no thread, which a test of the decision over sizes, worker caps and levels holds.
+
+### the release recheck after part four
+
+`bench/recheck.py` with its own fixtures for each arm on tmpfs, release builds of 6a580e98, the last of part four, against f03ffccd, the commit before it, musl and glibc, a byte-identical copy of f03ffccd's at another path as the a/a arm in the same rounds, the measured commands on cores 12–23 under the measure lock, beside 4 busy training processes as above:
+
+| case | libc | pairs | base | against the base | a/a arm | against the a/a arm | peak memory | a/a peak memory |
+|---|---|---:|---|---|---|---|---|---|
+| the 3-file settled sync | musl | 100 | 4.2 ms | 0.994 [0.986, 1.008] | 1.002 [0.991, 1.008] | 0.997 [0.991, 1.002] | 0.998 | 0.999 |
+| `version` | musl | 100 | 2.6 ms | 0.990 [0.984, 1.004] | 0.997 [0.981, 1.007] | 0.994 [0.984, 1.006] | 0.996 | 1.000 |
+| `help` | musl | 100 | 2.8 ms | 0.996 [0.982, 1.008] | 0.988 [0.975, 1.006] | 0.998 [0.985, 1.006] | 1.002 [1.000, 1.006] | 1.000 [0.998, 1.000] |
+| placing 40,000 datasets | musl | 10 | 1,099.8 ms | 1.011 [1.003, 1.013] | 1.004 [0.998, 1.013] | 1.003 [0.997, 1.011] | 1.016 [1.000, 1.050] | 1.027 [0.973, 1.036] |
+| merge across 1,000 datasets | musl | 15 | 98.8 ms | 1.011 [1.008, 1.018] | 1.007 [1.001, 1.012] | 1.002 [0.999, 1.015] | 1.001 | 1.001 |
+| drop across 1,000 datasets | musl | 15 | 45.8 ms | 0.995 [0.987, 1.000] | 1.005 [0.999, 1.009] | 0.989 [0.983, 0.995] | 0.999 | 1.000 |
+| the 3-file settled sync | glibc | 100 | 4.3 ms | 1.006 [1.000, 1.010] | 1.005 [1.001, 1.014] | 0.999 [0.991, 1.005] | 0.997 | 1.005 |
+| `version` | glibc | 100 | 2.8 ms | 0.994 [0.990, 1.002] | 0.995 [0.989, 1.001] | 1.001 [0.995, 1.005] | 1.001 | 1.000 |
+| `help` | glibc | 100 | 3.1 ms | 0.999 [0.991, 1.001] | 1.006 [1.001, 1.013] | 0.991 [0.983, 0.996] | 0.992 | 1.001 |
+
+"against the a/a arm" is each round's candidate over the same round's copy of the base, with a bootstrap interval of the median. nothing is slower than its a/a arm: merge and placing moved with theirs, which a copy of the base cannot do by its code, and against it they are 1.002 and 1.003, intervals across 1. none of part four's changes is on those paths: under strace the 40,000-dataset sync looks at `urls/` once, as every run that opens the cache does, and reads no record, its state missing before the run and 9.6 MB after; merge touches neither.
