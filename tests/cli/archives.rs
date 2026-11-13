@@ -1491,6 +1491,27 @@ mod split {
         Ok(())
     }
 
+    /// dropping every file of an archive split into parts leaves out every part, not only the
+    /// first, so data.lock pins none of them, while the dataset keeps its other files.
+    #[test]
+    fn dropping_every_file_of_a_split_archive_leaves_out_every_part() -> Result {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("scans")?;
+        cut(&folder, &scans_zip()?, &["scans.zip.001", "scans.zip.002"])?;
+        fs::write(folder.join("notes.txt"), "n\n")?;
+        ok(&sandbox.run(&["add", "../scans"])?)?;
+        ok(&sandbox.run(&["drop", "data/scans/scans"])?)?;
+        assert_eq!(
+            fs::read_to_string(sandbox.work().join("data.toml"))?,
+            "[datasets.scans]\nref = \"local\"\nexclude = [\n  \"scans.zip.001\",\n  \"scans.zip.002\",\n]\n"
+        );
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        assert!(!lock.contains("scans.zip"), "{lock}");
+        assert_eq!(files_in(&sandbox.work().join("data/scans"))?, ["notes.txt"]);
+        ok(&sandbox.run(&["sync", "--locked"])?)?;
+        Ok(())
+    }
+
     #[test]
     fn a_missing_part_is_named_and_the_others_stay_as_they_are() -> Result {
         let sandbox = Sandbox::new()?;
