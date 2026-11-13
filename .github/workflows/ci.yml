@@ -123,6 +123,9 @@ jobs:
       - name: build the site and agent exports
         if: always()
         run: uv run --locked --project docs-site python python/build_site.py
+      - name: check the addresses fetchloom prints, heading ids and requests
+        if: always()
+        run: python3 python/check_site.py site
       - name: check rendered links and anchors
         if: always()
         run: |

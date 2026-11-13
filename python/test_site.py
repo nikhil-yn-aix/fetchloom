@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import build_site
 from build_site import add_mermaid, add_wordmark, export_agents, page_url, redirects, write_redirects
+import check_site
 
 PAGES = "https://nikhil-yn-aix.github.io/fetchloom/"
 
@@ -195,6 +196,79 @@ class Build(unittest.TestCase):
         self.assertEqual(steps, ["clean", "zensical", *names])
         run.assert_called_once_with([sys.executable, "-m", "zensical", "build", "--clean", "--strict"],
                                     cwd=build_site.ROOT, check=True)
+
+
+class BuiltSite(Folder):
+    """the checks python/check_site.py runs on a built site, on small sites."""
+
+    def page(self, site, path, body="", head=""):
+        return self.write(site / path, f"<html><head>{head}</head><body>{body}</body></html>")
+
+    def moved(self, site, address, target):
+        self.write(site / address, f'<link rel="canonical" href="x"><meta http-equiv="refresh" content="0; url={target}">')
+
+    def test_the_addresses_fetchloom_prints_are_found_in_its_sources(self):
+        root = self.folder()
+        self.write(root / "docs/user/commands/add.md")
+        self.write(root / "docs/user/commands/sync.md")
+        self.write(root / "docs/user/commands/README.md")
+        self.write(root / "src/cli/args.rs", 'const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";\n'
+                                             'format!("{SITE}/user/commands/README.html"); format!("{SITE}/user/commands/{name}.html");')
+        self.write(root / "src/source/gitlab.rs", 'const SITE: &str = "https://gitlab.com";\nformat!("{SITE}/api/v4/projects")')
+        self.write(root / "src/place.rs", '"see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html".to_owned()')
+        self.write(root / "tests/cli/snapshots/help.snap",
+                   "docs: https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets.\n")
+        self.assertEqual(check_site.printed(root), {
+            "https://nikhil-yn-aix.github.io/fetchloom",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/commands/README.html",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/commands/add.html",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/commands/sync.html",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets",
+        })
+
+    def test_an_address_reaches_its_page_and_heading_through_a_moved_page(self):
+        site = self.folder()
+        self.page(site, "index.html")
+        self.page(site, "user/hpc/index.html", '<h2 id="scratch">scratch</h2>')
+        self.moved(site, "user/hpc.html", "hpc/")
+        for address in ("", "/", "/user/hpc/", "/user/hpc", "/user/hpc.html", "/user/hpc.html#scratch", "/user/hpc/#scratch"):
+            with self.subTest(address=address):
+                self.assertIsNone(check_site.unreached(site, check_site.SITE_URL + address))
+        self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/gone.html"),
+                         f"{check_site.SITE_URL}/user/gone.html reaches no page")
+        self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/hpc.html#nodes"),
+                         f"{check_site.SITE_URL}/user/hpc.html has no #nodes on user/hpc/index.html")
+
+    def test_a_link_to_a_markdown_file_is_found(self):
+        site = self.folder()
+        self.page(site, "user/index.html", '<a href="../dev/style.md#prose">style</a><a href="add/">add</a>'
+                                           '<a href="https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md">readme</a>')
+        self.assertEqual(check_site.markdown_links(site), ["user/index.html links ../dev/style.md#prose"])
+
+    def test_a_heading_without_its_github_id_is_found(self):
+        root, site = self.folder(), self.folder()
+        self.write(root / "docs/README.md", "# docs\n## the `sync` command\n")
+        self.write(root / "docs/user/a.md", "# a\n## what's new?\n")
+        self.page(site, "index.html", '<h1 id="docs">docs</h1><h2 id="the-sync-command">the sync command</h2>')
+        self.page(site, "user/a/index.html", '<h1 id="a">a</h1><h2 id="whats_new">what\'s new?</h2>')
+        self.assertEqual(check_site.github_ids(root, site), ["user/a.md has no id whats-new on user/a/index.html"])
+
+    def test_anything_a_page_loads_from_another_host_is_found(self):
+        site = self.folder()
+        self.page(site, "index.html",
+                  '<a href="https://example.org/">a link</a><img src="assets/a.png">'
+                  '<script src="https://unpkg.com/mermaid@12/dist/mermaid.min.js"></script>',
+                  '<link rel="canonical" href="https://nikhil-yn-aix.github.io/fetchloom/">'
+                  '<link rel="stylesheet" href="//fonts.googleapis.com/css">')
+        self.write(site / "assets/a.css", '@font-face{src:url("../fonts/a.woff2")}'
+                                          'a{background:url(https://example.org/b.png)}@import "https://example.org/c.css";')
+        self.assertEqual(check_site.external(site), [
+            "assets/a.css loads https://example.org/b.png",
+            "assets/a.css loads https://example.org/c.css",
+            "index.html loads //fonts.googleapis.com/css",
+            "index.html loads https://unpkg.com/mermaid@12/dist/mermaid.min.js",
+        ])
 
 
 if __name__ == "__main__":

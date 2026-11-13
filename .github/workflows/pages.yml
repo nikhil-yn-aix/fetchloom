@@ -13,6 +13,7 @@ on:
       - 'skills/**'
       - '.github/workflows/pages.yml'
       - 'python/build_site.py'
+      - 'python/check_site.py'
       - 'python/transcript.py'
       # the wordmark on the home page
       - 'src/output.rs'
@@ -52,6 +53,8 @@ jobs:
         run: uv sync --locked --project docs-site
       - name: build the docs and agent exports
         run: uv run --locked --project docs-site python python/build_site.py
+      - name: check the addresses fetchloom prints, heading ids and requests
+        run: python3 python/check_site.py site
       - name: find the latest published release
         id: release
         env:

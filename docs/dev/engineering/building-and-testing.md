@@ -171,11 +171,12 @@ on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest d
 
 ### the documentation site
 
-[uv](https://docs.astral.sh/uv/) installs the site's toolchain, pinned in `docs-site/uv.lock`, then the builder writes the site into `site/`:
+[uv](https://docs.astral.sh/uv/) installs the site's toolchain, pinned in `docs-site/uv.lock`, then the builder writes the site into `site/` and the checker holds it to the repository:
 
 ```sh
 uv sync --locked --project docs-site
 uv run --locked --project docs-site python python/build_site.py
+python3 python/check_site.py
 ```
 
 the first build downloads mermaid from npm into `docs-site/.cache`. `uv run --locked --project docs-site zensical serve` previews the pages as you edit them, without what the builder adds after zensical: transcript colors, the wordmark, mermaid and the pages at old addresses. [CI](ci.md#documentation-site) runs the same build and checks.
