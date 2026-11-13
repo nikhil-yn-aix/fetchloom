@@ -1007,7 +1007,9 @@ impl Net {
                 .map(|next| Err(Instead::Divert(next)))
                 .map_err(Failure::Final);
         }
-        if let Some(error) = super::site::sign_in_page(&response, &fetch.url, fetch.page) {
+        if let Some(error) =
+            super::site::sign_in_page(&response, response.url(), &fetch.url, fetch.page)
+        {
             return Err(Failure::Final(error));
         }
         if let Some(expired) = fetch.expired

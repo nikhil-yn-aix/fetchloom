@@ -345,7 +345,7 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
         )
         .unwrap(),
     ]);
-    let answer = |link: &str, kind: &str, asked: bool| {
+    let answered = |link: &str, from: &str, kind: &str, asked: bool| {
         let link = Url::parse(link).unwrap();
         let mut response = reqwest::Response::from(
             http::Response::builder()
@@ -354,8 +354,9 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
                 .unwrap(),
         );
         net.mark_site(&mut response, &link, true, &mut None);
-        sign_in_page(&response, &link, asked)
+        sign_in_page(&response, &Url::parse(from).unwrap(), &link, asked)
     };
+    let answer = |link: &str, kind: &str, asked: bool| answered(link, link, kind, asked);
     let error = answer(
         "https://data.lab/files/1",
         "text/html; charset=utf-8",
@@ -387,6 +388,42 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
     ] {
         assert!(answer(link, kind, asked).is_none(), "{link} {kind} {asked}");
     }
+    // a page the link was sent on to, as a sign-in page is, counts whatever was asked or named
+    for (link, from, refused) in [
+        ("https://data.lab/files/1", "https://data.lab/login", true),
+        (
+            "https://data.lab/report.html",
+            "https://data.lab/login",
+            true,
+        ),
+        (
+            "https://data.lab/report.html",
+            "https://sso.lab/report.html",
+            true,
+        ),
+        ("https://data.lab/docs", "https://data.lab/docs/", false),
+        (
+            "https://data.lab/docs?v=1",
+            "https://data.lab/docs?v=2",
+            false,
+        ),
+    ] {
+        assert_eq!(
+            answered(link, from, "text/html", true).is_some(),
+            refused,
+            "{link} from {from}"
+        );
+    }
+    // a `.html` name counts for the page the answer came from, not the link
+    assert!(
+        answered(
+            "https://data.lab/report.html",
+            "https://data.lab/report.html/",
+            "text/html",
+            false
+        )
+        .is_some()
+    );
 }
 
 /// a website's 401 or 403, with no key of its own sent, offers a sign-in for its host and port:

@@ -136,14 +136,30 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
             page,
         ),
     )])?;
-    site.change(vec![(
-        "/data".to_owned(),
+    let to_login = || {
         reply(
             "302 Found",
             &[("Location", "/login"), ("Content-Length", "0")],
             b"",
+        )
+    };
+    let notes = b"<html><body>the notes</body></html>";
+    let notes_length = notes.len().to_string();
+    site.change(vec![
+        ("/data".to_owned(), to_login()),
+        ("/report.html".to_owned(), to_login()),
+        (
+            "/notes".to_owned(),
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    ("Content-Length", &notes_length),
+                ],
+                notes,
+            ),
         ),
-    )]);
+    ]);
     let host = host_of(&site);
     sign_in_with_token(&sandbox, &host, "t-old")?;
     let link = format!("{}/data", site.url);
@@ -164,18 +180,37 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
     );
     assert!(!stderr.contains("t-old"), "{stderr}");
     assert!(!sandbox.work().join("data.csv").exists());
-    let asked = sandbox.run(&["get", &link, "-o", "login.html", "--web-page"])?;
+    // a page the link moved to is no page the person asked for, nor one a `.html` link named
+    for (moved, asked) in [
+        (link.clone(), true),
+        (format!("{}/report.html", site.url), false),
+    ] {
+        let mut args = vec!["get", moved.as_str(), "-o", "moved.html"];
+        if asked {
+            args.push("--web-page");
+        }
+        let refused = sandbox.run(&args)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(40), "{moved}: {stderr}");
+        assert!(stderr.contains("such as its sign-in page"), "{stderr}");
+        assert!(!sandbox.work().join("moved.html").exists());
+    }
+    let notes_link = format!("{}/notes", site.url);
+    let asked = sandbox.run(&["get", &notes_link, "-o", "notes.html", "--web-page"])?;
     assert!(asked.status.success(), "{}", text(&asked.stderr)?);
-    assert_eq!(std::fs::read(sandbox.work().join("login.html"))?, page);
+    assert_eq!(std::fs::read(sandbox.work().join("notes.html"))?, notes);
     // a page data.toml asks for is the data when its pin is fetched again, as in a clone
-    let added = sandbox.run(&["add", &link, "--web-page", "--as", "notes"])?;
+    let added = sandbox.run(&["add", &notes_link, "--web-page", "--as", "notes"])?;
     assert!(added.status.success(), "{}", text(&added.stderr)?);
     crate::support::delete_folder(&sandbox.cache())?;
     crate::support::delete_folder(&sandbox.work().join("data"))?;
     sandbox.allow(&site.url);
     let synced = sandbox.run(&["sync"])?;
     assert!(synced.status.success(), "{}", text(&synced.stderr)?);
-    assert_eq!(std::fs::read(sandbox.work().join("data/notes/data"))?, page);
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data/notes/notes"))?,
+        notes
+    );
     Ok(())
 }
 

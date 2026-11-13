@@ -179,13 +179,21 @@ impl Sent {
     }
 }
 
-/// the refusal of `response`, a web page where a file was expected after a saved credential went
-/// for `link`, as a site sends its sign-in page once a session ends. none when the person `asked`
-/// for a page or the link's name says it is one.
-pub(super) fn sign_in_page(response: &reqwest::Response, link: &Url, asked: bool) -> Option<Error> {
+/// the refusal of `response`, a web page from `answered` where a file was expected after a saved
+/// credential went for `link`, as a site sends its sign-in page once a session ends. a page the
+/// link was sent on to, by another origin or path, is refused whatever was asked; else none when
+/// the person `asked` for a page, or the page's own name says it is one.
+pub(super) fn sign_in_page(
+    response: &reqwest::Response,
+    answered: &Url,
+    link: &Url,
+    asked: bool,
+) -> Option<Error> {
     let sent = response.extensions().get::<Sent>()?;
     let page = response.status().is_success() && super::headers::is_html(response.headers());
-    (page && !asked && !names_a_page(link)).then(|| sent.signed_out(response.url()))
+    let moved = answered.origin() != link.origin()
+        || answered.path().trim_end_matches('/') != link.path().trim_end_matches('/');
+    (page && (moved || !(asked || names_a_page(answered)))).then(|| sent.signed_out(answered))
 }
 
 /// whether the last part of `link`'s path ends in a web page's extension.
