@@ -83,6 +83,7 @@ bare `fetchloom` prints this outside a project, after its version line; inside a
 | fix a failed download or a local conflict | [troubleshooting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/troubleshooting.md) |
 | every other topic: scripts, CI, clusters, agents, windows, macos | [user guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/README.md) |
 | see what changed in each release | [changelog](https://github.com/nikhil-yn-aix/fetchloom/blob/main/CHANGELOG.md) |
+| cite it in a paper | [CITATION.cff](https://github.com/nikhil-yn-aix/fetchloom/blob/main/CITATION.cff) |
 | work on the code | [developer guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/dev/README.md) |
 
 ## license
