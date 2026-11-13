@@ -30,9 +30,9 @@ every change measured with the current harness, one row each: what it gained whe
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | SHA-256 and a required MD5 on separate workers | 512 MiB 0.776 glibc, 0.767 musl; musl median RSS 106.3 to 120.3 MiB, maximum 168.6 to 154.3 MiB | kept | [paired checksums](#overlapping-required-checksums-2026-11-12) |
-| hashing | placed-file verification scheduled by bytes as well as file count | 8 × 64 MiB warm 0.163 glibc, 0.151 musl; cold 0.263 and 0.262; median RSS +6.1 and +10.3 MiB, lean unchanged | kept | [verification](#byte-aware-placed-file-verification-2026-11-12) |
-| hashing | lean against default: 2 local workers | `status --verify` of 8 × 64 MiB: time 6.608, peak memory 0.673; `cache verify` of 100,000 objects 1.961 and 0.985, glibc | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
-| hashing | max against default: default's workers and memory | `status --verify` of 8 × 64 MiB 0.958 and 0.998; `cache verify` of 100,000 objects 1.010 and 1.006, glibc | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| hashing | placed-file verification scheduled by bytes as well as file count | 8 files of 64 MiB warm 0.163 glibc, 0.151 musl; cold 0.263 and 0.262; median RSS +6.1 and +10.3 MiB, lean unchanged | kept | [verification](#byte-aware-placed-file-verification-2026-11-12) |
+| hashing | lean against default: 2 local workers | `status --verify` of 8 files of 64 MiB: time 6.608, peak memory 0.673; `cache verify` of 100,000 objects 1.961 and 0.985, glibc | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| hashing | max against default: default's workers and memory | `status --verify` of 8 files of 64 MiB 0.958 and 0.998; `cache verify` of 100,000 objects 1.010 and 1.006, glibc | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -485,7 +485,7 @@ against efbf3adf, five arms a round:
 
 the `path` batch ran beside other agents' builds, and 27 of its 60 rounds were dropped. a second batch of three arms a round:
 
-| case | libc | pairs | a8f9dad7 → efbf3adf | a8f9dad7 → the change | efbf3adf → the change |
+| case | libc | pairs | a8f9dad7 to efbf3adf | a8f9dad7 to the change | efbf3adf to the change |
 |---|---|---:|---|---|---|
 | `path` beside 100,000 | glibc | 167 | 1.026 [1.023, 1.029] | 1.019 [1.017, 1.022] | 0.992 [0.991, 0.995] |
 | | musl | 167 | 1.014 [1.010, 1.018] | 1.013 [1.009, 1.016] | 0.997 [0.993, 1.002] |
@@ -498,7 +498,7 @@ the `path` batch ran beside other agents' builds, and 27 of its 60 rounds were d
 
 then the clean release build of the batch this change came in, with the flush groups and the data folder walk's stop that follow it, against the same two, three arms a round:
 
-| case | libc | pairs | a8f9dad7 → efbf3adf | a8f9dad7 → the batch | efbf3adf → the batch |
+| case | libc | pairs | a8f9dad7 to efbf3adf | a8f9dad7 to the batch | efbf3adf to the batch |
 |---|---|---:|---|---|---|
 | `path` beside 100,000 | glibc | 147 | 1.020 [1.016, 1.023] | 1.025 [1.021, 1.027] | 1.004 [1.000, 1.007] |
 | | musl | 147 | 1.022 [1.019, 1.025] | 1.003 [1.001, 1.008] | 0.981 [0.977, 0.984] |
@@ -596,7 +596,7 @@ what each [level](../../user/resources.md) trades, on the eight workloads of the
 | | musl | 15 | 342.5 ms, 96.4 MiB | 1.085 [1.022, 1.141], 0.679 [0.652, 0.712] | 1.040 [1.017, 1.130], 1.141 [1.099, 1.227] |
 | `get -o` of 1 GiB from a local server | glibc | 10 | 771.3 ms, 67.9 MiB | 0.977 [0.961, 0.994], 0.862 [0.792, 0.935] | 1.005 [0.995, 1.033], 1.069 [0.967, 1.160] |
 | | musl | 10 | 730.2 ms, 94.7 MiB | 0.997 [0.991, 1.001], 0.991 [0.745, 1.154] | 0.999 [0.993, 1.004], 1.074 [0.991, 1.107] |
-| `status --verify` of 8 × 64 MiB | glibc | 19 | 74.3 ms, 17.7 MiB | 6.608 [5.667, 6.960], 0.673 [0.657, 0.678] | 0.958 [0.870, 0.997], 0.998 [0.990, 1.009] |
+| `status --verify` of 8 files of 64 MiB | glibc | 19 | 74.3 ms, 17.7 MiB | 6.608 [5.667, 6.960], 0.673 [0.657, 0.678] | 0.958 [0.870, 0.997], 0.998 [0.990, 1.009] |
 | `cache verify` of 100,000 objects | glibc | 15 | 408.3 ms, 32.1 MiB | 1.961 [1.921, 2.014], 0.985 [0.978, 0.992] | 1.010 [0.981, 1.025], 1.006 [0.988, 1.012] |
 | sync of a zip of 10,000 files | glibc | 12 | 299.3 ms, 39.6 MiB | 2.095 [2.043, 2.145], 0.934 [0.824, 1.137] | 1.018 [0.993, 1.030], 0.934 [0.847, 1.080] |
 | | musl | 15 | 314.0 ms, 128.5 MiB | 2.031 [1.970, 2.051], 0.870 [0.784, 0.894] | 0.992 [0.958, 0.996], 1.000 [0.986, 1.016] |
@@ -704,16 +704,16 @@ one switched release build per libc, from d0176dd7, compared fresh `sync --locke
 
 | files and filesystem | build | before s [range] | after s [range] | time ratio [95%] | peak RSS MiB, before to after | peak RSS ratio [95%] |
 |---|---|---|---|---|---|---|
-| 10,000 × 4 KiB, xfs | glibc | 2.152 [2.084, 2.332] | 1.493 [1.408, 1.541] | 0.689 [0.672, 0.700] | 36.26 to 37.62 | 1.019 [0.904, 1.211] |
-| 10,000 × 4 KiB, xfs | musl | 2.200 [2.084, 2.285] | 1.557 [1.417, 1.606] | 0.703 [0.682, 0.715] | 127.84 to 127.63 | 0.991 [0.951, 1.057] |
-| 10,000 × 4 KiB, ext4 | glibc | 1.296 [1.252, 1.352] | 0.710 [0.655, 0.741] | 0.545 [0.533, 0.552] | 36.61 to 36.18 | 0.891 [0.852, 1.135] |
-| 10,000 × 4 KiB, ext4 | musl | 1.325 [1.286, 1.511] | 0.717 [0.660, 0.764] | 0.538 [0.501, 0.547] | 119.80 to 127.78 | 1.049 [0.993, 1.109] |
-| 10,000 × 4 KiB, btrfs | glibc | 2.120 [2.031, 2.321] | 1.956 [1.880, 2.071] | 0.926 [0.902, 0.935] | 31.45 to 30.80 | 0.978 [0.918, 1.013] |
-| 10,000 × 4 KiB, btrfs | musl | 2.080 [1.987, 2.281] | 2.011 [1.881, 2.161] | 0.959 [0.936, 0.978] | 121.61 to 109.91 | 0.909 [0.872, 0.951] |
-| 32 × 4 KiB, ext4 | glibc | 0.026 [0.025, 0.028] | 0.022 [0.021, 0.023] | 0.843 [0.797, 0.859] | 13.35 to 13.52 | 1.010 [0.989, 1.027] |
-| 32 × 4 KiB, ext4 | musl | 0.028 [0.026, 0.033] | 0.023 [0.022, 0.028] | 0.829 [0.803, 0.846] | 30.69 to 32.72 | 1.066 [1.064, 1.071] |
-| 32 × 4 KiB, FAT32 | glibc | 0.044 [0.043, 0.047] | 0.038 [0.037, 0.046] | 0.860 [0.835, 0.873] | 13.43 to 13.61 | 1.021 [0.996, 1.032] |
-| 32 × 4 KiB, FAT32 | musl | 0.045 [0.044, 0.046] | 0.039 [0.038, 0.042] | 0.875 [0.866, 0.887] | 30.70 to 32.71 | 1.066 [0.996, 1.066] |
+| 10,000 files of 4 KiB, xfs | glibc | 2.152 [2.084, 2.332] | 1.493 [1.408, 1.541] | 0.689 [0.672, 0.700] | 36.26 to 37.62 | 1.019 [0.904, 1.211] |
+| 10,000 files of 4 KiB, xfs | musl | 2.200 [2.084, 2.285] | 1.557 [1.417, 1.606] | 0.703 [0.682, 0.715] | 127.84 to 127.63 | 0.991 [0.951, 1.057] |
+| 10,000 files of 4 KiB, ext4 | glibc | 1.296 [1.252, 1.352] | 0.710 [0.655, 0.741] | 0.545 [0.533, 0.552] | 36.61 to 36.18 | 0.891 [0.852, 1.135] |
+| 10,000 files of 4 KiB, ext4 | musl | 1.325 [1.286, 1.511] | 0.717 [0.660, 0.764] | 0.538 [0.501, 0.547] | 119.80 to 127.78 | 1.049 [0.993, 1.109] |
+| 10,000 files of 4 KiB, btrfs | glibc | 2.120 [2.031, 2.321] | 1.956 [1.880, 2.071] | 0.926 [0.902, 0.935] | 31.45 to 30.80 | 0.978 [0.918, 1.013] |
+| 10,000 files of 4 KiB, btrfs | musl | 2.080 [1.987, 2.281] | 2.011 [1.881, 2.161] | 0.959 [0.936, 0.978] | 121.61 to 109.91 | 0.909 [0.872, 0.951] |
+| 32 files of 4 KiB, ext4 | glibc | 0.026 [0.025, 0.028] | 0.022 [0.021, 0.023] | 0.843 [0.797, 0.859] | 13.35 to 13.52 | 1.010 [0.989, 1.027] |
+| 32 files of 4 KiB, ext4 | musl | 0.028 [0.026, 0.033] | 0.023 [0.022, 0.028] | 0.829 [0.803, 0.846] | 30.69 to 32.72 | 1.066 [1.064, 1.071] |
+| 32 files of 4 KiB, FAT32 | glibc | 0.044 [0.043, 0.047] | 0.038 [0.037, 0.046] | 0.860 [0.835, 0.873] | 13.43 to 13.61 | 1.021 [0.996, 1.032] |
+| 32 files of 4 KiB, FAT32 | musl | 0.045 [0.044, 0.046] | 0.039 [0.038, 0.042] | 0.875 [0.866, 0.887] | 30.70 to 32.71 | 1.066 [0.996, 1.066] |
 
 more of the requested threads now do useful work, at a measured memory cost. on musl, the small ext4 case added 2.03 MiB at the median, 6.6% [6.4%, 7.1%]; the 10,000-file ext4 case added 7.99 MiB, though its paired RSS interval was wide. the largest candidate peak in these cap-eight cases was 138.70 MiB (145.4 MB). these costs fit the owner's default memory budget of about 150 MB; they are not described as memory-neutral. peak RSS came from GNU time's child `wait4`, not the python harness's inherited RSS floor. a separate unlocked 12-pair memory counter also found growth on the small musl case, 1.036 [1.003, 1.148]; its wall samples are not qualification evidence.
 
@@ -725,10 +725,10 @@ more of the requested threads now do useful work, at a measured memory cost. on 
 | 10,000 files, xfs, unset cap | musl | 12 | 1.503 [1.448, 1.599] | 1.497 [1.411, 1.748] | 0.991 [0.982, 1.038] | 1.022 [0.962, 1.047] |
 | 32 files, xfs, cap 1 | glibc | 12 | 0.034 [0.032, 0.037] | 0.033 [0.033, 0.036] | 0.984 [0.978, 1.024] | 0.995 [0.985, 0.998] |
 | 32 files, xfs, cap 1 | musl | 12 | 0.035 [0.032, 0.045] | 0.034 [0.032, 0.036] | 0.987 [0.949, 1.013] | 1.000 [0.995, 1.000] |
-| 3 archives × 1,000 files, xfs, cap 8 | glibc | 12 | 0.459 [0.429, 0.466] | 0.458 [0.432, 0.489] | 1.000 [0.982, 1.048] | 0.988 [0.947, 1.003] |
-| 3 archives × 1,000 files, xfs, cap 8 | musl | 12 | 0.453 [0.427, 0.477] | 0.461 [0.428, 0.622] | 1.010 [0.970, 1.093] | 0.986 [0.904, 1.047] |
-| 1 × 64 MiB member, xfs, cap 8 | glibc | 12 | 0.260 [0.246, 0.429] | 0.265 [0.247, 0.360] | 1.005 [0.958, 1.030] | 0.954 [0.884, 1.133] |
-| 1 × 64 MiB member, xfs, cap 8 | musl | 24 | 0.329 [0.234, 0.361] | 0.344 [0.238, 0.367] | 1.016 [0.994, 1.035] | 0.990 [0.975, 1.029] |
+| 3 archives of 1,000 files, xfs, cap 8 | glibc | 12 | 0.459 [0.429, 0.466] | 0.458 [0.432, 0.489] | 1.000 [0.982, 1.048] | 0.988 [0.947, 1.003] |
+| 3 archives of 1,000 files, xfs, cap 8 | musl | 12 | 0.453 [0.427, 0.477] | 0.461 [0.428, 0.622] | 1.010 [0.970, 1.093] | 0.986 [0.904, 1.047] |
+| 1 member of 64 MiB, xfs, cap 8 | glibc | 12 | 0.260 [0.246, 0.429] | 0.265 [0.247, 0.360] | 1.005 [0.958, 1.030] | 0.954 [0.884, 1.133] |
+| 1 member of 64 MiB, xfs, cap 8 | musl | 24 | 0.329 [0.234, 0.361] | 0.344 [0.238, 0.367] | 1.016 [0.994, 1.035] | 0.990 [0.975, 1.029] |
 
 the one-thread lean control keeps its inline, zero-writer path and showed no memory increase. this does not introduce resource levels or promise that any larger lean preset has been qualified. default, one-thread and three-archive controls keep the same effective budgets. the musl single-large-member control first gave 1.029 [1.014, 1.058]; an independent 12-pair confirmation, retaining the first pairs, gave the pooled result above. no control crossed the earlier lab's time-regression guard, a lower 95% bound above 1.02. that is not proof of exact equivalence: the large-member control still leaves a small effect unresolved.
 
@@ -746,14 +746,14 @@ one release experiment from d0176dd7 per libc ran both arms through a read-once 
 
 | files | build | before s [range] | after s [range] | time ratio [95%] | peak RSS ratio [95%] |
 |---|---|---|---|---|---|
-| 2 × 16 MiB, ext4 | glibc | 0.058 [0.056, 0.063] | 0.033 [0.032, 0.036] | 0.563 [0.558, 0.565] | 1.000 [0.985, 1.013] |
-| 2 × 16 MiB, ext4 | musl | 0.055 [0.054, 0.059] | 0.030 [0.029, 0.033] | 0.544 [0.540, 0.553] | 0.987 [0.987, 0.987] |
-| 2 × 16 MiB, FAT32 | glibc | 0.060 [0.058, 0.062] | 0.034 [0.032, 0.035] | 0.560 [0.552, 0.568] | 1.005 [0.998, 1.011] |
-| 2 × 16 MiB, FAT32 | musl | 0.059 [0.057, 0.061] | 0.032 [0.031, 0.037] | 0.543 [0.535, 0.553] | 0.991 [0.990, 0.996] |
-| 10,000 × 4 KiB, ext4 | glibc | 0.077 [0.072, 0.087] | 0.064 [0.063, 0.080] | 0.827 [0.803, 0.840] | 0.981 [0.975, 0.990] |
-| 10,000 × 4 KiB, ext4 | musl | 0.074 [0.073, 0.081] | 0.061 [0.060, 0.066] | 0.821 [0.813, 0.830] | 0.933 [0.929, 0.947] |
-| 100,000 × 32 B, ext4 | glibc | 0.670 [0.653, 0.693] | 0.562 [0.549, 0.606] | 0.837 [0.826, 0.857] | 1.001 [1.000, 1.003] |
-| 100,000 × 32 B, ext4 | musl | 0.652 [0.636, 0.682] | 0.549 [0.532, 0.599] | 0.840 [0.827, 0.882] | 0.953 [0.952, 0.955] |
+| 2 files of 16 MiB, ext4 | glibc | 0.058 [0.056, 0.063] | 0.033 [0.032, 0.036] | 0.563 [0.558, 0.565] | 1.000 [0.985, 1.013] |
+| 2 files of 16 MiB, ext4 | musl | 0.055 [0.054, 0.059] | 0.030 [0.029, 0.033] | 0.544 [0.540, 0.553] | 0.987 [0.987, 0.987] |
+| 2 files of 16 MiB, FAT32 | glibc | 0.060 [0.058, 0.062] | 0.034 [0.032, 0.035] | 0.560 [0.552, 0.568] | 1.005 [0.998, 1.011] |
+| 2 files of 16 MiB, FAT32 | musl | 0.059 [0.057, 0.061] | 0.032 [0.031, 0.037] | 0.543 [0.535, 0.553] | 0.991 [0.990, 0.996] |
+| 10,000 files of 4 KiB, ext4 | glibc | 0.077 [0.072, 0.087] | 0.064 [0.063, 0.080] | 0.827 [0.803, 0.840] | 0.981 [0.975, 0.990] |
+| 10,000 files of 4 KiB, ext4 | musl | 0.074 [0.073, 0.081] | 0.061 [0.060, 0.066] | 0.821 [0.813, 0.830] | 0.933 [0.929, 0.947] |
+| 100,000 files of 32 B, ext4 | glibc | 0.670 [0.653, 0.693] | 0.562 [0.549, 0.606] | 0.837 [0.826, 0.857] | 1.001 [1.000, 1.003] |
+| 100,000 files of 32 B, ext4 | musl | 0.652 [0.636, 0.682] | 0.549 [0.532, 0.599] | 0.840 [0.827, 0.882] | 0.953 [0.952, 0.955] |
 
 `sync --locked --verify` of the two 16 MiB files took 0.572 [0.564, 0.577] of its time on glibc and 0.564 [0.554, 0.568] on musl, with peak RSS ratios 1.000 [0.985, 1.011] and 1.000 [1.000, 1.000]. ordinary racy status, non-racy verification, settled status of 10,000 files and settled sync of 100,000 files stayed within noise on both builds; none of their time or memory intervals ended above 1.02. the 100,000-file verification peaked at median 79.0 MiB on glibc both ways and 135.2 to 128.9 MiB on musl.
 
@@ -853,28 +853,28 @@ the test: a local TLS Dataverse stand-in, with a private test CA trusted for the
 
 there were twelve measured rounds before bounded noise retries; a pair with a burst in either arm was left out. GNU time supplied the actual child's RSS, since the harness's parent can set a higher inherited wait4 floor. the table gives clean paired medians and their 95% bootstrap intervals, with before/after median time and median RSS. counts are process pairs, not response chunks.
 
-| workload | libc | pairs | before s | after s | after/before [95%] | median MiB before → after |
+| workload | libc | pairs | before s | after s | after/before [95%] | median MiB, before to after |
 |---|---|---:|---:|---:|---|---|
-| one 512 MiB file, MD5 | glibc | 9 | 1.5574 | 1.2086 | 0.776 [0.768, 0.782] | 79.3 → 75.6 |
-| one 512 MiB file, MD5 | musl | 11 | 1.5323 | 1.1774 | 0.767 [0.765, 0.771] | 106.3 → 120.3 |
-| eight 64 MiB files, MD5 | glibc | 11 | 0.9603 | 0.9236 | 0.982 [0.953, 1.037] | 146.1 → 129.1 |
-| eight 64 MiB files, MD5 | musl | 14 | 0.7828 | 0.7087 | 0.934 [0.870, 0.999] | 244.0 → 217.2 |
-| 64 files of 4 KiB, MD5 | glibc | 23 | 0.7200 | 0.7210 | 1.003 [0.999, 1.005] | 15.1 → 15.0 |
-| 64 files of 4 KiB, MD5 | musl | 14 | 0.7208 | 0.7186 | 0.999 [0.994, 1.003] | 34.8 → 34.9 |
-| one 512 MiB SHA-256 pin | glibc | 11 | 0.7578 | 0.7875 | 0.962 [0.923, 1.130] | 25.7 → 24.2 |
-| one 512 MiB SHA-256 pin | musl | 13 | 0.7600 | 0.7614 | 1.009 [0.983, 1.063] | 70.9 → 68.6 |
-| 512 MiB MD5, thread cap 1 | glibc | 8 | 1.5417 | 1.5382 | 0.998 [0.991, 1.010] | 55.0 → 54.0 |
-| 512 MiB MD5, thread cap 1 | musl | 12 | 1.5344 | 1.5301 | 1.001 [0.993, 1.004] | 94.5 → 91.5 |
-| 512 MiB MD5, split requested | glibc | 12 | 1.5832 | 1.2118 | 0.768 [0.765, 0.771] | 70.0 → 64.5 |
-| 512 MiB MD5, split requested | musl | 12 | 1.5263 | 1.1670 | 0.766 [0.765, 0.770] | 104.5 → 108.5 |
+| one 512 MiB file, MD5 | glibc | 9 | 1.5574 | 1.2086 | 0.776 [0.768, 0.782] | 79.3 to 75.6 |
+| one 512 MiB file, MD5 | musl | 11 | 1.5323 | 1.1774 | 0.767 [0.765, 0.771] | 106.3 to 120.3 |
+| eight 64 MiB files, MD5 | glibc | 11 | 0.9603 | 0.9236 | 0.982 [0.953, 1.037] | 146.1 to 129.1 |
+| eight 64 MiB files, MD5 | musl | 14 | 0.7828 | 0.7087 | 0.934 [0.870, 0.999] | 244.0 to 217.2 |
+| 64 files of 4 KiB, MD5 | glibc | 23 | 0.7200 | 0.7210 | 1.003 [0.999, 1.005] | 15.1 to 15.0 |
+| 64 files of 4 KiB, MD5 | musl | 14 | 0.7208 | 0.7186 | 0.999 [0.994, 1.003] | 34.8 to 34.9 |
+| one 512 MiB SHA-256 pin | glibc | 11 | 0.7578 | 0.7875 | 0.962 [0.923, 1.130] | 25.7 to 24.2 |
+| one 512 MiB SHA-256 pin | musl | 13 | 0.7600 | 0.7614 | 1.009 [0.983, 1.063] | 70.9 to 68.6 |
+| 512 MiB MD5, thread cap 1 | glibc | 8 | 1.5417 | 1.5382 | 0.998 [0.991, 1.010] | 55.0 to 54.0 |
+| 512 MiB MD5, thread cap 1 | musl | 12 | 1.5344 | 1.5301 | 1.001 [0.993, 1.004] | 94.5 to 91.5 |
+| 512 MiB MD5, split requested | glibc | 12 | 1.5832 | 1.2118 | 0.768 [0.765, 0.771] | 70.0 to 64.5 |
+| 512 MiB MD5, split requested | musl | 12 | 1.5263 | 1.1670 | 0.766 [0.765, 0.770] | 104.5 to 108.5 |
 
 the 512 MiB MD5 case wins by 22–23%, with no established time regression in the controls. the first small-file GNU pilot included the switch only on one arm; a confirmation with it set to 0 and 1 on the two arms was flat, 1.001 [0.997, 1.004]. that switch is removed from the kept code. the slow split scheduler was entered in the split-requested case, but these fast transfers could finish before its next stream; a separate checked 64 MiB/s-capped run made three requests and exercised real range readback. its wall time is not in this table.
 
-memory is not claimed neutral. for the main MD5 case, glibc's largest clean child RSS was 95.7 → 90.0 MiB; musl's median rose by 14.1 MiB, while its largest clean peak fell from 168.6 to 154.3 MiB. both run envelopes already extend past the historical ordinary-workload 150 MB target. the measured worst peak did not grow, but the higher median residency is a cost of this change, not memory neutrality. the many-file case used less memory. cap one adds no second lane.
+memory is not claimed neutral. for the main MD5 case, glibc's largest clean child RSS was 95.7 to 90.0 MiB; musl's median rose by 14.1 MiB, while its largest clean peak fell from 168.6 to 154.3 MiB. both run envelopes already extend past the historical ordinary-workload 150 MB target. the measured worst peak did not grow, but the higher median residency is a cost of this change, not memory neutrality. the many-file case used less memory. cap one adds no second lane.
 
 characterization checks use independently generated hashlib vectors, including a prefixed checkpoint, range readback and final SHA-256/MD5. channel-controlled tests cover bounded shared ownership, cancellation/claim lifetime, optional-thread refusal, worker failure and CPU slots becoming busy. the lane-selection test failed on the original code; deliberately losing the saved MD5 state on thread-start refusal failed the independent vector test, then passed after restoration. no test uses elapsed time to prove blocking.
 
-raw commands, binary hashes, checked payload hashes, round records and noise flags are retained under `/datadisk/fl-perf/cpu2/records/p2-*`; `scripts/measure-p2.py` and `scripts/analyze-p2.py` reproduce the comparison and its paired analysis. no bandwidth, interface, global cache or global filesystem flush was changed for the test.
+raw commands, binary hashes, checked payload hashes, round records and noise flags of this checksum experiment are kept on the measuring machine under `/datadisk/fl-perf/cpu2/`, with the scripts that reproduce the comparison and its paired analysis. no bandwidth, interface, global cache or global filesystem flush was changed for the test.
 
 
 ## musl bzip2 short memory moves, 2026-11-12
@@ -889,38 +889,38 @@ no dependency, decoder or allocator is changed, and no upstream issue was submit
 
 the original archive reader decoded, wrote and hashed a large member before sending it to a writer for sealing. the first prototype sent the 1 MiB prefix and then reused three 256 KiB buffers while an existing writer wrote and hashed them. it made a real `get` of a 64 MiB gzip member 0.717 [0.695, 0.741] of the glibc time and 0.774 [0.762, 0.785] on musl, twelve clean pairs each. ZIP was 0.816 [0.779, 0.833] and 0.806 [0.782, 0.815]. these are command timings, not the earlier CPU-only ceiling.
 
-that version was dropped. a boundary control with 32 different 1.0625 MiB members took 0.1614 → 0.1647 s on glibc, ratio 1.021 [1.005, 1.044], over 22 clean pairs including a bounded confirmation. its median child RSS was 17.1 → 17.9 MiB. extra memory was not the failure: the handoff's cost was not repaid for short members. the boundary regression remains in the records rather than being hidden by the large-file win.
+that version was dropped. a boundary control with 32 different 1.0625 MiB members took 0.1614 to 0.1647 s on glibc, ratio 1.021 [1.005, 1.044], over 22 clean pairs including a bounded confirmation. its median child RSS was 17.1 to 17.9 MiB. extra memory was not the failure: the handoff's cost was not repaid for short members. the boundary regression remains in the records rather than being hidden by the large-file win.
 
-these runs used separate switched release binaries for glibc and static musl, fat LTO, one codegen unit, abort, frame pointers and line tables, on the same EPYC 7V13 as the checksum measurements. a local HTTP server supplied ZIP, plain tar, tar.gz, tar.zst, tar.xz, tar.bz2 and 7z fixtures with one 64 MiB member, plus a ZIP of 4,000 × 4 KiB files and the boundary control. `get` used a fresh cache/output on ext4 NVMe, warm source files, ordinary defaults and a thread-cap-one control. hashlib checked every output's size and SHA-256 outside the clock. the first setup batch's checker expected a `data/` directory which `get` correctly stripped; those failed-check rows are retained separately and are not measurements accepted here.
+these runs used separate switched release binaries for glibc and static musl, fat LTO, one codegen unit, abort, frame pointers and line tables, on the same EPYC 7V13 as the checksum measurements. a local HTTP server supplied ZIP, plain tar, tar.gz, tar.zst, tar.xz, tar.bz2 and 7z fixtures with one 64 MiB member, plus a ZIP of 4,000 files of 4 KiB and the boundary control. `get` used a fresh cache/output on ext4 NVMe, warm source files, ordinary defaults and a thread-cap-one control. hashlib checked every output's size and SHA-256 outside the clock. the first setup batch's checker expected a `data/` directory which `get` correctly stripped; those failed-check rows are retained separately and are not measurements accepted here.
 
 `abh.py` randomized the two arms within each round, four pairs per lock acquisition on cores 12–23 at nice 0. builds used cores 0–11, nice 10 and three jobs. a burst on either arm excluded the whole pair. GNU time measured child peak RSS without the Python parent's inherited floor; paired median ratios have 95% bootstrap intervals. all commands, source patches, binary hashes and round records remain with the CPU sweep's archive handoff evidence.
 
 the kept version admits streaming only for a member declared above 4 MiB. shorter members take the original path. the declared size is only a scheduling hint: no buffer is sized from it, and every actual byte still passes the existing guard. the size admission removed the earlier boundary regression; a separate 32-member fixture just beyond the new boundary, at 4.0625 MiB per file, also gained. after resource levels landed, a zero- or one-writer budget was kept inline as well, so single-core and lean runs allocate no new handoff buffers. this fallback is checked directly with paused writers, not claimed as a timed speedup.
 
-| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB before → after |
+| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB, before to after |
 |---|---|---:|---:|---:|---|---|
-| 64 MiB ZIP | glibc | 13 | 0.2991 | 0.2448 | 0.816 [0.780, 0.830] | 19.7 → 19.5 |
-| 64 MiB ZIP | musl | 12 | 0.2923 | 0.2400 | 0.817 [0.778, 0.840] | 64.3 → 61.3 |
-| 64 MiB gzip | glibc | 8 | 0.2853 | 0.2174 | 0.754 [0.751, 0.778] | 19.9 → 19.2 |
-| 64 MiB gzip | musl | 8 | 0.2734 | 0.2078 | 0.759 [0.726, 0.774] | 58.3 → 60.3 |
-| 64 MiB zstd | glibc | 14 | 0.2328 | 0.2243 | 0.962 [0.952, 0.978] | 19.7 → 19.3 |
-| 64 MiB zstd | musl | 12 | 0.2363 | 0.2242 | 0.949 [0.928, 0.970] | 63.5 → 62.5 |
-| 64 MiB xz | glibc | 14 | 0.7797 | 0.7178 | 0.926 [0.917, 0.929] | 24.4 → 25.0 |
-| 64 MiB xz | musl | 12 | 0.7817 | 0.7149 | 0.909 [0.897, 0.923] | 72.1 → 72.3 |
-| 64 MiB bzip2 | glibc | 16 | 2.2748 | 2.2154 | 0.972 [0.966, 0.975] | 21.7 → 21.2 |
-| 64 MiB bzip2 | musl | 12 | 3.0295 | 2.9879 | 0.982 [0.978, 0.992] | 62.8 → 68.8 |
-| 64 MiB plain tar | glibc | 13 | 0.2998 | 0.3074 | 0.977 [0.957, 1.015] | 37.2 → 32.8 |
-| 64 MiB plain tar | musl | 12 | 0.3140 | 0.3120 | 0.971 [0.955, 0.999] | 59.0 → 58.4 |
-| 64 MiB 7z | glibc | 10 | 0.8800 | 0.8184 | 0.930 [0.922, 0.940] | 23.3 → 23.6 |
-| 64 MiB 7z | musl | 11 | 0.9403 | 0.8725 | 0.936 [0.929, 0.945] | 70.4 → 72.0 |
-| 32 × 1.0625 MiB ZIP | glibc | 8 | 0.1492 | 0.1509 | 0.993 [0.961, 1.037] | 17.2 → 17.2 |
-| 32 × 1.0625 MiB ZIP | musl | 12 | 0.1610 | 0.1641 | 1.006 [0.976, 1.031] | 57.5 → 56.4 |
-| 32 × 4.0625 MiB ZIP | glibc | 15 | 0.5935 | 0.4979 | 0.856 [0.835, 0.869] | 24.9 → 24.2 |
-| 32 × 4.0625 MiB ZIP | musl | 8 | 0.5872 | 0.5119 | 0.885 [0.856, 0.905] | 72.5 → 71.5 |
-| 4,000 × 4 KiB ZIP | glibc | 12 | 0.2286 | 0.2247 | 0.982 [0.957, 0.999] | 23.7 → 23.7 |
-| 4,000 × 4 KiB ZIP | musl | 12 | 0.2302 | 0.2322 | 1.007 [0.964, 1.052] | 80.8 → 78.7 |
-| 64 MiB ZIP, thread cap 1 | glibc | 12 | 0.2925 | 0.2938 | 0.995 [0.964, 1.012] | 19.8 → 19.6 |
-| 64 MiB ZIP, thread cap 1 | musl | 10 | 0.2388 | 0.2416 | 1.011 [0.977, 1.026] | 50.3 → 49.2 |
+| 64 MiB ZIP | glibc | 13 | 0.2991 | 0.2448 | 0.816 [0.780, 0.830] | 19.7 to 19.5 |
+| 64 MiB ZIP | musl | 12 | 0.2923 | 0.2400 | 0.817 [0.778, 0.840] | 64.3 to 61.3 |
+| 64 MiB gzip | glibc | 8 | 0.2853 | 0.2174 | 0.754 [0.751, 0.778] | 19.9 to 19.2 |
+| 64 MiB gzip | musl | 8 | 0.2734 | 0.2078 | 0.759 [0.726, 0.774] | 58.3 to 60.3 |
+| 64 MiB zstd | glibc | 14 | 0.2328 | 0.2243 | 0.962 [0.952, 0.978] | 19.7 to 19.3 |
+| 64 MiB zstd | musl | 12 | 0.2363 | 0.2242 | 0.949 [0.928, 0.970] | 63.5 to 62.5 |
+| 64 MiB xz | glibc | 14 | 0.7797 | 0.7178 | 0.926 [0.917, 0.929] | 24.4 to 25.0 |
+| 64 MiB xz | musl | 12 | 0.7817 | 0.7149 | 0.909 [0.897, 0.923] | 72.1 to 72.3 |
+| 64 MiB bzip2 | glibc | 16 | 2.2748 | 2.2154 | 0.972 [0.966, 0.975] | 21.7 to 21.2 |
+| 64 MiB bzip2 | musl | 12 | 3.0295 | 2.9879 | 0.982 [0.978, 0.992] | 62.8 to 68.8 |
+| 64 MiB plain tar | glibc | 13 | 0.2998 | 0.3074 | 0.977 [0.957, 1.015] | 37.2 to 32.8 |
+| 64 MiB plain tar | musl | 12 | 0.3140 | 0.3120 | 0.971 [0.955, 0.999] | 59.0 to 58.4 |
+| 64 MiB 7z | glibc | 10 | 0.8800 | 0.8184 | 0.930 [0.922, 0.940] | 23.3 to 23.6 |
+| 64 MiB 7z | musl | 11 | 0.9403 | 0.8725 | 0.936 [0.929, 0.945] | 70.4 to 72.0 |
+| ZIP of 32 members of 1.0625 MiB | glibc | 8 | 0.1492 | 0.1509 | 0.993 [0.961, 1.037] | 17.2 to 17.2 |
+| ZIP of 32 members of 1.0625 MiB | musl | 12 | 0.1610 | 0.1641 | 1.006 [0.976, 1.031] | 57.5 to 56.4 |
+| ZIP of 32 members of 4.0625 MiB | glibc | 15 | 0.5935 | 0.4979 | 0.856 [0.835, 0.869] | 24.9 to 24.2 |
+| ZIP of 32 members of 4.0625 MiB | musl | 8 | 0.5872 | 0.5119 | 0.885 [0.856, 0.905] | 72.5 to 71.5 |
+| ZIP of 4,000 files of 4 KiB | glibc | 12 | 0.2286 | 0.2247 | 0.982 [0.957, 0.999] | 23.7 to 23.7 |
+| ZIP of 4,000 files of 4 KiB | musl | 12 | 0.2302 | 0.2322 | 1.007 [0.964, 1.052] | 80.8 to 78.7 |
+| 64 MiB ZIP, thread cap 1 | glibc | 12 | 0.2925 | 0.2938 | 0.995 [0.964, 1.012] | 19.8 to 19.6 |
+| 64 MiB ZIP, thread cap 1 | musl | 10 | 0.2388 | 0.2416 | 1.011 [0.977, 1.026] | 50.3 to 49.2 |
 
 large gzip is 24–25% faster and ZIP about 18% faster end to end on both libc builds. no control establishes a time regression; the wider small-file, old-boundary and single-thread intervals do not establish equivalence either. GNU's largest clean child RSS across the fixtures was 38.2 MiB after the change, musl's 88.6 MiB. small median increases in some cases remain well inside the default budget and are shown in the table. the pipeline keeps at most the initial 1 MiB prefix and three 256 KiB reusable buffers for its handoff, not a whole large member.
 
@@ -936,40 +936,40 @@ one switched release binary per libc was built over [the IO/resource-level base]
 
 `abh.py` randomized both arms in four-pair blocks, with an initial warmup. early blocks took separate leases. to avoid repeated waits behind long network cases, only unfinished blocks were then grouped under bounded leases: the longest was 122.16 s. no accepted pair was repeated. a burst in either arm excluded the whole pair; rows and flags remain in the records. the table gives median times, paired median after/before ratios with 95% bootstrap intervals, and median child peak RSS from GNU time, not the harness parent's inherited floor.
 
-| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB before → after |
+| workload | libc | clean pairs | before s | after s | after/before [95%] | median MiB, before to after |
 |---|---|---:|---:|---:|---|---|
-| 8 × 64 MiB, warm | glibc | 9 | 0.4021 | 0.0655 | 0.163 [0.153, 0.204] | 11.8 → 17.9 |
-| 8 × 64 MiB, warm | musl | 12 | 0.3944 | 0.0593 | 0.151 [0.149, 0.153] | 15.4 → 25.7 |
-| 8 × 64 MiB, cold | glibc | 12 | 0.6609 | 0.1734 | 0.263 [0.261, 0.264] | 11.7 → 17.8 |
-| 8 × 64 MiB, cold | musl | 12 | 0.6589 | 0.1731 | 0.262 [0.261, 0.264] | 15.1 → 25.3 |
-| 8 × 64 MiB, lean | glibc | 12 | 0.3953 | 0.3963 | 1.001 [0.998, 1.005] | 11.6 → 11.6 |
-| 8 × 64 MiB, lean | musl | 12 | 0.3988 | 0.3983 | 1.000 [0.996, 1.002] | 14.9 → 14.9 |
-| 8 × 64 MiB, max | glibc | 11 | 0.3947 | 0.0622 | 0.158 [0.154, 0.180] | 11.6 → 17.8 |
-| 8 × 64 MiB, max | musl | 12 | 0.3991 | 0.0597 | 0.150 [0.148, 0.151] | 14.9 → 25.1 |
-| 8 × 64 MiB, thread cap 1 | glibc | 12 | 0.3950 | 0.3953 | 1.001 [0.999, 1.001] | 11.7 → 11.4 |
-| 8 × 64 MiB, thread cap 1 | musl | 12 | 0.3987 | 0.3983 | 1.001 [0.999, 1.003] | 14.9 → 14.9 |
-| 8 × 64 MiB, thread cap 2 | glibc | 10 | 0.3955 | 0.3943 | 0.998 [0.994, 1.002] | 11.6 → 11.7 |
-| 8 × 64 MiB, thread cap 2 | musl | 12 | 0.3989 | 0.3995 | 1.002 [1.000, 1.003] | 14.9 → 14.9 |
-| 8 × 64 MiB, thread cap 4 | glibc | 12 | 0.3966 | 0.1093 | 0.276 [0.275, 0.276] | 11.7 → 14.8 |
-| 8 × 64 MiB, thread cap 4 | musl | 12 | 0.4000 | 0.1074 | 0.268 [0.267, 0.271] | 14.9 → 19.1 |
-| 8 × 4 MiB | glibc | 7 | 0.0348 | 0.0169 | 0.472 [0.389, 0.509] | 11.5 → 17.5 |
-| 8 × 4 MiB | musl | 12 | 0.0323 | 0.0111 | 0.341 [0.339, 0.353] | 14.9 → 25.1 |
-| 8 × 1 MiB | glibc | 7 | 0.0140 | 0.0110 | 0.837 [0.763, 0.894] | 11.8 → 12.9 |
-| 8 × 1 MiB | musl | 12 | 0.0132 | 0.0101 | 0.763 [0.677, 0.780] | 14.9 → 17.1 |
-| 8 × 4 KiB | glibc | 6 | 0.0058 | 0.0058 | 0.981 [0.876, 1.153] | 10.6 → 10.8 |
-| 8 × 4 KiB | musl | 12 | 0.0059 | 0.0059 | 1.009 [0.950, 1.042] | 14.9 → 14.9 |
-| one 64 MiB file | glibc | 12 | 0.0560 | 0.0559 | 1.000 [0.996, 1.008] | 11.2 → 11.3 |
-| one 64 MiB file | musl | 12 | 0.0569 | 0.0567 | 0.994 [0.993, 1.007] | 14.9 → 15.0 |
-| settled status without verify | glibc | 12 | 0.0069 | 0.0068 | 1.005 [0.978, 1.027] | 10.7 → 10.8 |
-| settled status without verify | musl | 12 | 0.0072 | 0.0072 | 0.999 [0.985, 1.034] | 15.0 → 15.0 |
-| sync --verify, 8 × 64 MiB | glibc | 12 | 0.4006 | 0.0626 | 0.155 [0.154, 0.173] | 12.6 → 18.8 |
-| sync --verify, 8 × 64 MiB | musl | 12 | 0.4074 | 0.0612 | 0.150 [0.149, 0.153] | 18.0 → 26.3 |
+| 8 files of 64 MiB, warm | glibc | 9 | 0.4021 | 0.0655 | 0.163 [0.153, 0.204] | 11.8 to 17.9 |
+| 8 files of 64 MiB, warm | musl | 12 | 0.3944 | 0.0593 | 0.151 [0.149, 0.153] | 15.4 to 25.7 |
+| 8 files of 64 MiB, cold | glibc | 12 | 0.6609 | 0.1734 | 0.263 [0.261, 0.264] | 11.7 to 17.8 |
+| 8 files of 64 MiB, cold | musl | 12 | 0.6589 | 0.1731 | 0.262 [0.261, 0.264] | 15.1 to 25.3 |
+| 8 files of 64 MiB, lean | glibc | 12 | 0.3953 | 0.3963 | 1.001 [0.998, 1.005] | 11.6 to 11.6 |
+| 8 files of 64 MiB, lean | musl | 12 | 0.3988 | 0.3983 | 1.000 [0.996, 1.002] | 14.9 to 14.9 |
+| 8 files of 64 MiB, max | glibc | 11 | 0.3947 | 0.0622 | 0.158 [0.154, 0.180] | 11.6 to 17.8 |
+| 8 files of 64 MiB, max | musl | 12 | 0.3991 | 0.0597 | 0.150 [0.148, 0.151] | 14.9 to 25.1 |
+| 8 files of 64 MiB, thread cap 1 | glibc | 12 | 0.3950 | 0.3953 | 1.001 [0.999, 1.001] | 11.7 to 11.4 |
+| 8 files of 64 MiB, thread cap 1 | musl | 12 | 0.3987 | 0.3983 | 1.001 [0.999, 1.003] | 14.9 to 14.9 |
+| 8 files of 64 MiB, thread cap 2 | glibc | 10 | 0.3955 | 0.3943 | 0.998 [0.994, 1.002] | 11.6 to 11.7 |
+| 8 files of 64 MiB, thread cap 2 | musl | 12 | 0.3989 | 0.3995 | 1.002 [1.000, 1.003] | 14.9 to 14.9 |
+| 8 files of 64 MiB, thread cap 4 | glibc | 12 | 0.3966 | 0.1093 | 0.276 [0.275, 0.276] | 11.7 to 14.8 |
+| 8 files of 64 MiB, thread cap 4 | musl | 12 | 0.4000 | 0.1074 | 0.268 [0.267, 0.271] | 14.9 to 19.1 |
+| 8 files of 4 MiB | glibc | 7 | 0.0348 | 0.0169 | 0.472 [0.389, 0.509] | 11.5 to 17.5 |
+| 8 files of 4 MiB | musl | 12 | 0.0323 | 0.0111 | 0.341 [0.339, 0.353] | 14.9 to 25.1 |
+| 8 files of 1 MiB | glibc | 7 | 0.0140 | 0.0110 | 0.837 [0.763, 0.894] | 11.8 to 12.9 |
+| 8 files of 1 MiB | musl | 12 | 0.0132 | 0.0101 | 0.763 [0.677, 0.780] | 14.9 to 17.1 |
+| 8 files of 4 KiB | glibc | 6 | 0.0058 | 0.0058 | 0.981 [0.876, 1.153] | 10.6 to 10.8 |
+| 8 files of 4 KiB | musl | 12 | 0.0059 | 0.0059 | 1.009 [0.950, 1.042] | 14.9 to 14.9 |
+| one 64 MiB file | glibc | 12 | 0.0560 | 0.0559 | 1.000 [0.996, 1.008] | 11.2 to 11.3 |
+| one 64 MiB file | musl | 12 | 0.0569 | 0.0567 | 0.994 [0.993, 1.007] | 14.9 to 15.0 |
+| settled status without verify | glibc | 12 | 0.0069 | 0.0068 | 1.005 [0.978, 1.027] | 10.7 to 10.8 |
+| settled status without verify | musl | 12 | 0.0072 | 0.0072 | 0.999 [0.985, 1.034] | 15.0 to 15.0 |
+| sync --verify, 8 files of 64 MiB | glibc | 12 | 0.4006 | 0.0626 | 0.155 [0.154, 0.173] | 12.6 to 18.8 |
+| sync --verify, 8 files of 64 MiB | musl | 12 | 0.4074 | 0.0612 | 0.150 [0.149, 0.153] | 18.0 to 26.3 |
 
 warm 512 MiB verification is 84–85% faster, cold verification about 74% faster. the largest clean candidate RSS across all cases was 19.1 MiB on glibc and 26.3 MiB on musl, within the default budget. the main warm case spends 6.1 MiB more median RSS on glibc and 10.3 MiB on musl; this is reported, not called memory neutral. lean and low thread ceilings retain the original reader count and show no established memory increase. the control intervals do not establish a time regression, but the wider tiny-command bounds are not proof of equivalence.
 
 an unlocked strace check, outside timing, counted exactly 64 MiB read from each of the eight files on both arms: one reading thread before, eight after, 536,870,912 bytes in each. the gain therefore does not come from skipping hashes. worker-choice tests use fixed CPUs, sizes and ceilings. independent 4 MiB SHA-256 vectors check result ordering and refused-thread fallback; interrupted reads stay errors. the count-only policy failed the new scheduling test. deliberately dropping the IO racy-proof filter failed its existing regression, and allowing extra readers under a small ceiling failed the lean-buffer test; restoration passed. the kept path has no experiment switch.
 
-raw commands, binary hashes, source patch, reports, per-file read counts and every paired run remain in the CPU sweep's `p1-*` records. these measurements cover warm/cold ext4 NVMe on linux, not rotational disks, network filesystems, native macos/windows or aarch64 throughput; those remain unmeasured rather than inferred from the CPU gain.
+raw commands, binary hashes, source patch, reports, per-file read counts and every paired run remain in the CPU sweep's records of this verification change. these measurements cover warm/cold ext4 NVMe on linux, not rotational disks, network filesystems, native macos/windows or aarch64 throughput; those remain unmeasured rather than inferred from the CPU gain.
 
 ## conditional mirror staging shards, 2026-11-12
 
@@ -1099,16 +1099,16 @@ related: [budgets](budgets.md), [windows defender study](windows-defender.md), [
 
 one stock release executable per libc carried `FETCHLOOM_EXP_API_MEMO`, read once. the supplied interleaved harness ran both arms on cores 12–23 under the shared lock, with one warmup per arm after each acquisition. whole rounds with a load burst were excluded; failed runs remained failures. RSS below is GNU time’s child reading, not the Python parent’s inherited `wait4` high-water mark. times and RSS are medians, with observed ranges.
 
-| selections / RTT | libc | quiet pairs | seconds before → after | peak MiB before → after |
+| selections / RTT | libc | quiet pairs | seconds, before to after | peak MiB, before to after |
 |---|---|---:|---|---|
-| 100 / 1 ms | glibc | 5/12 | 0.096 (0.095–0.098) → 0.026 (0.024–0.027) | 18.88 (17.77–18.98) → 18.53 (18.24–18.77) |
-| 100 / 1 ms | musl | 11/12 | 0.099 (0.096–0.268) → 0.022 (0.022–0.024) | 39.12 (35.23–39.37) → 37.24 (35.15–37.37) |
-| 100 / 50 ms | glibc | 11/12 | 0.741 (0.738–0.787) → 0.123 (0.123–0.124) | 18.75 (18.18–19.01) → 18.58 (18.25–19.20) |
-| 100 / 50 ms | musl | 12/12 | 0.739 (0.737–0.792) → 0.121 (0.120–0.153) | 37.37 (37.12–39.38) → 37.19 (37.06–37.40) |
-| 1 / 1 ms | glibc | 13/20 | 0.013 (0.012–0.017) → 0.013 (0.013–0.017) | 13.17 (12.87–13.34) → 12.96 (12.83–13.34) |
-| 1 / 1 ms | musl | 20/20 | 0.013 (0.013–0.014) → 0.013 (0.012–0.014) | 20.96 (19.12–22.98) → 21.14 (19.21–21.21) |
-| 1 / 50 ms | glibc | 16/20 | 0.111 (0.111–0.112) → 0.111 (0.111–0.112) | 13.06 (12.86–13.35) → 13.08 (12.73–13.29) |
-| 1 / 50 ms | musl | 15/20 | 0.112 (0.111–0.112) → 0.112 (0.111–0.115) | 20.97 (20.90–23.04) → 21.14 (21.02–21.20) |
+| 100 / 1 ms | glibc | 5/12 | 0.096 (0.095–0.098) to 0.026 (0.024–0.027) | 18.88 (17.77–18.98) to 18.53 (18.24–18.77) |
+| 100 / 1 ms | musl | 11/12 | 0.099 (0.096–0.268) to 0.022 (0.022–0.024) | 39.12 (35.23–39.37) to 37.24 (35.15–37.37) |
+| 100 / 50 ms | glibc | 11/12 | 0.741 (0.738–0.787) to 0.123 (0.123–0.124) | 18.75 (18.18–19.01) to 18.58 (18.25–19.20) |
+| 100 / 50 ms | musl | 12/12 | 0.739 (0.737–0.792) to 0.121 (0.120–0.153) | 37.37 (37.12–39.38) to 37.19 (37.06–37.40) |
+| 1 / 1 ms | glibc | 13/20 | 0.013 (0.012–0.017) to 0.013 (0.013–0.017) | 13.17 (12.87–13.34) to 12.96 (12.83–13.34) |
+| 1 / 1 ms | musl | 20/20 | 0.013 (0.013–0.014) to 0.013 (0.012–0.014) | 20.96 (19.12–22.98) to 21.14 (19.21–21.21) |
+| 1 / 50 ms | glibc | 16/20 | 0.111 (0.111–0.112) to 0.111 (0.111–0.112) | 13.06 (12.86–13.35) to 13.08 (12.73–13.29) |
+| 1 / 50 ms | musl | 15/20 | 0.112 (0.111–0.112) to 0.112 (0.111–0.115) | 20.97 (20.90–23.04) to 21.14 (21.02–21.20) |
 
 at 50 ms, requests fell from 100 to 5. paired time ratios were 0.166 [0.166, 0.167] on glibc and 0.163 [0.158, 0.164] on musl, clearing the 10% speed gate. the five quiet glibc pairs at 1 ms are diagnostic, not another qualified result. one musl baseline run at 1 ms hit the harness’s 70 s limit after 77 server GETs; its cause was not isolated. it is retained as a failed run, not discarded as load noise.
 
@@ -1124,14 +1124,14 @@ one host returned 429 with `Retry-After: 5` before serving two distinct 4 KiB fi
 
 `FETCHLOOM_EXP_RELEASE_WAITS`, read once, switched both arms in each stock release executable. each shuffled batch held the shared lock for at most five minutes on cores 12–23, with one warmup per arm. the two musl controls each needed one bounded two-pair fill after a noisy round; every earlier row remains recorded. no permit-matrix run failed. the paired method and GNU-time child RSS are as in the metadata experiment above.
 
-| workload / jobs | libc | quiet pairs | seconds before → after | peak MiB before → after |
+| workload / jobs | libc | quiet pairs | seconds, before to after | peak MiB, before to after |
 |---|---|---:|---|---|
-| mixed / 2/2 | glibc | 10/10 | 13.176 (13.072–13.200) → 8.159 (8.106–8.196) | 23.22 (22.45–25.93) → 21.25 (20.29–24.46) |
-| mixed / 2/2 | musl | 10/10 | 13.185 (13.107–13.218) → 8.205 (8.193–8.214) | 50.34 (48.53–53.58) → 51.41 (45.96–53.52) |
-| healthy host / 2/2 | glibc | 10/10 | 8.159 (8.103–8.217) → 8.114 (8.104–8.233) | 20.80 (20.21–22.30) → 20.59 (20.19–22.49) |
-| healthy host / 2/2 | musl | 11/12 | 8.171 (8.104–8.221) → 8.117 (8.106–8.225) | 48.73 (44.03–54.69) → 49.45 (43.79–53.31) |
-| mixed / 8/4 | glibc | 10/10 | 8.112 (8.106–8.128) → 8.114 (8.104–8.216) | 22.78 (21.00–23.73) → 22.75 (21.59–25.34) |
-| mixed / 8/4 | musl | 11/12 | 8.210 (8.186–8.225) → 8.216 (8.200–8.224) | 52.51 (47.41–57.38) → 52.78 (50.00–58.19) |
+| mixed / 2/2 | glibc | 10/10 | 13.176 (13.072–13.200) to 8.159 (8.106–8.196) | 23.22 (22.45–25.93) to 21.25 (20.29–24.46) |
+| mixed / 2/2 | musl | 10/10 | 13.185 (13.107–13.218) to 8.205 (8.193–8.214) | 50.34 (48.53–53.58) to 51.41 (45.96–53.52) |
+| healthy host / 2/2 | glibc | 10/10 | 8.159 (8.103–8.217) to 8.114 (8.104–8.233) | 20.80 (20.21–22.30) to 20.59 (20.19–22.49) |
+| healthy host / 2/2 | musl | 11/12 | 8.171 (8.104–8.221) to 8.117 (8.106–8.225) | 48.73 (44.03–54.69) to 49.45 (43.79–53.31) |
+| mixed / 8/4 | glibc | 10/10 | 8.112 (8.106–8.128) to 8.114 (8.104–8.216) | 22.78 (21.00–23.73) to 22.75 (21.59–25.34) |
+| mixed / 8/4 | musl | 11/12 | 8.210 (8.186–8.225) to 8.216 (8.200–8.224) | 52.51 (47.41–57.38) to 52.78 (50.00–58.19) |
 
 mixed-run time ratios were 0.619 [0.619, 0.620] on glibc and 0.622 [0.621, 0.626] on musl, about 38% faster. server timestamps explain the change: the healthy host’s second request started about 5.008 s after the limited host’s first, versus 0.004 s after releasing sleeping requests’ slots. with 8/4 limits, both healthy requests already started immediately, so no default-two-host speedup is claimed. the control time intervals include 1 and end below 1.005. RSS varies between runs; its control intervals also include 1. the largest observed candidate peak was 58.19 MiB, inside the ordinary default budget.
 
@@ -1143,12 +1143,12 @@ five focused tests cover retry/quota sleeps, successful reacquisition and acquis
 
 a local host allowed two successful requests per second, ten distinct 4 KiB files in all, and otherwise returned 429 with `Retry-After: 1` but no remaining-quota headers. the prototype admitted one recovery probe after the floor and widened after its first non-429 answer. older in-flight answers could not widen it. `FETCHLOOM_EXP_QUOTA_PROBE` selected the candidate; a second comparison enabled sleeping-slot release in both arms. default 8/4 limits, 1 ms RTT, native verification and an independent hash oracle were the same in both arms. each case has ten quiet paired rounds, one warmup per arm, and no failures.
 
-| slot release in both arms | libc | total 429s before → after (range per run) | seconds before → after | peak MiB before → after |
+| slot release in both arms | libc | total 429s, before to after (range per run) | seconds, before to after | peak MiB, before to after |
 |---|---|---|---|---|
-| off | glibc | 138 (13–14) → 138 (13–14) | 4.043 (4.041–4.044) → 4.044 (4.043–4.048) | 13.98 (13.77–14.53) → 14.00 (13.77–14.17) |
-| off | musl | 137 (13–14) → 135 (13–14) | 4.043 (4.041–4.045) → 4.045 (4.043–4.089) | 24.96 (24.35–26.12) → 25.60 (23.88–25.95) |
-| on | glibc | 138 (13–14) → 139 (13–14) | 4.043 (4.040–4.046) → 4.045 (4.043–4.047) | 13.96 (13.75–14.31) → 13.92 (13.61–14.18) |
-| on | musl | 137 (13–14) → 136 (13–14) | 4.041 (4.040–4.044) → 4.044 (4.043–4.047) | 25.12 (24.14–26.25) → 25.73 (23.83–26.30) |
+| off | glibc | 138 (13–14) to 138 (13–14) | 4.043 (4.041–4.044) to 4.044 (4.043–4.048) | 13.98 (13.77–14.53) to 14.00 (13.77–14.17) |
+| off | musl | 137 (13–14) to 135 (13–14) | 4.043 (4.041–4.045) to 4.045 (4.043–4.089) | 24.96 (24.35–26.12) to 25.60 (23.88–25.95) |
+| on | glibc | 138 (13–14) to 139 (13–14) | 4.043 (4.040–4.046) to 4.045 (4.043–4.047) | 13.96 (13.75–14.31) to 13.92 (13.61–14.18) |
+| on | musl | 137 (13–14) to 136 (13–14) | 4.041 (4.040–4.044) to 4.044 (4.043–4.047) | 25.12 (24.14–26.25) to 25.73 (23.83–26.30) |
 
 dropped. none of the comparisons reduced 429s by the required 20%; time differed by about 0.1%. one successful probe did not reveal the remaining quota, so widening immediately recreated the refusal burst. ordinary-file controls also ran on both libc targets and showed no established time or RSS regression. the proposed narrowing, its state and its switch are not shipped. red and mutation checks for serialization, old in-flight responses, widening and the `Retry-After` floor remain with the prototype evidence.
 
@@ -1168,63 +1168,63 @@ a later independent native-RSS check used 32 pairs for each one- and ten-dataset
 
 an allocator diagnostic changed only `MIMALLOC_PURGE_DELAY` to 0: the 1,000-rename musl peaks became 20.4/20.1 MiB, versus 28.9/36.0 MiB at the shipped 1,000 ms delay. that supports a retention explanation, but neither an allocator change nor the diagnostic's lower memory is part of this keep decision. all tables below use the default allocator policy.
 
-| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
 |---|---|---:|---|---|---|---|
-| glibc | status, datasets | 1 | 3.763 [3.721, 3.803] | 3.768 [3.737, 3.833] | 1.0032 [0.9929, 1.0113] | 10.36 [10.09, 10.56] → 10.37 [10.12, 10.76] |
-| musl | status, datasets | 1 | 3.847 [3.814, 3.924] | 3.864 [3.792, 3.927] | 0.9944 [0.9832, 1.0181] | 14.95 [14.95, 14.95] → 14.95 [14.94, 14.95] |
-| glibc | lock, datasets | 1 | 4.350 [4.271, 4.418] | 4.427 [4.345, 4.567] | 1.0064 [0.9963, 1.0244] | 11.70 [11.25, 11.80] → 11.76 [11.60, 11.79] |
-| musl | lock, datasets | 1 | 3.908 [3.825, 4.014] | 3.991 [3.936, 4.073] | 1.0090 [0.9879, 1.0436] | 14.93 [14.93, 14.93] → 14.93 [14.80, 14.93] |
-| glibc | status, datasets | 10 | 4.381 [4.245, 4.492] | 4.378 [4.268, 4.423] | 0.9925 [0.9740, 1.0237] | 10.51 [10.43, 10.67] → 10.64 [9.68, 10.76] |
-| musl | status, datasets | 10 | 4.039 [4.010, 4.110] | 4.016 [3.965, 4.094] | 0.9891 [0.9792, 1.0023] | 14.95 [14.95, 14.95] → 14.94 [14.87, 14.95] |
-| glibc | lock, datasets | 10 | 4.451 [4.385, 4.532] | 4.544 [4.442, 4.733] | 1.0171 [0.9971, 1.0345] | 12.00 [11.83, 12.07] → 11.82 [11.57, 11.99] |
-| musl | lock, datasets | 10 | 3.684 [3.661, 3.748] | 3.690 [3.647, 3.816] | 0.9962 [0.9870, 1.0093] | 14.93 [14.80, 14.93] → 14.93 [14.80, 14.93] |
-| glibc | status, datasets | 1,000 | 27.710 [27.489, 27.813] | 25.647 [25.160, 26.444] | 0.9269 [0.9159, 0.9487] | 13.30 [13.12, 13.34] → 13.37 [12.90, 13.73] |
-| musl | status, datasets | 1,000 | 27.027 [26.215, 28.016] | 25.398 [24.375, 25.745] | 0.9246 [0.9153, 0.9478] | 25.38 [25.20, 25.39] → 25.38 [25.31, 25.39] |
-| glibc | lock, datasets | 1,000 | 14.598 [14.281, 14.840] | 12.376 [12.090, 12.635] | 0.8422 [0.8328, 0.8608] | 14.10 [13.93, 14.41] → 14.22 [14.12, 14.47] |
-| musl | lock, datasets | 1,000 | 13.995 [13.565, 14.193] | 11.816 [11.491, 12.207] | 0.8353 [0.8269, 0.8655] | 31.11 [31.11, 31.11] → 31.11 [30.93, 31.11] |
-| glibc | status, datasets | 40,000 | 7593.403 [7290.038, 7822.390] | 1104.601 [1084.080, 1124.374] | 0.1455 [0.1404, 0.1505] | 116.12 [115.20, 116.25] → 116.16 [116.14, 116.18] |
-| musl | status, datasets | 40,000 | 3457.476 [3449.533, 3466.505] | 875.585 [864.818, 883.389] | 0.2536 [0.2485, 0.2554] | 154.71 [154.53, 154.77] → 155.40 [155.22, 155.41] |
-| glibc | lock, datasets | 40,000 | 7408.789 [7305.159, 7529.643] | 439.115 [436.297, 448.144] | 0.0599 [0.0588, 0.0608] | 116.55 [116.30, 116.68] → 116.44 [115.86, 116.45] |
-| musl | lock, datasets | 40,000 | 2863.722 [2856.372, 2866.920] | 285.986 [284.816, 287.958] | 0.0999 [0.0994, 0.1006] | 186.08 [186.08, 186.25] → 186.95 [186.95, 187.13] |
-| glibc | unique renames | 1 | 4.602 [4.550, 4.680] | 4.630 [4.557, 4.775] | 1.0027 [0.9918, 1.0311] | 10.96 [10.66, 11.39] → 11.14 [11.12, 11.43] |
-| musl | unique renames | 1 | 4.434 [4.392, 4.503] | 4.285 [4.212, 4.338] | 0.9685 [0.9584, 0.9787] | 17.60 [17.48, 17.61] → 15.57 [15.57, 15.57] |
-| glibc | unique renames | 10 | 4.881 [4.802, 5.010] | 4.616 [4.548, 4.701] | 0.9496 [0.9222, 0.9684] | 11.08 [10.57, 11.51] → 11.10 [10.87, 11.23] |
-| musl | unique renames | 10 | 4.413 [4.382, 4.458] | 4.324 [4.284, 4.347] | 0.9773 [0.9633, 0.9898] | 17.61 [17.35, 17.61] → 17.60 [17.48, 17.61] |
-| glibc | unique renames | 600 | 1335.849 [1280.093, 1342.686] | 15.836 [15.450, 15.935] | 0.0119 [0.0116, 0.0123] | 12.97 [12.92, 13.04] → 12.85 [12.64, 12.92] |
-| musl | unique renames | 600 | 1649.760 [1646.830, 1651.957] | 14.560 [14.471, 14.932] | 0.0088 [0.0088, 0.0091] | 24.88 [24.88, 24.89] → 26.02 [26.01, 26.02] |
-| glibc | unique renames | 1,000 | 5472.140 [5400.593, 5495.236] | 23.760 [22.958, 24.773] | 0.0044 [0.0042, 0.0045] | 14.20 [13.71, 14.52] → 14.38 [14.11, 14.55] |
-| musl | unique renames | 1,000 | 6838.609 [6829.122, 6847.039] | 21.511 [21.101, 21.947] | 0.0031 [0.0031, 0.0032] | 28.89 [28.88, 28.89] → 36.01 [35.82, 36.02] |
-| glibc | status, files control | 100,000 | 447.400 [429.189, 463.357] | 429.063 [423.937, 448.631] | 0.9597 [0.9312, 1.0064] | 78.49 [78.38, 78.58] → 78.38 [78.00, 78.63] |
-| musl | status, files control | 100,000 | 385.965 [369.276, 392.810] | 381.148 [370.645, 390.603] | 1.0021 [0.9912, 1.0105] | 97.39 [85.35, 99.14] → 95.44 [85.21, 100.99] |
+| glibc | status, datasets | 1 | 3.763 [3.721, 3.803] | 3.768 [3.737, 3.833] | 1.0032 [0.9929, 1.0113] | 10.36 [10.09, 10.56] to 10.37 [10.12, 10.76] |
+| musl | status, datasets | 1 | 3.847 [3.814, 3.924] | 3.864 [3.792, 3.927] | 0.9944 [0.9832, 1.0181] | 14.95 [14.95, 14.95] to 14.95 [14.94, 14.95] |
+| glibc | lock, datasets | 1 | 4.350 [4.271, 4.418] | 4.427 [4.345, 4.567] | 1.0064 [0.9963, 1.0244] | 11.70 [11.25, 11.80] to 11.76 [11.60, 11.79] |
+| musl | lock, datasets | 1 | 3.908 [3.825, 4.014] | 3.991 [3.936, 4.073] | 1.0090 [0.9879, 1.0436] | 14.93 [14.93, 14.93] to 14.93 [14.80, 14.93] |
+| glibc | status, datasets | 10 | 4.381 [4.245, 4.492] | 4.378 [4.268, 4.423] | 0.9925 [0.9740, 1.0237] | 10.51 [10.43, 10.67] to 10.64 [9.68, 10.76] |
+| musl | status, datasets | 10 | 4.039 [4.010, 4.110] | 4.016 [3.965, 4.094] | 0.9891 [0.9792, 1.0023] | 14.95 [14.95, 14.95] to 14.94 [14.87, 14.95] |
+| glibc | lock, datasets | 10 | 4.451 [4.385, 4.532] | 4.544 [4.442, 4.733] | 1.0171 [0.9971, 1.0345] | 12.00 [11.83, 12.07] to 11.82 [11.57, 11.99] |
+| musl | lock, datasets | 10 | 3.684 [3.661, 3.748] | 3.690 [3.647, 3.816] | 0.9962 [0.9870, 1.0093] | 14.93 [14.80, 14.93] to 14.93 [14.80, 14.93] |
+| glibc | status, datasets | 1,000 | 27.710 [27.489, 27.813] | 25.647 [25.160, 26.444] | 0.9269 [0.9159, 0.9487] | 13.30 [13.12, 13.34] to 13.37 [12.90, 13.73] |
+| musl | status, datasets | 1,000 | 27.027 [26.215, 28.016] | 25.398 [24.375, 25.745] | 0.9246 [0.9153, 0.9478] | 25.38 [25.20, 25.39] to 25.38 [25.31, 25.39] |
+| glibc | lock, datasets | 1,000 | 14.598 [14.281, 14.840] | 12.376 [12.090, 12.635] | 0.8422 [0.8328, 0.8608] | 14.10 [13.93, 14.41] to 14.22 [14.12, 14.47] |
+| musl | lock, datasets | 1,000 | 13.995 [13.565, 14.193] | 11.816 [11.491, 12.207] | 0.8353 [0.8269, 0.8655] | 31.11 [31.11, 31.11] to 31.11 [30.93, 31.11] |
+| glibc | status, datasets | 40,000 | 7593.403 [7290.038, 7822.390] | 1104.601 [1084.080, 1124.374] | 0.1455 [0.1404, 0.1505] | 116.12 [115.20, 116.25] to 116.16 [116.14, 116.18] |
+| musl | status, datasets | 40,000 | 3457.476 [3449.533, 3466.505] | 875.585 [864.818, 883.389] | 0.2536 [0.2485, 0.2554] | 154.71 [154.53, 154.77] to 155.40 [155.22, 155.41] |
+| glibc | lock, datasets | 40,000 | 7408.789 [7305.159, 7529.643] | 439.115 [436.297, 448.144] | 0.0599 [0.0588, 0.0608] | 116.55 [116.30, 116.68] to 116.44 [115.86, 116.45] |
+| musl | lock, datasets | 40,000 | 2863.722 [2856.372, 2866.920] | 285.986 [284.816, 287.958] | 0.0999 [0.0994, 0.1006] | 186.08 [186.08, 186.25] to 186.95 [186.95, 187.13] |
+| glibc | unique renames | 1 | 4.602 [4.550, 4.680] | 4.630 [4.557, 4.775] | 1.0027 [0.9918, 1.0311] | 10.96 [10.66, 11.39] to 11.14 [11.12, 11.43] |
+| musl | unique renames | 1 | 4.434 [4.392, 4.503] | 4.285 [4.212, 4.338] | 0.9685 [0.9584, 0.9787] | 17.60 [17.48, 17.61] to 15.57 [15.57, 15.57] |
+| glibc | unique renames | 10 | 4.881 [4.802, 5.010] | 4.616 [4.548, 4.701] | 0.9496 [0.9222, 0.9684] | 11.08 [10.57, 11.51] to 11.10 [10.87, 11.23] |
+| musl | unique renames | 10 | 4.413 [4.382, 4.458] | 4.324 [4.284, 4.347] | 0.9773 [0.9633, 0.9898] | 17.61 [17.35, 17.61] to 17.60 [17.48, 17.61] |
+| glibc | unique renames | 600 | 1335.849 [1280.093, 1342.686] | 15.836 [15.450, 15.935] | 0.0119 [0.0116, 0.0123] | 12.97 [12.92, 13.04] to 12.85 [12.64, 12.92] |
+| musl | unique renames | 600 | 1649.760 [1646.830, 1651.957] | 14.560 [14.471, 14.932] | 0.0088 [0.0088, 0.0091] | 24.88 [24.88, 24.89] to 26.02 [26.01, 26.02] |
+| glibc | unique renames | 1,000 | 5472.140 [5400.593, 5495.236] | 23.760 [22.958, 24.773] | 0.0044 [0.0042, 0.0045] | 14.20 [13.71, 14.52] to 14.38 [14.11, 14.55] |
+| musl | unique renames | 1,000 | 6838.609 [6829.122, 6847.039] | 21.511 [21.101, 21.947] | 0.0031 [0.0031, 0.0032] | 28.89 [28.88, 28.89] to 36.01 [35.82, 36.02] |
+| glibc | status, files control | 100,000 | 447.400 [429.189, 463.357] | 429.063 [423.937, 448.631] | 0.9597 [0.9312, 1.0064] | 78.49 [78.38, 78.58] to 78.38 [78.00, 78.63] |
+| musl | status, files control | 100,000 | 385.965 [369.276, 392.810] | 381.148 [370.645, 390.603] | 1.0021 [0.9912, 1.0105] | 97.39 [85.35, 99.14] to 95.44 [85.21, 100.99] |
 
-| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+| libc | workload | n | instructions M, before to after | clean pairs | excluded burst pairs |
 |---|---|---:|---:|---:|---:|
-| glibc | status, datasets | 1 | 3.173 → 3.173 | 64 | 0 |
-| musl | status, datasets | 1 | 2.526 → 2.527 | 64 | 0 |
-| glibc | lock, datasets | 1 | 3.152 → 3.155 | 64 | 0 |
-| musl | lock, datasets | 1 | 2.483 → 2.486 | 64 | 0 |
-| glibc | status, datasets | 10 | 3.997 → 3.999 | 64 | 0 |
-| musl | status, datasets | 10 | 3.244 → 3.239 | 64 | 0 |
-| glibc | lock, datasets | 10 | 3.579 → 3.579 | 60 | 4 |
-| musl | lock, datasets | 10 | 2.875 → 2.875 | 64 | 0 |
-| glibc | status, datasets | 1,000 | 115.099 → 98.731 | 10 | 0 |
-| musl | status, datasets | 1,000 | 110.030 → 88.277 | 12 | 0 |
-| glibc | lock, datasets | 1,000 | 68.819 → 52.409 | 10 | 0 |
-| musl | lock, datasets | 1,000 | 71.600 → 49.852 | 12 | 0 |
-| glibc | status, datasets | 40,000 | 30972.136 → 4036.744 | 10 | 2 |
-| musl | status, datasets | 40,000 | 29174.134 → 3655.827 | 10 | 0 |
-| glibc | lock, datasets | 40,000 | 29038.889 → 2126.822 | 10 | 0 |
-| musl | lock, datasets | 40,000 | 27560.992 → 2042.746 | 11 | 17 |
-| glibc | unique renames | 1 | 4.239 → 4.236 | 61 | 3 |
-| musl | unique renames | 1 | 3.195 → 3.187 | 64 | 0 |
-| glibc | unique renames | 10 | 6.141 → 5.362 | 64 | 0 |
-| musl | unique renames | 10 | 4.886 → 4.191 | 64 | 0 |
-| glibc | unique renames | 600 | 10758.294 → 84.639 | 10 | 5 |
-| musl | unique renames | 600 | 15987.157 → 77.303 | 12 | 0 |
-| glibc | unique renames | 1,000 | 43479.296 → 138.707 | 10 | 2 |
-| musl | unique renames | 1,000 | 68013.643 → 127.642 | 12 | 0 |
-| glibc | status, files control | 100,000 | 2000.476 → 2000.509 | 10 | 5 |
-| musl | status, files control | 100,000 | 2474.830 → 2475.101 | 12 | 0 |
+| glibc | status, datasets | 1 | 3.173 to 3.173 | 64 | 0 |
+| musl | status, datasets | 1 | 2.526 to 2.527 | 64 | 0 |
+| glibc | lock, datasets | 1 | 3.152 to 3.155 | 64 | 0 |
+| musl | lock, datasets | 1 | 2.483 to 2.486 | 64 | 0 |
+| glibc | status, datasets | 10 | 3.997 to 3.999 | 64 | 0 |
+| musl | status, datasets | 10 | 3.244 to 3.239 | 64 | 0 |
+| glibc | lock, datasets | 10 | 3.579 to 3.579 | 60 | 4 |
+| musl | lock, datasets | 10 | 2.875 to 2.875 | 64 | 0 |
+| glibc | status, datasets | 1,000 | 115.099 to 98.731 | 10 | 0 |
+| musl | status, datasets | 1,000 | 110.030 to 88.277 | 12 | 0 |
+| glibc | lock, datasets | 1,000 | 68.819 to 52.409 | 10 | 0 |
+| musl | lock, datasets | 1,000 | 71.600 to 49.852 | 12 | 0 |
+| glibc | status, datasets | 40,000 | 30972.136 to 4036.744 | 10 | 2 |
+| musl | status, datasets | 40,000 | 29174.134 to 3655.827 | 10 | 0 |
+| glibc | lock, datasets | 40,000 | 29038.889 to 2126.822 | 10 | 0 |
+| musl | lock, datasets | 40,000 | 27560.992 to 2042.746 | 11 | 17 |
+| glibc | unique renames | 1 | 4.239 to 4.236 | 61 | 3 |
+| musl | unique renames | 1 | 3.195 to 3.187 | 64 | 0 |
+| glibc | unique renames | 10 | 6.141 to 5.362 | 64 | 0 |
+| musl | unique renames | 10 | 4.886 to 4.191 | 64 | 0 |
+| glibc | unique renames | 600 | 10758.294 to 84.639 | 10 | 5 |
+| musl | unique renames | 600 | 15987.157 to 77.303 | 12 | 0 |
+| glibc | unique renames | 1,000 | 43479.296 to 138.707 | 10 | 2 |
+| musl | unique renames | 1,000 | 68013.643 to 127.642 | 12 | 0 |
+| glibc | status, files control | 100,000 | 2000.476 to 2000.509 | 10 | 5 |
+| musl | status, files control | 100,000 | 2474.830 to 2475.101 | 12 | 0 |
 
 characterizations passed before the rewrite. the new cases are `fetched_renames_keep_bytes_and_report_new_name_order`, `named_rename_copies_the_pin_and_excludes_other_new_names`, `fetched_matches_require_unique_specs_and_the_same_extraction`, `given_and_upgraded_names_are_not_rename_candidates`, `recipe_renames_match_the_ordered_recipe_not_its_old_hashes` and `recipe_renames_refuse_ambiguous_old_or_new_shapes`. disabling the duplicate-new guard made the ambiguity cases fail; restoring it passed. the existing real-CLI fetched and recipe rename cases also passed. fixtures, experiment binaries, raw rounds, native RSS and mutation evidence remain with the sweep outside the repository.
 
@@ -1236,31 +1236,31 @@ the build, paired analysis, noise filter and independent native-RSS method are t
 
 wall time improved substantially at 40,000 names and the small cases showed no established slowdown, but native musl RSS rose from 137.6–144.4 MiB to 184.2–184.4 MiB. that is much more than the modest memory allowance, so the change did not stay. the unnamed 100,000-file export already misses the 150 MB target and is unchanged; it does not excuse a new increase elsewhere. no production code or allocator setting was retained for this proposal.
 
-| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
 |---|---|---:|---|---|---|---|
-| glibc | all named exports | 1 | 3.830 [3.753, 3.925] | 3.762 [3.685, 3.931] | 0.9916 [0.9728, 1.0106] | 10.99 [10.85, 11.14] → 10.78 [10.18, 10.98] |
-| musl | all named exports | 1 | 3.596 [3.567, 3.619] | 3.579 [3.560, 3.621] | 0.9935 [0.9859, 1.0026] | 15.56 [15.56, 15.57] → 15.56 [15.55, 15.57] |
-| glibc | all named exports | 10 | 3.964 [3.825, 4.026] | 3.802 [3.776, 3.950] | 0.9824 [0.9586, 1.0136] | 10.68 [10.22, 10.99] → 10.73 [10.35, 11.14] |
-| musl | all named exports | 10 | 4.129 [4.049, 4.251] | 4.162 [4.022, 4.229] | 0.9935 [0.9858, 1.0203] | 15.57 [15.56, 15.57] → 15.56 [15.56, 15.61] |
-| glibc | all named exports | 1,000 | 27.275 [26.833, 27.860] | 16.389 [16.146, 17.001] | 0.6045 [0.5944, 0.6177] | 14.16 [13.61, 14.23] → 14.14 [13.43, 14.16] |
-| musl | all named exports | 1,000 | 26.128 [25.391, 26.518] | 14.756 [14.343, 15.112] | 0.5659 [0.5560, 0.5823] | 35.82 [35.77, 35.82] → 35.82 [35.82, 35.83] |
-| glibc | all named exports | 40,000 | 17657.924 [17186.672, 17752.020] | 636.157 [625.705, 643.062] | 0.0367 [0.0356, 0.0374] | 144.78 [144.77, 144.92] → 146.40 [145.85, 146.91] |
-| musl | all named exports | 40,000 | 14356.194 [14332.797, 14361.045] | 394.845 [394.072, 397.699] | 0.0275 [0.0275, 0.0277] | 143.02 [137.62, 144.43] → 184.27 [184.15, 184.35] |
-| glibc | unnamed export, files control | 100,000 | 334.756 [327.599, 337.032] | 334.278 [331.241, 335.977] | 1.0023 [0.9901, 1.0134] | 105.09 [104.79, 105.33] → 104.91 [104.89, 105.16] |
-| musl | unnamed export, files control | 100,000 | 264.906 [263.350, 268.155] | 265.317 [263.419, 266.273] | 1.0006 [0.9926, 1.0022] | 177.88 [177.88, 177.89] → 177.88 [177.88, 177.88] |
+| glibc | all named exports | 1 | 3.830 [3.753, 3.925] | 3.762 [3.685, 3.931] | 0.9916 [0.9728, 1.0106] | 10.99 [10.85, 11.14] to 10.78 [10.18, 10.98] |
+| musl | all named exports | 1 | 3.596 [3.567, 3.619] | 3.579 [3.560, 3.621] | 0.9935 [0.9859, 1.0026] | 15.56 [15.56, 15.57] to 15.56 [15.55, 15.57] |
+| glibc | all named exports | 10 | 3.964 [3.825, 4.026] | 3.802 [3.776, 3.950] | 0.9824 [0.9586, 1.0136] | 10.68 [10.22, 10.99] to 10.73 [10.35, 11.14] |
+| musl | all named exports | 10 | 4.129 [4.049, 4.251] | 4.162 [4.022, 4.229] | 0.9935 [0.9858, 1.0203] | 15.57 [15.56, 15.57] to 15.56 [15.56, 15.61] |
+| glibc | all named exports | 1,000 | 27.275 [26.833, 27.860] | 16.389 [16.146, 17.001] | 0.6045 [0.5944, 0.6177] | 14.16 [13.61, 14.23] to 14.14 [13.43, 14.16] |
+| musl | all named exports | 1,000 | 26.128 [25.391, 26.518] | 14.756 [14.343, 15.112] | 0.5659 [0.5560, 0.5823] | 35.82 [35.77, 35.82] to 35.82 [35.82, 35.83] |
+| glibc | all named exports | 40,000 | 17657.924 [17186.672, 17752.020] | 636.157 [625.705, 643.062] | 0.0367 [0.0356, 0.0374] | 144.78 [144.77, 144.92] to 146.40 [145.85, 146.91] |
+| musl | all named exports | 40,000 | 14356.194 [14332.797, 14361.045] | 394.845 [394.072, 397.699] | 0.0275 [0.0275, 0.0277] | 143.02 [137.62, 144.43] to 184.27 [184.15, 184.35] |
+| glibc | unnamed export, files control | 100,000 | 334.756 [327.599, 337.032] | 334.278 [331.241, 335.977] | 1.0023 [0.9901, 1.0134] | 105.09 [104.79, 105.33] to 104.91 [104.89, 105.16] |
+| musl | unnamed export, files control | 100,000 | 264.906 [263.350, 268.155] | 265.317 [263.419, 266.273] | 1.0006 [0.9926, 1.0022] | 177.88 [177.88, 177.89] to 177.88 [177.88, 177.88] |
 
-| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+| libc | workload | n | instructions M, before to after | clean pairs | excluded burst pairs |
 |---|---|---:|---:|---:|---:|
-| glibc | all named exports | 1 | 3.126 → 3.127 | 32 | 34 |
-| musl | all named exports | 1 | 2.493 → 2.490 | 64 | 0 |
-| glibc | all named exports | 10 | 3.755 → 3.757 | 32 | 54 |
-| musl | all named exports | 10 | 3.047 → 3.051 | 64 | 0 |
-| glibc | all named exports | 1,000 | 158.972 → 76.988 | 10 | 0 |
-| musl | all named exports | 1,000 | 176.873 → 68.485 | 12 | 0 |
-| glibc | all named exports | 40,000 | 137582.837 → 3183.745 | 10 | 0 |
-| musl | all named exports | 40,000 | 130462.786 → 2889.036 | 12 | 0 |
-| glibc | unnamed export, files control | 100,000 | 2522.494 → 2523.609 | 10 | 12 |
-| musl | unnamed export, files control | 100,000 | 2314.885 → 2314.957 | 12 | 0 |
+| glibc | all named exports | 1 | 3.126 to 3.127 | 32 | 34 |
+| musl | all named exports | 1 | 2.493 to 2.490 | 64 | 0 |
+| glibc | all named exports | 10 | 3.755 to 3.757 | 32 | 54 |
+| musl | all named exports | 10 | 3.047 to 3.051 | 64 | 0 |
+| glibc | all named exports | 1,000 | 158.972 to 76.988 | 10 | 0 |
+| musl | all named exports | 1,000 | 176.873 to 68.485 | 12 | 0 |
+| glibc | all named exports | 40,000 | 137582.837 to 3183.745 | 10 | 0 |
+| musl | all named exports | 40,000 | 130462.786 to 2889.036 | 12 | 0 |
+| glibc | unnamed export, files control | 100,000 | 2522.494 to 2523.609 | 10 | 12 |
+| musl | unnamed export, files control | 100,000 | 2314.885 to 2314.957 | 12 | 0 |
 
 the borrowed vector itself occupies about 0.61 MiB at 40,000 names. the shipped mimalloc 3.3.2 reports a 1,000 ms purge delay. a separate causal probe changed only that option, once per arm, and obtained:
 
@@ -1283,68 +1283,68 @@ v1 used the earlier 27811da3 build; v2 and v3 include c3438f1c's CPU changes and
 
 in a fan-out fixture, n recipes share one input of n files; the commands are offline JSON `status` and `build --dry-run`. no-reuse controls give each recipe its own one-file input. the named control previews one recipe among 1,000, and the ordinary 100,000-file status control has no recipes. all v2 output pairs matched. the complete v2 matrix follows; times are medians with 95% intervals, and RSS is median [minimum, maximum] of per-process peaks in MiB.
 
-| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
 |---|---|---:|---|---|---|---|
-| glibc | shared-input status | 1 | 4.432 [4.404, 4.457] | 4.458 [4.410, 4.496] | 1.0035 [1.0005, 1.0118] | 11.69 [11.14, 12.25] → 11.73 [10.85, 12.36] |
-| musl | shared-input status | 1 | 4.111 [4.085, 4.152] | 4.109 [4.080, 4.150] | 1.0037 [0.9950, 1.0148] | 18.05 [18.05, 18.30] → 18.05 [18.05, 18.05] |
-| glibc | shared-input dry run | 1 | 3.858 [3.842, 3.919] | 3.850 [3.825, 3.877] | 0.9957 [0.9828, 1.0084] | 11.60 [11.08, 11.92] → 11.58 [10.87, 12.00] |
-| musl | shared-input dry run | 1 | 3.371 [3.305, 3.408] | 3.391 [3.332, 3.458] | 1.0093 [0.9953, 1.0198] | 16.25 [16.25, 16.26] → 16.25 [16.25, 16.26] |
-| glibc | shared-input status | 10 | 4.470 [4.441, 4.499] | 4.452 [4.420, 4.499] | 0.9939 [0.9882, 1.0000] | 11.84 [11.05, 12.12] → 11.82 [10.89, 12.16] |
-| musl | shared-input status | 10 | 4.392 [4.361, 4.421] | 4.349 [4.326, 4.364] | 0.9926 [0.9798, 0.9965] | 18.30 [18.30, 18.31] → 18.30 [18.30, 18.31] |
-| glibc | shared-input dry run | 10 | 4.181 [4.109, 4.273] | 4.126 [4.005, 4.241] | 0.9827 [0.9796, 0.9895] | 11.77 [11.05, 12.31] → 11.78 [11.09, 12.07] |
-| musl | shared-input dry run | 10 | 3.607 [3.551, 3.736] | 3.530 [3.480, 3.591] | 0.9776 [0.9683, 0.9905] | 16.50 [16.25, 16.51] → 16.50 [16.25, 16.51] |
-| glibc | shared-input status | 1,000 | 447.475 [445.695, 448.513] | 25.185 [25.050, 25.782] | 0.0565 [0.0562, 0.0569] | 16.84 [16.55, 17.33] → 16.95 [16.71, 17.14] |
-| musl | shared-input status | 1,000 | 463.236 [462.403, 465.187] | 19.448 [19.311, 19.622] | 0.0419 [0.0417, 0.0422] | 34.27 [34.27, 34.28] → 30.27 [30.27, 30.28] |
-| glibc | shared-input dry run | 1,000 | 1163.073 [1155.403, 1172.514] | 739.067 [730.816, 749.855] | 0.6308 [0.6269, 0.6486] | 16.36 [15.79, 16.71] → 16.19 [16.04, 16.43] |
-| musl | shared-input dry run | 1,000 | 1159.120 [1155.832, 1161.063] | 709.471 [707.390, 711.157] | 0.6119 [0.6098, 0.6143] | 32.35 [32.35, 32.36] → 32.60 [32.35, 32.60] |
-| glibc | shared-input status | 4,000 | 6875.321 [6837.000, 7035.020] | 97.247 [95.045, 101.165] | 0.0140 [0.0139, 0.0144] | 33.42 [33.02, 33.68] → 32.33 [32.03, 33.43] |
-| musl | shared-input status | 4,000 | 7186.068 [7175.918, 7197.408] | 66.039 [65.833, 67.124] | 0.0092 [0.0092, 0.0093] | 53.53 [53.52, 53.53] → 70.27 [70.27, 70.28] |
-| glibc | status, no recipes | 100,000 | 426.502 [424.685, 430.796] | 427.475 [425.807, 431.293] | 1.0003 [0.9956, 1.0115] | 79.11 [79.02, 79.47] → 79.10 [78.98, 79.20] |
-| musl | status, no recipes | 100,000 | 367.862 [365.961, 370.291] | 368.748 [367.061, 370.699] | 1.0024 [0.9971, 1.0107] | 95.80 [85.65, 95.90] → 86.14 [85.65, 95.98] |
-| glibc | distinct-input status | 1,000 | 46.029 [45.616, 46.266] | 46.585 [46.367, 47.022] | 1.0111 [1.0015, 1.0199] | 19.53 [19.32, 19.96] → 20.61 [20.48, 20.67] |
-| musl | distinct-input status | 1,000 | 35.438 [35.332, 35.568] | 35.516 [35.293, 35.607] | 1.0010 [0.9950, 1.0050] | 42.27 [42.27, 42.28] → 44.28 [44.27, 44.52] |
-| glibc | distinct-input status | 4,000 | 190.867 [189.802, 191.724] | 191.076 [189.779, 192.440] | 0.9985 [0.9932, 1.0064] | 47.23 [46.85, 47.38] → 46.98 [46.67, 47.03] |
-| musl | distinct-input status | 4,000 | 132.682 [132.340, 133.029] | 132.696 [132.229, 132.942] | 1.0018 [0.9961, 1.0064] | 82.28 [82.03, 82.28] → 82.28 [82.28, 82.28] |
-| glibc | one named dry run | 1,000 | 18.454 [18.283, 19.108] | 18.490 [18.265, 18.976] | 1.0036 [0.9924, 1.0106] | 16.11 [15.94, 16.67] → 16.39 [16.02, 16.52] |
-| musl | one named dry run | 1,000 | 16.722 [16.662, 16.851] | 16.832 [16.631, 16.923] | 1.0065 [0.9966, 1.0138] | 26.36 [26.35, 26.60] → 26.35 [26.34, 26.60] |
+| glibc | shared-input status | 1 | 4.432 [4.404, 4.457] | 4.458 [4.410, 4.496] | 1.0035 [1.0005, 1.0118] | 11.69 [11.14, 12.25] to 11.73 [10.85, 12.36] |
+| musl | shared-input status | 1 | 4.111 [4.085, 4.152] | 4.109 [4.080, 4.150] | 1.0037 [0.9950, 1.0148] | 18.05 [18.05, 18.30] to 18.05 [18.05, 18.05] |
+| glibc | shared-input dry run | 1 | 3.858 [3.842, 3.919] | 3.850 [3.825, 3.877] | 0.9957 [0.9828, 1.0084] | 11.60 [11.08, 11.92] to 11.58 [10.87, 12.00] |
+| musl | shared-input dry run | 1 | 3.371 [3.305, 3.408] | 3.391 [3.332, 3.458] | 1.0093 [0.9953, 1.0198] | 16.25 [16.25, 16.26] to 16.25 [16.25, 16.26] |
+| glibc | shared-input status | 10 | 4.470 [4.441, 4.499] | 4.452 [4.420, 4.499] | 0.9939 [0.9882, 1.0000] | 11.84 [11.05, 12.12] to 11.82 [10.89, 12.16] |
+| musl | shared-input status | 10 | 4.392 [4.361, 4.421] | 4.349 [4.326, 4.364] | 0.9926 [0.9798, 0.9965] | 18.30 [18.30, 18.31] to 18.30 [18.30, 18.31] |
+| glibc | shared-input dry run | 10 | 4.181 [4.109, 4.273] | 4.126 [4.005, 4.241] | 0.9827 [0.9796, 0.9895] | 11.77 [11.05, 12.31] to 11.78 [11.09, 12.07] |
+| musl | shared-input dry run | 10 | 3.607 [3.551, 3.736] | 3.530 [3.480, 3.591] | 0.9776 [0.9683, 0.9905] | 16.50 [16.25, 16.51] to 16.50 [16.25, 16.51] |
+| glibc | shared-input status | 1,000 | 447.475 [445.695, 448.513] | 25.185 [25.050, 25.782] | 0.0565 [0.0562, 0.0569] | 16.84 [16.55, 17.33] to 16.95 [16.71, 17.14] |
+| musl | shared-input status | 1,000 | 463.236 [462.403, 465.187] | 19.448 [19.311, 19.622] | 0.0419 [0.0417, 0.0422] | 34.27 [34.27, 34.28] to 30.27 [30.27, 30.28] |
+| glibc | shared-input dry run | 1,000 | 1163.073 [1155.403, 1172.514] | 739.067 [730.816, 749.855] | 0.6308 [0.6269, 0.6486] | 16.36 [15.79, 16.71] to 16.19 [16.04, 16.43] |
+| musl | shared-input dry run | 1,000 | 1159.120 [1155.832, 1161.063] | 709.471 [707.390, 711.157] | 0.6119 [0.6098, 0.6143] | 32.35 [32.35, 32.36] to 32.60 [32.35, 32.60] |
+| glibc | shared-input status | 4,000 | 6875.321 [6837.000, 7035.020] | 97.247 [95.045, 101.165] | 0.0140 [0.0139, 0.0144] | 33.42 [33.02, 33.68] to 32.33 [32.03, 33.43] |
+| musl | shared-input status | 4,000 | 7186.068 [7175.918, 7197.408] | 66.039 [65.833, 67.124] | 0.0092 [0.0092, 0.0093] | 53.53 [53.52, 53.53] to 70.27 [70.27, 70.28] |
+| glibc | status, no recipes | 100,000 | 426.502 [424.685, 430.796] | 427.475 [425.807, 431.293] | 1.0003 [0.9956, 1.0115] | 79.11 [79.02, 79.47] to 79.10 [78.98, 79.20] |
+| musl | status, no recipes | 100,000 | 367.862 [365.961, 370.291] | 368.748 [367.061, 370.699] | 1.0024 [0.9971, 1.0107] | 95.80 [85.65, 95.90] to 86.14 [85.65, 95.98] |
+| glibc | distinct-input status | 1,000 | 46.029 [45.616, 46.266] | 46.585 [46.367, 47.022] | 1.0111 [1.0015, 1.0199] | 19.53 [19.32, 19.96] to 20.61 [20.48, 20.67] |
+| musl | distinct-input status | 1,000 | 35.438 [35.332, 35.568] | 35.516 [35.293, 35.607] | 1.0010 [0.9950, 1.0050] | 42.27 [42.27, 42.28] to 44.28 [44.27, 44.52] |
+| glibc | distinct-input status | 4,000 | 190.867 [189.802, 191.724] | 191.076 [189.779, 192.440] | 0.9985 [0.9932, 1.0064] | 47.23 [46.85, 47.38] to 46.98 [46.67, 47.03] |
+| musl | distinct-input status | 4,000 | 132.682 [132.340, 133.029] | 132.696 [132.229, 132.942] | 1.0018 [0.9961, 1.0064] | 82.28 [82.03, 82.28] to 82.28 [82.28, 82.28] |
+| glibc | one named dry run | 1,000 | 18.454 [18.283, 19.108] | 18.490 [18.265, 18.976] | 1.0036 [0.9924, 1.0106] | 16.11 [15.94, 16.67] to 16.39 [16.02, 16.52] |
+| musl | one named dry run | 1,000 | 16.722 [16.662, 16.851] | 16.832 [16.631, 16.923] | 1.0065 [0.9966, 1.0138] | 26.36 [26.35, 26.60] to 26.35 [26.34, 26.60] |
 
-| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+| libc | workload | n | instructions M, before to after | clean pairs | excluded burst pairs |
 |---|---|---:|---:|---:|---:|
-| glibc | shared-input status | 1 | 4.518 → 4.520 | 64 | 0 |
-| musl | shared-input status | 1 | 3.360 → 3.359 | 64 | 0 |
-| glibc | shared-input dry run | 1 | 3.361 → 3.357 | 64 | 0 |
-| musl | shared-input dry run | 1 | 2.577 → 2.579 | 76 | 4 |
-| glibc | shared-input status | 10 | 6.109 → 5.686 | 64 | 0 |
-| musl | shared-input status | 10 | 4.690 → 4.313 | 64 | 0 |
-| glibc | shared-input dry run | 10 | 5.723 → 5.292 | 78 | 2 |
-| musl | shared-input dry run | 10 | 4.562 → 4.190 | 64 | 0 |
-| glibc | shared-input status | 1,000 | 4522.578 → 142.146 | 13 | 1 |
-| musl | shared-input status | 1,000 | 4221.601 → 120.446 | 10 | 0 |
-| glibc | shared-input dry run | 1,000 | 12663.174 → 8307.728 | 10 | 4 |
-| musl | shared-input dry run | 1,000 | 11497.636 → 7398.191 | 10 | 8 |
-| glibc | shared-input status | 4,000 | 71331.961 → 570.015 | 10 | 0 |
-| musl | shared-input status | 4,000 | 66207.897 → 488.600 | 13 | 1 |
-| glibc | status, no recipes | 100,000 | 2001.309 → 2001.387 | 32 | 14 |
-| musl | status, no recipes | 100,000 | 2476.139 → 2476.324 | 32 | 0 |
-| glibc | distinct-input status | 1,000 | 261.836 → 261.132 | 32 | 0 |
-| musl | distinct-input status | 1,000 | 224.904 → 224.978 | 32 | 0 |
-| glibc | distinct-input status | 4,000 | 1064.742 → 1061.451 | 32 | 0 |
-| musl | distinct-input status | 4,000 | 922.276 → 922.487 | 32 | 0 |
-| glibc | one named dry run | 1,000 | 80.328 → 80.331 | 35 | 1 |
-| musl | one named dry run | 1,000 | 67.910 → 67.911 | 32 | 0 |
+| glibc | shared-input status | 1 | 4.518 to 4.520 | 64 | 0 |
+| musl | shared-input status | 1 | 3.360 to 3.359 | 64 | 0 |
+| glibc | shared-input dry run | 1 | 3.361 to 3.357 | 64 | 0 |
+| musl | shared-input dry run | 1 | 2.577 to 2.579 | 76 | 4 |
+| glibc | shared-input status | 10 | 6.109 to 5.686 | 64 | 0 |
+| musl | shared-input status | 10 | 4.690 to 4.313 | 64 | 0 |
+| glibc | shared-input dry run | 10 | 5.723 to 5.292 | 78 | 2 |
+| musl | shared-input dry run | 10 | 4.562 to 4.190 | 64 | 0 |
+| glibc | shared-input status | 1,000 | 4522.578 to 142.146 | 13 | 1 |
+| musl | shared-input status | 1,000 | 4221.601 to 120.446 | 10 | 0 |
+| glibc | shared-input dry run | 1,000 | 12663.174 to 8307.728 | 10 | 4 |
+| musl | shared-input dry run | 1,000 | 11497.636 to 7398.191 | 10 | 8 |
+| glibc | shared-input status | 4,000 | 71331.961 to 570.015 | 10 | 0 |
+| musl | shared-input status | 4,000 | 66207.897 to 488.600 | 13 | 1 |
+| glibc | status, no recipes | 100,000 | 2001.309 to 2001.387 | 32 | 14 |
+| musl | status, no recipes | 100,000 | 2476.139 to 2476.324 | 32 | 0 |
+| glibc | distinct-input status | 1,000 | 261.836 to 261.132 | 32 | 0 |
+| musl | distinct-input status | 1,000 | 224.904 to 224.978 | 32 | 0 |
+| glibc | distinct-input status | 4,000 | 1064.742 to 1061.451 | 32 | 0 |
+| musl | distinct-input status | 4,000 | 922.276 to 922.487 | 32 | 0 |
+| glibc | one named dry run | 1,000 | 80.328 to 80.331 | 35 | 1 |
+| musl | one named dry run | 1,000 | 67.910 to 67.911 | 32 | 0 |
 
 v2's default musl 4,000-recipe peak rose from 53.5 to 70.3 MiB. it remains below 150 MB, but is not memory-neutral. the earlier purge-delay diagnostic reduced the v1 before/after peaks to about 39.6 MiB each; that override was not used for a keep decision. the ordinary and small measurements remain visible rather than subtracting inferred retained allocator pages.
 
 the fixed independent v2 confirmation again found the glibc 1,000-input slowdown: ratio 1.0106 [1.0031, 1.0179] over 32 clean pairs. its other no-reuse, named and single-dataset checks did not establish a slowdown. the final v3 control results were:
 
-| libc | control | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+| libc | control | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
 |---|---|---|---|---|---|
-| glibc | 1,000 distinct inputs | 46.151 [45.753, 46.668] | 46.485 [46.221, 46.941] | 1.0092 [1.0019, 1.0156] | 20.06 [18.94, 20.16] → 20.70 [20.61, 21.13] |
-| glibc | 4,000 distinct inputs | 188.578 [187.127, 190.354] | 189.115 [188.569, 189.920] | 1.0003 [0.9959, 1.0063] | 46.81 [46.66, 46.91] → 46.82 [46.12, 47.02] |
-| glibc | one named recipe among 1,000 | 18.157 [18.123, 18.216] | 18.207 [18.133, 18.251] | 1.0014 [0.9988, 1.0058] | 16.25 [16.05, 16.36] → 16.23 [16.17, 16.55] |
-| musl | 1,000 distinct inputs | 35.250 [35.183, 35.416] | 35.575 [35.426, 35.766] | 1.0086 [1.0050, 1.0113] | 42.28 [42.27, 42.59] → 46.27 [42.27, 46.28] |
-| musl | 4,000 distinct inputs | 131.481 [131.191, 131.764] | 131.161 [130.878, 131.657] | 0.9987 [0.9934, 1.0036] | 82.28 [82.27, 82.28] → 82.28 [82.28, 82.28] |
-| musl | one named recipe among 1,000 | 16.827 [16.716, 16.946] | 16.950 [16.829, 17.087] | 1.0079 [1.0022, 1.0201] | 26.35 [26.35, 26.60] → 26.59 [26.34, 26.60] |
+| glibc | 1,000 distinct inputs | 46.151 [45.753, 46.668] | 46.485 [46.221, 46.941] | 1.0092 [1.0019, 1.0156] | 20.06 [18.94, 20.16] to 20.70 [20.61, 21.13] |
+| glibc | 4,000 distinct inputs | 188.578 [187.127, 190.354] | 189.115 [188.569, 189.920] | 1.0003 [0.9959, 1.0063] | 46.81 [46.66, 46.91] to 46.82 [46.12, 47.02] |
+| glibc | one named recipe among 1,000 | 18.157 [18.123, 18.216] | 18.207 [18.133, 18.251] | 1.0014 [0.9988, 1.0058] | 16.25 [16.05, 16.36] to 16.23 [16.17, 16.55] |
+| musl | 1,000 distinct inputs | 35.250 [35.183, 35.416] | 35.575 [35.426, 35.766] | 1.0086 [1.0050, 1.0113] | 42.28 [42.27, 42.59] to 46.27 [42.27, 46.28] |
+| musl | 4,000 distinct inputs | 131.481 [131.191, 131.764] | 131.161 [130.878, 131.657] | 0.9987 [0.9934, 1.0036] | 82.28 [82.27, 82.28] to 82.28 [82.28, 82.28] |
+| musl | one named recipe among 1,000 | 16.827 [16.716, 16.946] | 16.950 [16.829, 17.087] | 1.0079 [1.0022, 1.0201] | 26.35 [26.35, 26.60] to 26.59 [26.34, 26.60] |
 
 each v3 row has 32 clean wall pairs. the larger fan-out ladder was not repeated for v3 after these controls rejected it. the stated keep rule rejects a reproducible time regression elsewhere, so the large fan-out gain was not enough.
 
@@ -1362,47 +1362,47 @@ the source base includes 066a6416 and the kept rename change. one stock release 
 
 native RSS and instructions ran separately on cores 0–11 at nice 10 without the wall lock. small-n RSS has 32 observations per arm, other cases through 1,000 have five, and larger ones three. RSS cells show median [minimum, maximum] of per-process peaks in MiB, not the Python parent's inherited high-water mark. at 40,000 selected datasets glibc's median peak falls by about 1 MiB; musl spends 0.75 MiB more. the wide-manifest musl workloads already exceed the ordinary 150 MB target, a miss still shown here. the ordinary 100,000-file control stays below that target on both libc builds. no protected time interval establishes a slowdown.
 
-| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
 |---|---|---:|---|---|---|---|
-| glibc | all named datasets | 1 | 4.442 [4.361, 4.546] | 4.400 [4.348, 4.531] | 1.0052 [0.9914, 1.0146] | 13.10 [11.86, 13.38] → 13.04 [11.87, 13.50] |
-| musl | all named datasets | 1 | 4.149 [4.050, 4.235] | 4.080 [4.038, 4.130] | 0.9783 [0.9625, 1.0091] | 17.14 [17.13, 17.14] → 17.14 [17.13, 17.14] |
-| glibc | all named datasets | 10 | 4.370 [4.342, 4.440] | 4.406 [4.320, 4.453] | 0.9946 [0.9835, 1.0103] | 13.23 [12.12, 13.58] → 13.16 [12.05, 13.63] |
-| musl | all named datasets | 10 | 4.032 [3.967, 4.077] | 4.035 [3.962, 4.083] | 0.9970 [0.9862, 1.0231] | 17.14 [17.13, 17.14] → 17.14 [17.13, 17.14] |
-| glibc | all named datasets | 1,000 | 29.208 [28.860, 29.696] | 25.170 [24.981, 25.740] | 0.8683 [0.8483, 0.8832] | 16.23 [16.16, 16.63] → 16.47 [15.91, 16.55] |
-| musl | all named datasets | 1,000 | 31.637 [31.162, 31.874] | 24.002 [23.682, 24.227] | 0.7591 [0.7499, 0.7707] | 25.45 [25.45, 25.46] → 25.45 [25.41, 25.46] |
-| glibc | all named datasets | 40,000 | 7354.738 [7332.877, 7604.208] | 969.291 [963.004, 972.418] | 0.1312 [0.1275, 0.1325] | 137.77 [137.66, 137.79] → 136.75 [136.42, 136.88] |
-| musl | all named datasets | 40,000 | 11742.476 [11683.997, 11879.797] | 812.972 [804.548, 814.583] | 0.0687 [0.0681, 0.0697] | 159.30 [159.30, 159.30] → 160.05 [160.05, 160.05] |
-| glibc | named subset of 40,000 datasets | 1 | 277.834 [276.250, 278.580] | 277.943 [276.465, 278.782] | 0.9995 [0.9980, 1.0033] | 109.40 [108.60, 109.88] → 109.50 [108.60, 109.88] |
-| musl | named subset of 40,000 datasets | 1 | 175.960 [175.762, 176.291] | 176.217 [175.945, 176.473] | 1.0004 [0.9989, 1.0020] | 143.46 [143.16, 143.46] → 143.46 [143.21, 143.46] |
-| glibc | named subset of 40,000 datasets | 10 | 285.787 [285.456, 286.711] | 284.567 [284.087, 285.715] | 0.9958 [0.9941, 0.9996] | 109.52 [108.43, 109.92] → 109.53 [108.79, 109.98] |
-| musl | named subset of 40,000 datasets | 10 | 181.299 [181.104, 181.622] | 180.195 [179.958, 180.607] | 0.9940 [0.9928, 0.9947] | 143.46 [143.16, 145.46] → 143.46 [143.16, 145.45] |
-| glibc | named subset of 40,000 datasets | 1,000 | 481.233 [476.623, 484.055] | 301.272 [299.214, 304.834] | 0.6285 [0.6206, 0.6359] | 109.73 [109.65, 109.88] → 109.88 [109.36, 110.07] |
-| musl | named subset of 40,000 datasets | 1,000 | 465.832 [465.351, 466.473] | 200.341 [199.682, 201.059] | 0.4303 [0.4288, 0.4314] | 147.47 [147.17, 147.47] → 147.48 [147.47, 147.48] |
-| glibc | one folder, files control | 100,000 | 400.094 [397.251, 401.771] | 401.855 [398.962, 405.866] | 1.0025 [0.9966, 1.0121] | 80.98 [80.64, 81.56] → 81.23 [81.18, 81.33] |
-| musl | one folder, files control | 100,000 | 372.510 [370.601, 373.263] | 372.619 [371.055, 374.074] | 1.0012 [0.9939, 1.0051] | 95.55 [95.49, 105.56] → 95.57 [95.49, 101.54] |
-| glibc | plain sync, no selector | 40,000 | 798.946 [792.103, 804.972] | 797.362 [787.379, 806.083] | 0.9985 [0.9955, 1.0046] | 117.61 [117.53, 117.88] → 117.81 [117.76, 117.81] |
-| musl | plain sync, no selector | 40,000 | 649.631 [648.297, 653.055] | 649.089 [647.844, 651.650] | 1.0007 [0.9977, 1.0027] | 156.96 [156.96, 156.96] → 156.96 [156.95, 156.96] |
+| glibc | all named datasets | 1 | 4.442 [4.361, 4.546] | 4.400 [4.348, 4.531] | 1.0052 [0.9914, 1.0146] | 13.10 [11.86, 13.38] to 13.04 [11.87, 13.50] |
+| musl | all named datasets | 1 | 4.149 [4.050, 4.235] | 4.080 [4.038, 4.130] | 0.9783 [0.9625, 1.0091] | 17.14 [17.13, 17.14] to 17.14 [17.13, 17.14] |
+| glibc | all named datasets | 10 | 4.370 [4.342, 4.440] | 4.406 [4.320, 4.453] | 0.9946 [0.9835, 1.0103] | 13.23 [12.12, 13.58] to 13.16 [12.05, 13.63] |
+| musl | all named datasets | 10 | 4.032 [3.967, 4.077] | 4.035 [3.962, 4.083] | 0.9970 [0.9862, 1.0231] | 17.14 [17.13, 17.14] to 17.14 [17.13, 17.14] |
+| glibc | all named datasets | 1,000 | 29.208 [28.860, 29.696] | 25.170 [24.981, 25.740] | 0.8683 [0.8483, 0.8832] | 16.23 [16.16, 16.63] to 16.47 [15.91, 16.55] |
+| musl | all named datasets | 1,000 | 31.637 [31.162, 31.874] | 24.002 [23.682, 24.227] | 0.7591 [0.7499, 0.7707] | 25.45 [25.45, 25.46] to 25.45 [25.41, 25.46] |
+| glibc | all named datasets | 40,000 | 7354.738 [7332.877, 7604.208] | 969.291 [963.004, 972.418] | 0.1312 [0.1275, 0.1325] | 137.77 [137.66, 137.79] to 136.75 [136.42, 136.88] |
+| musl | all named datasets | 40,000 | 11742.476 [11683.997, 11879.797] | 812.972 [804.548, 814.583] | 0.0687 [0.0681, 0.0697] | 159.30 [159.30, 159.30] to 160.05 [160.05, 160.05] |
+| glibc | named subset of 40,000 datasets | 1 | 277.834 [276.250, 278.580] | 277.943 [276.465, 278.782] | 0.9995 [0.9980, 1.0033] | 109.40 [108.60, 109.88] to 109.50 [108.60, 109.88] |
+| musl | named subset of 40,000 datasets | 1 | 175.960 [175.762, 176.291] | 176.217 [175.945, 176.473] | 1.0004 [0.9989, 1.0020] | 143.46 [143.16, 143.46] to 143.46 [143.21, 143.46] |
+| glibc | named subset of 40,000 datasets | 10 | 285.787 [285.456, 286.711] | 284.567 [284.087, 285.715] | 0.9958 [0.9941, 0.9996] | 109.52 [108.43, 109.92] to 109.53 [108.79, 109.98] |
+| musl | named subset of 40,000 datasets | 10 | 181.299 [181.104, 181.622] | 180.195 [179.958, 180.607] | 0.9940 [0.9928, 0.9947] | 143.46 [143.16, 145.46] to 143.46 [143.16, 145.45] |
+| glibc | named subset of 40,000 datasets | 1,000 | 481.233 [476.623, 484.055] | 301.272 [299.214, 304.834] | 0.6285 [0.6206, 0.6359] | 109.73 [109.65, 109.88] to 109.88 [109.36, 110.07] |
+| musl | named subset of 40,000 datasets | 1,000 | 465.832 [465.351, 466.473] | 200.341 [199.682, 201.059] | 0.4303 [0.4288, 0.4314] | 147.47 [147.17, 147.47] to 147.48 [147.47, 147.48] |
+| glibc | one folder, files control | 100,000 | 400.094 [397.251, 401.771] | 401.855 [398.962, 405.866] | 1.0025 [0.9966, 1.0121] | 80.98 [80.64, 81.56] to 81.23 [81.18, 81.33] |
+| musl | one folder, files control | 100,000 | 372.510 [370.601, 373.263] | 372.619 [371.055, 374.074] | 1.0012 [0.9939, 1.0051] | 95.55 [95.49, 105.56] to 95.57 [95.49, 101.54] |
+| glibc | plain sync, no selector | 40,000 | 798.946 [792.103, 804.972] | 797.362 [787.379, 806.083] | 0.9985 [0.9955, 1.0046] | 117.61 [117.53, 117.88] to 117.81 [117.76, 117.81] |
+| musl | plain sync, no selector | 40,000 | 649.631 [648.297, 653.055] | 649.089 [647.844, 651.650] | 1.0007 [0.9977, 1.0027] | 156.96 [156.96, 156.96] to 156.96 [156.95, 156.96] |
 
-| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+| libc | workload | n | instructions M, before to after | clean pairs | excluded burst pairs |
 |---|---|---:|---:|---:|---:|
-| glibc | all named datasets | 1 | 3.404 → 3.404 | 64 | 0 |
-| musl | all named datasets | 1 | 2.660 → 2.660 | 64 | 0 |
-| glibc | all named datasets | 10 | 4.002 → 3.995 | 64 | 0 |
-| musl | all named datasets | 10 | 3.161 → 3.160 | 64 | 0 |
-| glibc | all named datasets | 1,000 | 109.356 → 75.193 | 10 | 0 |
-| musl | all named datasets | 1,000 | 147.564 → 67.697 | 10 | 0 |
-| glibc | all named datasets | 40,000 | 58171.889 → 3157.121 | 10 | 0 |
-| musl | all named datasets | 40,000 | 112333.961 → 2900.111 | 10 | 0 |
-| glibc | named subset of 40,000 datasets | 1 | 1475.979 → 1475.714 | 64 | 0 |
-| musl | named subset of 40,000 datasets | 1 | 1312.024 → 1311.786 | 64 | 0 |
-| glibc | named subset of 40,000 datasets | 10 | 1520.715 → 1517.891 | 64 | 0 |
-| musl | named subset of 40,000 datasets | 10 | 1366.942 → 1358.448 | 64 | 0 |
-| glibc | named subset of 40,000 datasets | 1,000 | 2941.925 → 1608.699 | 10 | 8 |
-| musl | named subset of 40,000 datasets | 1,000 | 4131.916 → 1452.009 | 10 | 0 |
-| glibc | one folder, files control | 100,000 | 2017.887 → 2025.549 | 32 | 7 |
-| musl | one folder, files control | 100,000 | 2493.082 → 2493.294 | 32 | 0 |
-| glibc | plain sync, no selector | 40,000 | 2297.916 → 2297.917 | 32 | 0 |
-| musl | plain sync, no selector | 40,000 | 2105.640 → 2105.638 | 32 | 0 |
+| glibc | all named datasets | 1 | 3.404 to 3.404 | 64 | 0 |
+| musl | all named datasets | 1 | 2.660 to 2.660 | 64 | 0 |
+| glibc | all named datasets | 10 | 4.002 to 3.995 | 64 | 0 |
+| musl | all named datasets | 10 | 3.161 to 3.160 | 64 | 0 |
+| glibc | all named datasets | 1,000 | 109.356 to 75.193 | 10 | 0 |
+| musl | all named datasets | 1,000 | 147.564 to 67.697 | 10 | 0 |
+| glibc | all named datasets | 40,000 | 58171.889 to 3157.121 | 10 | 0 |
+| musl | all named datasets | 40,000 | 112333.961 to 2900.111 | 10 | 0 |
+| glibc | named subset of 40,000 datasets | 1 | 1475.979 to 1475.714 | 64 | 0 |
+| musl | named subset of 40,000 datasets | 1 | 1312.024 to 1311.786 | 64 | 0 |
+| glibc | named subset of 40,000 datasets | 10 | 1520.715 to 1517.891 | 64 | 0 |
+| musl | named subset of 40,000 datasets | 10 | 1366.942 to 1358.448 | 64 | 0 |
+| glibc | named subset of 40,000 datasets | 1,000 | 2941.925 to 1608.699 | 10 | 8 |
+| musl | named subset of 40,000 datasets | 1,000 | 4131.916 to 1452.009 | 10 | 0 |
+| glibc | one folder, files control | 100,000 | 2017.887 to 2025.549 | 32 | 7 |
+| musl | one folder, files control | 100,000 | 2493.082 to 2493.294 | 32 | 0 |
+| glibc | plain sync, no selector | 40,000 | 2297.916 to 2297.917 | 32 | 0 |
+| musl | plain sync, no selector | 40,000 | 2105.640 to 2105.638 | 32 | 0 |
 
 `selected_folders_keep_separator_boundaries_and_shared_paths` and the extended `a_survey_within_folders_lists_and_keeps_only_them` passed on the old algorithm first. they cover nested roots, shared/duplicate paths, `a` versus `a-` and `ab`, unicode, the data root, empty selection, links, missing folders and a file blocking a folder. `folder_order_matches_a_terminal_separator` independently checks the custom comparison against explicit suffixed strings. replacing it with ordinary string order made the new assertions fail; restoring it passed. the existing partial-state test still verifies that selected records, candidates and sync flags round-trip. after switch removal, the full survey characterization exercises the indexed path itself. the old paths and experiment switch are removed; raw fixtures, binaries, counters, paired runs and mutation logs remain with the sweep outside the repository.
 
@@ -1440,7 +1440,7 @@ one bounded retry prefetched at most 64 names on the caller, kept worker-local r
 
 functional CLI checks compared all errors, totals, changed marks and bytes for a damaged object, a link, a directory and an unreadable fan: eight comparisons in the first version and four glibc comparisons in the retry. the streaming regression failed against the eager scan. deliberately collecting the full name walk and disabling the one-shot total guard then failed both `verification_reads_before_finishing_the_name_walk` and `discovered_total_waits_for_metadata_and_is_reported_once`. after restoration, 91 upkeep, partial and link tests and all-target clippy passed.
 
-reproduction records stay under `/datadisk/fl-perf/io/impl2/`: immutable `bin/p8-*` builds, both source patches and base identities, `results/p8-ab/` and `p8-v2-ab/`, the corresponding analysis JSON, syscall counts, contract outputs and red/restored logs. `scripts/run_p8.py`, `ab_p8.py` and `analyze_p8.py` select `--experiment v1` or `v2`; the unchanged sweep harness's identity is recorded with each batch.
+reproduction records of this cache-verification experiment stay under `/datadisk/fl-perf/io/impl2/`: its immutable builds, both source patches and base identities, the a/b results of both versions, the corresponding analysis JSON, syscall counts, contract outputs and red/restored logs. the scripts that run, compare and analyze it select either version with `--experiment v1` or `v2`; the unchanged sweep harness's identity is recorded with each batch.
 
 ## a shorter search grace, 2026-11-13
 

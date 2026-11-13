@@ -48,7 +48,7 @@ the child environment is inherited, apart from `FETCHLOOM_CACHE` and removal of 
 
 `native.json` retains phase wall times, settings, machine information and executable SHA-256s. `native.md` contains the summary table. filesystem and Defender probes are best effort; unavailable or localized system output can leave fields empty, so record the actual volume and protection settings separately.
 
-the ratio is the exponential of the median paired log ratio, candidate over baseline. its 95% percentile bootstrap interval uses 20,000 resamples through [ab.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/ab.py). with at least three positive pairs, an interval wholly below 1 says `candidate faster`, wholly above 1 says `candidate slower`, and otherwise says `no clear difference`. this is not the linux a/b runner's minimum-pair or effect-size acceptance gate.
+the ratio is the exponential of the median paired log ratio, candidate over baseline. its 95% percentile bootstrap interval uses 20,000 resamples through `bench/ab.py`. with at least three positive pairs, an interval wholly below 1 says `candidate faster`, wholly above 1 says `candidate slower`, and otherwise says `no clear difference`. this is not the linux a/b runner's minimum-pair or effect-size acceptance gate.
 
 the runner checks process exit codes, not output hashes independently. it captures but does not retain successful stdout and stderr, records no CPU time, memory, work counters or server request counts, and has no per-command timeout. a failed command aborts the run before the final report. keep failures and use the [native verification steps](native-checks.md#verify-the-fixture-bytes) before interpreting timings.
 
