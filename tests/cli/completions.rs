@@ -139,8 +139,8 @@ fn completions_have_their_own_help() -> Result {
     Ok(())
 }
 
-/// bash loads the script it printed, which completes fetchloom and fl, and `fl ca` becomes
-/// `fl cache` through whatever bash registered for fl. skipped where bash is not installed.
+/// the script completes fetchloom and fl, and `fl ca` becomes `fl cache` through whatever bash
+/// registered for fl. skipped where bash is not installed.
 #[cfg(unix)]
 #[test]
 fn bash_loads_the_script() -> Result {
@@ -170,10 +170,8 @@ fn bash_loads_the_script() -> Result {
     Ok(())
 }
 
-/// the bash script completes the names of the project's datasets after a command that takes them,
-/// read from data.toml alone, in the project and through -C, while a broken settings file is
-/// ignored. a command name, an option and a name outside any project complete as the static
-/// script does. skipped where bash is not installed.
+/// names come from data.toml alone, in the project or through -C, past a broken settings file;
+/// the rest completes as the static script does. skipped where bash is not installed.
 #[cfg(unix)]
 #[test]
 fn bash_completes_the_dataset_names_data_toml_has() -> Result {
@@ -287,9 +285,8 @@ fn before_path(folder: &std::path::Path) -> Result<std::ffi::OsString> {
     )?)
 }
 
-/// bash takes each name it is given as a word: it expands none while completing and quotes
-/// each on the line, so a name runs nothing at a tab or when the line runs, which bash reading
-/// each offer back as a command line would show. skipped where bash is not installed.
+/// bash expands no name while completing and quotes each on the line, so none runs at a tab or
+/// when the line runs. skipped where bash is not installed.
 #[cfg(unix)]
 #[test]
 fn bash_takes_the_names_it_is_given_literally() -> Result {
@@ -324,9 +321,8 @@ fn bash_takes_the_names_it_is_given_literally() -> Result {
     Ok(())
 }
 
-/// powershell puts each name it is given on the line as a word too: a name that is more than
-/// letters, digits, `-`, `_` and `.` comes in single quotes. skipped where pwsh is not
-/// installed.
+/// a name of more than letters, digits, `-`, `_` and `.` comes in single quotes. skipped where
+/// pwsh is not installed.
 #[cfg(unix)]
 #[test]
 fn powershell_takes_the_names_it_is_given_literally() -> Result {

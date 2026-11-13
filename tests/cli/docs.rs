@@ -1,6 +1,5 @@
-//! the documentation against the binary: every option is on its command's page, the agent guides
-//! name every command and option, every command line in a shell example uses real commands and
-//! options, and every setting is listed.
+//! the documentation against the binary: options on their pages, commands and options in the
+//! agent guides, only real ones in shell examples, every setting, and each JSON result.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -167,8 +166,7 @@ fn names_option(line: &str, option: &str) -> bool {
     })
 }
 
-/// an agent may read only its skill or llms.txt, so both name every command and option `help`
-/// lists, each command's options on a line that names the command.
+/// an agent may read only its skill or llms.txt, so each names a command's options on its line.
 #[test]
 fn the_agent_guides_name_every_command_and_option() -> Result {
     let document = json(&Sandbox::new()?.run(&["help", "--json"])?)?;
@@ -347,8 +345,7 @@ fn every_setting_is_documented_and_every_documented_one_is_read() -> Result {
     Ok(())
 }
 
-/// every command `help --json` lists has its result fields in the JSON reference, but for
-/// `completions`, whose `--json` is always a usage error.
+/// `completions` is left out, since its `--json` is always a usage error.
 #[test]
 fn every_command_result_is_in_the_json_reference() -> Result {
     let cli = cli()?;

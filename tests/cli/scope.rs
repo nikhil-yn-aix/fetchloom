@@ -1,6 +1,5 @@
-//! `sync` with dataset names, and `path`, which syncs its dataset alone, against servers on this
-//! machine: the named datasets are resolved, downloaded, placed and cleaned up, and every other
-//! dataset stays as data.lock and the data folder have it.
+//! `sync` with dataset names, and `path`, which syncs its dataset alone: only the named datasets
+//! are resolved, downloaded, placed and cleaned up, in data.lock and the data folder alike.
 
 use std::fs;
 use std::path::PathBuf;
@@ -12,9 +11,8 @@ use crate::support::{Result, Sandbox, Server, delete, file, json, text};
 const SMALL: &[u8] = b"s";
 const LARGE: &[u8] = b"l";
 
-/// a project with two datasets, small and large, each added from a server of its own that
-/// answers `downloads` requests in all, the add's included, so a test counts each one's
-/// requests. both are placed and in the cache.
+/// a project of small and large, each added from a server of its own that answers `downloads`
+/// requests, the add's included, so a test counts each one's; both are placed and cached.
 fn small_and_large(sandbox: &Sandbox, downloads: usize) -> Result<(Server, Server)> {
     let mut servers = Vec::new();
     for (name, bytes) in [("small", SMALL), ("large", LARGE)] {
@@ -82,8 +80,6 @@ fn sync_named_fetches_and_places_only_that_dataset() -> Result {
     Ok(())
 }
 
-/// a dry run of a named sync shows what that sync would do: small's download and placement,
-/// and nothing of large.
 #[test]
 fn a_named_dry_run_shows_only_that_dataset() -> Result {
     let sandbox = Sandbox::new()?;
@@ -106,8 +102,7 @@ fn a_named_dry_run_shows_only_that_dataset() -> Result {
     Ok(())
 }
 
-/// a sync of named datasets never records the project as settled, so the plain sync after it
-/// still looks at every dataset and places the one it left out.
+/// the plain sync after it still looks at every dataset and places the one it left out.
 #[test]
 fn a_named_sync_never_settles_the_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -135,8 +130,7 @@ fn a_named_sync_never_settles_the_project() -> Result {
     Ok(())
 }
 
-/// a dataset gone from data.toml keeps its files and its entry in data.lock through a sync of
-/// another dataset; the plain sync after it removes both.
+/// a dataset gone from data.toml keeps its entry in data.lock too, until a plain sync removes both.
 #[test]
 fn sync_named_never_removes_other_datasets_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -164,9 +158,8 @@ fn sync_named_never_removes_other_datasets_files() -> Result {
     Ok(())
 }
 
-/// `--force` with a name replaces only that dataset's edits; another dataset's edit stays byte
-/// for byte. the named sync before it keeps the edit and names that same command, which
-/// replaces nothing in the other datasets.
+/// the named sync before it keeps the edit, and its help names that same command, which leaves
+/// the other datasets alone.
 #[test]
 fn force_named_replaces_only_that_datasets_edits() -> Result {
     let sandbox = Sandbox::new()?;
@@ -193,7 +186,7 @@ fn force_named_replaces_only_that_datasets_edits() -> Result {
     Ok(())
 }
 
-/// a name data.toml does not have is a usage error naming the closest one, before any request.
+/// the usage error suggests the closest name.
 #[test]
 fn an_unknown_name_is_refused_before_any_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -213,9 +206,8 @@ fn an_unknown_name_is_refused_before_any_request() -> Result {
     Ok(())
 }
 
-/// `--locked` with a name checks that dataset's entry alone: large's entry, stale since data.toml
-/// moved it to another link, neither fails the named sync nor gets resolved, while a plain
-/// `--locked` sync fails on it.
+/// large's entry, stale since data.toml moved it to another link, neither fails the named sync
+/// nor gets resolved, while a plain `--locked` sync fails on it.
 #[test]
 fn a_locked_named_sync_checks_only_named_entries() -> Result {
     let sandbox = Sandbox::new()?;
@@ -247,7 +239,7 @@ fn a_locked_named_sync_checks_only_named_entries() -> Result {
     Ok(())
 }
 
-/// `path` in a fresh clone downloads and places its own dataset alone before it answers.
+/// the dataset is placed before `path` answers.
 #[test]
 fn path_on_a_cold_cache_fetches_only_its_dataset() -> Result {
     let sandbox = Sandbox::new()?;
@@ -269,8 +261,7 @@ fn path_on_a_cold_cache_fetches_only_its_dataset() -> Result {
     Ok(())
 }
 
-/// `path --locked` checks its own dataset's entry alone: large's stale entry does not stop it,
-/// and nothing asks large's links.
+/// large's stale entry does not stop `path`, and nothing asks large's links.
 #[test]
 fn a_locked_path_checks_only_its_dataset() -> Result {
     let sandbox = Sandbox::new()?;
@@ -300,10 +291,8 @@ fn a_locked_path_checks_only_its_dataset() -> Result {
     Ok(())
 }
 
-/// a named sync of a settled project counts only the named datasets' files as unchanged: a has
-/// 2 files and b 1, and none once b has `place = false`. a checkout it may not write, which
-/// syncs without the project's hold, counts the same, and a sync of every dataset still counts
-/// every placed file.
+/// a read-only checkout, which syncs without the project's hold, counts the same, and b counts
+/// none once it has `place = false`.
 #[test]
 fn a_settled_named_sync_counts_only_its_datasets() -> Result {
     let sandbox = Sandbox::new()?;
