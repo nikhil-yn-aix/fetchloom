@@ -30,7 +30,7 @@ each row is a command people run to fetch dataset files, and what does that job 
 
 ### a list of files and their hashes
 
-a readme often gives a base link and a `SHA256SUMS` file, with the hash before each name. `add -i` reads a link, then its SHA-256, so one `awk` line turns one into the other; it drops the `*` that `sha256sum -b` writes before a name. from a real run against files on github, in a new folder shortened here to `/home/me/paper`, with stderr shown:
+a readme often gives a base link and a `SHA256SUMS` file, with the hash before each name. `add -i` reads a link, then its SHA-256, so one `awk` line turns one into the other; it drops the `*` that `sha256sum -b` writes before a name. from a real run at a terminal against files on github, in a new folder `~/paper`, with stderr shown:
 
 ```sh
 $ cat SHA256SUMS
@@ -38,21 +38,19 @@ $ cat SHA256SUMS
 e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0  tips.csv
 $ awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ 'NF {sub(/^\*/, "", $2); print base $2, $1}' SHA256SUMS > links.txt
 $ fetchloom add -i links.txt
- Downloaded 2 files · 13.3 KiB in 124 ms
-     Pinned iris, new in data.lock: https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv · 1 file · 3.8 KiB
-     Pinned tips, new in data.lock: https://raw.githubusercontent.com/mwaskom/seaborn-data/master/tips.csv · 1 file · 9.5 KiB
-     Placed data/iris · 1 file linked to the cache
-     Placed data/tips · 1 file linked to the cache
+ Downloaded 2 files · 13.3 KiB in 108 ms
     Started a project in ~/paper
       Added iris, its files are in data/iris
       Added tips, its files are in data/tips
   hint: scripts can find each with `fetchloom path <name>`
+  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
 a pooch registry gives the name first, then the hash, which may be `md5:`, and may give a file its own link third. a list for `add -i` takes only a SHA-256, and any other hash stops the add, naming the line:
 
 ```text
 error: "md5:0123456789abcdef0123456789abcdef" on line 2 of links.txt is not a SHA-256
+  this looks like an MD5, which has 32 hex digits. give the file's SHA-256, which has 64
   help: a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped
 ```
 
