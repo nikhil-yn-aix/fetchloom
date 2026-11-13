@@ -433,8 +433,8 @@ fn attached_non_unicode_directories_keep_the_help_topic() -> Result {
     Ok(())
 }
 
-/// a project pinning one file from each server, whose first answer is what `add` pins, then a
-/// fresh clone of it with a cache of its own, where `sync` meets the answers that follow.
+/// pins one file from each server's first answer, and returns a fresh clone of the project,
+/// where `sync` meets the answers that follow.
 fn pinned_then_changed(sandbox: &Sandbox, servers: &[&Server]) -> Result<std::path::PathBuf> {
     for server in servers {
         sandbox.allow(&server.url);
@@ -455,10 +455,8 @@ fn synced_cold(sandbox: &Sandbox, project: &std::path::Path, args: &[&str]) -> R
     json(&output)
 }
 
-/// two files whose bytes changed upstream, one longer and one the same size, fail a sync each
-/// with its own way on, which only a person may choose: the one error for both keeps each file's
-/// details and offers no fix, with or without --locked, since running the sync again fails
-/// again.
+/// each file has its own way on, which only a person may choose, so the one error keeps each
+/// file's details; with or without --locked, a rerun would fail again.
 #[test]
 fn files_changed_upstream_give_no_fix_to_rerun() -> Result {
     let sandbox = Sandbox::new()?;
@@ -490,8 +488,7 @@ fn files_changed_upstream_give_no_fix_to_rerun() -> Result {
     Ok(())
 }
 
-/// a failure of another kind first, a dead link here, beside a file whose bytes changed
-/// upstream: the one error for both offers no fix either, since the changed file fails again.
+/// the changed file fails again whatever failed first, so the one error offers no fix either.
 #[test]
 fn a_dead_link_beside_changed_bytes_gives_no_fix_to_rerun() -> Result {
     let sandbox = Sandbox::new()?;

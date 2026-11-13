@@ -95,9 +95,8 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
-/// `FETCHLOOM_RESOURCES=lean` shows in `settings` with where it came from, and each knob it sets
-/// shows as set by it, while `most_files` is not sized from lean's memory and a knob set by name
-/// keeps its own value.
+/// each knob lean sets shows `resources` as its origin, but `most_files` is not sized from lean's
+/// memory, and a knob set by name keeps its own value.
 #[test]
 fn settings_show_what_a_resources_level_derives() -> Result {
     let sandbox = Sandbox::new()?;
@@ -139,9 +138,7 @@ fn settings_show_what_a_resources_level_derives() -> Result {
     Ok(())
 }
 
-/// `-v` starts a run with what it spends, downloads at once, to one host, local workers, buffers
-/// and hash lanes, and what set each that is not fetchloom's own default. without `-v` the line
-/// stays out.
+/// each amount not at fetchloom's own default names what set it; without `-v` the line stays out.
 #[test]
 fn a_verbose_run_says_what_it_spends_and_why() -> Result {
     let sandbox = Sandbox::new()?;
@@ -181,9 +178,7 @@ fn a_verbose_run_says_what_it_spends_and_why() -> Result {
     Ok(())
 }
 
-/// a project whose files need more memory than a container's limit leaves fetchloom is refused,
-/// `local.io` with exit 50, before its files are read, rather than ended by the kernel partway
-/// with no word; with room, the same command reads it.
+/// the kernel would otherwise end the run partway, with no word of why.
 #[test]
 fn a_project_too_big_for_its_container_is_refused_before_it_is_read() -> Result {
     let sandbox = Sandbox::new()?;
@@ -222,9 +217,8 @@ fn a_project_too_big_for_its_container_is_refused_before_it_is_read() -> Result 
     Ok(())
 }
 
-/// `--no-config`, or `FETCHLOOM_NO_CONFIG`, runs a command on the defaults past a settings file
-/// that would stop it, and `settings` says the file was bypassed. without it the file still
-/// stops the run, and data.toml is read either way.
+/// `FETCHLOOM_NO_CONFIG` works as `--no-config` does, `settings` says the file was bypassed, and
+/// data.toml is still read.
 #[test]
 fn no_config_bypasses_the_settings_file_for_one_run() -> Result {
     let sandbox = Sandbox::new()?;
@@ -418,8 +412,7 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
     Ok(())
 }
 
-/// every on/off variable reads `true` and `false`, in any case and with spaces around them, as
-/// well as `1` and `0`.
+/// spaces around `true` or `false` are allowed, as are `1` and `0`.
 #[test]
 fn on_off_variables_take_true_and_false_in_any_case() -> Result {
     let sandbox = Sandbox::new()?;
@@ -447,8 +440,8 @@ fn on_off_variables_take_true_and_false_in_any_case() -> Result {
     Ok(())
 }
 
-/// `FETCHLOOM_ACCESSIBLE` and `FETCHLOOM_NO_HINTS` change only what a person sees, so a value
-/// that is neither true nor false leaves each off with a warning instead of stopping the run.
+/// `FETCHLOOM_ACCESSIBLE` and `FETCHLOOM_NO_HINTS` change only what a person sees, so a bad value
+/// never stops the run.
 #[test]
 fn a_display_variable_it_cannot_read_stays_off_with_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
@@ -589,8 +582,8 @@ fn one_thread_unpacks_places_and_verifies_a_project() -> Result {
     Ok(())
 }
 
-/// a variable naming certificates fetchloom cannot read is said plainly, never overruled by other
-/// roots. macos and windows ask their own verifier, which does not read it.
+/// other roots never overrule `SSL_CERT_FILE`. macos and windows ask their own verifier, which
+/// does not read it.
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn certificates_named_but_unreadable_are_a_usage_error() -> Result {
@@ -621,8 +614,7 @@ fn certificates_named_but_unreadable_are_a_usage_error() -> Result {
     Ok(())
 }
 
-/// a system without a certificate store, as in a container built without one, still downloads:
-/// fetchloom trusts the mozilla roots it carries.
+/// fetchloom carries the mozilla roots, for a container built without a certificate store.
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn a_system_without_certificates_still_downloads() -> Result {
