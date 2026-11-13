@@ -3,6 +3,8 @@
 mod fit;
 mod picker;
 mod progress;
+#[cfg(test)]
+pub(crate) mod screen;
 mod style;
 mod warning;
 

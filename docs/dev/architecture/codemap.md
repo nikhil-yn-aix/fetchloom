@@ -316,3 +316,4 @@ the cli tests run the real binary in a sandbox; [building and testing](../engine
 | `src/net/scripted.rs` | a local server that answers each connection with scripted bytes, for network unit tests | `serve` |  |
 | `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests, and the real network the `live_` tests reach | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `block_on`, `live` |
 | `src/archive/samples.rs` | archives built at test time, and a scratch cache to unpack them into | `Scratch` |  |
+| `src/output/screen.rs` | a terminal that records what progress bars draw, for tests that wait on a drawn line | `Screen` | `records`, `text`, `shows` |

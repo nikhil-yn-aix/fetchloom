@@ -1663,6 +1663,7 @@ mod tests {
     use crate::cache::Cache;
     use crate::cli::import::tell_system;
     use crate::cli::project::tests::{listed, offline_context, pinned, pinned_file, stated};
+    use crate::output::screen::Screen;
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
@@ -2105,64 +2106,6 @@ mod tests {
             "{error:?}"
         );
         assert!(!root.join("data").join("b").exists());
-    }
-
-    /// a terminal that keeps the text bars draw on it, and says when it changes.
-    #[derive(Clone, Debug, Default)]
-    struct Screen(Arc<(std::sync::Mutex<String>, std::sync::Condvar)>);
-
-    impl Screen {
-        fn draw(&self, text: &str) {
-            let (shown, changed) = &*self.0;
-            shown.lock().unwrap().push_str(text);
-            changed.notify_all();
-        }
-
-        /// whether `text` shows, waiting for it a while.
-        fn shows(&self, text: &str) -> bool {
-            let (shown, changed) = &*self.0;
-            let shown = changed
-                .wait_timeout_while(
-                    shown.lock().unwrap(),
-                    std::time::Duration::from_secs(10),
-                    |shown| !shown.contains(text),
-                )
-                .unwrap()
-                .0;
-            shown.contains(text)
-        }
-    }
-
-    impl indicatif::TermLike for Screen {
-        fn width(&self) -> u16 {
-            80
-        }
-        fn move_cursor_up(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_down(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_right(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_left(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn write_line(&self, line: &str) -> std::io::Result<()> {
-            self.draw(line);
-            Ok(())
-        }
-        fn write_str(&self, text: &str) -> std::io::Result<()> {
-            self.draw(text);
-            Ok(())
-        }
-        fn clear_line(&self) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn flush(&self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 
     thread_local! {

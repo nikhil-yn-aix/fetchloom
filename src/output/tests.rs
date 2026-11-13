@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anstyle::Style as Paint;
 
+use super::screen::Screen;
 use super::{Level, Output, Pieces, Style, accented, masked, plain, subject, write_answer};
 use crate::cli::judged;
 use crate::work::Counts;
@@ -1142,70 +1143,6 @@ fn a_typed_line_ends_at_enter_and_ctrl_c_cancels_it() {
     assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
-/// a terminal that records what bars draw on it, and says when that changes.
-#[derive(Debug, Default, Clone)]
-struct Screen(
-    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    std::sync::Arc<std::sync::Condvar>,
-);
-
-impl Screen {
-    fn record(&self, what: String) {
-        self.0.lock().unwrap().push(what);
-        self.1.notify_all();
-    }
-
-    /// whether a record holds `text`, waiting for one up to 30 s, which only a broken test
-    /// reaches.
-    fn shows(&self, text: &str) -> bool {
-        let held = |records: &Vec<String>| records.iter().any(|record| record.contains(text));
-        let (records, _) = self
-            .1
-            .wait_timeout_while(self.0.lock().unwrap(), Duration::from_secs(30), |records| {
-                !held(records)
-            })
-            .unwrap();
-        held(&records)
-    }
-}
-
-impl indicatif::TermLike for Screen {
-    fn width(&self) -> u16 {
-        80
-    }
-    fn move_cursor_up(&self, n: usize) -> std::io::Result<()> {
-        self.record(format!("up {n}"));
-        Ok(())
-    }
-    fn move_cursor_down(&self, n: usize) -> std::io::Result<()> {
-        self.record(format!("down {n}"));
-        Ok(())
-    }
-    fn move_cursor_right(&self, n: usize) -> std::io::Result<()> {
-        self.record(format!("right {n}"));
-        Ok(())
-    }
-    fn move_cursor_left(&self, n: usize) -> std::io::Result<()> {
-        self.record(format!("left {n}"));
-        Ok(())
-    }
-    fn write_line(&self, s: &str) -> std::io::Result<()> {
-        self.record(format!("line {s}"));
-        Ok(())
-    }
-    fn write_str(&self, s: &str) -> std::io::Result<()> {
-        self.record(format!("text {s}"));
-        Ok(())
-    }
-    fn clear_line(&self) -> std::io::Result<()> {
-        self.record("clear".to_owned());
-        Ok(())
-    }
-    fn flush(&self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 fn telling(interactive: bool) -> Output {
     let style = Style {
         color: false,
@@ -1356,15 +1293,15 @@ fn a_run_that_ends_at_once_clears_its_bars_first() {
     bar.set_message("iris.csv");
     bar.tick();
     assert!(!bars.is_hidden());
-    let drawn = screen.0.lock().unwrap().len();
+    let drawn = screen.records().len();
     assert!(drawn > 0);
 
     output.abandon();
 
-    let after = screen.0.lock().unwrap()[drawn..].to_vec();
+    let after = screen.records()[drawn..].to_vec();
     assert!(after.contains(&"clear".to_owned()), "{after:?}");
     assert!(bars.is_hidden());
     bar.inc(5);
     bar.tick();
-    assert_eq!(screen.0.lock().unwrap().len(), drawn + after.len());
+    assert_eq!(screen.records().len(), drawn + after.len());
 }

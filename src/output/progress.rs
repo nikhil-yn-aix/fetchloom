@@ -1006,6 +1006,7 @@ fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::screen::Screen;
 
     /// a wait for a person's answer counts neither as data that stopped coming nor in the bar's
     /// time: 4 s of waiting in a bar born 5 s ago leave it neither quiet nor 2 s old.
@@ -1085,64 +1086,9 @@ mod tests {
         );
     }
 
-    /// a terminal that keeps what bars draw on it, and says when that changes.
-    #[derive(Debug, Default, Clone)]
-    struct Drawn(Arc<Mutex<Vec<String>>>, Arc<Condvar>);
-
-    impl Drawn {
-        fn draw(&self, text: &str) {
-            self.0.lock().unwrap().push(text.to_owned());
-            self.1.notify_all();
-        }
-
-        /// whether what was drawn holds `text`, waiting for it up to 30 s, which only a broken
-        /// test reaches.
-        fn shows(&self, text: &str) -> bool {
-            let drawn = self.0.lock().unwrap();
-            let held = |drawn: &Vec<String>| drawn.join("").contains(text);
-            let (drawn, _) = self
-                .1
-                .wait_timeout_while(drawn, Duration::from_secs(30), |drawn| !held(drawn))
-                .unwrap();
-            held(&drawn)
-        }
-    }
-
-    impl TermLike for Drawn {
-        fn width(&self) -> u16 {
-            100
-        }
-        fn move_cursor_up(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_down(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_right(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn move_cursor_left(&self, _: usize) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn write_line(&self, line: &str) -> std::io::Result<()> {
-            self.draw(line);
-            Ok(())
-        }
-        fn write_str(&self, text: &str) -> std::io::Result<()> {
-            self.draw(text);
-            Ok(())
-        }
-        fn clear_line(&self) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn flush(&self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn a_long_setup_step_gets_a_line_and_a_short_one_none() {
-        let screen = Drawn::default();
+        let screen = Screen::default();
         let bars = MultiProgress::with_draw_target(ProgressDrawTarget::term_like(Box::new(
             screen.clone(),
         )));
@@ -1155,7 +1101,7 @@ mod tests {
             look,
             Arc::default(),
         ));
-        assert!(screen.0.lock().unwrap().is_empty());
+        assert_eq!(screen.text(), "");
         let setup = Setup::after(
             Duration::ZERO,
             &bars,
@@ -1180,7 +1126,7 @@ mod tests {
         };
         let mut output =
             super::super::Output::new(style, super::super::Level::Normal, false, false);
-        let screen = Drawn::default();
+        let screen = Screen::default();
         output.bars = Some(MultiProgress::with_draw_target(
             ProgressDrawTarget::term_like(Box::new(screen.clone())),
         ));
@@ -1190,9 +1136,9 @@ mod tests {
         }
         bar.start(Some(1000), 0);
         bar.advance(452);
-        screen.0.lock().unwrap().clear();
+        let before = screen.text().len();
         output.alone().stopping();
-        let drawn = screen.0.lock().unwrap().join("\n");
+        let drawn = screen.text().split_off(before);
         assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
     }
 
