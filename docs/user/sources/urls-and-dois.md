@@ -28,11 +28,11 @@ a link whose name has no extension, such as a folder link ending in `/`, is refu
 
 ## names
 
-a link's file is named after the last part of its path, decoded. a character windows cannot hold in a name, such as `?` or `:`, becomes `_`, and a `\` counts as a folder, so only what follows it stays. the dataset takes that name without its file type when that is a known one, such as `.txt` or `.gz`, in lowercase letters, digits, `-` and `_`, so other dots, as in `2024.05.csv`, become `-`. from real runs of `fetchloom add` with links to a server on this machine:
+a link's file is named after the last part of its path, decoded. a character windows cannot hold in a name, such as `?` or `:`, becomes `_`, and a `\` counts as a folder, so only what follows it stays. the dataset takes that name without its file type when that is a known one, such as `.txt` or `.gz`, and without the known type before a compression type, as `.jsonl` in `.jsonl.gz`, in lowercase letters, digits, `-` and `_`, so other dots, as in `2024.05.csv`, become `-`. from real runs of `fetchloom add` with links to a server on this machine:
 
 | link ends in | dataset | file |
 |---|---|---|
-| `corpus-a.jsonl.gz` | `corpus-a-jsonl` | `data/corpus-a-jsonl/corpus-a.jsonl.gz` |
+| `corpus-a.jsonl.gz` | `corpus-a` | `data/corpus-a/corpus-a.jsonl.gz` |
 | `q%3Fmark.txt` | `q_mark` | `data/q_mark/q_mark.txt` |
 | `back%5Cslash.txt` | `slash` | `data/slash/slash.txt` |
 | `Data%20Set.CSV` | `data-set` | `data/data-set/Data Set.CSV` |

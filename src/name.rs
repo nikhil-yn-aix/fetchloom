@@ -354,17 +354,22 @@ fn without_type(name: &str) -> Option<&str> {
     (known && !stem.trim_start_matches('.').is_empty()).then_some(stem)
 }
 
-/// the folder `get` makes for a file: its name without a known file type, and without a `.tar`
-/// before it, so `iris.csv` gets `iris`, `data.tar.gz` gets `data` and `1706.03762v7` keeps its
-/// dots.
+/// the compression types a file may take after its own, as `.gz` after `.csv`.
+const COMPRESSIONS: [&str; 6] = ["bz2", "gz", "lz4", "lzma", "xz", "zst"];
+
+/// the folder `get` makes for a file: its name without a known file type, and without the known
+/// type before a compression type or a `.tar` before any type, so `iris.csv` gets `iris`,
+/// `x.csv.gz` gets `x`, `data.tar.gz` gets `data` and `1706.03762v7` keeps its dots.
 pub(crate) fn folder_for(file: &str) -> String {
     let stem = match without_type(file) {
-        Some(stem) => match stem.len().checked_sub(4) {
-            Some(at) if stem.is_char_boundary(at) && stem[at..].eq_ignore_ascii_case(".tar") => {
-                &stem[..at]
-            }
-            _ => stem,
-        },
+        Some(stem) => {
+            let compressed = COMPRESSIONS
+                .iter()
+                .any(|kind| file[stem.len() + 1..].eq_ignore_ascii_case(kind));
+            without_type(stem)
+                .filter(|inner| compressed || stem[inner.len() + 1..].eq_ignore_ascii_case("tar"))
+                .unwrap_or(stem)
+        }
         None => file,
     };
     let stem = stem.trim_start_matches('.');
@@ -764,6 +769,29 @@ mod tests {
             ("README", "README", "readme"),
             (".hidden", "hidden", "hidden"),
             (".csv", "csv", "csv"),
+        ] {
+            assert_eq!(folder_for(file), folder, "{file}");
+            assert_eq!(
+                dataset_name(&folder_for(file)).as_deref(),
+                Some(name),
+                "{file}"
+            );
+        }
+    }
+
+    /// a compressed file keeps its own type before the compression's, which goes too, as `.tar`
+    /// before `.gz` does; any other type, as an archive's, takes no second type with it but `.tar`.
+    #[test]
+    fn a_type_before_a_compression_type_goes_too() {
+        for (file, folder, name) in [
+            ("x.csv.gz", "x", "x"),
+            ("sub-01_T1w.nii.gz", "sub-01_T1w", "sub-01_t1w"),
+            ("reads.FASTQ.bz2", "reads", "reads"),
+            ("2024.05.csv.zst", "2024.05", "2024-05"),
+            ("1706.03762v7.pdf.xz", "1706.03762v7", "1706-03762v7"),
+            ("ids.v2.gz", "ids.v2", "ids-v2"),
+            ("x.csv.zip", "x.csv", "x-csv"),
+            ("x.tar.zip", "x", "x"),
         ] {
             assert_eq!(folder_for(file), folder, "{file}");
             assert_eq!(
