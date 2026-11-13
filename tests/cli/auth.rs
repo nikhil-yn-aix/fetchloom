@@ -252,7 +252,7 @@ fn signing_in_without_a_terminal_names_the_scripted_way() -> Result {
 }
 
 /// a key whose source cannot be reached is saved without its check, and the last line says so
-/// rather than that it signed in.
+/// rather than that it signed in, as `auth` does while the source still gives no answer.
 #[test]
 fn a_key_no_source_answered_for_is_saved_as_not_checked() -> Result {
     let sandbox = Sandbox::new()?;
@@ -279,6 +279,21 @@ fn a_key_no_source_answered_for_is_saved_as_not_checked() -> Result {
         "{told}"
     );
     assert!(home(&sandbox).join(".cache/huggingface/token").exists());
+
+    let mut listing = sandbox.command(&["auth"]);
+    listing
+        .env(
+            "FETCHLOOM_TEST_HF_API",
+            format!("http://{}", refusing.address),
+        )
+        .env("FETCHLOOM_RETRIES", "0");
+    let listed = text(&listing.output()?.stderr)?;
+    assert!(
+        listed.contains(
+            "Signed in to hf · ~/.cache/huggingface/token, not checked, as huggingface.co gave no answer"
+        ),
+        "{listed}"
+    );
     Ok(())
 }
 

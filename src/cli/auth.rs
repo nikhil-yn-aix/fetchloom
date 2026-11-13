@@ -110,16 +110,14 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     }
     for account in auth::listed(&auth::env) {
         let found = account.find(&auth::env);
-        let (user, valid) = match &found {
+        let (user, valid, unanswered) = match &found {
             // asking with a key that is never sent would only say the source refused it
             Some(found) if !account.sendable(found) => {
                 warn_unsendable(output, &account, found);
-                (None, None)
+                (None, None, None)
             }
-            Some(found) if !context.offline.enabled() && !context.mirrors.mirrors.only => {
-                check(context, &account, found).await
-            }
-            _ => (None, None),
+            Some(found) => asked_about(context, &account, found).await,
+            None => (None, None, None),
         };
         let name = login_name(&account);
         match &found {
@@ -132,6 +130,11 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                     output.mark(
                         "Refused",
                         &format!("{text}; sign in again with `{}`", account.command()),
+                    );
+                } else if let Some(host) = &unanswered {
+                    output.step(
+                        "Signed in",
+                        &format!("{text}, not checked, as {host} gave no answer"),
                     );
                 } else {
                     output.step("Signed in", &text);
