@@ -54,6 +54,7 @@ a session is what a site keeps of your sign-in in your browser, so whatever the 
 - a session the site ties to the browser it began in, by its address or a key the browser holds: its cookies are refused anywhere else, so use a token from the site's settings where it offers one.
 - chrome, edge and the other chromium browsers on windows seal their cookies so that only the browser itself can open them, which chrome calls app-bound encryption, since chrome 127. export the cookies with a browser extension and use `--cookies`, or sign in with firefox.
 - chromium browsers on linux whose key is kept only in kwallet, and safari, are not read. export the cookies with an extension and use `--cookies`.
+- windows' credential manager keeps at most 2,560 bytes for one entry, about 1,280 characters, and a site's cookies often take more, so saving them there fails; its help says to set `FETCHLOOM_KEYRING=false`, which keeps them in fetchloom's own file, readable only by you.
 
 ## private buckets and folders
 

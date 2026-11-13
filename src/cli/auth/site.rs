@@ -530,7 +530,15 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             let question = format!("save {it} in {}?", auth::keyring_name());
             agrees(context, host, saved, &question, true)?;
         }
-        return site::save(var, host, saved, store::Place::Keyring).map_err(failed);
+        return site::save(var, host, saved, store::Place::Keyring).map_err(|err| {
+            // windows' store keeps 2,560 bytes an entry, which a site's cookies often pass
+            let error = failed(err);
+            if matches!(saved, Saved::Cookies { .. }) {
+                error.help("set FETCHLOOM_KEYRING=false to keep them in fetchloom's own file, readable only by you, then run it again")
+            } else {
+                error
+            }
+        });
     }
     let file = store::folder(var)
         .unwrap_or_default()
