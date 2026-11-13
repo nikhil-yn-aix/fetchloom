@@ -35,6 +35,9 @@ mod manual;
 #[path = "../tests/support/paths.rs"]
 mod test_paths;
 #[cfg(test)]
+#[path = "../tests/support/ports.rs"]
+mod test_ports;
+#[cfg(test)]
 #[path = "../tests/support/skips.rs"]
 mod test_skips;
 

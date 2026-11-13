@@ -595,9 +595,8 @@ fn a_managed_identity_that_cannot_be_had_says_why() {
         missing.details,
         ["azure said invalid_request: Identity not found"]
     );
-    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-    let nowhere = Url::parse(&format!("http://{}/token", closed.local_addr().unwrap())).unwrap();
-    drop(closed);
+    let refusing = crate::test_ports::Refusing::new().unwrap();
+    let nowhere = Url::parse(&format!("http://{}/token", refusing.address)).unwrap();
     let unanswered = ask(nowhere);
     assert!(
         unanswered

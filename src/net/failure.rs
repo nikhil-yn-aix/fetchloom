@@ -854,9 +854,8 @@ mod tests {
     /// the error's help also says what a refusal means.
     #[test]
     fn a_refused_connection_names_its_host_and_port() {
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = closed.local_addr().unwrap().port();
-        drop(closed);
+        let refusing = crate::test_ports::Refusing::new().unwrap();
+        let port = refusing.address.port();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/x.csv")).unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
