@@ -31,7 +31,7 @@ fetchloom get [options] <link>...
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
 | `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 
-[global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; quote several, as in `fetchloom get "fashion mnist"`. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
+[global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; several are one search, quoted or not, as in `fetchloom get fashion mnist`, when none is a link, an id, a DOI or a path. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
 
 ## what happens
 
@@ -225,7 +225,7 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 | offline get cannot resolve a repository | only a link that kept one file, fetched on this machine before, runs offline | run it once without `--offline`, or for several files follow [offline preparation](../concepts.md#offline) |
 | a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
-| `"fashion" is not a link, a DOI or an id` | unquoted search words read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
+| `"fashion" is not a link, a DOI or an id` | search words mixed with links, ids or DOIs, which read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
 | `hf:datasets/scikit-learn/iris@main has no file iris.csv` | the link names a file its site lists under another name, often in other case | write the name the help gives in the link |
 | `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |

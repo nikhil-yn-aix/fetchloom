@@ -29,7 +29,7 @@ fetchloom add [options] -i <file>
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
-[global options](README.md#global-options) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; quote several, as in `fetchloom add "fashion mnist"`. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
+[global options](README.md#global-options) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; several are one search, quoted or not, as in `fetchloom add fashion mnist`, when none is a link, an id, a DOI or a path. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
 
 ## what happens
 
@@ -165,7 +165,7 @@ a link that fails while its file downloads is named by its line too, in the erro
 
 ### several links at once
 
-several links on the command line add a dataset each, as the lines of a list do, but each is trusted as a typed link is, so a lab server on a private address gets the warning above. search words go alone, in quotes, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2:
+several links on the command line add a dataset each, as the lines of a list do, but each is trusted as a typed link is, so a lab server on a private address gets the warning above. search words go alone, all of them one search, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2:
 
 ```text
 error: --as names one dataset, and 2 links add 2

@@ -69,7 +69,7 @@ fetchloom add iris
 fetchloom get "fashion mnist"
 ```
 
-a search must be the only argument, so quote a multi-word search. `get` takes several links, ids or DOIs, but no search words among them.
+a search is the only argument: several plain words, quoted or not, are one search, as `fetchloom add fashion mnist`, while words mixed with a link, an id or a DOI are refused, since `add` and `get` then read each as a link. each word is checked on its own, so one that names a file or folder here stops the search before any request.
 
 paths never reach a search site. a path such as `./flowers.csv`, `~/data` or `file:///data` is imported by `add`, refused by `get` with `reference.invalid`, exit 10, and refused by `search` with `usage`, exit 2. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, makes `add` and `get` exit 2; `fetchloom search iris` still searches for it. so does a word written as a path that names nothing here, as a typo would: one that ends with `/`, holds two `/` or a `\`, or ends with a file type such as `.csv` or `.zip`. `add` names the near file or folder, and both say how to search for the words on purpose, which only `search` does. stderr, beside a `flowers` folder:
 

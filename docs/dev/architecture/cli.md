@@ -84,7 +84,7 @@ several links typed for one `add` go the way of an `add -i` list, `add_list_held
 
 `get -i` reads its input on a blocking task while the command awaits either the result or cancellation. the end of the run leaves an interrupted input reader whose producer keeps the pipe open, on windows after `EXIT_WAIT`.
 
-plain-word `add` and `get` call `search::pick` before source resolution. an interactive choice returns a canonical reference; without one, the error carries candidate details and a JSON partial result. [catalog search](../../user/commands/search.md) owns user-facing selection rules.
+plain-word `add` and `get` call `search::pick` before source resolution. several words typed unquoted are one search when `add::one_search` finds each a search word, after `refuse_local` checked each alone, so a name here never joins the words sent; a mix with a link stays several links, which refuse a search word. an interactive choice returns a canonical reference; without one, the error carries candidate details and a JSON partial result. [catalog search](../../user/commands/search.md) owns user-facing selection rules.
 
 `fetch::all` queues only the allowed number of downloads. it shares progress and counters across them. a locked 404 or 410 may re-resolve its recorded source once per batch; replacement URLs must still produce the old pinned bytes.
 

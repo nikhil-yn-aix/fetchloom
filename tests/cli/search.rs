@@ -550,6 +550,44 @@ fn search_json_carries_metadata_and_joins_words() -> Result {
     Ok(())
 }
 
+/// plain words with no link, id, DOI or path among them can only be one search, quoted or not. a
+/// word that names something here, or a mix with a link, is refused as before, asking nobody.
+#[test]
+fn unquoted_words_are_one_search() -> Result {
+    let sandbox = Sandbox::new()?;
+    for command in ["add", "get"] {
+        let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+        let output = catalogs
+            .command(&sandbox, &["--json", command, "fashion", "mnist"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        assert_eq!(
+            document["errors"][0]["kind"], "reference.ambiguous",
+            "{command}"
+        );
+        assert!(
+            catalogs.hf.requests()[0].contains("search=fashion+mnist"),
+            "{command}"
+        );
+    }
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    std::fs::create_dir(sandbox.work().join("flowers"))?;
+    for args in [
+        &["add", "fashion", "zenodo:1"][..],
+        &["add", "flowers", "iris"],
+        &["get", "iris", "flowers"],
+    ] {
+        let output = catalogs
+            .command(&sandbox, &[&["--json"], args].concat())
+            .output()?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(json(&output)?["work"]["requests"], 0, "{args:?}");
+    }
+    assert_eq!(catalogs.hf.requests(), Vec::<String>::new());
+    Ok(())
+}
+
 #[test]
 fn zenodo_preserves_whitespace_in_quoted_words() -> Result {
     let sandbox = Sandbox::new()?;

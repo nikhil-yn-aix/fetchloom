@@ -320,6 +320,9 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
         }));
     }
     let mut typed = std::mem::take(&mut args.links);
+    if let Some(words) = one_search(&typed, true)? {
+        return Ok(Request::Link(words));
+    }
     if typed.len() > 1 {
         return several(args, typed).map(Request::List);
     }
@@ -337,6 +340,23 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     }
     super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
+}
+
+/// the words of one search, when `typed` holds several and each is plain words, with no link, id,
+/// DOI or path among them, which could then mean nothing else. none of them may name something
+/// here, so a local name never goes out; `pins` says the command can import it, as add can.
+pub(super) fn one_search(typed: &[String], pins: bool) -> Result<Option<String>, Error> {
+    if typed.len() < 2
+        || !typed
+            .iter()
+            .all(|word| crate::source::search::is_search(word))
+    {
+        return Ok(None);
+    }
+    for word in typed {
+        super::search::refuse_local(word, pins)?;
+    }
+    Ok(Some(typed.join(" ")))
 }
 
 /// the links typed for one add, `links`, which add a dataset each, as the lines of a list do:

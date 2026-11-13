@@ -292,6 +292,14 @@ impl Expected {
 /// its line gives. only a link alone may be search words, as several download together.
 async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
     context.stop.check()?;
+    if args.input_file.is_none()
+        && let Some(words) = super::add::one_search(&args.links, false)?
+    {
+        return Ok(vec![Asked {
+            link: words,
+            expected: None,
+        }]);
+    }
     let links = &args.links;
     let several = links.len() > 1 || args.input_file.is_some();
     if several && let Some(word) = links.iter().find(|link| is_search(link)) {
