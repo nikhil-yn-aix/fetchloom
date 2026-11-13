@@ -300,6 +300,10 @@ fn arxiv_is_searched_by_title_when_named() -> Result {
         stderr.contains("Searching arXiv for \"attention is all you need\""),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("Found 1 paper for \"attention is all you need\""),
+        "{stderr}"
+    );
     assert_eq!(
         text(&output.stdout)?,
         "arxiv:1706.03762\tAttention Is All You Need\n"
@@ -481,6 +485,10 @@ fn semantic_scholar_is_searched_when_named() -> Result {
     assert!(output.status.success(), "{stderr}");
     assert!(
         stderr.contains("Searching semantic scholar for \"attention is all you need\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Found 3 papers for \"attention is all you need\""),
         "{stderr}"
     );
     let stdout = text(&output.stdout)?;

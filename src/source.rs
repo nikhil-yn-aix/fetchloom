@@ -470,6 +470,11 @@ impl Reference {
         }
     }
 
+    /// whether this names a paper, as arXiv's and semantic scholar's do, rather than a dataset.
+    pub(crate) fn is_paper(&self) -> bool {
+        matches!(self, Reference::Arxiv(_) | Reference::S2Paper(_))
+    }
+
     /// whether the links of this dataset's files may pin the object version their bytes were,
     /// as S3's may.
     pub(crate) fn keeps_versions(&self) -> bool {

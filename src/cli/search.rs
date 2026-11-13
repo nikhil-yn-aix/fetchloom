@@ -25,10 +25,7 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     let output = &context.output;
     output.done(
         "Found",
-        &format!(
-            "{} for \"{words}\"",
-            units::count(report.candidates.len() as u64, "dataset", "datasets")
-        ),
+        &format!("{} for \"{words}\"", counted(&report.candidates)),
     );
     // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() {
@@ -172,7 +169,7 @@ pub(super) async fn pick(
         "Found",
         &format!(
             "{} for \"{words}\"; add one by its id:",
-            units::count(report.candidates.len() as u64, "dataset", "datasets")
+            counted(&report.candidates)
         ),
     );
     let width = console::Term::stderr()
@@ -201,6 +198,42 @@ pub(super) async fn pick(
 
 /// the columns before a reference in the list `search` prints.
 const LIST_LEAD: usize = 12;
+
+/// how many `candidates` there are, by what they are: `3 datasets`, `2 papers`, or
+/// `1 dataset and 2 papers`.
+fn counted(candidates: &[Candidate]) -> String {
+    let papers = candidates
+        .iter()
+        .filter(|candidate| candidate.reference.is_paper())
+        .count() as u64;
+    let datasets = candidates.len() as u64 - papers;
+    let (datasets, papers) = (
+        units::count(datasets, "dataset", "datasets"),
+        (papers > 0).then(|| units::count(papers, "paper", "papers")),
+    );
+    match papers {
+        None => datasets,
+        Some(papers)
+            if candidates
+                .iter()
+                .all(|candidate| candidate.reference.is_paper()) =>
+        {
+            papers
+        }
+        Some(papers) => format!("{datasets} and {papers}"),
+    }
+}
+
+/// what a search of the `asked` catalogs that found nothing found none of.
+fn unmatched(asked: &[Catalog]) -> &'static str {
+    let papers = asked.iter().any(|catalog| catalog.finds_papers());
+    let datasets = asked.iter().any(|catalog| !catalog.finds_papers());
+    match (datasets, papers) {
+        (true, true) => "dataset or paper",
+        (false, true) => "paper",
+        _ => "dataset",
+    }
+}
 
 /// whether a catalog filled its share, so it may hold more matches than were shown.
 fn more(candidates: &[Candidate], limit: usize) -> bool {
@@ -246,11 +279,9 @@ async fn find(
             &format!("searching for \"{words}\" asks sites such as hugging face"),
         ));
     }
-    let asked: Vec<&str> = Catalog::asked(catalogs)
-        .into_iter()
-        .map(Catalog::label)
-        .collect();
-    let named = units::listed(&asked, "and");
+    let asked = Catalog::asked(catalogs);
+    let labels: Vec<&str> = asked.iter().copied().map(Catalog::label).collect();
+    let named = units::listed(&labels, "and");
     context
         .output
         .step("Searching", &format!("{named} for \"{words}\""));
@@ -264,7 +295,7 @@ async fn find(
     if result.candidates.is_empty() {
         return Err(Error::new(
             Kind::ReferenceUnresolved,
-            format!("found no dataset matching \"{words}\""),
+            format!("found no {} matching \"{words}\"", unmatched(&asked)),
         )
         .help("try other words, or paste a link or id such as zenodo:3608990")
         .with_result(serde_json::json!({"candidates": []})));
@@ -498,6 +529,38 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style, picker_lead};
     use crate::source::Reference;
+
+    /// the count says what was found: datasets, papers or both.
+    #[test]
+    fn what_was_found_is_counted_as_datasets_papers_or_both() {
+        let found = |references: &[&str]| {
+            let candidates: Vec<Candidate> = references
+                .iter()
+                .map(|reference| Candidate {
+                    reference: Reference::parse(reference).unwrap().reference,
+                    title: String::new(),
+                    source: "test",
+                    size: None,
+                    downloads: None,
+                    note: None,
+                })
+                .collect();
+            counted(&candidates)
+        };
+        assert_eq!(found(&["zenodo:1", "kaggle:uciml/iris"]), "2 datasets");
+        assert_eq!(found(&["arxiv:1706.03762"]), "1 paper");
+        assert_eq!(
+            found(&["s2:CorpusId:1", "s2:CorpusId:2", "arxiv:1706.03762"]),
+            "3 papers"
+        );
+        assert_eq!(
+            found(&["zenodo:1", "arxiv:1706.03762", "s2:CorpusId:2"]),
+            "1 dataset and 2 papers"
+        );
+        assert_eq!(unmatched(&[Catalog::Hf, Catalog::Zenodo]), "dataset");
+        assert_eq!(unmatched(&[Catalog::Arxiv, Catalog::S2]), "paper");
+        assert_eq!(unmatched(&[Catalog::Geo, Catalog::S2]), "dataset or paper");
+    }
 
     #[test]
     fn script_lines_keep_the_reference_first() {

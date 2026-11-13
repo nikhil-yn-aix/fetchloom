@@ -86,6 +86,11 @@ impl Catalog {
             .collect()
     }
 
+    /// whether the catalog finds papers, not datasets.
+    pub(crate) fn finds_papers(self) -> bool {
+        matches!(self, Catalog::Arxiv | Catalog::S2)
+    }
+
     /// the catalog's name in the story and in `source`.
     pub(crate) fn label(self) -> &'static str {
         match self {
