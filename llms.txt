@@ -6,32 +6,32 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 
 ## for agents
 
-- [agent skill](skills/fetchloom/SKILL.md): which command fits which task, what to ask the user first, and how to read a failure
-- [JSON output](docs/user/reference/json-output.md): the document `--json` prints, every command's result fields, warning kinds, dry runs and work counters
-- [exit codes](docs/user/reference/exit-codes.md): each error kind, its exit code and the next step
-- [add](docs/user/commands/add.md): `fetchloom add <ref>` puts a dataset in the project, downloads and pins it; `--as` names it, `--select`, `--exclude` and `--no-extract` choose its files, `-i` reads a list of links, `-n` previews, and a path such as `./flowers` pins files on this machine
-- [sync](docs/user/commands/sync.md): `fetchloom sync` places what data.lock pins and keeps local edits; `--force` replaces them, `--locked` fails rather than change data.lock, `--strict` fails with `data.not_ready` while the data is not ready to use, `--verify` hashes every placed file, `-n` previews, and names sync only those datasets
-- [path](docs/user/commands/path.md): `fetchloom path <name>` prints a dataset's or file's absolute path, syncing that dataset first when needed; `--locked` never changes data.lock
-- [status](docs/user/commands/status.md): `fetchloom status` lists missing, edited and extra files and exits 0 either way; `--check` fails with `data.not_ready` while the data is not ready to use; `--verify` hashes every placed file
-- [lock](docs/user/commands/lock.md): `fetchloom lock` pins without placing; `--check` checks data.lock against data.toml, `--upgrade` pins newer versions, `-n` previews, and after a git merge `--ours` and `--theirs` choose a side
-- [offline](docs/user/concepts.md#offline): `--offline` or `FETCHLOOM_OFFLINE=1` uses only the cache, the data folder and folder mirrors
-- [CI](docs/user/ci.md): a cache kept between jobs, keyed on data.lock, `sync --locked --yes`, keys from CI secrets and exact-input checks
-- [AI agents](docs/user/ai-agents.md): where to put the skill, what agents rely on and why there is no MCP server
+- [agent skill](skills/fetchloom/SKILL.md): which command fits a task, what to ask the user first and how to read a failure
+- [JSON output](docs/user/reference/json-output.md): what `--json` prints: each command's result fields, warning kinds, dry runs and work counters
+- [exit codes](docs/user/reference/exit-codes.md): what each exit code and error kind means, and the next step
+- [AI agents](docs/user/ai-agents.md): where to put the skill, what agents can rely on and why there is no MCP server
+- [offline](docs/user/concepts.md#offline): what `--offline` or `FETCHLOOM_OFFLINE=1` may use: the cache, the data folder and folder mirrors
+- [CI](docs/user/ci.md): how a job checks exact inputs: a cache kept between jobs, keyed on data.lock, `sync --locked --yes` and keys from CI secrets
 
-## other commands
+## commands
 
 - [commands](docs/user/commands/README.md): every command, the global options `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C`, `--mirror` and `--no-config`, `fetchloom help` and its topics, and what goes to stdout and stderr
-- [get](docs/user/commands/get.md): `fetchloom get` downloads once without a project, into a folder `-d` names, or one checked file at the path `-o` names, replaced only with `--force`; `--sha256` checks a single file, `-i` reads a list of links, `--dry-run` tells what it would fetch and where without writing anything, and `--select`, `--exclude` and `--no-extract` choose files
-- [search](docs/user/commands/search.md): `fetchloom search` finds datasets on hugging face, kaggle, zenodo, GEO and openneuro, and on ENA and dandi when `--source` names them; `--source` and `--limit` narrow or widen it, and without `--limit` it shows at most 12 matches
-- [build](docs/user/commands/build.md): `fetchloom build` runs the recipes' steps and pins and places what they made; `-n` shows the commands first, `--check` runs them again to compare with data.lock, `--accept` pins a rebuild that differs, `--locked` never writes data.lock, and `--prepare` fetches what a build reads
-- [list](docs/user/commands/list.md): each dataset's reference, size, folder and pinned files
-- [export](docs/user/commands/export.md): `fetchloom export` writes SHA-256 lines for `sha256sum -c`, or links with `--format links` or `--format aria2`; `-o` writes a file and keeps one already there unless `--force`
-- [push](docs/user/commands/push.md): `fetchloom push` copies the pinned files into the folder mirror `--to` names; `--inputs` adds what recipes are made from, and `-n` previews
-- [remove](docs/user/commands/remove.md): `fetchloom remove` takes a dataset out with the unchanged files it placed; `-n` previews
-- [drop](docs/user/commands/drop.md): `fetchloom drop` leaves files out of a dataset for good, as patterns in data.toml; `-n` previews
-- [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, and `-n` previews; `cache verify` hashes every cached file
-- [settings](docs/user/commands/settings.md): each setting's value and where it came from
-- [auth](docs/user/commands/auth.md): `auth login` signs in once, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; `auth logout` signs out, with `--host` too
+- [add](docs/user/commands/add.md): how to add and pin a dataset: `fetchloom add <ref>`, or a path such as `./flowers` for files on this machine; `--as` names it, `--select`, `--exclude` and `--no-extract` choose its files, `-i` reads a list of links, `-n` previews
+- [sync](docs/user/commands/sync.md): how to place what data.lock pins: `fetchloom sync`, or with names only those datasets; edits stay unless `--force`, `--locked` fails rather than change data.lock, `--strict` fails with `data.not_ready` while the data is not ready, `--verify` hashes every placed file, `-n` previews
+- [path](docs/user/commands/path.md): where a dataset or file is: `fetchloom path <name>` prints its absolute path, syncing that dataset first when needed; `--locked` never changes data.lock
+- [status](docs/user/commands/status.md): what differs from data.lock: `fetchloom status` lists missing, edited and extra files and exits 0 either way; `--check` fails with `data.not_ready` while the data is not ready, `--verify` hashes every placed file
+- [lock](docs/user/commands/lock.md): how to pin without placing: `fetchloom lock`; `--check` compares data.lock with data.toml, `--upgrade` pins newer versions, `-n` previews, and after a git merge `--ours` or `--theirs` chooses a side
+- [get](docs/user/commands/get.md): how to download once without a project: `fetchloom get` into a folder `-d` names, or one checked file at the path `-o` names, replaced only with `--force`; `--sha256` checks a single file, `-i` reads a list of links, `--dry-run` says what it would fetch and where, `--select`, `--exclude` and `--no-extract` choose files
+- [search](docs/user/commands/search.md): how to find a dataset by words: `fetchloom search` asks hugging face, kaggle, zenodo, GEO and openneuro, and ENA and dandi when `--source` names them; `--limit` changes the 12 matches it shows
+- [build](docs/user/commands/build.md): how to make datasets with recipes: `fetchloom build` runs their steps and pins and places what they made; `-n` shows the commands first, `--check` runs them again to compare with data.lock, `--accept` pins a rebuild that differs, `--locked` never writes data.lock, `--prepare` fetches what a build reads
+- [list](docs/user/commands/list.md): what each dataset is: its reference, size, folder and pinned files
+- [export](docs/user/commands/export.md): how to use the pins without fetchloom: `fetchloom export` writes SHA-256 lines for `sha256sum -c`, or links with `--format links` or `--format aria2`; `-o` writes a file and keeps one already there unless `--force`
+- [push](docs/user/commands/push.md): how to fill a folder mirror: `fetchloom push` copies the pinned files into the folder `--to` names; `--inputs` adds what recipes are made from, `-n` previews
+- [remove](docs/user/commands/remove.md): how to take a dataset out: `fetchloom remove` drops it and the unchanged files it placed; `-n` previews
+- [drop](docs/user/commands/drop.md): how to leave files out of a dataset for good: `fetchloom drop` writes patterns to data.toml; `-n` previews
+- [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, `-n` previews; `cache verify` hashes every cached file
+- [settings](docs/user/commands/settings.md): which value each setting has and where it came from
+- [auth](docs/user/commands/auth.md): how to sign in once: `auth login`, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; `auth logout` signs out, with `--host` too
 - [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish, dataset names included
 
 ## guides
@@ -42,15 +42,15 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [concepts](docs/user/concepts.md): data.toml, data.lock, the cache, placement, archives, offline work, approval and interruptions
 - [working with raw data](docs/user/raw-data.md): results outside the data folder, bad samples, edits with copy = true and freeing space
 - [other tools](docs/user/other-tools.md): the fetchloom command for each download step from curl, gdown, kaggle, hf, aws s3, dvc or pooch, and working beside dvc, git-lfs and datalad
-- [recipes](docs/user/recipes.md): datasets a command of yours makes from others, declared with from, run, code and env, and built with `fetchloom build`
-- [scripting](docs/user/scripting.md): JSON checks for scripts and the python helper
-- [mirrors](docs/user/mirrors.md): folders and web servers that hold pinned files by SHA-256, asked before sources
-- [clusters](docs/user/hpc.md): home and scratch disks, many jobs, offline compute nodes and one cache for a lab
-- [resources](docs/user/resources.md): `resources` or `FETCHLOOM_RESOURCES`, lean, default or max, trades speed against memory; a setting set by name still wins
+- [recipes](docs/user/recipes.md): how to make a dataset from others with a command of yours: from, run, code and env, built with `fetchloom build`
+- [scripting](docs/user/scripting.md): how scripts read `--json` answers, and the python helper
+- [mirrors](docs/user/mirrors.md): how a folder or web server that holds pinned files by SHA-256 stands in for sources
+- [clusters](docs/user/hpc.md): where the cache goes on home and scratch disks, many jobs, offline compute nodes and one cache for a lab
+- [resources](docs/user/resources.md): how `resources` or `FETCHLOOM_RESOURCES`, lean, default or max, trades speed against memory
 - [notebooks and containers](docs/user/notebooks.md): where the cache lasts in hosted notebooks, dev containers and kubernetes jobs
 - [windows](docs/user/windows.md): drives, synced folders, long paths and recipe steps
 - [macos](docs/user/macos.md): the cache, apfs clones, icloud drive and unicode names
-- [troubleshooting](docs/user/troubleshooting.md): error text, causes and fixes
+- [troubleshooting](docs/user/troubleshooting.md): what an error or warning means and its fix
 - [limits](docs/user/limits.md): what fetchloom does not do, and its size limits
 
 ## sources
@@ -73,7 +73,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones once `drive_folders` lists them
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private ones once `s3_buckets` or `gcs_buckets` lists them
-- [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them, read with a SAS, an account key, the az cli's login or a virtual machine's managed identity
+- [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them, with a SAS, an account key, the az cli's login or a managed identity
 - [signing in](docs/user/signing-in.md): which sources need a key, `fetchloom auth login` or the source's variable, and the settings that let keys reach private buckets, containers and drive folders
 
 ## reference
@@ -83,7 +83,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [environment](docs/user/reference/environment.md): every variable, the settings file, proxies and credentials
 - [compatibility](docs/user/reference/compatibility.md): systems, terminals, source APIs and the programs that unpack a `.rar`
 - [cache folder](docs/user/reference/cache-folder.md): where the cache is and what it holds
-- [project folder](docs/user/reference/project-folder.md): finding the project, and the files fetchloom keeps in `.fetchloom/`
+- [project folder](docs/user/reference/project-folder.md): how the project is found, and the files fetchloom keeps in `.fetchloom/`
 
 ## working on the code
 
