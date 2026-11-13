@@ -425,7 +425,8 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
 const VALUE: usize = 24;
 
 /// the settings as aligned columns, one per line, for a person or for `grep`. a terminal `width`
-/// shows a home path from `~`, and too narrow leaves out the variable, `FETCHLOOM_` and the name.
+/// shows a home path from `~`, and too narrow leaves out the variable, `FETCHLOOM_` and the name,
+/// then puts each origin under its value.
 fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()
@@ -463,6 +464,18 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
     ];
     let full = widths.iter().map(|width| width + 2).sum::<usize>() + widest(3, usize::MAX);
     let variables = width.is_none_or(|width| full <= width);
+    if width.is_some_and(|width| widths[0] + widths[1] + widths[2] + 4 > width) {
+        // too narrow for a value and its origin side by side, so each origin goes on a line of
+        // its own, under its value
+        return rows
+            .iter()
+            .map(|row| {
+                let pad = units::columns(&row[0]) + 2;
+                format!("{}  {}\n{:pad$}{}", row[0], row[1], "", row[2])
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     rows.iter()
         .map(|row| {
             let mut line = format!("{:<name$}  ", row[0], name = widths[0]);
@@ -543,6 +556,35 @@ mod tests {
         assert_eq!(
             starts[0], starts[1],
             "a wide character takes two columns:\n{told}"
+        );
+    }
+
+    /// a terminal too narrow for a value and its origin side by side gets each origin under its
+    /// value, so every line fits, as list leaves out columns to fit.
+    #[test]
+    fn a_narrow_terminal_gets_each_origin_under_its_value() {
+        let row = |name: &'static str, said: &str, origin: Origin| Shown {
+            name,
+            value: json!(said),
+            origin: vec![origin],
+            variable: "FETCHLOOM_SPLIT",
+            said: said.to_owned(),
+        };
+        let shown = [
+            row("azure_containers", "none", Origin::Default),
+            row("split", "when one stream is slow", Origin::Default),
+            row("most_files", "2,097,152", Origin::Machine),
+        ];
+        let told = table(&shown, Some(40));
+        assert_eq!(
+            told,
+            "azure_containers  none\n                  default\n\
+             split  when one stream is slow\n       default\n\
+             most_files  2,097,152\n            this machine"
+        );
+        assert!(
+            told.lines().all(|line| units::columns(line) <= 40),
+            "{told}"
         );
     }
 
