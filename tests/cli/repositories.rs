@@ -82,9 +82,7 @@ fn dryad(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// a pasted dataset page is added at dryad's newest version, which data.lock pins with the MD5
-/// dryad states for each file, and a teammate's empty cache gets the same bytes from the lock
-/// alone.
+/// a pasted page is pinned at dryad's newest version, with the MD5 dryad states for each file.
 #[test]
 fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -158,7 +156,7 @@ fn get_downloads_a_dryad_version_into_a_folder() -> Result {
     Ok(())
 }
 
-/// the MD5 dryad states checks the bytes it sends: other bytes are never placed.
+/// refused bytes are never placed.
 #[test]
 fn bytes_that_differ_from_dryads_md5_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -225,8 +223,7 @@ fn a_dryad_download_refused_without_a_key_says_how_to_get_one() -> Result {
     Ok(())
 }
 
-/// a dryad key is checked with dryad's test endpoint, which names the key's owner, before it is
-/// saved. a key dryad refuses is not saved, and no key is ever printed.
+/// dryad's test endpoint names the key's owner, a refused key is not saved, and none is printed.
 #[test]
 fn a_dryad_key_is_checked_before_it_is_saved() -> Result {
     let sandbox = Sandbox::new()?;
@@ -273,9 +270,8 @@ fn a_dryad_key_is_checked_before_it_is_saved() -> Result {
 
 const MENDELEY: &str = "/data.mendeley.com";
 
-/// mendeley's answers for rscbjbr9sj at version 2, its top folder holding `(name, bytes, sha256)`
-/// files with the SHA-256 stated, and each file's public download link sending it on to the
-/// storage that serves its bytes.
+/// mendeley's answers for rscbjbr9sj at version 2, whose top folder holds `(name, bytes, sha256)`
+/// files, each public download link sending on to the storage that serves the bytes.
 fn mendeley(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
     let api = format!("{MENDELEY}/public-api/datasets/rscbjbr9sj");
     let listed: Vec<_> = files
@@ -327,8 +323,8 @@ fn mendeley(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// a pasted version link is pinned with the SHA-256 mendeley states for each file, its download
-/// link followed on to its storage, and a teammate's empty cache gets the same bytes from the lock.
+/// a pasted version link is pinned with the SHA-256 mendeley states for each file, and each
+/// download link is followed on to its storage.
 #[test]
 fn a_mendeley_version_is_pinned_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -393,7 +389,7 @@ fn get_downloads_a_mendeley_version_into_a_folder() -> Result {
     Ok(())
 }
 
-/// the SHA-256 mendeley states checks the bytes its storage sends: other bytes are never placed.
+/// the bytes come from mendeley's storage, and refused ones are never placed.
 #[test]
 fn bytes_that_differ_from_mendeleys_sha256_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -446,8 +442,7 @@ fn github(assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// a pasted release page is pinned at its tag with the SHA-256 github states for each file, and
-/// a teammate's empty cache gets the same bytes from the lock alone.
+/// a pasted release page is pinned at its tag with the SHA-256 github states for each file.
 #[test]
 fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -490,7 +485,7 @@ fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
     Ok(())
 }
 
-/// the SHA-256 github states checks the bytes its storage sends: other bytes are never placed.
+/// the bytes come from github's storage, and refused ones are never placed.
 #[test]
 fn bytes_that_differ_from_githubs_sha256_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -554,10 +549,9 @@ fn githubs_rate_limit_says_plainly_what_a_key_allows() -> Result {
     Ok(())
 }
 
-/// gitlab's answer for gitlab-runner's release v19.3.6 holding `(path, bytes, stored)` links,
-/// each at its own address: in an S3 bucket, or on gitlab.com in the project's packages when
-/// `stored` says so. as gitlab.com does, a link's download address there answers a program with a
-/// page that warns of leaving gitlab rather than sending it on to another host.
+/// gitlab's answer for gitlab-runner's release v19.3.6 holding `(path, bytes, stored)` links, at
+/// an S3 bucket or, when `stored`, in the project's packages on gitlab.com. as there, a link's
+/// download address answers a program with a page warning of leaving gitlab, not a redirect.
 fn gitlab(links: &[(&str, &[u8], bool)]) -> Result<Routes> {
     let release = "/gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.6";
     let packages =
@@ -605,9 +599,8 @@ fn gitlab(links: &[(&str, &[u8], bool)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// `get` takes a gitlab release with `--select`, its links keep the paths the release gives them,
-/// and each file comes from the link's own address, in a bucket or on gitlab.com, never from the
-/// page gitlab.com shows in its place.
+/// links keep the paths the release gives them, and each file comes from the link's own address,
+/// never from the page gitlab.com shows in its place.
 #[test]
 fn get_downloads_a_gitlab_release_link_at_its_path() -> Result {
     let sandbox = Sandbox::new()?;
@@ -644,9 +637,8 @@ const ENA_API: &str = "/www.ebi.ac.uk/ena/portal/api";
 type Served<'a> = (&'a str, &'a [u8], &'a str);
 const ENA_FIELDS: &str = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,sra_ftp,sra_md5,sra_bytes,study_title";
 
-/// ENA's answers for `accession`: the count of its runs, and its report of each run's FASTQ
-/// files `(name, bytes, md5)` at their addresses on ftp.sra.ebi.ac.uk, with the bytes there. a
-/// run with no files is under controlled access, as ENA reports a run dbGaP holds.
+/// ENA's answers for `accession`: its run count, each run's FASTQ files `(name, bytes, md5)` and
+/// their bytes on ftp.sra.ebi.ac.uk. a run without files stands for one dbGaP controls.
 fn ena(accession: &str, runs: &[(&str, &[Served])]) -> Result<Routes> {
     let mut routes = Vec::new();
     let rows: Vec<_> = runs
@@ -690,8 +682,7 @@ fn ena(accession: &str, runs: &[(&str, &[Served])]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// a pasted page of ENA's browser is pinned with the MD5 ENA states for each of the run's files,
-/// and a teammate's empty cache gets the same bytes from the lock alone.
+/// a pasted page of ENA's browser is pinned with the MD5 ENA states for each of the run's files.
 #[test]
 fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -742,8 +733,7 @@ fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
     Ok(())
 }
 
-/// a study's runs under controlled access are left out, and the add says so, as a warning a
-/// script can match.
+/// the warning has a kind a script can match.
 #[test]
 fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -781,7 +771,6 @@ fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result 
     Ok(())
 }
 
-/// `get` takes an experiment's runs, and `--select` picks one run by its accession.
 #[test]
 fn get_selects_one_run_of_an_ena_experiment_by_its_accession() -> Result {
     let sandbox = Sandbox::new()?;
@@ -816,7 +805,7 @@ fn get_selects_one_run_of_an_ena_experiment_by_its_accession() -> Result {
     Ok(())
 }
 
-/// the MD5 ENA states checks the bytes its file server sends: other bytes are never placed.
+/// the bytes come from ENA's file server, and refused ones are never placed.
 #[test]
 fn bytes_that_differ_from_enas_md5_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -890,8 +879,7 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
 }
 
 /// a pasted page of GEO's site is pinned by each file's SHA-256 and the size its download gave,
-/// not the size an index rounds, and a teammate's empty cache gets the same bytes from the lock
-/// alone.
+/// not the size an index rounds.
 #[test]
 fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -946,7 +934,6 @@ fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
     Ok(())
 }
 
-/// a pasted link to one of a series' folders on NCBI's file server takes that folder alone.
 #[test]
 fn get_takes_the_folder_a_pasted_geo_link_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1062,8 +1049,7 @@ fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom
     command
 }
 
-/// a dandiset is pinned at its newest published version with the SHA-256 dandi states for each
-/// asset, and a teammate's sync reads only the blobs data.lock names.
+/// the newest published version is pinned, and a teammate's sync reads only data.lock's blobs.
 #[test]
 fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1104,8 +1090,7 @@ fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result 
     Ok(())
 }
 
-/// bytes whose SHA-256 is not the one dandi states for the asset are refused, and nothing is
-/// placed.
+/// the bytes come from dandi's blobs on S3, and refused ones are never placed.
 #[test]
 fn bytes_that_differ_from_dandis_sha256_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1130,8 +1115,7 @@ fn bytes_that_differ_from_dandis_sha256_are_refused() -> Result {
     Ok(())
 }
 
-/// an embargoed dandiset, which dandi shows to no one without an account, is refused with what
-/// that means, and no data.toml is written.
+/// dandi shows an embargoed dandiset to no one without an account, and no data.toml is written.
 #[test]
 fn an_embargoed_dandiset_is_refused_and_says_why() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1153,7 +1137,6 @@ fn an_embargoed_dandiset_is_refused_and_says_why() -> Result {
     Ok(())
 }
 
-/// a pasted page of a folder in a dandiset fetches that folder's assets alone.
 #[test]
 fn get_takes_the_folder_a_pasted_dandi_page_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1244,9 +1227,8 @@ fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetch
     command
 }
 
-/// a snapshot is pinned with the SHA-256 its git-annex keys state, from the S3 links pinned to
-/// it, every query carrying the header openneuro's API asks of a query sent by GET. `DataLad`'s
-/// own folder is not asked for, and a teammate's sync reads only the files data.lock names.
+/// the files come from the S3 links pinned to the snapshot, every query carries the header
+/// openneuro's API asks of a GET, and `DataLad`'s own folder is never asked for.
 #[test]
 fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1342,8 +1324,7 @@ fn an_upgrade_to_the_snapshot_data_lock_pins_fetches_no_file() -> Result {
     Ok(())
 }
 
-/// bytes whose MD5 is not the one an old dataset's git-annex key states are refused, and
-/// nothing is placed.
+/// an old dataset's git-annex key states an MD5, and refused bytes are never placed.
 #[test]
 fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1367,8 +1348,7 @@ fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
     Ok(())
 }
 
-/// a pattern with no folder in it is answered from the top folder alone, in one query, and the
-/// resolved line says what the listing covers.
+/// the listing takes one query, and the resolved line says what it covers.
 #[test]
 fn a_top_level_pattern_lists_openneuros_top_folder_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1403,8 +1383,7 @@ fn a_top_level_pattern_lists_openneuros_top_folder_alone() -> Result {
     Ok(())
 }
 
-/// a dataset openneuro shows to no one without an account is refused with what that means, and
-/// no data.toml is written.
+/// openneuro shows such a dataset to no one without an account, and no data.toml is written.
 #[test]
 fn a_private_openneuro_dataset_is_refused_and_says_why() -> Result {
     let sandbox = Sandbox::new()?;
