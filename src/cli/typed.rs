@@ -5,14 +5,24 @@ use std::borrow::Cow;
 
 use super::args;
 use crate::net;
+use crate::output::Runnable;
 
 /// the words of this run's command line after the program's name, as typed, kept for help that
 /// suggests a corrected command line. tests that never `run` leave it unset.
 pub(super) static TYPED: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
 
+/// how `--json`'s `fix` may treat `command`, as help quotes it: none when it is no whole command
+/// line fetchloom accepts.
+pub(crate) fn judged(command: &str) -> Option<Runnable> {
+    runs(command).then(|| Runnable {
+        harmless: harmless(command),
+        changes_lock: changes_lock(command),
+    })
+}
+
 /// whether `command`, as help quotes it, is a whole command line fetchloom accepts, which a script
 /// handed it as the next step can run. `fetchloom add` alone is not one.
-pub(crate) fn runs(command: &str) -> bool {
+fn runs(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
         .is_some_and(|words| args::Args::try_parse_from(words).is_ok())
@@ -20,7 +30,7 @@ pub(crate) fn runs(command: &str) -> bool {
 
 /// whether `command`, as help quotes it, is one a script may run with no person to ask, as
 /// [`args::Command::harmless`] says. one with `--yes` never is, since it answers for a person.
-pub(crate) fn harmless(command: &str) -> bool {
+fn harmless(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
         .and_then(|words| args::Args::try_parse_from(words).ok())
@@ -31,7 +41,7 @@ pub(crate) fn harmless(command: &str) -> bool {
 
 /// whether `command`, as help quotes it, may write data.lock, which a run asked to leave it as it
 /// is never hands a script as the next step.
-pub(crate) fn changes_lock(command: &str) -> bool {
+fn changes_lock(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
         .and_then(|words| args::Args::try_parse_from(words).ok())

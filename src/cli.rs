@@ -44,8 +44,8 @@ use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
 
+pub(crate) use typed::judged;
 use typed::{TYPED, command_line, moved_command};
-pub(crate) use typed::{changes_lock, harmless, runs};
 pub(in crate::cli) use typed::{meant, shell_word};
 
 /// how long retries to one host stay quiet after the line that told one, so downloads that lost
@@ -1213,7 +1213,7 @@ fn finish<T: Serialize>(
     }
     let printed = context
         .output
-        .document(command, outcome.as_ref(), counts, elapsed);
+        .document(command, outcome.as_ref(), counts, elapsed, judged);
     let outcome = outcome.and_then(|result| printed.map(|()| result));
     if outcome.is_ok() {
         context.output.retell();

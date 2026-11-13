@@ -232,10 +232,17 @@ struct Problem<'a> {
     failures: Option<&'a [crate::error::FileFailure]>,
 }
 
+/// a quoted command fetchloom takes whole, as cli reads it: whether a script may run it with no
+/// person to ask, and whether it may write data.lock.
+pub(crate) struct Runnable {
+    pub(crate) harmless: bool,
+    pub(crate) changes_lock: bool,
+}
+
 /// the first `fetchloom` command quoted in `help`, without its backticks, when a script may run it
 /// as the next step. json-output.md's `errors[].fix` lists what never is: an example, a guess, a
 /// person's choice, one of the ways offered with `or`, or under `locked` a write to data.lock.
-fn fix(help: &str, locked: bool) -> Option<&str> {
+fn fix(help: &str, locked: bool, judge: fn(&str) -> Option<Runnable>) -> Option<&str> {
     const NOT_A_FIX: [&str; 9] = [
         "as in",
         "such as",
@@ -263,12 +270,12 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
         if !example
             && part.starts_with("fetchloom ")
             && !part.contains(['<', '>'])
-            && crate::cli::runs(part)
+            && let Some(runnable) = judge(part)
         {
-            if !crate::cli::harmless(part) {
+            if !runnable.harmless {
                 return None;
             }
-            if !locked || !crate::cli::changes_lock(part) {
+            if !locked || !runnable.changes_lock {
                 return (!offers_choice(help, at)).then_some(part);
             }
         }
@@ -999,6 +1006,7 @@ impl Output {
         outcome: Result<&T, &Error>,
         counts: Counts,
         elapsed: Duration,
+        judge: fn(&str) -> Option<Runnable>,
     ) -> Result<(), Error> {
         if !self.json {
             return self
@@ -1018,7 +1026,7 @@ impl Output {
                 fix: error
                     .help
                     .as_deref()
-                    .and_then(|help| fix(help, self.locked.load(Ordering::Relaxed))),
+                    .and_then(|help| fix(help, self.locked.load(Ordering::Relaxed), judge)),
                 failures: (!error.failures.is_empty()).then_some(&*error.failures),
             }],
         };
@@ -1060,7 +1068,7 @@ impl Output {
                     previous.append(&mut warnings);
                     *warnings = previous;
                 }
-                self.document::<()>(command, Err(&error), counts, elapsed)?;
+                self.document::<()>(command, Err(&error), counts, elapsed, judge)?;
                 return Err(error);
             }
         };
@@ -1947,6 +1955,7 @@ mod tests {
     use anstyle::Style as Paint;
 
     use super::{Level, Output, Style, accented, masked, plain, subject, write_answer};
+    use crate::cli::judged;
     use crate::work::Counts;
 
     #[test]
@@ -2181,57 +2190,56 @@ mod tests {
         );
     }
 
+    /// the fix a run's `--json` finds in `help`, with cli reading each quoted command.
+    fn fix_in(help: &str, locked: bool) -> Option<&str> {
+        super::fix(help, locked, judged)
+    }
+
     /// each rule in `fix`'s doc has a row: placeholders, examples, guesses, a person's terminal,
     /// hand fixes first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
-            super::fix("run `fetchloom add <link>` to start a project here", false),
+            fix_in("run `fetchloom add <link>` to start a project here", false),
             None
         );
         assert_eq!(
-            super::fix("add --yes to download it without being asked", false),
+            fix_in("add --yes to download it without being asked", false),
             None
         );
+        assert_eq!(fix_in("quote it, as in `\"fashion mnist\"`", false), None);
         assert_eq!(
-            super::fix("quote it, as in `\"fashion mnist\"`", false),
-            None
-        );
-        assert_eq!(
-            super::fix(
+            fix_in(
                 "use a link or an id, as in `fetchloom add zenodo:3608990`",
                 false
             ),
             None
         );
-        assert_eq!(
-            super::fix("did you mean `fetchloom remove iris`?", false),
-            None
-        );
+        assert_eq!(fix_in("did you mean `fetchloom remove iris`?", false), None);
         // a command named without what it needs is no fix a script could run
         assert_eq!(
-            super::fix(
+            fix_in(
                 "ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`",
                 false
             ),
             None
         );
         assert_eq!(
-            super::fix(
+            fix_in(
                 "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`",
                 false
             ),
             None
         );
         assert_eq!(
-            super::fix(
+            fix_in(
                 "delete git's conflict lines by hand, then run `fetchloom lock`",
                 false
             ),
             None
         );
         assert_eq!(
-            super::fix(
+            fix_in(
                 "downloaded files stay in the cache. fix the errors above, then run `fetchloom sync` again",
                 false
             ),
@@ -2239,7 +2247,7 @@ mod tests {
             "files that failed on their own fail again until someone fixes them"
         );
         assert_eq!(
-            super::fix(
+            fix_in(
                 "run `fetchloom build clean`, then commit data.lock and data.lock.d",
                 false
             ),
@@ -2247,11 +2255,11 @@ mod tests {
             "a build runs the project's code"
         );
         assert_eq!(
-            super::fix("run `fetchloom build -n clean` to see what it runs", false),
+            fix_in("run `fetchloom build -n clean` to see what it runs", false),
             Some("fetchloom build -n clean")
         );
         assert_eq!(
-            super::fix(
+            fix_in(
                 "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`",
                 false
             ),
@@ -2272,10 +2280,10 @@ mod tests {
                 Some("fetchloom sync --locked"),
             ),
         ] {
-            assert_eq!(super::fix(help, true), fix, "{help}");
+            assert_eq!(fix_in(help, true), fix, "{help}");
         }
         assert_eq!(
-            super::fix("run `fetchloom lock` and commit data.lock", false),
+            fix_in("run `fetchloom lock` and commit data.lock", false),
             Some("fetchloom lock")
         );
     }
@@ -2285,7 +2293,7 @@ mod tests {
     #[test]
     fn signing_in_is_never_a_fix() {
         assert_eq!(
-            super::fix(
+            fix_in(
                 "if the dataset is private or restricted, sign in with `fetchloom auth login hf`, then run the same command again",
                 false
             ),
@@ -2319,7 +2327,7 @@ mod tests {
                 Some("fetchloom cache verify"),
             ),
         ] {
-            assert_eq!(super::fix(help, false), fix, "{help}");
+            assert_eq!(fix_in(help, false), fix, "{help}");
         }
     }
 
@@ -2334,10 +2342,10 @@ mod tests {
             "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`",
             "run `fetchloom push --yes` once everyone who reads the mirror may have the files",
         ] {
-            assert_eq!(super::fix(help, false), None, "{help}");
+            assert_eq!(fix_in(help, false), None, "{help}");
         }
         assert_eq!(
-            super::fix(
+            fix_in(
                 "run `fetchloom remove notes --dry-run` to see what it takes out",
                 false
             ),
@@ -2405,7 +2413,7 @@ mod tests {
         assert_eq!(found, named, "the table names every command, in order");
         for ((name, command), (_, alone, options)) in walked.iter().zip(table) {
             for (line, option) in lines(name, command) {
-                let fixed = super::fix(&format!("run `{line}`"), false).is_some();
+                let fixed = fix_in(&format!("run `{line}`"), false).is_some();
                 let allowed = option.map_or(*alone, |option| options.contains(&option.as_str()));
                 assert_eq!(fixed, allowed, "{line}");
             }
@@ -2471,7 +2479,7 @@ mod tests {
                 }
                 let line = candidates
                     .iter()
-                    .find(|line| crate::cli::runs(line))
+                    .find(|line| judged(line).is_some())
                     .unwrap_or_else(|| panic!("no line of {candidates:?} runs"))
                     .clone();
                 (line, option)
