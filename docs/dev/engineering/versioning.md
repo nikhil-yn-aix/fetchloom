@@ -4,7 +4,7 @@ fetchloom has one package version and separate version fields for JSON output, p
 
 ## package version
 
-[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) owns version `0.1.0`. the executable reports it, the python package reads it dynamically, and the [release workflow](releasing.md#workflow) rejects a tag that disagrees with it.
+`Cargo.toml` owns version `0.1.0`. the executable reports it, the python package reads it dynamically, and the [release workflow](releasing.md#workflow) rejects a tag that disagrees with it.
 
 before 1.0, use a minor-version change for a breaking public-interface change and a patch for compatible fixes or additions. use semantic versioning from 1.0. explain breaking changes and required user action in release notes.
 

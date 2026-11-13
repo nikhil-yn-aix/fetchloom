@@ -6,7 +6,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 ## workflow
 
-[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) owns the version; [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) reads it dynamically. [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) runs on tags matching `v*.*.*` and rejects a tag that disagrees with Cargo. default permissions are empty; each job requests only what it needs.
+`Cargo.toml` owns the version; `pyproject.toml` reads it dynamically. `.github/workflows/release.yml` runs on tags matching `v*.*.*` and rejects a tag that disagrees with Cargo. default permissions are empty; each job requests only what it needs.
 
 | job | permissions | work |
 |---|---|---|
@@ -31,7 +31,7 @@ build jobs have a 60-minute timeout and the intel check job 20 minutes. attestat
 
 `artifacts.yml` has only contents-read permission and also accepts manual dispatch. dispatching `release.yml` runs that same builder as a dry run: attestation and draft creation require a tag push and are skipped even when dispatch names a tag. neither rehearsal publishes packages or receives publishing secrets. the fourteen candidate files and their check receipts remain run artifacts.
 
-[publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
+`.github/workflows/publish.yml` runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
 
 | job | needs | work |
 |---|---|---|
@@ -44,7 +44,7 @@ both environments deploy only from tags matching `v*.*.*`, and each waits for th
 
 ## apt repository
 
-github pages serves one site per repository, and a deployment replaces the whole site. [pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml) is therefore the only workflow that deploys it: the documentation at the root and the apt repository under `/apt`. it runs when a release is published and when documentation changes on main, and each run rebuilds `/apt` from the latest published release.
+github pages serves one site per repository, and a deployment replaces the whole site. `.github/workflows/pages.yml` is therefore the only workflow that deploys it: the documentation at the root and the apt repository under `/apt`. it runs when a release is published and when documentation changes on main, and each run rebuilds `/apt` from the latest published release.
 
 the apt part downloads that release's `.deb` files and `SHA256SUMS`, checks them, then writes a flat repository signed with the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase. it serves `https://nikhil-yn-aix.github.io/fetchloom/apt` with `Packages`, `Release`, `Release.gpg`, `InRelease` and the public key `fetchloom.gpg`. when no release is published, the run logs a notice and deploys the documentation without `/apt`.
 
@@ -75,7 +75,7 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel, sbom and installer |
 
-THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from [about.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.toml), which accepts the licenses deny.toml allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
+THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from `about.toml`, which accepts the licenses deny.toml allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
 
 ```sh
 cargo fetch --locked
@@ -108,7 +108,7 @@ to rehearse without a tag, dispatch `release.yml` against the branch being check
 
 ## installers
 
-the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and macos and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. on macos it also writes `~/.zshrc`, since zsh, the default shell there, never reads `~/.profile`, and a shell running under rosetta on apple silicon gets the arm64 build. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
+the planned release will include `install.sh`, which detects x86_64 or arm64 linux and macos and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. on macos it also writes `~/.zshrc`, since zsh, the default shell there, never reads `~/.profile`, and a shell running under rosetta on apple silicon gets the arm64 build. `install.ps1` detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
 the shell installer refuses an existing directory or directory symlink at `$HOME/.local/bin/fetchloom` before staging, and checks again before the final move. it leaves the directory and its contents alone. move the conflicting directory aside before installing.
 

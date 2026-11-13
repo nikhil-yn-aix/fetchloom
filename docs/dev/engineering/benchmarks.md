@@ -1,14 +1,12 @@
 # running benchmarks
 
-`bench/` compares native download workflows in a controlled linux lab and against public services.
+`bench/` compares fetchloom with native download clients in a controlled linux lab and against public services.
 
 ## prepare a dedicated machine
 
-follow [bench requirements and setup](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#requirements) for the package pins, python environment and lab lifecycle. the runner needs linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. it is not a native windows runner; WSL measures the linux filesystem.
+the lab needs linux x86_64 with root; WSL works, a native windows runner does not. setup changes network namespaces, mounts, the hosts file and the system's certificate trust, dropping page caches affects the whole machine, and teardown deletes all lab state under `FL_BENCH_ROOT` (default `/srv/fl-bench`), results included, so copy wanted records out first. use a dedicated machine with at least 30 GiB free, and follow [bench requirements and setup](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#requirements) for the package pins, the python environment and the lab's lifecycle.
 
-use a dedicated machine with at least 30 GiB free. setup changes namespaces, mounts, the hosts file and system certificate trust. dropping page caches affects the whole machine. teardown deletes all lab state, including results, under `FL_BENCH_ROOT` (default `/srv/fl-bench`); copy wanted records out first.
-
-[build the measured executable](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#build-the-measured-executable), then follow setup in the same checkout. setup defines `benchmark_binary` as its absolute linux path; keep it and the `FL_BENCH_ROOT` and `FL_BENCH_VENV` variables in the root shell used below. keep measured files, caches and logs under `FL_BENCH_ROOT`, not a windows mount. the repository itself may be on a windows mount.
+[build the measured executable](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#build-the-measured-executable), then set up in the same checkout. setup defines `benchmark_binary` as its absolute linux path; keep it and the `FL_BENCH_ROOT` and `FL_BENCH_VENV` variables in the root shell the commands below run in. measured files, caches and logs stay under `FL_BENCH_ROOT`, never on a windows mount, though the repository may be on one.
 
 ## choose a run
 

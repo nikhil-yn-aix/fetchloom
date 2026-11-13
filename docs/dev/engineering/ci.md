@@ -4,7 +4,7 @@ CI checks native behavior, filesystem paths and installed release artifacts befo
 
 ## triggers and the required check
 
-[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
+`.github/workflows/ci.yml` runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
 the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. no step may turn a failed test into success to get this check green.
 
@@ -22,9 +22,9 @@ a macos job that ends `cancelled` with `The job was not acquired by Runner of ty
 | `windows-11-arm` | native arm64 windows |
 | `macos-15` | native arm64 macos on APFS, python tests and HFS+ |
 
-all five install the toolchain pinned in rust-toolchain.toml. clippy runs with warnings denied on x86_64 linux, x86_64 windows and the mac; the crate has no code that differs by processor, so the arm64 linux and windows runners would lint the same code. linux x86_64 also runs `cargo clippy --release --locked -- -D warnings` and `RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps`. the intel cross-check is replaced by a native `macos-15-intel` artifact journey; intel does not repeat the source test suite.
+all five install the toolchain pinned in rust-toolchain.toml. clippy runs with warnings denied on x86_64 linux, x86_64 windows and the mac; the crate has no code that differs by processor, so the arm64 linux and windows runners would lint the same code. linux x86_64 also runs `cargo clippy --release --locked -- -D warnings` and `RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps`. intel macos runs the native artifact journey on `macos-15-intel` and does not repeat the source test suite.
 
-nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero properties. [.config/nextest.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.config/nextest.toml) sets four concurrent tests, one retry and `flaky-result = "fail"`. a test that passes only on retry still fails CI. a slow test is reported after 30 seconds; six periods terminate a hung test as failure. this is a hang guard, not a wall-clock performance assertion. the crate has no doc tests, so CI runs none; the change that adds the first one also adds a `cargo test --locked --doc` step to each native job.
+nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero properties. `.config/nextest.toml` sets four concurrent tests, one retry and `flaky-result = "fail"`. a test that passes only on retry still fails CI. a slow test is reported after 30 seconds; six periods terminate a hung test as failure. this is a hang guard, not a wall-clock performance assertion. the crate has no doc tests, so CI runs none; the change that adds the first one also adds a `cargo test --locked --doc` step to each native job.
 
 `INSTA_UPDATE=no` forbids snapshot updates. insta 1.49.0 records the snapshot paths each run references through `INSTA_SNAPSHOT_REFERENCES_FILE`; the runner converts them to repository-relative reports. the `snapshots` job checks their union against every tracked `.snap` file and rejects unused, unknown or pending snapshots. it needs all native and filesystem jobs: a reflink-only snapshot is legitimately unused on ext4, but must be exercised on a cloning filesystem. this check adds no second test run. review snapshots locally as [building and testing](building-and-testing.md#update-snapshots) describes; CI never accepts them.
 
@@ -32,7 +32,7 @@ nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero
 
 ## selected-test proof and reports
 
-[python/ci_tests.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_tests.py) compares Cargo's test-binary inventory with nextest's. it asks those libtest binaries for their ordinary and ignored test IDs, both with and without the old filesystem `--skip` arguments. before each nextest run, its selected nonignored IDs must equal that recorded selection and must not be empty. the chmod case and the alias tests have exact selections of their own. doctests remain separate from this comparison.
+`python/ci_tests.py` compares Cargo's test-binary inventory with nextest's. it asks those libtest binaries for their ordinary and ignored test IDs, both with and without the old filesystem `--skip` arguments. before each nextest run, its selected nonignored IDs must equal that recorded selection and must not be empty. the chmod case and the alias tests have exact selections of their own. doctests remain separate from this comparison.
 
 reports under `target/ci` contain the selections and each run's JUnit XML. failures and retry output remain in JUnit; slowest cases also appear in the step summary. reports upload even after a failure, with OS, filesystem and run attempt in their artifact names, and remain for seven days. a successful test run without a JUnit report or with different executed IDs fails the job.
 
@@ -65,7 +65,7 @@ the benchmark itself never runs here. cargo-deny's three migration notices remai
 
 ## installed artifacts
 
-[artifacts.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/artifacts.yml) is the same read-only builder called by CI and release. manual dispatch is a rehearsal: it uploads run artifacts only, with no publishing secrets or write permissions. the old version-only musl jobs are replaced, not duplicated. release tags start without restored build output.
+`.github/workflows/artifacts.yml` is the same read-only builder called by CI and release. manual dispatch is a rehearsal: it uploads run artifacts only, with no publishing secrets or write permissions. release tags start without restored build output.
 
 | runner | packaged target | wheel interpreters |
 |---|---|---|
@@ -76,7 +76,7 @@ the benchmark itself never runs here. cargo-deny's three migration notices remai
 | `macos-15-intel`, built on `macos-15` | `x86_64-apple-darwin` | the image's 3.14 |
 | `macos-15` | `aarch64-apple-darwin` | 3.15.2 |
 
-the arm64 `macos-15` runner cross-builds `x86_64-apple-darwin`, since the same release build takes nearly twice as long on the intel runner; `macos-15-intel` downloads that archive, wheel and binary and runs every check below natively, with no rust toolchain. all six release archives are unpacked, checked for architecture, expected files and the build's executable hash, then run against a stdlib loopback server. [python/ci_journey.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_journey.py) checks downloaded bytes and SHA-256 pins, offline restoration from a shared cache, writable-copy edit preservation, checksum refusal without publication, and archive extraction. it checks the exact version and commit. macos also checks its default cache location, the no-hardlink decision for a recognized CloudStorage path, and loading bash/zsh completions. this folder-name test does not run a real cloud provider. static-musl, Windows CRT and macos system-library/deployment-target checks remain.
+the arm64 `macos-15` runner cross-builds `x86_64-apple-darwin`, since the same release build takes nearly twice as long on the intel runner; `macos-15-intel` downloads that archive, wheel and binary and runs every check below natively, with no rust toolchain. all six release archives are unpacked, checked for architecture, expected files and the build's executable hash, then run against a stdlib loopback server. `python/ci_journey.py` checks downloaded bytes and SHA-256 pins, offline restoration from a shared cache, writable-copy edit preservation, checksum refusal without publication, and archive extraction. it checks the exact version and commit. macos also checks its default cache location, the no-hardlink decision for a recognized CloudStorage path, and loading bash/zsh completions. this folder-name test does not run a real cloud provider. static-musl, Windows CRT and macos system-library/deployment-target checks remain.
 
 unpacked candidates, wheel venvs, source-install trees and receipts live under `.release/`, outside the cached Rust `target/`. a restored build cache must never supply an old installation or a successful receipt. only source-package compilation output is reused, through its explicit target directory.
 
@@ -94,13 +94,13 @@ every apt install in CI and release goes through `.github/scripts/apt-install.sh
 
 the required docs job runs the existing python markdown file, heading and sidebar checks, builds with mdBook 0.5.4, and checks generated HTML links and anchors with lychee 0.24.2 offline. it renders under `site/fetchloom/` so absolute `/fetchloom/` paths resolve against the local site root. missing HTML or local targets fail. external service availability is not part of this offline check.
 
-[python/build_site.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/build_site.py) is the shared builder for CI and [pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml). it runs mdBook and writes the same `llms.txt`, `llms-full.txt` and skills exports. [book.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/book.toml) and [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md) still own the site layout. default preprocessors stay off, so README.md becomes README.html.
+`python/build_site.py` is the shared builder for CI and `.github/workflows/pages.yml`. it runs mdBook and writes the same `llms.txt`, `llms-full.txt` and skills exports. `book.toml` and `docs/SUMMARY.md` still own the site layout. default preprocessors stay off, so README.md becomes README.html.
 
 pages remains the only deploying workflow. it builds the default branch and adds the signed apt repository from the latest published release before deploying the complete site. PR checks receive no apt key, pages-write or OIDC permission. [releasing](releasing.md#apt-repository) describes that publication boundary.
 
 ## scheduled deep checks
 
-[deep.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/deep.yml) runs weekly on Tuesday and accepts manual dispatch. it has no publishing permissions or secrets. dispatch `check=coverage`, `fuzz` or `links` for one lane; `all` runs those three, not mutation testing. no deep job soft-fails, and none runs the benchmark lab.
+`.github/workflows/deep.yml` runs weekly on Tuesday and accepts manual dispatch. it has no publishing permissions or secrets. dispatch `check=coverage`, `fuzz` or `links` for one lane; `all` runs those three, not mutation testing. no deep job soft-fails, and none runs the benchmark lab.
 
 | check | bound and result |
 |---|---|
@@ -119,8 +119,8 @@ external links stay outside PR correctness: an unavailable service can make the 
 
 ## live-source checks
 
-[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) runs the ignored public-service tests weekly on linux, Windows and macos, outside the required result. `--nocapture` keeps credential-dependent skips visible; their lines also appear in the step summary. no credentials are supplied by the workflow. logs are retained for fourteen days, and all jobs have a 45-minute timeout. each job restores the build cache ci's test job keeps for its platform and saves none of its own.
+`.github/workflows/live.yml` runs the ignored public-service tests weekly on linux, Windows and macos, outside the required result. `--nocapture` keeps credential-dependent skips visible; their lines also appear in the step summary. no credentials are supplied by the workflow. logs are retained for fourteen days, and all jobs have a 45-minute timeout. each job restores the build cache ci's test job keeps for its platform and saves none of its own.
 
-macos additionally runs the small public Zenodo add/restore/get and catalog-search journey in `python/mac_live.py`, with the debug executable the live tests built; every push checks the release executables in the artifact journeys. the standalone mac workflow is removed. its deterministic cache-location, shared-cache, CloudStorage-path, offline-auth and completion checks now belong to the [artifact journey](#installed-artifacts), so they no longer depend on service uptime. live failures need classification as service, configuration or product failures; they are not retried until green.
+macos additionally runs the small public Zenodo add/restore/get and catalog-search journey in `python/mac_live.py`, with the debug executable the live tests built; every push checks the release executables in the artifact journeys. the deterministic cache-location, shared-cache, CloudStorage-path, offline-auth and completion checks belong to the [artifact journey](#installed-artifacts), so they do not depend on service uptime. live failures need classification as service, configuration or product failures; they are not retried until green.
 
 related: [engineering loop](README.md), [building and testing](building-and-testing.md), [releasing](releasing.md), [placing](../architecture/placing.md).

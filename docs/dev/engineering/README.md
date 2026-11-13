@@ -61,4 +61,4 @@ CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a 
 | [releasing](releasing.md) | artifacts, installers, wheels and publication |
 | [versioning](versioning.md) | what a release may change and what stays stable |
 
-[style](../style.md) covers prose and commits. [decisions](../decisions.md) records boundaries that a change should preserve. [performance](../performance/README.md) records evidence for changes that claim a speed or memory improvement.
+related: [style](../style.md) for prose and commits, [decisions](../decisions.md) for the boundaries a change keeps, and [performance](../performance/README.md) for the evidence a speed or memory claim needs.
