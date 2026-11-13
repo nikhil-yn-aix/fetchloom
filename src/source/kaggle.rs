@@ -196,8 +196,7 @@ mod tests {
             .map(|(dataset, file)| (dataset.to_string(), file))
     }
 
-    /// a listing fetchloom cannot use names the dataset or the competition kaggle listed, why,
-    /// and where to report it.
+    /// the dataset or the competition, why, and where to report it.
     #[test]
     fn an_unusable_listing_names_what_kaggle_listed() {
         let dataset = Dataset::parse("uciml/iris").unwrap();

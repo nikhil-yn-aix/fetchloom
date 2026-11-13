@@ -1,6 +1,5 @@
-//! a kaggle competition: its data files, listed page by page and downloaded one at a time, for a
-//! signed-in account that accepted the competition's rules. competitions have no versions, so a
-//! listing records what kaggle sends today and the downloaded bytes pin it.
+//! a kaggle competition's data files, for a signed-in account that accepted its rules. they have
+//! no versions, so a listing records what kaggle sends today and the downloaded bytes pin it.
 
 use std::fmt;
 

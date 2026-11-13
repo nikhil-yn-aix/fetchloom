@@ -43,9 +43,8 @@ pub(super) fn pasted(secret: &str) -> Option<String> {
     Some(format!("Bearer {secret}"))
 }
 
-/// `KAGGLE_API_TOKEN`, which holds a token or names a file holding one, else `access_token` or
-/// `access_token.txt` in `~/.kaggle`, as kagglesdk reads them. a variable that is set but holds
-/// nothing usable leaves only the legacy key, as in kagglesdk.
+/// the API token as kagglesdk reads it: `KAGGLE_API_TOKEN`, a token or a file of one, else
+/// `access_token` in `~/.kaggle`. a variable set to nothing usable leaves only the legacy key.
 fn api_token(var: Var<'_>) -> Option<Found> {
     if let Some(value) = var("KAGGLE_API_TOKEN").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(&value);

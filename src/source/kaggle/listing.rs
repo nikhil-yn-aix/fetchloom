@@ -537,8 +537,8 @@ mod tests {
         );
     }
 
-    /// kaggle lists some datasets, such as epa/epa-historical-air-quality, but sends none of their
-    /// files through its api, every time: no retry can help, so the help says where else to look.
+    /// such as epa/epa-historical-air-quality, which kaggle lists but never sends through its api,
+    /// so the help says where else to look.
     #[test]
     fn a_dataset_kaggle_will_not_send_through_its_api_is_not_retried() {
         let body = changed("kaggle/iris-files.json", |value| {
