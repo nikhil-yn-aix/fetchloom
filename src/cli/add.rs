@@ -408,7 +408,14 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
         "{} is {what}, and a project there takes in every folder below it",
         root.display()
     );
-    let elsewhere = "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then run the command again";
+    // the command runs again from that new folder, so a relative path in it starts one further up
+    let again = super::typed::one_folder_down().map_or_else(
+        || "run the command again".to_owned(),
+        |line| format!("run `{line}` again"),
+    );
+    let elsewhere = format!(
+        "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then {again}"
+    );
     let cancel = format!(
         "starting a project in {}, so nothing changed",
         root.display()

@@ -849,6 +849,39 @@ fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> 
     Ok(())
 }
 
+/// the command the home folder's refusal hands over runs from the new project folder it suggests:
+/// a relative path in it starts one folder further up.
+#[test]
+fn a_home_folder_refusal_repeats_the_command_for_the_new_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = sandbox.folder("home")?;
+    fs::create_dir_all(home.join("stuff"))?;
+    fs::write(home.join("stuff/a.csv"), b"a\n1\n")?;
+    fs::write(home.join("links.txt"), b"https://example.org/iris.csv\n")?;
+    for (args, again) in [
+        (
+            &["--json", "add", "./stuff"][..],
+            "fetchloom --json add ../stuff",
+        ),
+        (
+            &["--json", "add", "-i", "links.txt"],
+            "fetchloom --json add -i ../links.txt",
+        ),
+    ] {
+        let refused = sandbox.command_in(&home, args).output()?;
+        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stdout)?);
+        let error = &json(&refused)?["errors"][0];
+        assert_eq!(
+            error["help"],
+            format!(
+                "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then run `{again}` again, or add --yes to start the project there anyway"
+            )
+        );
+    }
+    assert_eq!(listed(&home)?, ["links.txt", "stuff"]);
+    Ok(())
+}
+
 /// the project is named once, at a terminal, and paths are shown from where the person stands.
 #[test]
 fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Result {

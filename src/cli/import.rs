@@ -691,11 +691,15 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
         here.join(typed)
     };
     std::fs::canonicalize(&path).map_err(|err| {
-        let error = Error::io(format_args!("could not find {typed}"), &err);
-        let guess = (err.kind() == std::io::ErrorKind::NotFound)
-            .then(|| near(typed, &path))
-            .flatten();
-        match guess {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            return Error::io(format_args!("could not find {typed}"), &err);
+        }
+        // a path typed wrong is a mistake on the command line, not a fault of the disk
+        let error = Error::new(
+            Kind::Usage,
+            format!("there is no file or folder \"{typed}\""),
+        );
+        match near(typed, &path) {
             Some(guess) => {
                 let shown = super::meant(
                     &[typed],
@@ -704,7 +708,13 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
                 );
                 error.help(format!("did you mean `{shown}`?"))
             }
-            None => error,
+            None if Path::new(typed).is_relative() && !typed.starts_with('~') => {
+                error.help(format!(
+                    "check the path: fetchloom reads {typed} from {}",
+                    units::path(here)
+                ))
+            }
+            None => error.help("check the path"),
         }
     })
 }
@@ -1451,12 +1461,18 @@ mod tests {
         }
         let help = |typed: &str| {
             let error = located(typed, here, Some(here)).unwrap_err();
-            assert_eq!(error.kind, Kind::LocalIo, "{typed}");
+            assert_eq!(error.kind, Kind::Usage, "{typed}");
             assert_eq!(
                 error.message,
-                format!("could not find {typed}: it does not exist")
+                format!("there is no file or folder \"{typed}\"")
             );
-            error.help
+            error.help.map(String::from)
+        };
+        let unguessed = |typed: &str| {
+            Some(format!(
+                "check the path: fetchloom reads {typed} from {}",
+                units::path(here)
+            ))
         };
         assert_eq!(
             help("./my data/flower.csv").as_deref(),
@@ -1466,11 +1482,19 @@ mod tests {
             help("~/my dta/").as_deref(),
             Some("did you mean `fetchloom add \"~/my data/\"`?")
         );
-        assert_eq!(help("./iris-c.csv"), None, "two names are as near");
-        assert_eq!(help("./nowhere/flowers.csv"), None, "its folder is missing");
+        assert_eq!(
+            help("./iris-c.csv"),
+            unguessed("./iris-c.csv"),
+            "two names are as near"
+        );
+        assert_eq!(
+            help("./nowhere/flowers.csv"),
+            unguessed("./nowhere/flowers.csv"),
+            "its folder is missing"
+        );
         assert_eq!(
             help("./my data/deeper/flowers.csv"),
-            None,
+            unguessed("./my data/deeper/flowers.csv"),
             "no folder above is read"
         );
         #[cfg(unix)]
@@ -1479,7 +1503,7 @@ mod tests {
             std::fs::write(here.join("notes.tx"), b"x").unwrap();
             assert_eq!(
                 help("./notes.txt"),
-                None,
+                unguessed("./notes.txt"),
                 "the name is there, as a broken link"
             );
         }

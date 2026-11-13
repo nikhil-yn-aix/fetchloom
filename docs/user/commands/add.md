@@ -33,7 +33,7 @@ fetchloom add [options] -i <file>
 
 ## what happens
 
-1. find the nearest project, or start one in the current folder, which a closing `Started a project in <folder>` line names. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
+1. find the nearest project, or start one in the current folder, which a closing `Started a project in <folder>` line names. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given. its help suggests a folder of its own, `mkdir my-project` and `cd my-project`, and repeats your command for that folder, each relative path one folder further up, as `fetchloom add ../stuff` for `fetchloom add ./stuff`.
 2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../concepts.md#webdataset-shards) get a hint before anything downloads.
 3. download every file the project lacks into the cache, with the project still as it was.
 4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
@@ -205,7 +205,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 
 ## exit codes
 
-0 means the add succeeded, also when sync kept local conflicts, which JSON lists in `result.placement.kept`. 1 means a question went unanswered or was answered no: a large download, or a project in the home folder or at a disk's root. 2 means invalid usage. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. the others are the [shared exit codes](../reference/exit-codes.md).
+0 means the add succeeded, also when sync kept local conflicts, which JSON lists in `result.placement.kept`. 1 means a question went unanswered or was answered no: a large download, or a project in the home folder or at a disk's root. 2 means invalid usage, a path that names no file or folder among it. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. the others are the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -217,5 +217,5 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
-| `could not find ./flower.csv: it does not exist` | the path has a typo, or the file is somewhere else | when one name in that folder is a typo away, the help line gives the command with it, as ``did you mean `fetchloom add ./flowers.csv`?``, keeping your other options; only that folder is read, and nothing is searched for |
+| `there is no file or folder "./flower.csv"`, `usage`, exit 2 | the path has a typo, or the file is somewhere else | when one name in that folder is a typo away, the help line gives the command with it, as ``did you mean `fetchloom add ./flowers.csv`?``, keeping your other options; only that folder is read, and nothing is searched for. otherwise the help says which folder a relative path is read from, as `check the path: fetchloom reads ./stuff from ~/my-project` |
 | `huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `hf:datasets/scikit-learn/irsi does not exist, or is not public` | a typo in a hugging face or kaggle id, or a private dataset: both sources answer the two alike | when the owner lists a public dataset a typo away, which `add` asks the source once, signed in or not, and never offline, the help gives your command with the name fixed, as ``did you mean `fetchloom add hf:datasets/scikit-learn/iris`?``, or for a link with a query, a fragment or a login, which may hold a secret, the dataset alone, as `did you mean hf:datasets/scikit-learn/iris?`; no sign-in is offered, and the error is `reference.unresolved`, exit 10. otherwise see [when a download is refused](auth.md#when-a-download-is-refused) |

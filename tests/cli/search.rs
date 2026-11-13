@@ -765,8 +765,8 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
     let absolute = sandbox.work().join("flowers.csv").display().to_string();
     // add imports what a path names, and finds nothing at these
     for (args, code, kind) in [
-        (["add", "~/flowers.csv"], 50, "local.io"),
-        (["add", "C:\\data\\flowers.csv"], 50, "local.io"),
+        (["add", "~/flowers.csv"], 2, "usage"),
+        (["add", "C:\\data\\flowers.csv"], 2, "usage"),
         (["get", absolute.as_str()], 10, "reference.invalid"),
         (["get", "./flowers.csv"], 10, "reference.invalid"),
         (["get", "file:///etc/hostname"], 10, "reference.invalid"),

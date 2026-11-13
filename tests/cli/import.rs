@@ -642,12 +642,13 @@ fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {
     fs::create_dir_all(&folder)?;
     fs::write(folder.join("sepals.csv"), b"length\n5.1\n")?;
     let output = sandbox.run(&["--json", "add", "./my flowrs", "--as", "sepals"])?;
-    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
     let document = json(&output)?;
     let error = &document["errors"][0];
+    assert_eq!(error["kind"], "usage");
     assert_eq!(
         error["message"],
-        "could not find ./my flowrs: it does not exist"
+        "there is no file or folder \"./my flowrs\""
     );
     assert_eq!(
         error["help"],
@@ -655,6 +656,16 @@ fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {
     );
     assert_eq!(document["work"]["requests"], 0);
     assert!(!sandbox.work().join("data.toml").exists());
+    // with no near name, the help says where a relative path is read from
+    let output = sandbox.run(&["--json", "add", "./stuff"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["help"],
+        format!(
+            "check the path: fetchloom reads ./stuff from {}",
+            sandbox.work().display()
+        )
+    );
     Ok(())
 }
 

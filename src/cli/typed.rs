@@ -82,6 +82,83 @@ pub(super) fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) 
     command_line(kept.into_iter())
 }
 
+/// this run's command line as typed, for a person to run again from a new folder inside the one
+/// it ran in, so each relative path, as `./stuff` or the list `-i links.txt` reads, starts one
+/// folder further up. none when the line cannot be repeated, or gave `-C`, whose own folder
+/// changes where its paths are read from.
+pub(in crate::cli) fn one_folder_down() -> Option<String> {
+    let line = TYPED.get()?;
+    let root = <args::Args as clap::CommandFactory>::command();
+    // an option's value, such as a pattern after --select, is no path
+    let valued = |word: &str| {
+        std::iter::once(&root)
+            .chain(root.get_subcommands())
+            .flat_map(clap::Command::get_arguments)
+            .filter(|arg| arg.get_action().takes_values())
+            .any(|arg| match word.strip_prefix("--") {
+                Some(long) => arg.get_long() == Some(long),
+                None => {
+                    word.len() == 2
+                        && word.starts_with('-')
+                        && arg.get_short() == word.chars().nth(1)
+                }
+            })
+    };
+    let mut words = Vec::with_capacity(line.len());
+    let (mut listed_next, mut value_next) = (false, false);
+    for word in line {
+        let text = word.to_str()?;
+        if text.starts_with('-') && !text.starts_with("--") && text.contains('C') {
+            return None;
+        }
+        let moved = if std::mem::take(&mut listed_next) {
+            up_one(text, text != "-")
+        } else if std::mem::take(&mut value_next) {
+            text.to_owned()
+        } else if text == "-i" || text == "--input-file" {
+            listed_next = true;
+            text.to_owned()
+        } else if valued(text) {
+            value_next = true;
+            text.to_owned()
+        } else if let Some(list) = text.strip_prefix("--input-file=") {
+            format!("--input-file={}", up_one(list, list != "-"))
+        } else if let Some(list) = text.strip_prefix("-i").filter(|_| !text.starts_with("--")) {
+            format!("-i{}", up_one(list, list != "-"))
+        } else {
+            up_one(text, false)
+        };
+        words.push(std::ffi::OsString::from(moved));
+    }
+    command_line(words.into_iter())
+}
+
+/// `word` as seen from a folder inside the one it was typed in: a relative path, as
+/// [`crate::source::local::is_path`] reads one or as a `relative` list's name, one folder up.
+fn up_one(word: &str, relative: bool) -> String {
+    let dotted = [".", ".."].iter().any(|dots| {
+        word.strip_prefix(dots)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']))
+    });
+    let separator = if word.contains('\\') && !word.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    if dotted {
+        let rest = word.strip_prefix('.').filter(|rest| !rest.starts_with('.'));
+        return match rest {
+            Some(rest) => format!("..{rest}"),
+            None => format!("..{separator}{word}"),
+        };
+    }
+    let absolute = std::path::Path::new(word).is_absolute() || word.starts_with(['/', '\\', '~']);
+    if relative && !absolute && !word.contains(':') {
+        return format!("..{separator}{word}");
+    }
+    word.to_owned()
+}
+
 /// the command line as typed, ready to copy, for help that says to run it again. none when an
 /// argument holds a link with a query, a fragment or a login, or is not unicode.
 pub(super) fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
@@ -309,6 +386,30 @@ mod tests {
             "fetchloom sync iris",
             "without the line typed, the command alone"
         );
+    }
+
+    #[test]
+    fn a_relative_path_starts_one_folder_further_up() {
+        for (word, list, moved) in [
+            ("./stuff", false, "../stuff"),
+            ("../stuff", false, "../../stuff"),
+            (".", false, ".."),
+            ("..", false, "../.."),
+            (".\\stuff", false, "..\\stuff"),
+            ("links.txt", true, "../links.txt"),
+            ("-", false, "-"),
+            ("/data/stuff", true, "/data/stuff"),
+            ("~/stuff", true, "~/stuff"),
+            ("C:\\data", true, "C:\\data"),
+            (
+                "https://example.org/a.csv",
+                false,
+                "https://example.org/a.csv",
+            ),
+            (".hidden", false, ".hidden"),
+        ] {
+            assert_eq!(up_one(word, list), moved, "{word}");
+        }
     }
 
     #[test]
