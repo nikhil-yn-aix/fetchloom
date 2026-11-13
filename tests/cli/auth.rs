@@ -5,7 +5,6 @@ use std::process::Output;
 
 use crate::support::{Fetchloom, Result, Routes, Sandbox, Server, json, reply, text, workspace};
 
-/// runs `command` with `input` on stdin.
 pub(crate) fn with_stdin(mut command: Fetchloom, input: &str) -> Result<Output> {
     Ok(command.output_with(Some(input.as_bytes()))?)
 }
@@ -44,8 +43,7 @@ fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
     Ok(())
 }
 
-/// plain `auth` lists every account. `auth status`, the spelling other tools use, is no command,
-/// and its help names the one that is.
+/// `auth status`, as other tools spell it, is no command, and its help names the one that is.
 #[test]
 fn auth_alone_lists_every_account() -> Result {
     let sandbox = Sandbox::new()?;
@@ -88,8 +86,7 @@ fn logout_names_another_configured_key_that_remains() -> Result {
     Ok(())
 }
 
-/// a hugging face key goes to the file the hf tools read and back out of it, and the lines that
-/// name the file show it below the home folder as `~/…`, while `--json` gives it whole.
+/// lines show the file below the home folder as `~/…`, while `--json` gives the path whole.
 #[test]
 fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     let sandbox = Sandbox::new()?;
@@ -284,8 +281,7 @@ fn a_key_the_source_refuses_is_not_saved() -> Result {
     Ok(())
 }
 
-/// q typed to quit at the question whether to save a key is no answer: the question asks again,
-/// and the key is never saved as if it were a yes, though enter alone means yes there.
+/// q is no answer, and must never count as yes, though enter alone means yes there.
 #[cfg(target_os = "linux")]
 #[test]
 fn q_at_the_question_to_save_a_key_asks_again_and_saves_nothing() -> Result {
@@ -314,8 +310,7 @@ fn q_at_the_question_to_save_a_key_asks_again_and_saves_nothing() -> Result {
     Ok(())
 }
 
-/// `--yes` answers the questions signing in asks, as it answers every other question, so a key
-/// typed once is saved without another question.
+/// a key typed once is saved without another question, as `--yes` answers every question.
 #[cfg(target_os = "linux")]
 #[test]
 fn yes_answers_the_question_to_save_a_key() -> Result {
@@ -340,9 +335,8 @@ fn yes_answers_the_question_to_save_a_key() -> Result {
     Ok(())
 }
 
-/// a no while signing in, to saving the key or to replacing one, and while signing out, to
-/// removing a key other tools read, changes nothing and ends as a cancel: one line says what was
-/// cancelled, and the exit code is 1, as for any no.
+/// the questions are saving the key, replacing one and removing a key other tools read; one line
+/// says what was cancelled, and the exit code is 1, as for any no.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
@@ -399,9 +393,8 @@ fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
 const EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags&expand=cardData";
 const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags";
 
-/// the hub on this machine: its answer to a name nobody may see, as a typo gets, to a gated
-/// dataset before its terms are accepted, to a model link whose name a dataset has, and to any
-/// key a sign-in checks, as ada's.
+/// the hub on this machine, answering a name nobody may see, as a typo gets, a gated dataset
+/// before its terms are accepted, a model whose name a dataset has, and a sign-in's key check.
 fn hub() -> Result<Routes> {
     let answer = |status: &str, fixture: &str| -> Result<_> {
         let path = workspace().join("tests/fixtures/sources/hf").join(fixture);
@@ -449,11 +442,8 @@ fn hub() -> Result<Routes> {
     ])
 }
 
-/// at a terminal, a refusal that signing in may lift asks before any error: a line names what
-/// was refused, then what else may be wrong comes first: a name with a typo, which the hub
-/// answers as it answers a private one, with the page to check it at, or terms a gated dataset
-/// needs accepted on its page. enter alone is a no, so a reflex starts no sign-in, and the no
-/// ends the run with one line and the refusal's exit code.
+/// the refused line comes first, then what else may be wrong: a typo, which the hub answers as a
+/// private name, or terms to accept. enter alone is a no, so a reflex starts no sign-in.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
@@ -503,7 +493,7 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
         );
         assert!(!screen.contains("        key "), "no sign-in: {screen}");
     }
-    // -q tells the error above the question, as it always did
+    // with -q, the error comes above the question
     let mut quiet = sandbox.command(&["-q", "add", "hf:datasets/scikit-learn/irs"]);
     quiet.env("FETCHLOOM_TEST_HF_API", &hub.url);
     let Some((code, screen)) = crate::support::typed(&sandbox.work(), &quiet, "", "now?", "\r")?
@@ -521,9 +511,8 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     Ok(())
 }
 
-/// the command runs once more after signing in, and a refusal then says the key it went with has
-/// no access or was refused, never to sign in again, and asks nothing more: a saved key's help
-/// says how to check it, and a key kept for the command alone is named so.
+/// the command runs again after signing in, and its refusal never offers another sign-in; a key
+/// kept for the command alone is named so, and a saved key's help says how to check it.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_refusal_after_signing_in_says_how_to_check_the_key() -> Result {
@@ -566,8 +555,7 @@ fn a_refusal_after_signing_in_says_how_to_check_the_key() -> Result {
 /// how a refusal with a key on this machine says to check it.
 const CHECK_KEY: &str = "`fetchloom auth` shows where it comes from and whose it is";
 
-/// with a key on this machine, a refusal says the key has no access, or was refused, and how to
-/// check it, which `--json` gives as the fix, never a sign-in.
+/// `--json` gives the check as the fix, never a sign-in.
 #[test]
 fn a_refusal_with_a_key_here_says_how_to_check_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -602,8 +590,7 @@ fn a_refusal_with_a_key_here_says_how_to_check_it() -> Result {
     Ok(())
 }
 
-/// a server that asks for a login over plain http gets no offer to sign in, since fetchloom
-/// sends a key only over https, and the help says so.
+/// fetchloom sends a key only over https, and the help says so.
 #[test]
 fn no_sign_in_is_offered_for_a_login_over_http() -> Result {
     let sandbox = Sandbox::new()?;
@@ -636,9 +623,8 @@ fn no_sign_in_is_offered_for_a_login_over_http() -> Result {
     Ok(())
 }
 
-/// a link without `/datasets/` names a model. when the hub shows no such model but a dataset of
-/// that name, the error gives the dataset's link rather than a sign-in that cannot help. a model
-/// whose name no dataset has stays a refusal.
+/// a link without `/datasets/` names a model, and a sign-in could not help; a model whose name no
+/// dataset has stays a refusal.
 #[test]
 fn a_model_link_whose_name_a_dataset_has_gives_the_datasets_link() -> Result {
     let sandbox = Sandbox::new()?;
@@ -670,9 +656,8 @@ fn a_model_link_whose_name_a_dataset_has_gives_the_datasets_link() -> Result {
     Ok(())
 }
 
-/// a key that went with the request and was refused, as an old or wrong `HF_TOKEN` is, is named
-/// by where it comes from, never by its value, with how to replace it. signing in is not offered
-/// for a key from a variable, which would still win over the key a sign-in saves.
+/// the key's value never shows. no sign-in is offered for a key from a variable, which would
+/// still win over the key a sign-in saves.
 #[test]
 fn a_refused_key_is_named_by_where_it_comes_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -726,8 +711,7 @@ fn a_refused_key_is_named_by_where_it_comes_from() -> Result {
     Ok(())
 }
 
-/// a ctrl-c during a sign-out, which has nothing to stop, lets it remove the key and say so, exit
-/// 0, rather than say it stops and then that it stopped, with the key removed.
+/// a sign-out has nothing to stop, so it removes the key and says so, with exit 0.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_during_a_sign_out_lets_it_finish() -> Result {
@@ -748,9 +732,7 @@ fn a_ctrl_c_during_a_sign_out_lets_it_finish() -> Result {
     Ok(())
 }
 
-/// a ctrl-c once a sign-in has its key and marked its work as finishing, as while it saves the key,
-/// lets it save and say so, exit 0, rather than say it stops and then that it stopped, with the
-/// key saved.
+/// the mark comes once the sign-in has its key, so it saves it and says so, with exit 0.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_past_a_sign_ins_mark_lets_it_save_the_key() -> Result {
@@ -818,9 +800,8 @@ const AWS_SECRETS: [&str; 4] = [
     "AKIAFILEKEY",
 ];
 
-/// AWS settings in the sandbox's home: keys for `default` in the credentials file, and in the
-/// config file a profile of each kind that gets keys from a program, `process`, `sso` and
-/// `role`. the programs, in the folder this returns, leave the file `ran` if they ever run.
+/// AWS settings in the sandbox's home: keys for `default`, and profiles `process`, `sso` and
+/// `role` whose programs, in the folder this returns, leave the file `ran` if they ever run.
 fn aws_settings(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let aws = home(sandbox).join(".aws");
     std::fs::create_dir_all(&aws)?;
@@ -848,10 +829,8 @@ fn aws_settings(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     Ok(bin)
 }
 
-/// `auth` names where the AWS keys a bucket would be signed with come from, as the AWS tools
-/// find them: the environment's, a profile's written keys, or a program a profile names, which
-/// it never runs. a key shows only by its id's last four characters, and keys the settings send
-/// to another endpoint are that endpoint's, which leaves AWS with none.
+/// a program a profile names never runs, a key shows only by its id's last four characters, and
+/// keys the settings send to another endpoint are that endpoint's, leaving AWS with none.
 #[test]
 fn auth_names_where_aws_keys_would_come_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -952,8 +931,7 @@ fn auth_names_where_aws_keys_would_come_from() -> Result {
     Ok(())
 }
 
-/// a profile fetchloom cannot take keys from is said in a warning of its own kind, with what
-/// would fix it, and AWS counts as having no keys.
+/// the warning has a kind of its own, and AWS counts as having no keys.
 #[test]
 fn auth_warns_of_aws_settings_it_cannot_use() -> Result {
     let sandbox = Sandbox::new()?;
@@ -978,8 +956,7 @@ fn auth_warns_of_aws_settings_it_cannot_use() -> Result {
     Ok(())
 }
 
-/// `auth` names google's application default credentials by their file and kind: a service
-/// account with its email, or a person's login, and nothing they sign with.
+/// a service account comes with its email, and nothing either kind signs with ever shows.
 #[test]
 fn auth_names_googles_credentials_by_file_and_kind() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1035,10 +1012,8 @@ fn auth_names_googles_credentials_by_file_and_kind() -> Result {
     Ok(())
 }
 
-/// the az cli in a folder of its own, which leaves the file `ran` if it ever runs, and two folders
-/// with its profile: one signed in, as ada@lab.example in the default subscription, and one signed
-/// out. the az cli writes its profile with a byte order mark, and lists no subscription once
-/// signed out.
+/// the az cli, which leaves `ran` if it ever runs, and its profile, signed in as ada and signed
+/// out, as the az cli writes them: with a byte order mark, and no subscription once signed out.
 fn az_settings(
     sandbox: &Sandbox,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
@@ -1081,11 +1056,8 @@ fn signed_in_row(account: &str, from: &str, user: Option<&str>, kind: &str) -> s
     })
 }
 
-/// `auth` names where the credentials azure containers would be read with come from, as the az
-/// cli's variables and login give them: a SAS or an account key kept to the account
-/// `AZURE_STORAGE_ACCOUNT` names, listed as that account's, and for every other account a SAS for
-/// any, the az cli's login, which it never runs, or this machine's managed identity, which it
-/// never asks. neither a SAS nor a key shows.
+/// a SAS or key kept to the account `AZURE_STORAGE_ACCOUNT` names is listed as that account's;
+/// the az cli never runs, the managed identity is never asked, and neither a SAS nor a key shows.
 #[test]
 fn auth_names_where_azure_credentials_would_come_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1187,9 +1159,8 @@ fn auth_names_where_azure_credentials_would_come_from() -> Result {
     Ok(())
 }
 
-/// azure settings fetchloom cannot use are said in a warning of their own kind, with what would
-/// fix them: a key without its account leaves azure with no credential, while a sign-in it does
-/// not read still leaves the key of the account it is kept to.
+/// a key without its account leaves azure with no credential, while a sign-in fetchloom does not
+/// read still leaves the key of the account it is kept to.
 #[test]
 fn auth_warns_of_azure_settings_it_cannot_use() -> Result {
     let sandbox = Sandbox::new()?;
