@@ -27,7 +27,7 @@ a pasted HTTPS link names a prefix only when its path ends in `/`, or names the 
 
 an `s3://` or `gs://` reference without a final `/` names the object with exactly that key, or else the folder of that name. keys are case sensitive. bucket names follow each service's rules: lowercase letters, digits, `-` and `.`, from 3 to 63 characters on S3, and also `_` and up to 222 characters on cloud storage.
 
-`data.toml` keeps the `s3://`, `s3:https://` or `gs://` form, even for a pasted link. without `--as`, `add` names a one-object listing after that file. otherwise it uses the last segment of the prefix, so `s3://openneuro.org/ds000001/` becomes `ds000001`. it chooses from the unfiltered listing, so `--select` keeping one of several objects does not change that prefix-derived name; use `--as` to choose it. `get` chooses its folder from the selected files and uses the filename stem when one remains.
+`data.toml` keeps the `s3://`, `s3:https://` or `gs://` form, even for a pasted link. without `--as`, `add` names a one-object listing after that file. otherwise it uses the last segment of the prefix, with the segments before it while it holds no letter, so `s3://openneuro.org/ds000001/` becomes `ds000001` and `gs://arxiv-dataset/arxiv/arxiv/pdf/2401/` becomes `pdf-2401`. it chooses from the unfiltered listing, so `--select` keeping one of several objects does not change that prefix-derived name; use `--as` to choose it. `get` chooses its folder from the selected files and uses the file's name without its file type when one remains.
 
 ## listing
 

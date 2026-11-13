@@ -47,9 +47,9 @@ without `--as`, `add` chooses a name from the listing before applying command-li
 
 | available information | generated name |
 |---|---|
-| one listed file or a file selected by its source link | its filename stem, limited to 40 characters |
+| one listed file or a file selected by its source link | its name without a known file type, such as `.csv`, `.pdf` or `.gz`, and without a `.tar` before it, limited to 40 characters; other dots become `-`, so `data.tar.gz` gives `data`, `2024.05.csv` gives `2024-05` and the arXiv id `1706.03762v7` gives `1706-03762v7` |
 | a title, except for hugging face, whose datasets are known by their id | up to four words and 32 characters, dropping trailing words such as `and`, `of` and `the`; if no first word fits, the 40-character free-text rule applies |
-| a reference | its last part if that contains a letter, otherwise the reference without its version; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
+| a reference | its last part without the version, taking the parts before it one at a time until the name holds a letter; `hf:datasets/scikit-learn/iris` gives `iris`, `gs://arxiv-dataset/arxiv/arxiv/pdf/2401/` gives `pdf-2401`, and `zenodo:123` gives `zenodo-123` |
 
 if the generated name is taken, fetchloom tries `-2` through `-99`, then fails if all are taken. it warns which name it chose:
 

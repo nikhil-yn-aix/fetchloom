@@ -1,7 +1,6 @@
 //! file and folder names that windows and linux can both store.
 
 use std::borrow::Cow;
-use std::path::Path;
 
 use icu_normalizer::properties::CanonicalCombiningClassMapBorrowed;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
@@ -119,18 +118,21 @@ pub(crate) fn title_name(title: &str) -> Option<String> {
     Some(unreserved(kept.join("-")))
 }
 
-/// a dataset name made from a reference: its last part when that holds a letter, as iris for
-/// hf:datasets/scikit-learn/iris, else the whole reference without its version.
+/// a dataset name made from a reference without its version: its last part, as iris for
+/// hf:datasets/scikit-learn/iris, with the parts before it taken one at a time until the name
+/// holds a letter, as pdf-2401 for gs://arxiv-dataset/arxiv/arxiv/pdf/2401/.
 pub(crate) fn reference_name(reference: &str) -> Option<String> {
     let bare = reference.split('@').next().unwrap_or(reference);
-    let last = bare
-        .rsplit(['/', ':'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(bare);
-    if last.chars().any(|c| c.is_ascii_alphabetic())
-        && let Some(name) = dataset_name(last)
-    {
-        return Some(name);
+    let parts: Vec<&str> = bare
+        .split(['/', ':'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    for start in (0..parts.len()).rev() {
+        if parts[start].chars().any(|c| c.is_ascii_alphabetic())
+            && let Some(name) = dataset_name(&parts[start..].join("-"))
+        {
+            return Some(name);
+        }
     }
     dataset_name(bare)
 }
@@ -330,18 +332,38 @@ fn distance(a: &str, b: &str) -> usize {
     previous[b.len()]
 }
 
-/// the folder `get` makes for a file: its name without the extension, and without a `.tar`
-/// before it, so `iris.csv` gets `iris` and `data.tar.gz` gets `data`.
+/// the file types a generated name leaves out, in lowercase: data, archives, documents, images,
+/// sound, video and models. any other part after a dot stays, as the dots of `1706.03762v7` do.
+const FILE_TYPES: &str = "7z arrow avi avro bam bed bib bin bmp bz2 cif ckpt cram csv dat \
+    data db dcm djvu doc docx dta edf eps epub fa faa fasta fastq feather fits flac fna fq \
+    geojson gff gguf gif gpkg gtf gz h5 h5ad hdf hdf5 htm html ipynb joblib jpeg jpg json \
+    jsonl lz4 lzma m4a mat md mgz mkv mov mp3 mp4 msgpack mzml nc ndjson nii npy npz odp ods \
+    odt ogg onnx orc parquet pdb pdf pickle pkl png ppt pptx ps pt pth rar rda rdata rds \
+    safetensors sam shp sql sqlite svg tar tex tfrecord tfrecords tgz tif tiff tsv txt \
+    txz vcf wav webm webp xls xlsx xml xz yaml yml zip zst";
+
+/// `name` without its last part after a dot, when that is a known file type. a name whose only
+/// dot starts it, as `.hidden`, has none.
+fn without_type(name: &str) -> Option<&str> {
+    let (stem, kind) = name.rsplit_once('.')?;
+    let known = FILE_TYPES
+        .split_whitespace()
+        .any(|known| kind.eq_ignore_ascii_case(known));
+    (known && !stem.trim_start_matches('.').is_empty()).then_some(stem)
+}
+
+/// the folder `get` makes for a file: its name without a known file type, and without a `.tar`
+/// before it, so `iris.csv` gets `iris`, `data.tar.gz` gets `data` and `1706.03762v7` keeps its
+/// dots.
 pub(crate) fn folder_for(file: &str) -> String {
-    let stem = Path::new(file)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(file);
-    let stem = match stem.len().checked_sub(4) {
-        Some(at) if stem.is_char_boundary(at) && stem[at..].eq_ignore_ascii_case(".tar") => {
-            &stem[..at]
-        }
-        _ => stem,
+    let stem = match without_type(file) {
+        Some(stem) => match stem.len().checked_sub(4) {
+            Some(at) if stem.is_char_boundary(at) && stem[at..].eq_ignore_ascii_case(".tar") => {
+                &stem[..at]
+            }
+            _ => stem,
+        },
+        None => file,
     };
     let stem = stem.trim_start_matches('.');
     if stem.is_empty() {
@@ -640,6 +662,8 @@ pub(crate) fn made_by_system(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn named(text: &str) -> Option<String> {
@@ -716,14 +740,32 @@ mod tests {
         );
     }
 
+    /// only a file type is dropped, so an id with dots, as an arXiv paper's, stays whole.
     #[test]
-    fn folders_drop_the_extension() {
-        assert_eq!(folder_for("iris.csv"), "iris");
-        assert_eq!(folder_for("data.tar.gz"), "data");
-        assert_eq!(folder_for("data.TAR.zst"), "data");
-        assert_eq!(folder_for("release-v1.2.zip"), "release-v1.2");
-        assert_eq!(folder_for("README"), "README");
-        assert_eq!(folder_for(".hidden"), "hidden");
+    fn folders_drop_a_known_file_type_alone() {
+        for (file, folder, name) in [
+            ("iris.csv", "iris", "iris"),
+            ("data.tar.gz", "data", "data"),
+            ("data.TAR.zst", "data", "data"),
+            ("Model.SafeTensors", "Model", "model"),
+            ("release-v1.2.zip", "release-v1.2", "release-v1-2"),
+            ("1706.03762v7", "1706.03762v7", "1706-03762v7"),
+            ("1706.03762v7.pdf", "1706.03762v7", "1706-03762v7"),
+            ("2024.05.csv", "2024.05", "2024-05"),
+            ("report.final.pdf", "report.final", "report-final"),
+            ("python3.11", "python3.11", "python3-11"),
+            ("notes.tar", "notes", "notes"),
+            ("README", "README", "readme"),
+            (".hidden", "hidden", "hidden"),
+            (".csv", "csv", "csv"),
+        ] {
+            assert_eq!(folder_for(file), folder, "{file}");
+            assert_eq!(
+                dataset_name(&folder_for(file)).as_deref(),
+                Some(name),
+                "{file}"
+            );
+        }
     }
 
     #[test]
@@ -938,6 +980,7 @@ mod tests {
         assert_eq!(title_name(" -- "), None);
     }
 
+    /// a last part without a letter takes the parts before it, one at a time, until one has.
     #[test]
     fn references_give_their_last_named_part() {
         for (reference, name) in [
@@ -946,6 +989,9 @@ mod tests {
             ("kaggle:uciml/iris", "iris"),
             ("zenodo:3608990", "zenodo-3608990"),
             ("figshare:5616403@1", "figshare-5616403"),
+            ("gs://arxiv-dataset/arxiv/arxiv/pdf/2401/", "pdf-2401"),
+            ("https://example.org/files/2024/05/", "files-2024-05"),
+            ("dryad:10.5061/dryad.j1fd7@2", "dryad-j1fd7"),
         ] {
             assert_eq!(
                 reference_name(reference).as_deref(),

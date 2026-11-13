@@ -1762,8 +1762,8 @@ mod split {
         }
         assert_eq!(
             stderr.matches("warning: ").count(),
-            4,
-            "two taken names, two parts: {stderr}"
+            2,
+            "one for each first part, since each part's name is its own: {stderr}"
         );
         assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains("unpacks_to"));
         Ok(())

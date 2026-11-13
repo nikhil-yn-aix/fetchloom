@@ -28,7 +28,7 @@ a link whose name has no extension, such as a folder link ending in `/`, is refu
 
 ## names
 
-a link's file is named after the last part of its path, decoded. a character windows cannot hold in a name, such as `?` or `:`, becomes `_`, and a `\` counts as a folder, so only what follows it stays. the dataset takes that name without its last extension, in lowercase letters, digits, `-` and `_`. from real runs of `fetchloom add` with links to a server on this machine:
+a link's file is named after the last part of its path, decoded. a character windows cannot hold in a name, such as `?` or `:`, becomes `_`, and a `\` counts as a folder, so only what follows it stays. the dataset takes that name without its file type when that is a known one, such as `.txt` or `.gz`, in lowercase letters, digits, `-` and `_`, so other dots, as in `2024.05.csv`, become `-`. from real runs of `fetchloom add` with links to a server on this machine:
 
 | link ends in | dataset | file |
 |---|---|---|
