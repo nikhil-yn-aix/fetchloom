@@ -1,11 +1,14 @@
-//! `auth login <host>` with a website's own credential: a token or a header, kept for that host
-//! alone, as `auth` lists it and `auth logout` removes it.
+//! `auth login <host>` with a website's own credential: a token, a header or cookies, kept for
+//! that host alone, as `auth` lists it and `auth logout` removes it.
 
+use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Read as _};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{Outcome, Report, State, agree, answered_no};
+use crate::auth::cookies::{self, Picked, Why};
 use crate::auth::site::{self, Saved, Taken};
 use crate::auth::{self, Account, Origin, store};
 use crate::cli::Context;
@@ -15,8 +18,11 @@ use crate::output::{Output, Warning};
 
 /// whether `login` saves a website's own credential rather than an account's key.
 pub(super) fn wanted(login: &Login) -> bool {
-    login.token || login.header.is_some()
+    login.token || login.header.is_some() || login.cookies.is_some()
 }
+
+/// the most of a cookies.txt file read: a browser's whole jar takes a few MiB.
+const LARGEST_FILE: u64 = 64 << 20;
 
 /// the key a website's sign-in asks for: a token, or the value of a header the site names.
 enum Asked {
@@ -37,10 +43,13 @@ impl Asked {
     }
 
     /// what is saved, once the key is in hand.
-    fn saved(self, key: String) -> Saved {
+    fn saved(&self, key: String) -> Saved {
         match self {
             Asked::Token => Saved::Token { token: key },
-            Asked::Header(name) => Saved::Header { name, value: key },
+            Asked::Header(name) => Saved::Header {
+                name: name.clone(),
+                value: key,
+            },
         }
     }
 }
@@ -56,7 +65,7 @@ fn site_host(typed: &str) -> Result<String, Error> {
             format!("{typed} has an account of its own, which takes its own kind of key"),
         )
         .help(format!(
-            "run `{}`. --token and --header are for websites fetchloom has no account for",
+            "run `{}`. --token, --header and --cookies are for websites fetchloom has no account for",
             account.command()
         ))),
         Err(error) => site::host(typed).ok_or(error),
@@ -83,19 +92,28 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
     let cancelled = format!("signing in to {host}, so nothing changed");
     let told = login.with_token;
     let run = || -> Result<Origin, Error> {
-        if !told {
+        let saved = if let Some(path) = &login.cookies {
+            let saved = from_file(context, &host, path)?;
             replacing(context, &host)?;
-        }
-        let key = secret(context, login, &host, &asked)?;
-        let saved = asked.saved(key);
+            saved
+        } else {
+            if !told {
+                replacing(context, &host)?;
+            }
+            let key = secret(context, login, &host, &asked)?;
+            asked.saved(key)
+        };
         // the key is in hand, so a ctrl-c at the question below cancels it and any other stop
         // lets it finish
         context.stop.finish();
         let origin = keep(context, &host, &saved, told)?;
+        let when = saved.soonest().map_or_else(String::new, |soonest| {
+            format!(", the soonest expiring {}", date(soonest))
+        });
         context.output.done(
             "Signed in",
             &format!(
-                "to {host} with {} \u{b7} saved to {}",
+                "to {host} with {}{when} \u{b7} saved to {}",
                 described(&saved),
                 origin.shown()
             ),
@@ -121,6 +139,134 @@ fn replacing(context: &Context, host: &str) -> Result<(), Error> {
         &format!("{} for {host} in {}", described(&before), origin.shown()),
     );
     agrees(context, host, &before, "replace it?", false)
+}
+
+/// the cookies for `host` in the cookies.txt file at `path`, once they are shown, by name,
+/// domain and expiry, with those left out.
+fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error> {
+    let shown = crate::units::path(path);
+    let failed = |err: &std::io::Error| Error::io(format!("could not read {shown}"), err);
+    let file = std::fs::File::open(path).map_err(|err| failed(&err))?;
+    let mut text = String::new();
+    file.take(LARGEST_FILE + 1)
+        .read_to_string(&mut text)
+        .map_err(|err| failed(&err))?;
+    if text.len() as u64 > LARGEST_FILE {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{shown} is larger than a cookies file of one browser"),
+        )
+        .help("export the cookies of the site alone"));
+    }
+    let (found, _) = cookies::netscape(&text);
+    if found.is_empty() {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{shown} holds no cookies in the cookies.txt format curl and yt-dlp read"),
+        )
+        .help(
+            "export them again as cookies.txt, the netscape format: a cookie a line, seven fields apart by tabs",
+        ));
+    }
+    let picked = cookies::pick(found, host, SystemTime::now());
+    tell(&context.output, host, &picked, &format!("in {shown}"));
+    if picked.kept.is_empty() {
+        return Err(none_kept(host, &picked, &shown));
+    }
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    Ok(Saved::Cookies {
+        from: Taken::File(path),
+        cookies: picked.kept,
+    })
+}
+
+/// the error for cookies of which `host` takes none, from `place`.
+fn none_kept(host: &str, picked: &Picked, place: &str) -> Error {
+    let expired = picked
+        .left
+        .iter()
+        .any(|left| left.why == Why::Expired && cookies::covers(&left.domain, host));
+    if expired {
+        return Error::new(
+            Kind::AuthRequired,
+            format!("the cookies for {host} in {place} have expired"),
+        )
+        .help(format!(
+            "sign in at {} in your browser again and export its cookies, then run the same command again",
+            site::without_port(host)
+        ));
+    }
+    let mut domains: Vec<&str> = Vec::new();
+    for left in &picked.left {
+        if !domains.contains(&left.domain.as_str()) {
+            domains.push(&left.domain);
+        }
+    }
+    Error::new(Kind::Usage, format!("{place} holds no cookies for {host}"))
+        .details_up_to(&[format!("it holds cookies for {}", domains.join(", "))], 1)
+        .help(format!(
+            "export the cookies while you are signed in at {}, or name the host they were set for",
+            site::without_port(host)
+        ))
+}
+
+/// tells which cookies `from` holds for `host`, by name, domain and expiry, never by value, and
+/// which were left out and why.
+fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
+    let count = |cookies: usize| crate::units::count(cookies as u64, "cookie", "cookies");
+    if !picked.kept.is_empty() {
+        output.step(
+            "Found",
+            &format!("{} for {host} {from}", count(picked.kept.len())),
+        );
+    }
+    for cookie in &picked.kept {
+        let ends = cookie.expires.map_or_else(
+            || "ends with the browser's session".to_owned(),
+            |expires| format!("expires {}", date(expires)),
+        );
+        output.item(&format!(
+            "{} \u{b7} {} \u{b7} {ends}",
+            cookie.name, cookie.domain
+        ));
+    }
+    for (why, said) in [
+        (Why::Elsewhere, "for other hosts"),
+        (Why::Expired, "that expired"),
+        (Why::Unsendable, "no request can carry"),
+    ] {
+        let mut domains: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut order: Vec<&str> = Vec::new();
+        let mut left = 0;
+        for cookie in picked.left.iter().filter(|left| left.why == why) {
+            left += 1;
+            if !domains.contains_key(cookie.domain.as_str()) {
+                order.push(&cookie.domain);
+            }
+            domains
+                .entry(&cookie.domain)
+                .or_default()
+                .push(&cookie.name);
+        }
+        if left == 0 {
+            continue;
+        }
+        let mut named: Vec<String> = order
+            .iter()
+            .take(6)
+            .map(|domain| format!("{} of {domain}", domains[domain].join(", ")))
+            .collect();
+        if order.len() > 6 {
+            named.push(format!(
+                "and {} more",
+                crate::units::count((order.len() - 6) as u64, "host", "hosts")
+            ));
+        }
+        output.step(
+            "Left out",
+            &format!("{} {said}: {}", count(left), named.join("; ")),
+        );
+    }
 }
 
 /// the key `asked` for `host`: read from stdin with `--with-token`, else typed at the terminal.
@@ -227,9 +373,14 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     let failed = |err: std::io::Error| {
         Error::io(format!("could not save {} for {host}", saved.what()), &err)
     };
+    let (it, they) = if matches!(saved, Saved::Cookies { .. }) {
+        ("them", "they")
+    } else {
+        ("it", "it")
+    };
     if store::KEYRING.usable(var) {
         if !told {
-            let question = format!("save it in {}?", auth::keyring_name());
+            let question = format!("save {it} in {}?", auth::keyring_name());
             agrees(context, host, saved, &question, true)?;
         }
         return site::save(var, host, saved, store::Place::Keyring).map_err(failed);
@@ -237,17 +388,17 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     let file = store::folder(var)
         .unwrap_or_default()
         .join("credentials.json");
-    if told {
+    if told || context.yes {
         context.output.warn(
             Warning::AuthNoKeyring,
             &format!(
-                "this machine has no credential store, so it is saved in {}, readable only by you",
+                "this machine has no credential store, so {they} went in {}, readable only by you",
                 file.display()
             ),
         );
     } else {
         let question = format!(
-            "no credential store here, so it would go in a file only you can read\nsave it to {}?",
+            "no credential store here, so {they} would go in a file only you can read\nsave {it} to {}?",
             crate::units::path(&file)
         );
         agrees(context, host, saved, &question, false)?;

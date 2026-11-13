@@ -53,7 +53,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache, the weekly size reminder, and `Readers`, the objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop`, `Readers` |
 | `src/cli/cache/inputs.rs` | `cache gc --inputs`: raw data only built recipes read, freed where a folder mirror holds a copy | `gc` |  |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
-| `src/cli/auth/site.rs` | `auth login <host>` with a website's own token or header, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees` |
+| `src/cli/auth/site.rs` | `auth login <host>` with a website's own token, header or cookies, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees`, `from_file`, `tell` |
 | `src/cli/settings.rs` | `settings`: each value a run would use and where it came from, the `-v` line of what a run spends, and warnings for misnamed or unread variables | `run` | `Report`, `tell_spending`, `warn_misnamed`, `warn_unread` |
 | `src/cli/completions.rs` | shell completion scripts, and the hidden `completions <shell> --names=<word> -- <words before it>`, which completes dataset names from data.toml alone | `print`, `script` | `names`, `with_names` |
 | `src/cli/fetch.rs` | many downloads at once, a bounded number in flight, with bars or plain lines; the first failure stops the rest and keeps what arrived | `all`, `Job` | `apart`, `listed_job` |
@@ -172,6 +172,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/auth.rs` | accounts at the sources: which key each takes, where it is kept, how to check it and how to get one, and how a message names a key, by where it comes from | `Account`, `credentials` | `Origin::named` |
 | `src/auth/store.rs` | keys for sources whose tools keep no file: the system's credential store, or a private file the person agreed to | `read`, `save` |  |
 | `src/auth/netrc.rs` | `.netrc`, which curl, wget and python's requests also read | `read`, `save` |  |
+| `src/auth/cookies.rs` | cookies a person signed in with, from a cookies.txt file, and which a host takes: its domain's, unexpired and sendable, the rest named with why | `netscape`, `pick` | `Picked`, `Left`, `Why`, `covers` |
 | `src/auth/site.rs` | a website's own credential, a token, a header or cookies, kept in the key store under `site:<host>`; the header names it refuses | `Saved`, `sites` | `host`, `header_name`, `find`, `save`, `forget` |
 | `src/auth/aws.rs` | AWS keys from the environment, the shared profile files or the program a profile names, bound to an endpoint: an S3-compatible one gets them only where the AWS settings say | `find` | `Identity`, `Source` |
 | `src/auth/aws/program.rs` | a profile's `credential_process`, or the AWS CLI's `configure export-credentials`, run by full path without a shell and read as version 1 JSON | `Program` | `Issued`, `words`, `installed` |

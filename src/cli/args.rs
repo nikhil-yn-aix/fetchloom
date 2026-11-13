@@ -778,6 +778,16 @@ pub(crate) struct Login {
         conflicts_with = "token"
     )]
     pub(crate) header: Option<String>,
+
+    /// for any website: save its cookies from a cookies.txt file a browser extension
+    /// exported
+    #[arg(
+        long,
+        value_name = "file",
+        help_heading = "options",
+        conflicts_with_all = ["token", "header", "with_token"]
+    )]
+    pub(crate) cookies: Option<std::path::PathBuf>,
 }
 
 /// options of `auth logout`.

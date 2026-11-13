@@ -85,7 +85,7 @@ fn at(seconds: i64) -> SystemTime {
 }
 
 /// `host` without the `:port` a site's host may end with.
-fn without_port(host: &str) -> &str {
+pub(crate) fn without_port(host: &str) -> &str {
     match host.rsplit_once(':') {
         Some((name, port))
             if port.chars().all(|c| c.is_ascii_digit())

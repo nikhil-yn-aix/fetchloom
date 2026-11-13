@@ -3,6 +3,7 @@
 
 pub(crate) mod aws;
 pub(crate) mod azure;
+pub(crate) mod cookies;
 pub(crate) mod google;
 pub(crate) mod lease;
 pub(crate) mod netrc;

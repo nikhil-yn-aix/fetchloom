@@ -223,3 +223,136 @@ fn a_header_goes_to_its_own_host_by_the_name_the_site_reads() -> Result {
     );
     Ok(())
 }
+
+/// a cookies.txt line, as a browser extension exports it.
+fn line(domain: &str, path: &str, secure: bool, expires: i64, name: &str, value: &str) -> String {
+    let below = if domain.starts_with('.') {
+        "TRUE"
+    } else {
+        "FALSE"
+    };
+    let secure = if secure { "TRUE" } else { "FALSE" };
+    format!("{domain}\t{below}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+}
+
+#[test]
+fn cookies_from_a_file_go_to_their_host_by_path_and_secure_flag() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![
+        ("/data/file.csv".to_owned(), file(b"a,b\n", "\"v1\"")),
+        ("/other/x.csv".to_owned(), file(b"c,d\n", "\"v2\"")),
+    ])?;
+    let host = host_of(&site);
+    let later = 4_000_000_000;
+    let cookies = [
+        "# Netscape HTTP Cookie File\n".to_owned(),
+        line("127.0.0.1", "/data", false, later, "session", "s-value-1"),
+        line("127.0.0.1", "/", false, 0, "all", "a-value-1"),
+        line("127.0.0.1", "/", true, later, "secure", "s-value-2"),
+        line("127.0.0.1", "/", false, 1_000_000_000, "old", "o-value"),
+        line("sso.example.org", "/", true, later, "sid", "x-value"),
+    ]
+    .concat();
+    std::fs::write(sandbox.work().join("cookies.txt"), cookies)?;
+    let login = sandbox.run(&["auth", "login", &host, "--cookies", "cookies.txt", "--yes"])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    for told in [
+        format!("Found 3 cookies for {host} in cookies.txt\n"),
+        "session · 127.0.0.1 · expires 2096-10-02\n".to_owned(),
+        "all · 127.0.0.1 · ends with the browser's session\n".to_owned(),
+        "Left out 1 cookie for other hosts: sid of sso.example.org\n".to_owned(),
+        "Left out 1 cookie that expired: old of 127.0.0.1\n".to_owned(),
+    ] {
+        assert!(stderr.contains(&told), "{told}: {stderr}");
+    }
+    for value in ["s-value-1", "a-value-1", "s-value-2", "o-value", "x-value"] {
+        assert!(!stderr.contains(value), "{stderr}");
+    }
+    for path in ["data/file.csv", "other/x.csv"] {
+        let output = sandbox.run(&["get", &format!("{}/{path}", site.url)])?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+    }
+    assert_eq!(
+        heard(&site, "cookie"),
+        [
+            Some("session=s-value-1; all=a-value-1".to_owned()),
+            Some("all=a-value-1".to_owned())
+        ]
+    );
+    let lines = text(&sandbox.run(&["auth", "--offline"])?.stderr)?;
+    assert!(
+        lines.contains(&format!(
+            "Signed in to {host} with 3 cookies from a cookies file, the soonest expiring 2096-10-02 ·"
+        )),
+        "{lines}"
+    );
+    Ok(())
+}
+
+/// a website's cookies saved in the sandbox's key file as `auth login` writes them, with
+/// `expires` for each.
+fn saved_cookies(sandbox: &Sandbox, host: &str, expires: i64) -> Result {
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    let folder = if cfg!(windows) {
+        home.join("fetchloom")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/fetchloom")
+    } else {
+        home.join(".config/fetchloom")
+    };
+    std::fs::create_dir_all(&folder)?;
+    let id = format!("site:{host}");
+    let saved = serde_json::json!({
+        "kind": "cookies",
+        "from": {"browser": "firefox"},
+        "cookies": [{
+            "name": "session", "value": "s-old", "domain": "127.0.0.1", "path": "/",
+            "secure": false, "expires": expires,
+        }],
+    });
+    std::fs::write(
+        folder.join("accounts.json"),
+        serde_json::json!({ &id: "file" }).to_string(),
+    )?;
+    std::fs::write(
+        folder.join("credentials.json"),
+        serde_json::json!({ &id: saved.to_string() }).to_string(),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn expired_cookies_are_named_with_the_command_that_takes_them_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![(
+        "/data.csv".to_owned(),
+        reply("403 Forbidden", &[("Content-Length", "0")], b""),
+    )])?;
+    let host = host_of(&site);
+    saved_cookies(&sandbox, &host, 1_000_000_000)?;
+    let again = format!(
+        "sign in to 127.0.0.1 in firefox again, then run `fetchloom auth login {host} --browser firefox`"
+    );
+    let lines = text(&sandbox.run(&["auth", "--offline"])?.stderr)?;
+    assert!(
+        lines.contains(&format!(
+            "Expired 1 cookie from firefox for {host}, the soonest expiring 2001-09-09; {again}\n"
+        )),
+        "{lines}"
+    );
+    let link = format!("{}/data.csv", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        format!("{host} refused access to {link} (403), and the cookies saved for it have expired")
+    );
+    assert_eq!(
+        error["help"],
+        format!("{again}, then run `fetchloom --json get {link}` again")
+    );
+    assert_eq!(heard(&site, "cookie"), [None]);
+    Ok(())
+}
