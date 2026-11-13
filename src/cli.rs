@@ -79,8 +79,7 @@ struct Context {
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
 }
 
-/// a refusal that signing in may lift, which a person at the terminal is offered to sign in for
-/// once the command ends.
+/// a refusal that signing in may lift.
 struct Refusal {
     error: Error,
     /// whether the error was told already, as `-q` tells it, above the offer.
@@ -117,7 +116,6 @@ impl Context {
         }
     }
 
-    /// notes the parts of file lists `written` anew below the project at `root`.
     fn wrote_lists(&self, root: &std::path::Path, written: Vec<String>) {
         self.lists
             .lock()
@@ -219,8 +217,8 @@ impl Context {
         } else {
             net
         };
-        // a person named these mirrors, as they type a link, so a lab server on their network
-        // may be one. each mirror's origin is trusted, and no other port or scheme of its host
+        // a person names a mirror as they type a link, so it may be a lab server on their network.
+        // only its origin is trusted, no other port or scheme of its host
         net.trust(self.mirrors.mirrors.web().map(url::Url::origin));
         net
     }
@@ -287,7 +285,6 @@ impl RetryLines {
     }
 }
 
-/// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
 /// the project's folder `root` as a path from `here`, a folder inside it: `../` for each folder
 /// between them, so a command a help line names works where the person ran fetchloom.
 pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
@@ -297,6 +294,7 @@ pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
     "../".repeat(depth)
 }
 
+/// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
 fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Duration) -> String {
     let wait = units::seconds(Duration::from_secs(
         wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
@@ -320,9 +318,8 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
     )
 }
 
-/// whether `FETCHLOOM_OFFLINE`, as `value` holds it, asks for offline mode: `true` or `1`, and
-/// `false`, `0`, unset or empty for no, as the settings read a switch. any other value fails
-/// rather than letting a run meant to be offline go online.
+/// whether `FETCHLOOM_OFFLINE`, as `value` holds it, asks for offline mode. a value [`switch`]
+/// cannot read fails, rather than let a run meant to be offline go online.
 fn offline(value: Option<&std::ffi::OsStr>) -> Result<bool, Error> {
     switch(
         "FETCHLOOM_OFFLINE",
@@ -331,10 +328,8 @@ fn offline(value: Option<&std::ffi::OsStr>) -> Result<bool, Error> {
     )
 }
 
-/// reads the on/off variables a named command needs before its settings into `context`: offline
-/// mode, which `flag`, `--offline`, also asks, how large downloads split, and whether keys may go
-/// to the credential store. a value that is neither true nor false stops the run before any
-/// request.
+/// reads the on/off variables a named command needs into `context`, `flag` being `--offline`. a
+/// value that is neither true nor false stops the run before any request.
 fn read_switches(
     context: &mut Context,
     flag: bool,
@@ -346,8 +341,7 @@ fn read_switches(
     keyring(var("FETCHLOOM_KEYRING").as_deref())
 }
 
-/// the settings file this run reads, or leaves unread as `--no-config`, when `flag` says it was
-/// given, or `FETCHLOOM_NO_CONFIG` asks.
+/// the settings file, or one left unread when `flag`, `--no-config`, or `FETCHLOOM_NO_CONFIG` asks.
 fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Error> {
     match no_config(flag, var("FETCHLOOM_NO_CONFIG").as_deref())? {
         Some(by) => Ok(File::bypassed(var, by)),
@@ -355,8 +349,7 @@ fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Erro
     }
 }
 
-/// what leaves the settings file unread for this run: `--no-config`, as `flag` says, else
-/// `FETCHLOOM_NO_CONFIG`, which takes true or false as `FETCHLOOM_OFFLINE` does.
+/// what leaves the settings file unread: `--no-config`, as `flag` says, or `FETCHLOOM_NO_CONFIG`.
 fn no_config(flag: bool, value: Option<&std::ffi::OsStr>) -> Result<Option<&'static str>, Error> {
     if flag {
         return Ok(Some("--no-config"));
@@ -377,9 +370,8 @@ fn switch(name: &str, value: Option<&std::ffi::OsStr>, help: &str) -> Result<boo
         .map_err(|error| error.help(help))
 }
 
-/// when large downloads split, by `FETCHLOOM_SPLIT`: false never, true from the first answer,
-/// and unset or empty once one stream proves slow; any other value is a usage error. splitting
-/// from the start lost in the lab on lan and home, while it won on far, where one stream is slow.
+/// when large downloads split, by `FETCHLOOM_SPLIT`. unset waits until one stream proves slow:
+/// splitting at once lost in the lab on lan and home, and won only on far, where a stream is slow.
 fn splits(value: Option<&std::ffi::OsStr>) -> Result<net::Splitting, Error> {
     let split = crate::settings::switched("FETCHLOOM_SPLIT", value).map_err(|error| {
         error.help("set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow")
@@ -458,9 +450,8 @@ fn hold_cache(
 /// [`Context`].
 static SETTINGS_FILE: std::sync::OnceLock<File> = std::sync::OnceLock::new();
 
-/// the help for a cache folder that could not be used. a user may not own the folder fetchloom
-/// chose itself, as when a container gives an arbitrary user a home of `/`, so for that folder
-/// the help names the variable that moves the cache as well as its permissions.
+/// the help for a cache folder that could not be used. the folder fetchloom chose may be one the
+/// user does not own, as in a container whose user has a home of `/`, so it names the variable too.
 fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
     let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
     let filed = SETTINGS_FILE
@@ -531,9 +522,8 @@ fn cache_root() -> Result<std::path::PathBuf, Error> {
     })
 }
 
-/// why fetchloom cannot start in `folder`, as `-C` asks. windows lets a program work in no folder
-/// whose path passes 258 characters, so a project deeper than that is named with its length
-/// before anything is written.
+/// why fetchloom cannot start in `folder`, as `-C` asks. windows refuses a working folder whose
+/// path passes 258 characters, so a project deeper than that is named with its length.
 fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
     if err.kind() != std::io::ErrorKind::InvalidFilename {
         return Error::new(
@@ -690,8 +680,6 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     if outcome == ExitCode::SUCCESS && command.as_ref().is_some_and(reminds) {
         cache::remind(&context);
     }
-    // refused for want of an account, with a person at the terminal: offer to sign in, then run
-    // the command once more with the new key
     if let Some(refusal) = context.refusal() {
         let offered = match (&refusal.error.need, command) {
             (Some(need), Some(command)) => {
@@ -724,18 +712,12 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     outcome
 }
 
-/// how long the end of a run on windows waits for the runtime's threads to have exited. each of
-/// 1,920 normal and settled runs measured let go of them within 10.1 ms, the slowest on two cores
-/// each shared with three busy loops; a stopped run whose scan still runs, as `status --verify`'s,
-/// ends this much after `Stopped`.
+/// how long the end of a run on windows waits for the runtime's threads to exit. 1,920 measured
+/// runs let go within 10.1 ms; a stopped run whose scan still runs ends this much after `Stopped`.
 const EXIT_WAIT: Duration = Duration::from_millis(25);
 
-/// ends `runtime`. on windows it waits at most `wait` until the runtime's threads have exited,
-/// their thread-local destructors included: returning from main there ends every other thread
-/// wherever it is and then runs main's destructors, which take the same locks as theirs, as
-/// `-vv`'s logging does, so a runtime thread ended inside one left the run hanging after its last
-/// line. linux and macos end the other threads only after main's destructors have run, so there
-/// the run ends at once, as a blocking task still running after `wait` does on windows.
+/// ends `runtime`. on windows it waits at most `wait` for its threads, since returning from main
+/// ends them wherever they are, and one ended holding a lock `-vv`'s logging takes hung the run.
 fn end_runtime(runtime: tokio::runtime::Runtime, wait: Duration) {
     if cfg!(windows) {
         runtime.shutdown_timeout(wait);
@@ -744,8 +726,8 @@ fn end_runtime(runtime: tokio::runtime::Runtime, wait: Duration) {
     }
 }
 
-/// whether `command`, as help quotes it, is a whole command line fetchloom would accept, so a
-/// script handed it as the next step can run it. `fetchloom add` alone names a command and is not one.
+/// whether `command`, as help quotes it, is a whole command line fetchloom accepts, which a script
+/// handed it as the next step can run. `fetchloom add` alone is not one.
 pub(crate) fn runs(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
@@ -758,9 +740,8 @@ pub(crate) fn definition() -> clap::Command {
     <args::Args as clap::CommandFactory>::command()
 }
 
-/// whether `command`, as help quotes it, is one a script may run as the next step with no
-/// person to ask, as [`args::Command::harmless`] says. `--yes` answers a question meant for a
-/// person, so no command with it is.
+/// whether `command`, as help quotes it, is one a script may run with no person to ask, as
+/// [`args::Command::harmless`] says. one with `--yes` never is, since it answers for a person.
 pub(crate) fn harmless(command: &str) -> bool {
     use clap::Parser;
     command_words(command, cfg!(windows))
@@ -779,7 +760,8 @@ pub(crate) fn changes_lock(command: &str) -> bool {
         .is_some_and(|args| args.command.is_some_and(|command| command.writes_lock()))
 }
 
-/// reads the literal quoting in suggestions without interpreting expansions or shell operators.
+/// the words of a suggested `command`, read through its literal quoting. none for an expansion or
+/// a shell operator, which it never interprets.
 fn command_words(command: &str, windows: bool) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word: Option<String> = None;
@@ -1003,14 +985,12 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     let welcome = crate::output::wrap_help(&welcome, width, true);
     let rows = usize::from(console::Term::stdout().size().0);
     let banner = crate::output::wordmark(width, Style::stdout_color(args::color()));
-    // the wordmark leads only where the whole welcome still fits below it
     let fits = banner.lines().count() + welcome.lines().count() < rows;
     about(context, if fits { &banner } else { "" }, &welcome, started)
 }
-/// asks before a large download, or one the disk holding the cache may lack room for, unless
-/// `--yes` already said yes. without a terminal to ask on, it stops and names the flag. `room` is
-/// the cache folder and the bytes the downloads need on its disk. says whether a person said yes
-/// to going on without room, which says yes to the size as well.
+/// asks before a large download, or one the cache's disk may lack room for, `room` being the cache
+/// folder and the bytes needed on its disk. `yes` answers it; with no terminal it stops and names
+/// the flag. true when a person said yes to going on without room, which covers the size too.
 fn confirm(
     output: &Output,
     yes: bool,
@@ -1055,9 +1035,8 @@ fn confirm_doing(
     ask(output, yes, what, &units::size(bytes)).map(|()| false)
 }
 
-/// asks whether to go on `doing` what needs at least `needed` bytes on the disk holding `cache`,
-/// which has `free`. a disk that compresses what it stores can hold more than it tells, so a
-/// person may say yes; without a terminal it stops and names the flag.
+/// asks whether to go on `doing` what needs `needed` bytes on the disk holding `cache`, which has
+/// `free`. a disk that compresses can hold more than it tells, so a person may say yes.
 fn ask_room(
     output: &Output,
     doing: &str,
@@ -1104,7 +1083,7 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
     }
 }
 
-/// installs interruption handling before either synchronous or asynchronous work starts.
+/// the runtime for a command, with ctrl-c and SIGTERM handled before any work starts.
 fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = crate::threads::start_runtime(|| {
@@ -1115,7 +1094,7 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
     })
     .map_err(|err| Error::io("could not start", &err))?;
     let mut signal = Box::pin(tokio::signal::ctrl_c());
-    // polling once installs the OS listener before a synchronous scan can occupy this thread.
+    // polling once installs the OS listener before a synchronous scan can occupy this thread
     let already_stopped = runtime
         .block_on(std::future::poll_fn(|cx| {
             std::task::Poll::Ready(match signal.as_mut().poll(cx) {
@@ -1168,9 +1147,8 @@ async fn pass_on_ctrl_c(
     }
 }
 
-/// passes each SIGTERM, which a scheduler sends a job it ends, on to `heard`, listening from
-/// before the work starts. tokio keeps the handler for the rest of the process, so a SIGTERM no
-/// longer ends it at once: the work stops as at a ctrl-c instead.
+/// passes each SIGTERM, as a scheduler sends a job it ends, on to `heard`. tokio keeps the handler
+/// for the rest of the process, so a SIGTERM stops the work as a ctrl-c does.
 #[cfg(unix)]
 fn listen_for_terminate(
     runtime: &tokio::runtime::Runtime,
@@ -1189,9 +1167,8 @@ fn listen_for_terminate(
     }
 }
 
-/// what a first ctrl-c does: stops the run, or lets it finish where it has marked its work as
-/// finishing or only the disk is left, as [`Stop::hear`] decides, then `tell`s the person which,
-/// so the work sees a stop by the time `Stopping` shows. says which it did.
+/// what a first ctrl-c does, as [`Stop::hear`] decides, told through `tell` only after, so the work
+/// sees a stop by the time `Stopping` shows.
 fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) -> Heard {
     let heard = stop.hear();
     tell(heard);
@@ -1239,9 +1216,8 @@ fn block_on<T>(
     {
         return outcome;
     }
-    // work a stop cut short may still end well, so it ends as stopped, unless the command marked
-    // its work as finishing: it does that after its last look for a stop, so one asked after that
-    // look, even before the mark, leaves the work done
+    // work a stop cut short ends as stopped, even if it ended well, unless the command marked it as
+    // finishing; a stop asked between its last look for one and that mark leaves the work done
     context.stop.check_unfinished()?;
     outcome
 }
@@ -1264,7 +1240,7 @@ fn blocking<T: Send + 'static>(
     block_on(context, on_its_thread(context, effect, command))
 }
 
-/// runs `command` on a thread that may block, as [`blocking`] says.
+/// runs `command` on a thread that may block, where a stop does what `effect` says.
 async fn on_its_thread<T: Send + 'static>(
     context: &Arc<Context>,
     effect: Effect,
@@ -1346,9 +1322,8 @@ fn finish<T: Serialize>(
     }
 }
 
-/// `error`, a stop that the SIGTERM a scheduler sends asked, saying so rather than that a person
-/// asked it, as in `stopped by a SIGTERM while talking to zenodo.org`. any other error stays as
-/// it is.
+/// `error`, when it is a stop a SIGTERM asked, saying so rather than that a person asked, as in
+/// `stopped by a SIGTERM while talking to zenodo.org`. any other error stays as it is.
 fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
     if error.kind == Kind::Interrupted
         && by == Some(Interrupt::Terminate)
@@ -1362,10 +1337,8 @@ fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
     error
 }
 
-/// `error`, a refusal that signing in could lift, when the environment `var` gives a key for its
-/// account already: signing in again is no remedy, so the help says the key has no access or was
-/// refused, and how to check it, and only terms to accept are still offered. any other error
-/// stays as it is.
+/// `error`, a refusal signing in could lift, when `var` gives a key for its account already: since
+/// signing in is no remedy, [`with_key`] says to check that key. any other error stays as it is.
 fn with_key_here(error: Error, var: crate::source::Var<'_>) -> Error {
     let Some(need) = error.need.as_deref() else {
         return error;
@@ -1391,9 +1364,8 @@ fn with_key_here(error: Error, var: crate::source::Var<'_>) -> Error {
     )
 }
 
-/// `error`, a refusal that signing in could lift, refused with the key `key` went with: its help
-/// says the key was refused or has no access, then `check`, how to check the key, and only a need
-/// for terms to accept stays.
+/// `error`, a refusal signing in could lift, refused with `key`: its help says the key was refused
+/// or has no access, then `check`, and only a need for terms to accept stays.
 fn with_key(mut error: Error, key: &str, check: Option<&str>) -> Error {
     let Some(need) = error.need.as_deref() else {
         return error;
@@ -1429,14 +1401,12 @@ pub(in crate::cli) fn shell_word(word: &str) -> Cow<'_, str> {
     shell_word_for(word, cfg!(windows))
 }
 
-/// [`shell_word`] for the shells of windows, powershell and cmd, or for bash, zsh and fish. a
-/// word starting with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted.
-/// double quotes keep every other character literal in all of them, but for `$`, a backtick and
-/// a double quote; on windows curly double quotes, which powershell reads as double quotes; and
-/// elsewhere `!`, which bash and zsh expand from their history, and a backslash, an escape there.
-/// a word holding any of those is single-quoted: powershell doubles each single quote inside,
-/// curly ones too, and elsewhere a single quote and a backslash go outside the quotes, escaped,
-/// since fish reads a backslash inside them as an escape too.
+/// [`shell_word`] for powershell and cmd on windows, or for bash, zsh and fish. a word starting
+/// with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted. double quotes
+/// keep it literal unless it holds `$`, a backtick or a double quote, on windows a curly double
+/// quote, elsewhere `!` (history) or a backslash; then it is single-quoted, each single quote
+/// doubled on windows, curly ones too, and elsewhere a single quote or backslash escaped outside
+/// the quotes, since fish reads a backslash inside them as an escape.
 fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     if !word.is_empty()
         && !word.starts_with(['~', '=', '@'])
@@ -1493,7 +1463,7 @@ fn is_single_quote(c: char) -> bool {
     matches!(c, '\'' | '\u{2018}'..='\u{201b}')
 }
 
-/// retry from the moved project, without the old working directory or its attached forms.
+/// the typed command line for the moved project, without `-C` and its folder, attached or not.
 fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
     let command = <args::Args as clap::CommandFactory>::command();
     let mut kept = Vec::new();
@@ -1542,8 +1512,7 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 }
 
 /// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
-/// a name no list knows, such as dropbox's `rlkey`: the whole word, an option's value after `=`,
-/// a link attached to a short option, or a link pasted wholly percent-encoded.
+/// a name no list knows, as dropbox's `rlkey`, even after `=` or a short option or percent-encoded.
 fn may_hold_secret(arg: &str) -> bool {
     if matches!(net::mask_query(arg), Cow::Owned(_)) {
         return true;
@@ -1580,10 +1549,8 @@ fn may_hold_secret(arg: &str) -> bool {
     })
 }
 
-/// the command a person likely meant: the command line they typed with the words `typed`
-/// changed to `meant`, every other word kept, so a flag such as `--dry-run` stays in what they
-/// paste. `instead` names the command when that line is not known, lacks the words or holds a
-/// secret no message may repeat.
+/// the command line as typed with the words `typed` changed to `meant`, so a flag such as
+/// `--dry-run` stays in what a person pastes, or `instead` when that line cannot be repeated.
 pub(in crate::cli) fn meant(typed: &[&str], meant: &[&str], instead: String) -> String {
     TYPED
         .get()
@@ -1591,9 +1558,8 @@ pub(in crate::cli) fn meant(typed: &[&str], meant: &[&str], instead: String) -> 
         .unwrap_or(instead)
 }
 
-/// the command line `line` with the words `typed` changed to `meant`, ready to copy. the words
-/// are found where they stand last, alone or beside an `=`, as in `--limt=5` or `--upgrade=irs`.
-/// none when they stand nowhere, or the line cannot be repeated.
+/// [`meant`]'s line from `line`: the words `typed` change where they stand last, alone or beside
+/// an `=`, as in `--limt=5`. none when they stand nowhere or the line cannot be repeated.
 fn retyped(line: &[std::ffi::OsString], typed: &[&str], meant: &[&str]) -> Option<String> {
     let mut line = line.to_vec();
     let count = typed.len();
@@ -1630,8 +1596,7 @@ fn retyped(line: &[std::ffi::OsString], typed: &[&str], meant: &[&str]) -> Optio
 mod tests {
     use super::*;
 
-    /// a stop asked once a command marked its work as finishing, as by ctrl-c while it prints its
-    /// last lines, leaves it finished, while one asked before the mark ends it as stopped.
+    /// one asked before the mark ends it as stopped.
     #[test]
     fn a_stop_after_a_command_finished_its_work_leaves_it_finished() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1669,10 +1634,6 @@ mod tests {
         assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
     }
 
-    /// on windows the end of a run waits until the runtime's threads have exited, their
-    /// thread-local destructors included. returning from main there ends every other thread
-    /// wherever it is, then runs main's destructors, which take the same locks as theirs: a
-    /// runtime thread ended inside one left the run hanging after its last line.
     #[cfg(windows)]
     #[test]
     fn ending_the_runtime_waits_until_its_threads_have_exited() {
@@ -1708,8 +1669,7 @@ mod tests {
         );
     }
 
-    /// on linux and macos the end of a run leaves the runtime's threads to exit with the process,
-    /// since waiting for them cost commands such as `path` most of a millisecond after their answer.
+    /// on linux and macos, since waiting cost commands such as `path` most of a millisecond.
     #[cfg(not(windows))]
     #[test]
     fn the_run_ends_without_waiting_for_threads_still_exiting() {
@@ -1754,8 +1714,7 @@ mod tests {
         );
     }
 
-    /// a blocking task that never ends, as a scan a stop left running or `get -i`'s reader of a
-    /// pipe kept open, still lets the run end once the wait is over.
+    /// as a scan a stop left running, or `get -i`'s reader of a pipe kept open.
     #[test]
     fn a_task_that_never_ends_still_lets_the_run_end() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1775,9 +1734,7 @@ mod tests {
         drop(release);
     }
 
-    /// a stop returns from work that only reads at once, while work that writes is waited for
-    /// until it has seen the stop and removed what it started, since the process ends soon after
-    /// and would leave its files behind, as a stopped push left its unfinished copies.
+    /// a stopped push once ended before removing its unfinished copies.
     #[test]
     fn a_stop_waits_for_work_that_writes_and_leaves_a_scan_behind() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1826,7 +1783,7 @@ mod tests {
         }
     }
 
-    /// a wait for a host's limit is told in whole seconds, rounded up, with the limit it stated.
+    /// told in whole seconds, rounded up.
     #[test]
     fn a_rate_limit_wait_names_the_limit_it_waits_for() {
         assert_eq!(
@@ -1867,8 +1824,7 @@ mod tests {
         assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
     }
 
-    /// keys are looked for when a request first needs one, so a run that sends none, as a settled
-    /// sync, reads no key files and asks no credential store.
+    /// keys are looked for when a request first needs one, so a settled sync reads no key files.
     #[test]
     fn a_network_that_sends_nothing_looks_for_no_keys() {
         let context = Context::new(Output::new(
@@ -1901,8 +1857,7 @@ mod tests {
         assert_eq!(about(context.output.told()), 1);
     }
 
-    /// the first interrupt, ctrl-c or SIGTERM, stops the work, told as the one it was, and the
-    /// next of either quits.
+    /// either ctrl-c or SIGTERM, the first told as the one it was.
     #[test]
     fn the_first_interrupt_stops_the_work_and_the_second_quits() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1938,7 +1893,7 @@ mod tests {
         }
     }
 
-    /// a SIGTERM's stop names it, whatever the work said it stopped doing, since no person asked.
+    /// whatever the work said it stopped doing, since no person asked.
     #[test]
     fn a_stop_a_sigterm_asked_names_it() {
         for (said, named) in [
@@ -1961,9 +1916,8 @@ mod tests {
         }
     }
 
-    /// a first ctrl-c asks the stop before it tells the person, so once `Stopping` shows, the
-    /// work sees the stop: a test that waited for the line once found the work done anyway. a run
-    /// past its mark is not stopped but told it finishes.
+    /// a test that waited for `Stopping` once found the work done anyway. a run past its mark is
+    /// not stopped but told it finishes.
     #[test]
     fn a_first_ctrl_c_is_told_once_the_work_can_see_it() {
         let stop = Stop::default();
@@ -1977,8 +1931,7 @@ mod tests {
         assert!(!finished.is_asked());
     }
 
-    /// work that tells its last line as soon as it sees a stop tells it after `Stopping`, since
-    /// the stop is asked before that line while every other line waits for it.
+    /// since the stop is asked before `Stopping` while every other line waits for it.
     #[test]
     fn a_line_told_once_the_stop_is_seen_follows_stopping() {
         let output = Output::new(
@@ -2044,9 +1997,8 @@ mod tests {
         );
     }
 
-    /// a refusal that signing in could lift, with a key here already, says the key was refused or
-    /// has no access and how to check it, never to sign in, and offers to sign in no more: only
-    /// terms to accept stay offered. with no key here, it stays as it was.
+    /// never to sign in, and offers to sign in no more, but for terms to accept. with no key here,
+    /// it stays as it was.
     #[test]
     fn a_refusal_with_a_key_here_says_to_check_the_key() {
         use crate::auth::Account;
@@ -2233,8 +2185,7 @@ mod tests {
             line(&["get", "https://user:secret@example.org/a.csv"]),
             None
         );
-        // a name no list knows may hold a secret too, as dropbox's rlkey does, so any query,
-        // fragment or login in a link keeps the line from being repeated
+        // a name no list knows may hold a secret too, as dropbox's rlkey does
         for link in [
             "https://example.org/a.csv?rlkey=abc",
             "https://example.org/a.csv?download=1",
@@ -2275,9 +2226,8 @@ mod tests {
         assert_eq!(shell_word("my data"), "\"my data\"");
     }
 
-    /// words a shell would expand or split, as a suggested command quotes them for bash, zsh and
-    /// fish, and on windows for powershell, and for cmd too but for `$`, a backtick and a double
-    /// quote, which no quoting keeps literal in both. each reads back as it was.
+    /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell,
+    /// and for cmd but with `$`, a backtick or a double quote, which nothing keeps literal in both.
     const QUOTED: [(&str, &str, &str); 13] = [
         ("hi!.csv", "'hi!.csv'", "\"hi!.csv\""),
         ("$notes", "'$notes'", "'$notes'"),
@@ -2317,9 +2267,8 @@ mod tests {
         }
     }
 
-    /// interactive bash and zsh, which expand `!` inside double quotes from their history, and
-    /// every other shell here that a person may paste a suggested command into, take each quoted
-    /// word as it was: powershell, which reads the same wherever it runs, as windows quotes it.
+    /// interactive bash and zsh expand `!` inside double quotes from their history. powershell
+    /// reads the same wherever it runs, so it gets windows' quoting.
     #[cfg(unix)]
     #[test]
     fn a_quoted_word_reads_back_whole_in_each_shell() {
@@ -2375,8 +2324,7 @@ mod tests {
         }
     }
 
-    /// `FETCHLOOM_OFFLINE` reads true and false as `FETCHLOOM_MIRRORS_ONLY` does, and a value it
-    /// cannot read is a usage error naming it, never a run that goes online.
+    /// a value it cannot read is a usage error naming it, never a run that goes online.
     #[test]
     fn the_offline_variable_takes_true_or_false_and_refuses_the_rest() {
         let read = |value: Option<&str>| offline(value.map(std::ffi::OsStr::new));
@@ -2402,8 +2350,6 @@ mod tests {
         }
     }
 
-    /// `FETCHLOOM_SPLIT` reads true and false as every on/off variable does, splits once one
-    /// stream proves slow when it is unset or empty, and refuses any other value.
     #[test]
     fn downloads_split_once_one_stream_is_slow_unless_told_otherwise() {
         use net::Splitting::{Always, Never, WhenSlow};
