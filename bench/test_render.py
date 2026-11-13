@@ -327,6 +327,18 @@ class PageTests(Quiet):
         with self.assertRaisesRegex(ValueError, r"mixed benchmark conditions for \('s1', 'lan', 'ext4'\)"):
             self.render([lab_row(), lab_row(round=2, count=2)], dict(kind="lab", quick=True))
 
+    def test_cards_bars_and_ranges_have_square_ends(self):
+        import xml.etree.ElementTree as ET
+        self.render([lab_row(), lab_row(round=2, wall_seconds=2), lab_row(tool="curl", wall_seconds=3)],
+                    dict(kind="lab", quick=True))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        drawn = sorted(card.name for card in cards.glob("*.svg"))
+        self.assertEqual(drawn, ["hero-s1-ext4-dark.svg", "hero-s1-ext4.svg", "s1-lan-ext4-dark.svg", "s1-lan-ext4.svg"])
+        for name in drawn:
+            for element in ET.parse(cards / name).iter():
+                self.assertFalse({"rx", "ry"} & set(element.attrib), (name, element.attrib))
+                self.assertNotEqual(element.get("stroke-linecap"), "round", (name, element.attrib))
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)

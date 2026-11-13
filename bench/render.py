@@ -88,12 +88,12 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
            "s9": "{files} already in place, each tool confirms nothing changed"}
 
-# warm paper and ink, with one clay accent for fetchloom and quiet stone for everyone else
+# the site's paper and ink, with its indigo accent for fetchloom and a quiet grey for everyone else
 PALETTES = {
-    False: dict(card="#faf9f5", edge="#e6e3d9", text="#141413", muted="#75726a", track="#efece4",
-                accent="#c8532b", other="#b8b3a7", range="#141413"),
-    True: dict(card="#1b1a17", edge="#34322c", text="#f2efe7", muted="#9b978c", track="#24231f",
-               accent="#ee7a4c", other="#5c5850", range="#f2efe7"),
+    False: dict(card="#f8f8f7", edge="#dcdedf", text="#121315", muted="#5c6064", track="#ebeced",
+                accent="#2e3f9c", other="#adb1b5", range="#121315"),
+    True: dict(card="#141617", edge="#2b2e31", text="#e8e9ea", muted="#999ea2", track="#1e2123",
+               accent="#9ea9f2", other="#50565b", range="#e8e9ea"),
 }
 
 WIDTH = 760
@@ -166,7 +166,7 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" '
              f'viewBox="0 0 {WIDTH} {height}" role="img" aria-label="{html.escape(title, quote=True)}">',
              f"<style>{font_faces()}</style>",
-             f'<rect x=".5" y=".5" width="{WIDTH - 1}" height="{height - 1}" rx="14" fill="{colors["card"]}" '
+             f'<rect x=".5" y=".5" width="{WIDTH - 1}" height="{height - 1}" fill="{colors["card"]}" '
              f'stroke="{colors["edge"]}"/>']
     if label:
         parts += [text(PAD, 42, label.upper(), colors, "accent", 11, 500, spacing=1.4),
@@ -179,19 +179,19 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
         mine = name == "fetchloom"
         parts.append(text(PAD, middle + 4, name, colors, "accent" if mine else "text", 13, 500 if mine else 400))
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{span}" height="{BAR}" '
-                     f'rx="{BAR / 2}" fill="{colors["track"]}"/>')
+                     f'fill="{colors["track"]}"/>')
         right = WIDTH - PAD
         if result["median"] is None or result["failures"]:
             parts.append(text(right, middle + 4, no_bar(result), colors, "muted", 12.5, anchor="end"))
             continue
         width = max(span * result["median"] / reach, BAR)
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{width:.1f}" height="{BAR}" '
-                     f'rx="{BAR / 2}" fill="{colors["accent" if mine else "other"]}"/>')
+                     f'fill="{colors["accent" if mine else "other"]}"/>')
         if result["high"] > result["low"]:
             low = left + span * result["low"] / reach
             high = left + span * result["high"] / reach
             parts.append(f'<line x1="{low:.1f}" x2="{high:.1f}" y1="{middle:.1f}" y2="{middle:.1f}" '
-                         f'stroke="{colors["range"]}" stroke-opacity=".3" stroke-width="1.5" stroke-linecap="round"/>')
+                         f'stroke="{colors["range"]}" stroke-opacity=".3" stroke-width="1.5"/>')
         parts.append(text(right, middle + 4, seconds(result["median"]), colors, "text", 13, 500 if mine else 400,
                           anchor="end"))
     parts.append("</svg>")
