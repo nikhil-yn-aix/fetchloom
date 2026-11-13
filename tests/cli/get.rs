@@ -1,5 +1,4 @@
-//! `fetchloom get`: one link into one folder, or into the one file `-o` names, through the
-//! cache.
+//! `fetchloom get`: one link into one folder, or into the one file `-o` names, through the cache.
 
 use std::fs;
 use std::process::{Child, Stdio};
@@ -76,7 +75,6 @@ fn json_describes_the_run_and_nothing_else() -> Result {
     // what differs between machines is checked here, so the snapshot holds what never does
     let folder = std::mem::replace(&mut document["result"]["folder"], "[folder]".into());
     assert_eq!(folder, sandbox.work().join("iris").display().to_string());
-    // what the sandbox's drive makes for a read-only file: a reflink, a hardlink, or else a copy
     let links = sandbox.links()?;
     let (expected, counter) = if links.reflinks_read_only() {
         ("reflink", "reflinks")
@@ -90,7 +88,6 @@ fn json_describes_the_run_and_nothing_else() -> Result {
         "[method]".into(),
     );
     assert_eq!(method, expected);
-    // the one link's item repeats its folder and files
     let item = &mut document["result"]["items"][0];
     assert_eq!(
         std::mem::replace(&mut item["folder"], "[folder]".into()),
@@ -150,7 +147,6 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     let length = body.len().to_string();
     let rest = (body.len() - cut).to_string();
     let range = format!("bytes {cut}-{}/{}", body.len() - 1, body.len());
-    // a folder named after the file, then the one file -o names
     for (options, placed) in [(&[][..], "big/big.bin"), (&["-o", "big.bin"], "big.bin")] {
         let sandbox = Sandbox::new()?;
         let server = Server::start(
@@ -194,7 +190,7 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     Ok(())
 }
 
-/// the files in the cache's object store.
+/// how many files the cache's object store holds.
 fn objects(sandbox: &Sandbox) -> usize {
     fs::read_dir(sandbox.cache().join("objects"))
         .into_iter()
@@ -240,9 +236,8 @@ fn output_writes_exactly_that_file_writable_and_alone() -> Result {
     Ok(())
 }
 
-/// a download nothing else needs moves out of the cache into the file, so its bytes are written
-/// once, however large, also into folders `-o` names that are not there yet. windows copies,
-/// since fetchloom cannot count a file's names there.
+/// moving writes the bytes once, however large, also into folders `-o` names that are not there
+/// yet. windows copies, since fetchloom cannot count a file's names there.
 #[test]
 fn output_moves_a_one_off_out_of_the_cache() -> Result {
     for path in ["data.csv", "new/sub/data.csv"] {
@@ -266,9 +261,7 @@ fn output_moves_a_one_off_out_of_the_cache() -> Result {
     Ok(())
 }
 
-/// a rerun the server answers with 304 after a one-off moved its bytes out of the cache says the
-/// server still serves what was downloaded last time, which is true, rather than that the cache
-/// holds those bytes, which it no longer does.
+/// the line must not say the cache holds those bytes, which it no longer does.
 #[test]
 fn a_304_after_a_one_off_left_the_cache_says_what_the_server_serves() -> Result {
     let sandbox = Sandbox::new()?;
@@ -288,7 +281,6 @@ fn a_304_after_a_one_off_left_the_cache_says_what_the_server_serves() -> Result 
     Ok(())
 }
 
-/// bytes a project here pins stay in the cache for it, and the file gets its own copy of them.
 #[test]
 fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
     let sandbox = Sandbox::new()?;
@@ -311,8 +303,7 @@ fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
     Ok(())
 }
 
-/// a registered project whose data.toml is gone needs nothing, as gc forgets it, so a one-off
-/// still moves out of the cache rather than being copied beside it.
+/// a registered project whose data.toml is gone needs nothing, as gc forgets it.
 #[test]
 fn output_moves_a_one_off_though_a_registered_project_is_gone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -333,8 +324,7 @@ fn output_moves_a_one_off_though_a_registered_project_is_gone() -> Result {
     Ok(())
 }
 
-/// a path beneath a file cannot be written, since that file stands where a folder must be: the
-/// error names it and another path, before anything is asked of the server or written.
+/// the error also offers another path, and comes before any request or write.
 #[test]
 fn output_beneath_a_file_names_the_file_in_the_way() -> Result {
     let sandbox = Sandbox::new()?;
@@ -384,8 +374,7 @@ fn output_keeps_an_archive_packed() -> Result {
     Ok(())
 }
 
-/// a notebook that states the hash it expects makes no request when its file is already there,
-/// and a file holding other bytes is refused before anything downloads.
+/// a file holding the named bytes is kept, and one holding other bytes is refused.
 #[test]
 fn output_with_a_known_sha256_decides_about_a_file_there_before_any_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -413,8 +402,7 @@ fn output_with_a_known_sha256_decides_about_a_file_there_before_any_request() ->
     Ok(())
 }
 
-/// a hash that names other bytes than the file already there says the two disagree, since
-/// either may be wrong, and leads with checking the hash rather than with `--force`.
+/// the help leads with checking the hash rather than with `--force`.
 #[test]
 fn output_with_another_sha256_than_its_file_says_either_may_be_wrong() -> Result {
     let sandbox = Sandbox::new()?;
@@ -452,8 +440,6 @@ fn output_with_another_sha256_than_its_file_says_either_may_be_wrong() -> Result
     Ok(())
 }
 
-/// a rerun in a notebook finds its file where the last run put it, holding what the link serves,
-/// and leaves it as it is.
 #[test]
 fn output_leaves_a_file_holding_the_same_bytes_as_it_is() -> Result {
     let sandbox = Sandbox::new()?;
@@ -484,9 +470,8 @@ fn output_leaves_a_file_holding_the_same_bytes_as_it_is() -> Result {
     Ok(())
 }
 
-/// the bytes left the cache for the file, yet a rerun whose file still holds them asks whether
-/// they changed, and a 304 leaves the file as it is: no download, and no question about a size
-/// that asks first.
+/// the bytes left the cache for the file, yet the rerun still asks the server, and its 304 means
+/// no download and no question about the size.
 #[test]
 fn output_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -513,8 +498,7 @@ fn output_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     Ok(())
 }
 
-/// a folder whose file holds what the link served last asks whether that changed, though those
-/// bytes left the cache for a file `-o` wrote.
+/// `-o` wrote the file, so its bytes left the cache, yet the folder's rerun still asks.
 #[test]
 fn a_folder_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -534,9 +518,8 @@ fn a_folder_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     Ok(())
 }
 
-/// an archive saved with `-o` under a name that does not say so, as a zip saved as `.csv`, stays
-/// packed as every `-o` file does, and one warning says what it holds and how to unpack it. a
-/// name that says zip needs none.
+/// a zip saved as `.csv` stays packed, as every `-o` file does, and the warning says how to
+/// unpack it; a name that says zip needs none.
 #[test]
 fn an_archive_saved_under_another_kind_of_name_gets_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
@@ -561,9 +544,8 @@ fn an_archive_saved_under_another_kind_of_name_gets_a_warning() -> Result {
     Ok(())
 }
 
-/// a server that compresses a file on its way, as `Content-Encoding: gzip` says, leaves gzip
-/// bytes under the file's own name: they are kept as sent, which a published hash matches, and a
-/// warning says so once. a name that says gzip already needs no warning.
+/// the bytes stay as sent with `Content-Encoding: gzip`, which a published hash matches, and one
+/// warning says so; a name that says gzip needs none.
 #[test]
 fn bytes_a_server_compressed_on_their_way_are_kept_with_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
@@ -602,8 +584,8 @@ fn bytes_a_server_compressed_on_their_way_are_kept_with_a_warning() -> Result {
     Ok(())
 }
 
-/// a quoted `~` reaches fetchloom as a folder named ~, which no shell turned into the home
-/// folder: get writes where it was asked and warns once, while `./~` says that folder is meant.
+/// a quoted `~` reaches fetchloom unexpanded, so get writes to a folder named ~ and warns, while
+/// `./~` says that folder is meant.
 #[test]
 fn a_path_starting_with_a_folder_named_tilde_gets_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
@@ -627,8 +609,7 @@ fn a_path_starting_with_a_folder_named_tilde_gets_a_warning() -> Result {
     Ok(())
 }
 
-/// offline, the bytes a link served last time stand for what it serves, so a notebook run again
-/// without a network keeps its file.
+/// offline, what a link served last time stands for what it serves.
 #[test]
 fn offline_output_keeps_a_file_holding_what_the_link_served_last() -> Result {
     let sandbox = Sandbox::new()?;
@@ -646,8 +627,7 @@ fn offline_output_keeps_a_file_holding_what_the_link_served_last() -> Result {
     Ok(())
 }
 
-/// a rerun whose file still holds what the link served last time, while the link serves other
-/// bytes now, says that the source changed, not that the file holds something else.
+/// the file holds what the link served last, so the error says the source changed, not the file.
 #[test]
 fn output_refusing_a_file_the_source_changed_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -671,8 +651,7 @@ fn output_refusing_a_file_the_source_changed_says_so() -> Result {
     Ok(())
 }
 
-/// the `-o` path turning into a folder while the file downloads is refused: fetchloom puts no file
-/// where a folder now stands, and leaves the folder as it was made.
+/// fetchloom puts no file where the folder now stands, and leaves the folder as it was made.
 #[test]
 fn an_output_path_that_becomes_a_folder_while_downloading_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -701,8 +680,7 @@ fn an_output_path_that_becomes_a_folder_while_downloading_is_refused() -> Result
     Ok(())
 }
 
-/// a link to nothing at the `-o` path is named as what it is, and stays until `--force` replaces
-/// the link itself.
+/// the link stays until `--force` replaces the link itself, never what it names.
 #[cfg(unix)]
 #[test]
 fn output_names_a_link_to_nothing_in_its_way() -> Result {
@@ -737,8 +715,7 @@ fn output_names_a_link_to_nothing_in_its_way() -> Result {
     Ok(())
 }
 
-/// a file at the `-o` path that only the download can tell apart is compared once the download
-/// is in, which the person is told before it starts rather than after a long wait.
+/// only the download can tell the file apart, which the run says first, not after a long wait.
 #[test]
 fn output_says_it_downloads_to_compare_a_file_in_its_way() -> Result {
     let sandbox = Sandbox::new()?;
@@ -839,9 +816,8 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     Ok(())
 }
 
-/// ctrl-c during a download is a stop the person asked for, not an error: a note says a second
-/// ctrl-c quits at once, then one `Stopped` line says where it stopped and a dim line under it
-/// what the download kept. the exit code stays 130.
+/// a stop the person asked for is no error: a note offers a second ctrl-c, then a `Stopped` line
+/// says where and a dim line what the download kept, with exit code 130.
 #[cfg(unix)]
 #[test]
 fn a_stopped_get_says_so_in_a_plain_line() -> Result {
@@ -883,10 +859,8 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
-/// a server that names no version of a file and sends all of it to every request cannot
-/// continue a download, as python's http.server cannot. a stop says the next run starts over
-/// rather than promising it continues, and the next run, which does start over, says so once,
-/// though a broken connection makes it start over again.
+/// a server like python's http.server, which names no version and sends whole files, cannot
+/// continue, so the rerun starts over and says so once, though a broken connection restarts it.
 #[cfg(unix)]
 #[test]
 fn a_stop_promises_only_what_the_server_allows() -> Result {
@@ -982,8 +956,7 @@ fn a_busy_server_is_tried_again() -> Result {
     Ok(())
 }
 
-/// a connection that breaks partway through a file is tried again, and the warning says what
-/// happened in plain words, never the http library's.
+/// the file is tried again, and the warning is in plain words, never the http library's.
 #[test]
 fn a_connection_that_breaks_partway_through_a_file_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1046,9 +1019,8 @@ fn fetchloom_retries_sets_how_often_a_request_is_tried_again() -> Result {
     Ok(())
 }
 
-/// a server still refusing at the last try is named in json by whose side the trouble is on,
-/// as scripts match it: a busy server's 503 as `network.status`, a 429 as `network.rate_limited`.
-/// neither answer says when to come back, so each spends a try.
+/// scripts match the json kind, which says whose side the trouble is on. neither answer says when
+/// to come back, so each spends a try.
 #[test]
 fn giving_up_names_a_busy_or_limiting_server_by_its_kind() -> Result {
     for (status, kind, help) in [
@@ -1109,9 +1081,8 @@ fn rate_limited(reset: u64, retry_after: u64) -> Vec<Part> {
     )
 }
 
-/// more refusals than a request has tries, all but the first with a limit that reset when it
-/// was sent, still end in the file: waits for a limit spend no tries. whether a wait gets a line
-/// depends on how busy the machine is, so `pace::tests` checks that with fixed times.
+/// more refusals than a request has tries still end in the file. whether a wait gets a line
+/// depends on machine load, so `pace::tests` checks that with fixed times.
 #[test]
 fn a_rate_limit_is_waited_out_without_spending_tries() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1151,9 +1122,7 @@ fn a_missing_file_fails_with_the_reference_code() -> Result {
     Ok(())
 }
 
-/// get keeps no project, so its errors name neither data.toml nor a pin: a link that moved or an
-/// id nobody has is given to get again, a pattern is fixed on the command line, a new link
-/// offline is downloaded once, and a folder named like the search words leaves a search.
+/// get keeps no project, so its help names neither data.toml nor a pin.
 #[test]
 fn get_errors_speak_of_no_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1327,9 +1296,8 @@ fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
     Ok(())
 }
 
-/// at a terminal, no or ctrl-c at the question about a large download is a cancel, not an
-/// error: one line says what was cancelled and that nothing changed, and the exit codes stay 1
-/// and 130.
+/// no or ctrl-c at a terminal's question gets one line saying what was cancelled and that nothing
+/// changed, and the exit codes stay 1 and 130.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
@@ -1366,9 +1334,8 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
     Ok(())
 }
 
-/// with `FETCHLOOM_ACCESSIBLE=1`, a terminal that cannot redraw, as under `TERM=dumb`, still
-/// gets the question about a large download, on plain lines without one escape code, and yes
-/// downloads it. CI, a coding agent and --json still never ask.
+/// with `FETCHLOOM_ACCESSIBLE=1`, even `TERM=dumb` gets the question, free of escape codes, and
+/// yes downloads; CI, a coding agent and --json never ask.
 #[cfg(target_os = "linux")]
 #[test]
 fn an_accessible_terminal_asks_on_plain_lines_and_ci_never_does() -> Result {
@@ -1493,7 +1460,6 @@ fn two_runs_of_one_link_download_it_once() -> Result {
             .command(&["get", &server.url, "--dir", "second"])
             .env("FETCHLOOM_TEST_TICKER", "on"),
     )?;
-    // redirected stderr says the second run waits for the first, and never that it downloads
     let waiting = second.wait_for("Waiting iris.csv · another fetchloom is downloading it");
     drop(release);
     waiting?;
@@ -1522,9 +1488,8 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     Ok(())
 }
 
-/// a second `-o` run of one link to the same file waits for the first, then keeps the file the
-/// first wrote, as a run started afterwards would, though the first moved its bytes out of the
-/// cache: a server asked again answers unchanged, and with `--sha256` nobody asks.
+/// the second run waits, then keeps the file as a later run would, though its bytes left the
+/// cache: the server answers unchanged, and with `--sha256` nobody asks.
 #[test]
 fn a_second_output_of_one_link_keeps_the_file_the_first_wrote() -> Result {
     for extra in [&[][..], &["--sha256", IRIS_SHA256][..]] {
@@ -1566,8 +1531,7 @@ fn a_second_output_of_one_link_keeps_the_file_the_first_wrote() -> Result {
     Ok(())
 }
 
-/// the folder you name for `get` may be a link to a folder elsewhere, as when a drive is mounted
-/// into a home folder.
+/// a folder named through a link is common where a drive is mounted into a home folder.
 #[test]
 fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1586,8 +1550,7 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     Ok(())
 }
 
-/// `-v` counts the files a run added to the cache as that, not by the name the cache gives them
-/// inside.
+/// the count says files written to the cache, never objects, the cache's own word for them.
 #[test]
 fn verbose_counters_name_new_files_in_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1973,9 +1936,8 @@ fn one_failed_link_leaves_the_others_and_fails_the_run() -> Result {
     Ok(())
 }
 
-/// links that fail alike, as three a server has nothing at, are told once: their cause and its
-/// help once, with each link once, while `--json` keeps every link's own failure. `add -i` says
-/// that cause once too.
+/// the cause and its help come once, with each link once, while `--json` keeps every link's own
+/// failure; `add -i` tells the cause once too.
 #[test]
 fn links_that_fail_alike_are_told_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2043,9 +2005,8 @@ fn sha256_takes_the_form_sites_write() -> Result {
     Ok(())
 }
 
-/// a hash that differs from the file's late still reads apart: a person reads both whole, one
-/// under the other within 80 columns, to check against a published checksum, and JSON gives
-/// them in one detail.
+/// a hash that differs late still reads apart: both print whole, one under the other within 80
+/// columns, to check against a published checksum, and JSON gives them in one detail.
 #[test]
 fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2160,8 +2121,7 @@ fn links_named_alike_each_get_their_own_folder() -> Result {
     Ok(())
 }
 
-/// a folder that is another link's folder through a link or junction is that folder, so a
-/// second link of the run cannot replace the files the first one put there.
+/// a link or junction to the first link's folder is that folder, so the second gets its own.
 #[test]
 fn a_folder_reached_through_a_link_is_not_filled_twice() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2262,8 +2222,7 @@ fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
     Ok(())
 }
 
-/// a download bigger than the free space on the cache's disk is told before any byte moves, and
-/// `--yes` goes on anyway, as on a disk that compresses what it stores.
+/// `--yes` goes on anyway, as a disk that compresses what it stores may hold it.
 #[test]
 fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2299,9 +2258,7 @@ fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
-/// a download whose size neither its source nor its server states is checked as its bytes
-/// arrive: once more has arrived than the cache's disk had free, it stops before the disk fills,
-/// as one of known size stops before it starts, and `--yes` goes on anyway.
+/// the bytes are counted as they come, so it stops before the disk fills; `--yes` goes on.
 #[test]
 fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2351,8 +2308,7 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
     Ok(())
 }
 
-/// at a terminal, the question about a download the cache's disk cannot hold says where the
-/// cache is, as the error without a terminal does.
+/// a terminal's question names the cache folder as the error without a terminal does.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_question_about_room_names_the_cache_folder() -> Result {
@@ -2374,9 +2330,8 @@ fn the_question_about_room_names_the_cache_folder() -> Result {
     Ok(())
 }
 
-/// a file only its server says is 4 GiB is refused before any byte moves when the cache's disk
-/// is FAT32, which holds no file that large. exFAT holds it, so that run goes on to ask about the
-/// size.
+/// FAT32 holds no file of 4 GiB, the size only the server states; exFAT does, so that run goes on
+/// to ask about the size.
 #[test]
 fn a_download_fat32_cannot_hold_is_refused_before_any_byte_moves() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2409,9 +2364,8 @@ fn a_download_fat32_cannot_hold_is_refused_before_any_byte_moves() -> Result {
     Ok(())
 }
 
-/// a ctrl-c once get has placed its files, or begins writing the one file `-o` names, and marked
-/// its work as finishing, as while the disk keeps a large copy, lets it end with its closing line,
-/// exit 0, rather than say it stops and then that it stopped, after the files were in place.
+/// get marks its work finishing once its files are placed or it begins the `-o` file, so a ctrl-c
+/// while the disk writes a large copy lets it end with exit 0 rather than as stopped.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_past_gets_mark_lets_it_finish() -> Result {
