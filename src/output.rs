@@ -1391,13 +1391,13 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
             }
             continue;
         }
-        if line.chars().count() <= width {
+        if units::columns(line) <= width {
             out.push(line.to_owned());
             continue;
         }
         // a row: the description starts after the last run of two or more spaces in its first
         // part, as in `  -o, --output <dir>       put the download in <dir>`
-        // byte offsets for slicing, character counts for columns, since a name may not be ascii
+        // byte offsets for slicing, display widths for columns, since a name may not be ascii
         let indent = line.len() - line.trim_start().len();
         let split = line[indent..]
             .find("  ")
@@ -1405,19 +1405,19 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
                 let after = &line[indent + gap..];
                 indent + gap + (after.len() - after.trim_start().len())
             })
-            .filter(|split| line[..*split].chars().count() < width / 2)
+            .filter(|split| units::columns(&line[..*split]) < width / 2)
             .unwrap_or(indent);
         let (head, body) = line.split_at(split);
-        let column = head.chars().count();
+        let column = units::columns(head);
         let mut current = head.to_owned();
         let fresh = column;
         for word in body.split(' ').filter(|word| !word.is_empty()) {
-            let room = current.chars().count() + 1 + word.chars().count();
-            if current.chars().count() > fresh && room > width {
+            let room = units::columns(&current) + 1 + units::columns(word);
+            if units::columns(&current) > fresh && room > width {
                 out.push(current);
                 current = " ".repeat(column);
             }
-            if current.chars().count() > fresh {
+            if units::columns(&current) > fresh {
                 current.push(' ');
             }
             current.push_str(word);
@@ -2160,6 +2160,24 @@ mod tests {
             }),
             "{wrapped}"
         );
+        // a chinese name takes two columns for each character, so its row wraps by what it shows
+        let row = "  --目录名称  a description long enough to go on to the next line";
+        let wrapped = super::wrap_help(row, 40, true);
+        let first = wrapped.lines().next().unwrap();
+        let column = console::measure_text_width(&first[..first.find("a description").unwrap()]);
+        assert!(
+            wrapped
+                .lines()
+                .all(|line| console::measure_text_width(line) <= 40),
+            "{wrapped}"
+        );
+        assert!(
+            wrapped
+                .lines()
+                .skip(1)
+                .all(|line| line.len() - line.trim_start().len() == column),
+            "{wrapped}"
+        );
     }
 
     /// at 60 columns comments go below their commands, every one in the block once one does not
@@ -2176,6 +2194,14 @@ mod tests {
         );
         assert_eq!(super::wrap_help(examples, 80, true), examples);
         assert_eq!(super::wrap_help(examples, 60, false), examples);
+        let wide = "examples:\n  fetchloom add ./鸢尾花数据集/鸢尾花.csv --as iris";
+        let wrapped = super::wrap_help(wide, 40, true);
+        assert!(
+            wrapped
+                .lines()
+                .all(|line| console::measure_text_width(line) <= 40),
+            "a wide character takes two columns:\n{wrapped}"
+        );
     }
 
     /// a link wider than the terminal gets a line of its own.

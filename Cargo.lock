@@ -832,6 +832,7 @@ dependencies = [
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",
+ "unicode-width",
  "url",
  "webpki-root-certs",
  "winapi-util",

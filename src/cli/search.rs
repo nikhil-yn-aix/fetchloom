@@ -685,6 +685,40 @@ mod tests {
         );
     }
 
+    /// a chinese title is cut by the columns it shows, two for each of its characters, so it
+    /// fits beside its facts as an ascii one does.
+    #[test]
+    fn a_wide_title_is_cut_to_the_columns_it_shows() {
+        let candidate = |reference: &str, title: &str| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "zenodo",
+            size: Some(1_181_116_006),
+            downloads: Some(2400),
+            note: None,
+        };
+        let candidates = vec![
+            candidate("kaggle:uciml/iris", "Iris Species"),
+            candidate(
+                "zenodo:23233774",
+                "鸢尾花数据集：三种鸢尾花的花萼和花瓣的长度与宽度测量结果",
+            ),
+        ];
+        let output = quiet_output();
+        for width in [80, 100, 120] {
+            let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
+            for shown in &parts {
+                let line = format!("{:17}  {}  {}", shown.reference, shown.title, shown.facts);
+                assert!(!shown.below, "{width}: {line:?}");
+                assert!(
+                    LIST_LEAD + console::measure_text_width(&line) < width,
+                    "{width}: {line:?}"
+                );
+            }
+            assert!(parts[1].title.trim_end().ends_with('…'), "{width}");
+        }
+    }
+
     /// `search iris` with `LC_ALL=C` at 100 columns: a title cut with `...` still fits beside
     /// its facts, so no row drops its title to put its size on a line of its own.
     #[test]

@@ -77,6 +77,9 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse", "
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-chrome = { version = "0.7", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "fmt", "registry", "std"] }
+# the columns each character takes on a terminal, so a title cut or padded to fit does. it is
+# already in the tree under console and indicatif
+unicode-width = { version = "0.2", default-features = false }
 url = "2.5"
 zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "zstd"] }
 # 7z archives: the decoders alone, with no encryption or encoder. ppmd is left out, as its

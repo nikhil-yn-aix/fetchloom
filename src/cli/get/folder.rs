@@ -371,12 +371,15 @@ fn top_level<'a>(files: impl IntoIterator<Item = (&'a str, u64)>) -> Vec<String>
         .collect();
     let width = shown
         .iter()
-        .map(|(name, _)| name.chars().count())
+        .map(|(name, _)| units::columns(name))
         .max()
         .unwrap_or(0);
     let mut lines: Vec<String> = shown
         .into_iter()
-        .map(|(name, size)| format!("{name:<width$}  {size}"))
+        .map(|(name, size)| {
+            let pad = width - units::columns(&name);
+            format!("{name}{:pad$}  {size}", "")
+        })
         .collect();
     if entries.len() > SHOWN {
         lines.push(format!(
@@ -447,6 +450,11 @@ mod tests {
                 ".gitattributes         2.3 KiB",
                 "README.md              913 B",
             ]
+        );
+        assert_eq!(
+            top_level([("鸢尾花.csv", 2048), ("readme.md", 1024)]),
+            ["鸢尾花.csv  2.0 KiB", "readme.md   1.0 KiB"],
+            "a wide character takes two columns"
         );
     }
 

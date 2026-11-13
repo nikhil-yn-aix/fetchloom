@@ -1,6 +1,8 @@
 //! lines as wide as the terminal they go to: a story line wrapped between words under its own
 //! text, and an example in help continued across lines as a shell reads it.
 
+use crate::units::columns;
+
 /// what separates an example's command from its comment in help.
 const COMMENT: &str = "    # ";
 
@@ -178,20 +180,20 @@ pub(super) fn comments_below<'a>(
 ) -> bool {
     examples
         .into_iter()
-        .any(|line| line.contains(COMMENT) && line.chars().count() > width)
+        .any(|line| line.contains(COMMENT) && columns(line) > width)
 }
 
 /// `command`, a help line two spaces in, broken between words where wider than `width`, each line
 /// but the last ending in [`MARK`], the rest further in. an option keeps its value, a quote whole.
 fn continued(command: &str, width: usize) -> Vec<String> {
-    if command.chars().count() <= width {
+    if columns(command) <= width {
         return vec![command.to_owned()];
     }
     let indent = command.len() - command.trim_start_matches(' ').len();
     let mut lines = Vec::new();
     let mut current = " ".repeat(indent);
     for unit in units(command.trim_start_matches(' ')) {
-        let room = current.chars().count() + 1 + unit.chars().count() + MARK.len();
+        let room = columns(&current) + 1 + columns(&unit) + MARK.len();
         if current.trim().is_empty() {
             current.push_str(&unit);
         } else if room > width {
@@ -256,9 +258,7 @@ fn commented(comment: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = COMMENT.to_owned();
     for word in comment.split(' ').filter(|word| !word.is_empty()) {
-        if current.len() > COMMENT.len()
-            && current.chars().count() + 1 + word.chars().count() > width
-        {
+        if current.len() > COMMENT.len() && columns(&current) + 1 + columns(word) > width {
             lines.push(std::mem::replace(&mut current, COMMENT.to_owned()));
         }
         if current.len() > COMMENT.len() {

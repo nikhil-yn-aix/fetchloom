@@ -2377,8 +2377,8 @@ async fn learn_names(
 fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
     if let Some(problem) = name::dataset_name_problem(asked) {
         // a name long enough to be refused for its length would fill the screen
-        let shown: String = if asked.chars().count() > 40 {
-            asked.chars().take(40).chain(['\u{2026}']).collect()
+        let shown = if units::columns(asked) > 40 {
+            format!("{}\u{2026}", units::within(asked, 40))
         } else {
             asked.to_owned()
         };
@@ -2524,6 +2524,22 @@ mod tests {
         match EDIT_AT.take() {
             Some((at, edit)) if at == point => edit(root),
             other => EDIT_AT.set(other),
+        }
+    }
+
+    /// a refused name is cut to 40 columns, so one in chinese shows 20 of its characters.
+    #[test]
+    fn a_long_refused_name_is_cut_by_the_columns_it_shows() {
+        let manifest = Manifest::parse("").unwrap();
+        for (asked, shown) in [
+            ("x".repeat(70), format!("{}…", "x".repeat(40))),
+            ("鸢".repeat(30), format!("{}…", "鸢".repeat(20))),
+        ] {
+            let error = usable(&asked, &manifest).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!("\"{shown}\" is not a valid dataset name")
+            );
         }
     }
 

@@ -4,6 +4,8 @@
 use std::path::{MAIN_SEPARATOR, Path};
 use std::time::Duration;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 /// `path` as a line a person reads shows it: below the home folder as `~/…`, else whole. a
 /// command to run keeps the whole path, since a shell reads no `~` inside quotes.
 pub(crate) fn path(path: &Path) -> String {
@@ -200,16 +202,39 @@ pub(crate) fn some_of(words: &[impl AsRef<str>], most: usize) -> String {
     )
 }
 
-/// free text on one line and at most `most` characters, cut after a whole word and ended with
+/// the columns plain `text` takes on a terminal: two for most chinese, japanese and korean
+/// characters, none for a mark that combines with the one before it.
+pub(crate) fn columns(text: &str) -> usize {
+    text.width()
+}
+
+/// the longest start of `text` at most `most` columns wide.
+pub(crate) fn within(text: &str, most: usize) -> &str {
+    let mut taken = 0;
+    let end = text
+        .char_indices()
+        .find(|(_, c)| {
+            taken += c.width().unwrap_or(0);
+            taken > most
+        })
+        .map_or(text.len(), |(end, _)| end);
+    &text[..end]
+}
+
+/// free text on one line and at most `most` columns wide, cut after a whole word and ended with
 /// `more` when it is longer.
 pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let Some((end, _)) = flat.char_indices().nth(most) else {
+    let head = within(&flat, most);
+    let end = head.len();
+    if end == flat.len() {
         return flat;
-    };
-    let head = &flat[..end];
+    }
     let kept = match head.rfind(' ') {
-        Some(space) if !flat[end..].starts_with(' ') && space >= head.len() * 2 / 3 => {
+        Some(space)
+            if !flat[end..].starts_with(' ')
+                && columns(&head[..space]) >= columns(head) * 2 / 3 =>
+        {
             &head[..space]
         }
         _ => head,
@@ -471,6 +496,16 @@ mod tests {
             ),
             "Data files © Original Authors…",
             "a comma before the cut goes with it"
+        );
+        assert_eq!(
+            clip("鸢尾花数据集的测量结果", 10, "…"),
+            "鸢尾花数据…",
+            "a wide character takes two columns"
+        );
+        assert_eq!(
+            clip("ab鸢尾花", 5, "..."),
+            "ab鸢...",
+            "a wide character that would cross the last column goes"
         );
     }
 }

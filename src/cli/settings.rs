@@ -451,7 +451,7 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
         .collect();
     let widest = |column: usize, most: usize| {
         rows.iter()
-            .map(|row| row[column].chars().count())
+            .map(|row| units::columns(&row[column]))
             .filter(|count| *count <= most)
             .max()
             .unwrap_or_default()
@@ -466,7 +466,7 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
     rows.iter()
         .map(|row| {
             let mut line = format!("{:<name$}  ", row[0], name = widths[0]);
-            let value = row[1].chars().count();
+            let value = units::columns(&row[1]);
             if value > widths[1] {
                 // the origin and variable go under their columns, on a line of their own
                 let _ = write!(
@@ -477,10 +477,11 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
                     pad = widths[0] + widths[1] + 4
                 );
             } else {
-                let _ = write!(line, "{:<width$}  ", row[1], width = widths[1]);
+                let _ = write!(line, "{}{:pad$}  ", row[1], "", pad = widths[1] - value);
             }
             if variables {
-                let _ = write!(line, "{:<width$}  {}", row[2], row[3], width = widths[2]);
+                let pad = widths[2] - units::columns(&row[2]);
+                let _ = write!(line, "{}{:pad$}  {}", row[2], "", row[3]);
             } else {
                 line.push_str(&row[2]);
             }
@@ -529,6 +530,19 @@ mod tests {
         assert_eq!(
             table(&shown, Some(30)),
             format!("cache  {cache}\n          default\njobs   8  default")
+        );
+        let shown = [
+            row("cache", "/data/鸢尾花", "FETCHLOOM_CACHE"),
+            row("jobs", "8", "FETCHLOOM_JOBS"),
+        ];
+        let told = table(&shown, None);
+        let starts: Vec<usize> = told
+            .lines()
+            .map(|line| console::measure_text_width(&line[..line.find("default").unwrap()]))
+            .collect();
+        assert_eq!(
+            starts[0], starts[1],
+            "a wide character takes two columns:\n{told}"
         );
     }
 

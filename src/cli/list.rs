@@ -139,7 +139,7 @@ fn heading(dataset: &Listed) -> String {
 fn file_lines(files: &[(String, u64)]) -> String {
     let width = files
         .iter()
-        .map(|(path, _)| path.chars().count())
+        .map(|(path, _)| units::columns(path))
         .max()
         .unwrap_or_default();
     let sizes: Vec<String> = files.iter().map(|(_, size)| units::size(*size)).collect();
@@ -148,7 +148,7 @@ fn file_lines(files: &[(String, u64)]) -> String {
         .iter()
         .zip(&sizes)
         .map(|((path, _), size)| {
-            let pad = width - path.chars().count();
+            let pad = width - units::columns(path);
             format!("{path}{:pad$}  {size:>widest$}", "")
         })
         .collect::<Vec<_>>()
@@ -362,12 +362,7 @@ const LICENSE: usize = 32;
 /// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
 /// the source gives way, then the license, since `--json` and `list <name>` keep them.
 fn table(datasets: &[Listed], width: Option<usize>) -> String {
-    let widest = |text: &str| {
-        text.lines()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or_default()
-    };
+    let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
     let full = columns(datasets, true, true);
     let Some(width) = width.filter(|width| widest(&full) > *width) else {
         return full;
@@ -418,7 +413,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
     let widths: Vec<usize> = (0..last)
         .map(|column| {
             rows.iter()
-                .map(|row| row[column].chars().count())
+                .map(|row| units::columns(&row[column]))
                 .max()
                 .unwrap_or_default()
         })
@@ -430,7 +425,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
         }
         for (column, width) in widths.iter().enumerate() {
             let cell = &row[column];
-            let pad = width - cell.chars().count();
+            let pad = width - units::columns(cell);
             let _ = write!(text, "{cell}{:pad$}  ", "");
         }
         text.push_str(&row[last]);
@@ -454,6 +449,15 @@ mod tests {
         assert_eq!(
             file_lines(&files),
             "iris.csv         4.4 KiB\ndocs/readme.txt     12 B"
+        );
+        let wide = [
+            ("鸢尾花/数据.csv".to_owned(), 4551),
+            ("docs/readme.txt".to_owned(), 12),
+        ];
+        assert_eq!(
+            file_lines(&wide),
+            "鸢尾花/数据.csv  4.4 KiB\ndocs/readme.txt     12 B",
+            "a wide character takes two columns"
         );
     }
 
@@ -571,6 +575,18 @@ mod tests {
              tweets  1 file · 4.4 KiB  data/tweets\n\
              wine    1 file · 4.4 KiB  data/wine",
             "then the license"
+        );
+        let mut wide = listed("iris", Some("cc-by-4.0"));
+        wide.folder = "data/鸢尾花".to_owned();
+        let datasets = [wide, listed("wine", Some("cc-by-4.0"))];
+        let shown = table(&datasets, None);
+        let starts: Vec<usize> = shown
+            .lines()
+            .map(|line| console::measure_text_width(&line[..line.find("cc-by").unwrap()]))
+            .collect();
+        assert_eq!(
+            starts[0], starts[1],
+            "a wide character takes two columns:\n{shown}"
         );
     }
 
