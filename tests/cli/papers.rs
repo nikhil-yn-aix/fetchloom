@@ -681,39 +681,65 @@ fn a_semantic_scholar_link_past_its_expiry_is_asked_for_again() -> Result {
     Ok(())
 }
 
-/// S3 answers that a link expired, as it does once the session that signed it ends: the listing
-/// is asked again, and the fresh link downloads the file.
-#[test]
-fn a_semantic_scholar_link_s3_calls_expired_is_asked_for_again() -> Result {
+/// S3's answer for a link whose time ran out, as AWS words it.
+const S3_EXPIRED: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>2026-11-20T13:36:33Z</Expires><ServerTime>2026-11-20T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
+
+/// adds `count` files of the recorded dataset, at most `jobs` requests at once, whose first links
+/// S3 calls expired, as it does once the session that signed them ends: each download asks the
+/// listing again and its fresh link downloads the file. a download that kept its place while it
+/// asked would wait for ever once every place is taken, so the run has a short deadline.
+fn expired_links_are_asked_for_again(count: usize, jobs: &str) -> Result {
     let sandbox = Sandbox::new()?;
-    let names = s2_names(1)?;
+    let names = s2_names(count)?;
     let (old, old_targets) = s2_links(&names, "PLACEHOLDER", 4_102_444_800);
     let (new, new_targets) = s2_links(&names, "PLACEHOLDER-AGAIN", 4_102_444_800);
-    let expired = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>2026-11-20T13:36:33Z</Expires><ServerTime>2026-11-20T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
-    let routes = Routes::start(vec![
+    let mut served = vec![
         (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
         (S2_LINKS_AT.to_owned(), s2_json(&new)),
-        (
-            old_targets[0].clone(),
+    ];
+    for (at, (old, new)) in old_targets.iter().zip(&new_targets).enumerate() {
+        served.push((
+            old.clone(),
             reply(
                 "403 Forbidden",
                 &[("Content-Type", "application/xml")],
-                expired,
+                S3_EXPIRED,
             ),
-        ),
-        (new_targets[0].clone(), file(b"part\n", "\"s3\"")),
-    ])?;
+        ));
+        served.push((
+            new.clone(),
+            file(format!("part {at}\n").as_bytes(), "\"s3\""),
+        ));
+    }
+    let routes = Routes::start(served)?;
     routes.turns(S2_LINKS_AT, vec![s2_json(&old)]);
     let output = command(&sandbox, &routes, &["add", "s2:tldrs"])
         .env("S2_API_KEY", S2_KEY)
+        .env("FETCHLOOM_JOBS", jobs)
+        .deadline(std::time::Duration::from_secs(30))
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    assert_eq!(asked(&routes, S2_LINKS_AT), 2);
-    assert_eq!(asked(&routes, &old_targets[0]), 1);
-    assert_eq!(asked(&routes, &new_targets[0]), 1);
-    assert_eq!(
-        fs::read(sandbox.work().join("data/tldrs").join(&names[0]))?,
-        b"part\n"
-    );
+    // downloads asking at once may each ask the listing again
+    let listed = asked(&routes, S2_LINKS_AT);
+    assert!((2..=count + 1).contains(&listed), "{listed} listings");
+    for target in old_targets.iter().chain(&new_targets) {
+        assert_eq!(asked(&routes, target), 1, "{target}");
+    }
+    for (at, name) in names.iter().enumerate() {
+        assert_eq!(
+            fs::read(sandbox.work().join("data/tldrs").join(name))?,
+            format!("part {at}\n").as_bytes()
+        );
+    }
     Ok(())
+}
+
+#[test]
+fn a_semantic_scholar_link_s3_calls_expired_is_asked_for_again() -> Result {
+    expired_links_are_asked_for_again(1, "1")
+}
+
+#[test]
+fn semantic_scholar_links_expiring_together_are_asked_for_again() -> Result {
+    expired_links_are_asked_for_again(2, "2")
 }

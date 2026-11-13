@@ -194,7 +194,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/failure.rs` | which failures get another try, and how long to wait | `classify`, `Failure` | `Retry`, `retry_after` |
 | `src/net/pace.rs` | how often a host lets fetchloom ask, from its rate-limit headers or a spacing such as NCBI's, longer after it refuses for load, and which waits get a line | `Paces` | `Limit`, `Hold`, `Ticket`, `admit`, `heard`, `answered`, `pause`, `busy`, `told` |
 | `src/net/rate.rs` | the one byte budget every response in a run shares | `Rate` | `read`, `throttle` |
-| `src/net/relink.rs` | links a source gives only for a while: a fresh one by the stable link data.lock keeps, asked again once when it expired | `Net::relinked` |  |
+| `src/net/relink.rs` | links a source gives only for a while: a fresh one by the stable link data.lock keeps, asked again once when it expired, and during a download only while it holds no slot | `Net::relinked`, `Net::refreshed` |  |
 | `src/net/address.rs` | where a request may go: private addresses only for origins a person typed, named as a mirror or listed in `allowed_origins`; DNS; and proxies with the variables that name them | `Reach`, `Proxies` | `Typed`, `Resolver`, `is_private`, `named` |
 | `src/net/address/reach.rs` | whether the proxy carrying a request can be reached, so a dead proxy is named within seconds | `Proxies::carrier` | `Carrier`, `unreachable`, `watch`, `reached` |
 | `src/net/shown.rs` | which query names hold secrets, and links as messages and logs show them, every query value masked unless its name is known to be harmless | `Shown`, `mask_query` | `secret`, `depends_on_path` |

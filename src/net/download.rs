@@ -316,6 +316,16 @@ enum Answer {
     StartOver,
     /// the server sent a page, and the page says where the file is.
     Divert(Url),
+    /// the link the source gave only for a while expired, so the source is asked for a fresh one.
+    Relink(Box<crate::source::Relink>),
+}
+
+/// what an answer asks for in place of being read as the file.
+enum Instead {
+    /// the link a page points to.
+    Divert(Url),
+    /// a fresh link from the source, for one that expired.
+    Relink(Box<crate::source::Relink>),
 }
 
 /// splitting and request ownership across this file's retries.
@@ -600,6 +610,7 @@ impl Net {
         let validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
+        let mut relinks = 0;
         let mut restarted = false;
         // a file stops being split once a server answered a range badly, or bytes from several
         // answers did not match
@@ -671,6 +682,11 @@ impl Net {
                     partial.discard();
                 }
                 Ok(Answer::Divert(next)) => from = self.divert(fetch, next, &mut diversions)?,
+                Ok(Answer::Relink(relink)) => {
+                    // asking the source takes slots of its own, which these may be all of
+                    Self::release_for_wait(&mut state.permits);
+                    from = self.refreshed(&relink, &from, &mut relinks).await?;
+                }
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason, wait }) => {
                     Self::release_for_wait(&mut state.permits);
@@ -791,7 +807,8 @@ impl Net {
         let head = response.headers().clone();
         let response = match self.instead(from, fetch, response).await? {
             Ok(response) => response,
-            Err(next) => return Ok(Answer::Divert(next)),
+            Err(Instead::Divert(next)) => return Ok(Answer::Divert(next)),
+            Err(Instead::Relink(relink)) => return Ok(Answer::Relink(relink)),
         };
         let validators = answered(&head, status, earlier.as_ref());
         if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
@@ -932,13 +949,14 @@ impl Net {
     }
 
     /// the answer itself when it brings the file, else what it means: the URL a page's handler
-    /// finds, an expired link to try again, or a refusal that says whether an S3 key went with it.
+    /// finds, a link the source gives for a while that expired, an expired link to try again, or a
+    /// refusal that says whether an S3 key went with it.
     async fn instead(
         &self,
         from: &Url,
         fetch: &Fetch,
         response: reqwest::Response,
-    ) -> Result<Result<reqwest::Response, Url>, Failure> {
+    ) -> Result<Result<reqwest::Response, Instead>, Failure> {
         let status = response.status();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && let Some(keyed) = response.extensions().get::<crate::source::Keyed>()
@@ -964,7 +982,7 @@ impl Net {
             let url = response.url().clone();
             let page = self.page(from, response).await?;
             return divert(&url, status.as_u16(), &page)
-                .map(Err)
+                .map(|next| Err(Instead::Divert(next)))
                 .map_err(Failure::Final);
         }
         if let Some(expired) = fetch.expired
@@ -974,11 +992,7 @@ impl Net {
             let head = response.headers().clone();
             if self.expired_link(from, response, expired).await? {
                 if let Some(relink) = crate::source::relink(&fetch.url) {
-                    return self
-                        .relinked(&relink, Some(from))
-                        .await
-                        .map(Err)
-                        .map_err(Failure::Final);
+                    return Ok(Err(Instead::Relink(Box::new(relink))));
                 }
                 return Err(failure::transient(format!(
                     "{} supplied an expired download link",
