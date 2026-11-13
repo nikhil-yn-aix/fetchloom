@@ -300,7 +300,8 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
     let typed = format!("{name}/{file}");
     let shown = |near: &str| {
         let meant = format!("{name}/{near}");
-        super::meant(&[&typed], &[&meant], format!("fetchloom path {meant}"))
+        let instead = format!("fetchloom path {}", super::shell_word(&meant));
+        super::meant(&[&typed], &[&meant], instead)
     };
     if let Some(best) = name::closest(file, inside.iter().copied()) {
         return error.help(format!("did you mean `{}`?", shown(best)));
@@ -483,6 +484,27 @@ mod tests {
             complete: true,
         });
         state
+    }
+
+    /// a file's path comes from its source's listing, so the path a guess names reads back as one
+    /// word even where the command line cannot be repeated.
+    #[test]
+    fn a_guessed_path_is_one_word_for_a_shell() {
+        let error = not_in("iris", "notes (id).csv", &["notes $(id).csv"]);
+        let help = error.help.unwrap_or_default();
+        let meant = help
+            .strip_prefix("did you mean `")
+            .and_then(|rest| rest.strip_suffix("`?"))
+            .unwrap_or_default();
+        assert_eq!(
+            crate::suggested::command_words(meant, cfg!(windows)),
+            Some(
+                ["fetchloom", "path", "iris/notes $(id).csv"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            "{help}"
+        );
     }
 
     /// `path` needs its dataset's pins, those of overlapping folders, and what their recipes read.
