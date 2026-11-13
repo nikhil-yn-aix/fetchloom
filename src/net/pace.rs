@@ -22,6 +22,11 @@ const SAME_WINDOW: Duration = Duration::from_millis(1500);
 const QUIET: Duration = Duration::from_secs(10);
 /// a reset this large is a time in seconds since 1970, and a smaller one seconds from now.
 const EPOCH_FROM: u64 = 1_000_000_000;
+/// the longest a host that asks its requests to start apart is slowed to by refusals for load.
+const SLOWEST: Duration = Duration::from_secs(60);
+/// answers in a row that refuse for load after which a host that asks its requests to start
+/// apart is asked nothing more in the run: it is busy, and more tries would only add to that.
+const MOST_REFUSED: u32 = 4;
 /// the longest reset kept. a server may state any number, and a clock cannot add one too large
 /// to it; anything past [`LONGEST`] is refused as too long to wait anyway.
 const FARTHEST: Duration = Duration::from_hours(24);
@@ -205,6 +210,9 @@ struct Pace {
     announced: Option<Instant>,
     /// the earliest the next request may start, at a host that asks its requests to start apart.
     next: Option<Instant>,
+    /// answers in a row that refused for load, each of which doubles the pause before the next
+    /// request to a host that asks its requests to start apart.
+    refused: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -298,6 +306,55 @@ impl Paces {
         })
     }
 
+    /// counts an answer from `host` at `at`, when it asks its requests to start apart: a refusal
+    /// for load, 429 or 503, pauses its next request for longer than the last, by a random `share`
+    /// of the second half of the pause, and any other answer ends the run of refusals.
+    pub(super) fn answered(&self, host: &str, status: StatusCode, at: Instant, share: f64) {
+        let Some(spacing) = crate::source::spacing(host) else {
+            return;
+        };
+        let shared = {
+            let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+            hosts.entry(host.to_owned()).or_default().clone()
+        };
+        let mut pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        if !matches!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+        ) {
+            pace.refused = 0;
+            return;
+        }
+        pace.refused = pace.refused.saturating_add(1);
+        let until = at + paused(spacing, pace.refused, share);
+        pace.next = Some(pace.next.map_or(until, |next| next.max(until)));
+    }
+
+    /// how long the next request to `host` at `now` waits after it refused one for load, so a
+    /// retry waits at least that long and says so.
+    pub(super) fn pause(&self, host: &str, now: Instant) -> Option<Duration> {
+        let shared = self.shared(host)?;
+        let pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let next = pace.next.filter(|_| pace.refused > 0)?;
+        Some(next.saturating_duration_since(now))
+    }
+
+    /// whether `host` refused so many requests in a row for load that the run asks it nothing
+    /// more.
+    pub(super) fn busy(&self, host: &str) -> bool {
+        self.shared(host).is_some_and(|pace| {
+            pace.lock().unwrap_or_else(PoisonError::into_inner).refused >= MOST_REFUSED
+        })
+    }
+
+    fn shared(&self, host: &str) -> Option<Arc<Mutex<Pace>>> {
+        self.hosts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(host)
+            .cloned()
+    }
+
     /// whether a request to `host` at `now` would wait for one of its limits to reset, as
     /// [`Paces::admit`] would say, without counting a request.
     pub(super) fn holds(&self, host: &str, now: Instant) -> bool {
@@ -332,6 +389,18 @@ impl Paces {
             pace.learn(limit, at);
         }
     }
+}
+
+/// the pause before the next request to a host that asks its requests to start `spacing` apart,
+/// after `refused` answers in a row that refused for load: a ceiling twice as long for each, up to
+/// [`SLOWEST`], of which the first half is always waited and a `share` of the second, so clients
+/// refused together do not come back together.
+pub(super) fn paused(spacing: Duration, refused: u32, share: f64) -> Duration {
+    if refused == 0 {
+        return spacing;
+    }
+    let half = spacing.saturating_mul(1 << refused.min(16)).min(SLOWEST) / 2;
+    half + half.mul_f64(share.clamp(0.0, 1.0))
 }
 
 impl Pace {

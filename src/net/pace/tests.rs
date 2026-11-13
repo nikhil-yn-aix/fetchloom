@@ -365,6 +365,74 @@ fn requests_to_arxivs_hosts_start_three_seconds_apart_whichever_they_ask() {
     );
 }
 
+/// each refusal for load doubles the pause's ceiling, of which the first half is always waited.
+#[test]
+fn a_pause_after_refusals_doubles_up_to_a_minute_with_a_random_second_half() {
+    let seconds = Duration::from_secs_f64;
+    for (spacing, refused, share, pause) in [
+        (3.0, 0, 0.7, 3.0),
+        (3.0, 1, 0.0, 3.0),
+        (3.0, 1, 1.0, 6.0),
+        (3.0, 2, 0.5, 9.0),
+        (3.0, 3, 0.0, 12.0),
+        (3.0, 5, 1.0, 60.0),
+        (3.0, 40, 0.0, 30.0),
+        (1.0, 1, 0.5, 1.5),
+        (1.0, 1, 2.0, 2.0),
+    ] {
+        assert_eq!(
+            paused(seconds(spacing), refused, share),
+            seconds(pause),
+            "{spacing} s after {refused} refusals with {share}"
+        );
+    }
+}
+
+/// arXiv asks for three seconds between requests; once it refuses one for load, the next waits
+/// longer, until an answer that is no refusal.
+#[test]
+fn a_paced_host_that_refuses_for_load_is_asked_less_often_until_it_answers() {
+    let paces = Paces::default();
+    let host = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    drop(paces.admit(&host, at(0)).unwrap());
+    paces.answered(&host, StatusCode::SERVICE_UNAVAILABLE, at(1), 1.0);
+    assert_eq!(paces.pause(&host, at(1)), Some(Duration::from_secs(6)));
+    assert_eq!(paces.admit(&host, at(4)).unwrap_err().until, at(7));
+    drop(paces.admit(&host, at(7)).unwrap());
+    paces.answered(&host, StatusCode::TOO_MANY_REQUESTS, at(8), 0.0);
+    assert_eq!(paces.admit(&host, at(10)).unwrap_err().until, at(14));
+    drop(paces.admit(&host, at(14)).unwrap());
+    paces.answered(&host, StatusCode::OK, at(15), 0.0);
+    assert_eq!(paces.pause(&host, at(15)), None);
+    assert_eq!(paces.admit(&host, at(16)).unwrap_err().until, at(17));
+    assert!(!paces.busy(&host));
+}
+
+#[test]
+fn a_paced_host_that_keeps_refusing_is_asked_nothing_more_while_others_are_never_paused() {
+    let paces = Paces::default();
+    let arxiv = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
+    let now = Instant::now();
+    for _ in 0..3 {
+        paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    }
+    assert!(!paces.busy(&arxiv));
+    paces.answered(&arxiv, StatusCode::OK, now, 0.0);
+    for _ in 0..3 {
+        paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    }
+    assert!(!paces.busy(&arxiv), "an answer between them ended the run");
+    paces.answered(&arxiv, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    assert!(paces.busy(&arxiv));
+    for _ in 0..10 {
+        paces.answered("zenodo.org", StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+    }
+    assert!(!paces.busy("zenodo.org"));
+    assert_eq!(paces.pause("zenodo.org", now), None);
+}
+
 /// zenodo's answers once its limit is used up: a 429 whose limit resets a second after its date,
 /// then 429s sent after that reset, which spend no try. the host's clock decides, not this one.
 #[test]

@@ -165,6 +165,13 @@ impl<'a> Retry<'a> {
                 host(self.url)
             )));
         }
+        // a host that refused for load pauses its next request, and the wait says how long
+        let paced = super::paced(self.url);
+        if self.net.paces.busy(&paced) {
+            return Err(busy(self.url));
+        }
+        let now = tokio::time::Instant::now().into_std();
+        let asked = asked.max(self.net.paces.pause(&paced, now));
         let wait = backoff(self.net.first_wait, self.attempt, asked)
             .map_err(|asked| rate_limited(self.url, asked))?;
         self.attempt += 1;
@@ -208,6 +215,19 @@ impl Net {
         self.connect = super::CONNECT.max(timeout);
         self
     }
+}
+
+/// the error for a request to a host that asks its requests to start apart, and that refused so
+/// many in a row for load that the run asks it nothing more.
+pub(super) fn busy(url: &Url) -> Error {
+    Error::new(
+        Kind::NetworkRateLimited,
+        format!(
+            "{} refused one request after another because it is busy, so this run asks it nothing more",
+            host(url)
+        ),
+    )
+    .help("run the same command again later")
 }
 
 /// whether a status says the same request may succeed later.
@@ -1235,6 +1255,61 @@ mod tests {
                 .map(|next| ("example.org".to_owned(), next, tries))
                 .collect();
             assert_eq!(*heard, expected);
+        }
+    }
+
+    /// arXiv answered 503 without a `Retry-After`, so the retry waits the pause the refusal set
+    /// rather than a second, and says so; once it refuses four in a row, no request goes.
+    #[tokio::test(start_paused = true)]
+    async fn a_paced_host_refusing_for_load_is_waited_for_then_asked_nothing_more() {
+        use crate::net::{Notice, Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let url = Url::parse("https://export.arxiv.org/api/query").unwrap();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let kept = heard.clone();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(move |notice| {
+                if let Notice::Retrying { wait, .. } = notice {
+                    kept.lock().unwrap().push(wait);
+                }
+            }),
+        );
+        let name = super::super::paced(&url);
+        let now = tokio::time::Instant::now().into_std();
+        net.paces
+            .answered(&name, StatusCode::SERVICE_UNAVAILABLE, now, 1.0);
+        let mut retry = Retry::new(&net, &url);
+        retry
+            .wait("export.arxiv.org answered 503".to_owned(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(*heard.lock().unwrap(), [Duration::from_secs(6)]);
+        drop(net.pace(&url).await.unwrap());
+        for _ in 0..3 {
+            net.paces
+                .answered(&name, StatusCode::TOO_MANY_REQUESTS, now, 0.0);
+        }
+        let stopped = retry
+            .wait("export.arxiv.org answered 429".to_owned(), None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(heard.lock().unwrap().len(), 1, "no wait before stopping");
+        let refused = net.pace(&url).await.unwrap_err();
+        for error in [stopped, refused] {
+            assert_eq!(error.kind, Kind::NetworkRateLimited);
+            assert_eq!(
+                error.message,
+                "export.arxiv.org refused one request after another because it is busy, so this run asks it nothing more"
+            );
         }
     }
 

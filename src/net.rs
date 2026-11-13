@@ -650,7 +650,10 @@ impl Net {
                 )
                 .await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
-            pace::Paces::heard(ticket, limits, tokio::time::Instant::now().into_std());
+            let at = tokio::time::Instant::now().into_std();
+            self.paces
+                .answered(&paced(&hop), response.status(), at, fastrand::f64());
+            pace::Paces::heard(ticket, limits, at);
             if !renewed
                 && self
                     .keys_expired(signer.as_ref(), &hop, &mut response)
@@ -909,6 +912,9 @@ impl Net {
         let name = paced(url);
         loop {
             self.stop.check()?;
+            if self.paces.busy(&name) {
+                return Err(failure::busy(url));
+            }
             if let Some(holding) = holding.as_mut()
                 && holding.owned
                 && holding.permits.is_none()
