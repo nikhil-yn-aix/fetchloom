@@ -674,9 +674,9 @@ class PublicNames(unittest.TestCase):
 
 
 class ProgramDiscovery(unittest.TestCase):
-    def locate(self, package, binaries, fallback=None):
+    def locate(self, package, binaries, fallback=None, windows=False):
         root = Path.cwd() / "discovery"
-        name = "fetchloom.exe" if fetchloom.sys.platform == "win32" else "fetchloom"
+        name = "fetchloom.exe" if windows else "fetchloom"
         available = {root / folder / name for folder in binaries}
 
         def scripts(key, scheme=None, vars=None):
@@ -684,39 +684,49 @@ class ProgramDiscovery(unittest.TestCase):
             folder = "user" if scheme else "base" if vars else "interpreter"
             return str(root / folder)
 
+        def on_path(on_windows):
+            # PATH holds the fallback under the program names of this platform alone
+            return fallback if on_windows == windows else None
+
         with patch.object(fetchloom, "__file__", str(root / package / "__init__.py")):
             with patch.object(fetchloom.sysconfig, "get_path", side_effect=scripts):
                 with patch.object(Path, "is_file", lambda path: path in available):
-                    with patch.object(fetchloom, "_on_path", return_value=fallback):
-                        return fetchloom._program()
+                    with patch.object(fetchloom, "_on_path", side_effect=on_path):
+                        return fetchloom._program(windows)
 
-    def executable(self, folder):
-        name = "fetchloom.exe" if fetchloom.sys.platform == "win32" else "fetchloom"
-        return str(Path.cwd() / "discovery" / folder / name)
+    def executable(self, folder, windows=False):
+        return str(Path.cwd() / "discovery" / folder / ("fetchloom.exe" if windows else "fetchloom"))
 
-    def test_target_binary_precedes_unrelated_interpreter_and_user_scripts(self):
-        self.assertEqual(
-            self.locate("target/fetchloom", ["target/bin", "interpreter", "user"]),
-            self.executable("target/bin"),
-        )
-
-    def test_prefix_binary_is_found_without_path(self):
-        windows = fetchloom.sys.platform == "win32"
-        package = "prefix/Lib/site-packages/fetchloom" if windows else "prefix/lib/python3.12/site-packages/fetchloom"
-        scripts = "prefix/Scripts" if windows else "prefix/bin"
-        self.assertEqual(self.locate(package, [scripts]), self.executable(scripts))
-
-    def test_prefix_binary_precedes_unrelated_interpreter(self):
-        windows = fetchloom.sys.platform == "win32"
-        package = "prefix/Lib/site-packages/fetchloom" if windows else "prefix/lib64/python3.12/site-packages/fetchloom"
-        scripts = "prefix/Scripts" if windows else "prefix/bin"
-        self.assertEqual(self.locate(package, [scripts, "interpreter"]), self.executable(scripts))
-
-    def test_base_interpreter_scripts_are_considered(self):
-        self.assertEqual(self.locate("source/fetchloom", ["base"]), self.executable("base"))
+    def test_the_program_installed_with_the_package_comes_first(self):
+        # where an installer put the package, the folders holding a program, and the one run
+        for windows, package, binaries, found in [
+            # --target keeps the scripts in bin beside the package
+            (False, "target/fetchloom", ["target/bin", "interpreter", "user"], "target/bin"),
+            # --prefix, a venv and --user keep them in bin beside lib, under the folder each
+            # interpreter names for itself or none
+            (False, "prefix/lib/python3.12/site-packages/fetchloom", ["prefix/bin", "interpreter"], "prefix/bin"),
+            (False, "prefix/lib64/python3.12/site-packages/fetchloom", ["prefix/bin", "interpreter"], "prefix/bin"),
+            (False, "prefix/lib/pypy3.10/site-packages/fetchloom", ["prefix/bin", "interpreter"], "prefix/bin"),
+            (False, "prefix/lib/site-packages/fetchloom", ["prefix/bin", "interpreter"], "prefix/bin"),
+            (False, "usr/lib/python3/dist-packages/fetchloom", ["usr/bin", "interpreter"], "usr/bin"),
+            # windows keeps them in Scripts beside Lib, and beside site-packages for --user
+            (True, "prefix/Lib/site-packages/fetchloom", ["prefix/Scripts", "interpreter"], "prefix/Scripts"),
+            (True, "Python/Python312/site-packages/fetchloom", ["Python/Python312/Scripts", "interpreter"],
+             "Python/Python312/Scripts"),
+            # a site-packages outside lib names no bin, so none is guessed above it
+            (False, "vendor/site-packages/fetchloom", ["bin", "interpreter"], "interpreter"),
+            # then the interpreter's own scripts, its base interpreter's and the user's
+            (False, "source/fetchloom", ["interpreter", "base", "user"], "interpreter"),
+            (False, "source/fetchloom", ["base", "user"], "base"),
+            (True, "source/fetchloom", ["user"], "user"),
+        ]:
+            with self.subTest(package=package, binaries=binaries):
+                self.assertEqual(self.locate(package, binaries, windows=windows), self.executable(found, windows))
 
     def test_path_fallback_remains_available(self):
-        self.assertEqual(self.locate("source/fetchloom", [], "from-path"), "from-path")
+        for windows in [False, True]:
+            with self.subTest(windows=windows):
+                self.assertEqual(self.locate("source/fetchloom", [], "from-path", windows), "from-path")
 
     def test_missing_program_points_at_the_install_steps(self):
         with self.assertRaises(FileNotFoundError) as raised:

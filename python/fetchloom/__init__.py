@@ -443,8 +443,7 @@ def _example(code: str, switches: dict[str, str], values: dict[str, str]) -> str
     return ", ".join(spoken) if spoken else code
 
 
-def _program() -> str:
-    windows = sys.platform == "win32"
+def _program(windows: bool = sys.platform == "win32") -> str:
     name = "fetchloom.exe" if windows else "fetchloom"
     package = Path(__file__).resolve().parent
     # --target keeps scripts beside the package; --prefix puts them above site-packages.
@@ -457,7 +456,8 @@ def _program() -> str:
                 prefix = prefix.parent
             folders.append(prefix / "Scripts")
         else:
-            if prefix.name.startswith("python"):
+            # under lib sits a folder each interpreter names for itself, as python3.12 or pypy3.10
+            if prefix.parent.name in {"lib", "lib64"}:
                 prefix = prefix.parent
             if prefix.name in {"lib", "lib64"}:
                 folders.append(prefix.parent / "bin")
