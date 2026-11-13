@@ -2076,7 +2076,7 @@ fn a_sync_that_cannot_save_what_it_placed_names_the_file() -> Result {
     if fs::write(own.join("probe"), b"").is_ok() {
         fs::remove_file(own.join("probe"))?;
         fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let output = sandbox.run(&["sync"]);
     fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
@@ -2115,7 +2115,7 @@ fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
     if fs::write(own.join("probe"), b"").is_ok() {
         fs::remove_file(own.join("probe"))?;
         fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let output = sandbox.run(&["sync"]);
     let blocked = sandbox.run(&["--json", "sync"]);
@@ -2599,7 +2599,7 @@ pub(crate) fn writable(root: &std::path::Path, yes: bool) -> Result {
 #[test]
 fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

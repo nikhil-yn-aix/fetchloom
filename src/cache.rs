@@ -1062,7 +1062,7 @@ pub(crate) mod tests {
     fn a_failed_record_directory_flush_is_retried_on_registration() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         let (dir, cache) = cache();
         let folder = cache.root.join("projects");
@@ -1087,7 +1087,7 @@ pub(crate) mod tests {
     fn a_repair_is_not_marked_complete_before_directory_flush() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         let (_dir, cache) = cache();
         let digest = store(&cache, b"good").digest;
@@ -1649,7 +1649,7 @@ pub(crate) mod tests {
         drop(held);
         // root on unix can replace the changed object despite its folder's permissions
         if fs::read(&object).unwrap() == b"good" {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         assert!(published.is_err());
         assert_eq!(cache.find(&digest, Some(4)), None);

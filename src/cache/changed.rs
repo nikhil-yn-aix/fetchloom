@@ -638,7 +638,7 @@ mod tests {
     fn unreadable_marks_never_make_an_object_trusted() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         for mode in [Some(0o111), Some(0o000), None] {
             let (_dir, cache) = cache();

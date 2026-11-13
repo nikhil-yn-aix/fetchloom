@@ -1575,7 +1575,7 @@ mod tests {
             let checked = project.check_writable();
             fs::set_permissions(&project.root, fs::Permissions::from_mode(0o755)).unwrap();
             if writable {
-                return;
+                return crate::test_skips::skip("unprivileged", "root ignores file permissions");
             }
             let shown = format!("{} is read-only", project.root.display());
             for error in [written.unwrap_err(), checked.unwrap_err()] {

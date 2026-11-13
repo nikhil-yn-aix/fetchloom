@@ -1773,7 +1773,7 @@ mod tests {
     fn a_rollback_that_cannot_finish_names_a_private_copy_without_its_text() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         let dir = tempfile::tempdir().unwrap();
         let project = Project {

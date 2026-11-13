@@ -399,7 +399,7 @@ fn verify_keeps_damage_findings_in_json() -> Result {
 fn a_default_cache_folder_that_cannot_be_made_says_how_to_move_it() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
@@ -429,7 +429,7 @@ fn a_default_cache_folder_that_cannot_be_made_says_how_to_move_it() -> Result {
 fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     for broken in [
         "registration",
@@ -474,7 +474,7 @@ fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
 fn sync_warns_when_gc_registration_fails() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
@@ -683,7 +683,7 @@ fn gc_forgets_a_project_only_when_its_manifest_is_missing() -> Result {
 fn gc_reports_failed_registration_removal_with_partial_counts() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     for json in [true, false] {
         let sandbox = Sandbox::new()?;
@@ -872,7 +872,7 @@ fn an_unreadable_change_mark_stops_sync_before_placing() -> Result {
 fn unreadable_change_marks_stop_a_settled_sync() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/good.bin", vec![file(b"good", "\"v1\"")])?;
@@ -916,7 +916,7 @@ fn small_downloads_keep_their_bytes_and_sealing() -> Result {
 fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
@@ -962,7 +962,7 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
 fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     fs::write(sandbox.work().join("data.toml"), "")?;

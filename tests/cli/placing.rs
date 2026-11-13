@@ -1758,6 +1758,7 @@ fn hold(path: &Path) -> Result<Option<Unwritable>> {
     let probe = folder.join("probe");
     if fs::write(&probe, b"").is_ok() {
         let _ = fs::remove_file(probe);
+        skipped("unprivileged", "root ignores file permissions")?;
         return Ok(None);
     }
     Ok(Some(held))
@@ -2278,7 +2279,7 @@ fn status_lists_what_sync_removes_as_unneeded_rather_than_blocking() -> Result {
 fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
@@ -2317,7 +2318,7 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
 fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {
-        return Ok(());
+        return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
     let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;

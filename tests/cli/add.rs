@@ -521,7 +521,7 @@ fn an_add_into_a_read_only_project_folder_names_it_and_leaves_no_copies() -> Res
     if fs::write(work.join("probe"), b"").is_ok() {
         fs::remove_file(work.join("probe"))?;
         fs::set_permissions(&work, fs::Permissions::from_mode(0o755))?;
-        return Ok(());
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
     }
     let output = sandbox.run(&["add", &other.url]);
     fs::set_permissions(&work, fs::Permissions::from_mode(0o755))?;

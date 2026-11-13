@@ -904,7 +904,7 @@ mod tests {
     fn verification_reports_directory_and_metadata_permission_errors() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
-            return;
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         for (root, mode) in [(true, 0), (false, 0), (false, 0o400)] {
             let (_dir, cache) = cache();
@@ -1526,7 +1526,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             if rustix::process::geteuid().is_root() {
-                return;
+                return crate::test_skips::skip("unprivileged", "root ignores file permissions");
             }
             fs::set_permissions(&object, fs::Permissions::from_mode(0o000)).unwrap();
         }
