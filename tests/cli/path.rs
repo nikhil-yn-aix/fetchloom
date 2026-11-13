@@ -1,5 +1,5 @@
-//! `path` against servers on this machine: the answer for a dataset or a file in it, and the sync
-//! it runs first when the files are not in place.
+//! `path`: the answer for a dataset or a file in it, and the sync it runs first when the files are
+//! not in place.
 
 use std::fs;
 
@@ -94,8 +94,8 @@ fn path_syncs_first_when_the_files_are_not_there() -> Result {
     Ok(())
 }
 
-/// `path --locked` never writes data.lock: a dataset added to data.toml by hand fails as
-/// `sync --locked` does, before any request, while a dataset already in place still answers.
+/// a dataset added to data.toml by hand fails as it would under `sync --locked`, before any
+/// request, while one already in place still answers.
 #[test]
 fn a_locked_path_fails_instead_of_pinning_a_dataset() -> Result {
     let sandbox = Sandbox::new()?;
@@ -194,9 +194,7 @@ fn ready_paths_read_and_plan_once() -> Result {
     Ok(())
 }
 
-/// `path -v` tells where the bytes really are, in one plain line: a placed file is a link to its
-/// file in the cache folder, or a copy of it, and `fetchloom cache` shows that folder. without
-/// `-v` the answer stays alone.
+/// `-v` adds one plain line, for a dataset or a file in it; without it the answer stays alone.
 #[test]
 fn verbose_path_says_where_the_bytes_are() -> Result {
     let sandbox = Sandbox::new()?;
@@ -218,8 +216,7 @@ fn verbose_path_says_where_the_bytes_are() -> Result {
     Ok(())
 }
 
-/// an empty target and a path on this machine are refused as typed, with how a target names a
-/// dataset and a file or folder in it, while a file in a dataset still answers.
+/// the help shows how a target names a dataset and a file or folder in it.
 #[test]
 fn a_target_that_names_no_dataset_is_refused_as_typed() -> Result {
     let sandbox = Sandbox::new()?;

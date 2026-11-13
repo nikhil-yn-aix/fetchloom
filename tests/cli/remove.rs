@@ -1,13 +1,11 @@
-//! `remove` against servers on this machine: what it drops and keeps, and that it downloads
-//! nothing.
+//! `remove`: what it drops and keeps, and that it downloads nothing.
 
 use std::fs;
 
 use crate::project::{IRIS, PATH, added, clone};
 use crate::support::{Result, Sandbox, Server, file, json, text};
 
-/// `remove` given no name lists the datasets it could remove and names one as an example,
-/// which `--json` gives as no fix, since only a person knows which one to remove.
+/// the example names one dataset, but `--json` gives no fix, since only a person knows which.
 #[test]
 fn remove_without_a_name_lists_the_datasets() -> Result {
     let sandbox = Sandbox::new()?;
@@ -56,9 +54,8 @@ fn remove_drops_the_dataset_and_only_its_files() -> Result {
     Ok(())
 }
 
-/// a dataset's folder can hold more than fetchloom placed: work of yours, and the changed copies
-/// sync kept beside files it put back. remove leaves them and the folder, and says so, as its dry
-/// run does first.
+/// such files are work of yours and changed copies sync kept beside files it put back; remove
+/// leaves them and the folder, and its dry run says so too.
 #[test]
 fn remove_names_the_files_it_leaves_in_the_dataset_folder() -> Result {
     let sandbox = Sandbox::new()?;
