@@ -334,7 +334,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     )?;
     let options = scope
         .lines()
-        .find(|line| line.starts_with("every command takes"))
+        .find(|line| line.starts_with("Every command takes"))
         .ok_or("commands/global-options.md names no options")?;
     let sandbox = Sandbox::new()?;
     for (commands, intro) in [
@@ -347,7 +347,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 &["search"],
                 &["cache", "gc"],
             ][..],
-            "every command takes ",
+            "Every command takes ",
         ),
         (
             &[

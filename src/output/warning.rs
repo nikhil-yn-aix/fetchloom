@@ -252,7 +252,7 @@ mod tests {
         let docs = include_str!("../../docs/user/reference/json-output.md");
         let mut documented: Vec<&str> = docs
             .lines()
-            .skip_while(|line| *line != "## warning kinds")
+            .skip_while(|line| *line != "## Warning kinds")
             .skip_while(|line| !line.starts_with("| `"))
             .take_while(|line| line.starts_with('|'))
             .filter_map(|row| row.split('`').nth(1))

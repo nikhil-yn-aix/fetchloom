@@ -353,7 +353,7 @@ fn every_command_result_is_in_the_json_reference() -> Result {
     let page = fs::read_to_string(repository().join("docs/user/reference/json-output.md"))?;
     let listed: BTreeSet<&str> = page
         .lines()
-        .skip_while(|line| *line != "## command results")
+        .skip_while(|line| *line != "## Command results")
         .skip_while(|line| !line.starts_with('|'))
         .take_while(|line| line.starts_with('|'))
         .filter_map(|row| row.split('|').nth(1))

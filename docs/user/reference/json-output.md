@@ -36,7 +36,7 @@ error details give each SHA-256 whole with `--json`. a person reads two hashes c
 
 bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0","commit":"…"}`: `commit` is the git commit the build came from, 40 hex digits, or null for a build outside git. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
 
-## command results
+## Command results
 
 | command | result fields |
 |---|---|
@@ -126,7 +126,7 @@ a failed build keeps the steps that finished before it in `result.steps`, and a 
 
 the JSON `fix` of a build's error is always null, since building runs the project's code.
 
-## warning kinds
+## Warning kinds
 
 a warning's `kind` says what it is about, so a script can act on one without reading its `message`, whose words may change. `details` lists the paths or names it is about, often none, and `help` says what to do, or is null. a person reads the same warning on stderr, as `warning:` with its help on the line below.
 

@@ -124,14 +124,16 @@ class GateDocumentation(unittest.TestCase):
         ]
         cases = [
             (".github/pull_request_template.md", "", None),
-            ("docs/dev/engineering/README.md", "run the full gate:", "## commands"),
-            ("docs/dev/engineering/other-platforms.md", "## WSL gate", "## xfs loop mount"),
+            ("docs/dev/engineering/README.md", "run the full gate:", "## Commands"),
+            ("docs/dev/engineering/other-platforms.md", "## WSL gate", "## XFS loop mount"),
         ]
         for path, start, end in cases:
             text = (ROOT / path).read_text(encoding="utf-8")
             if start:
                 text = text.split(start, 1)[1]
             if end:
+                # a renamed heading would widen the span, so the bound heading must be there
+                self.assertTrue(end in text, f"{path} lacks {end}")
                 text = text.split(end, 1)[0]
             for command in required:
                 with self.subTest(path=path, command=command):

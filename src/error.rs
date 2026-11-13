@@ -435,12 +435,12 @@ mod tests {
             .map(|kind| (Some(kind.exit_code()), kind.name().to_owned()))
             .collect();
         coded.sort();
-        let mut by_code = documented("| exit |");
+        let mut by_code = documented("| Exit |");
         by_code.sort();
         assert_eq!(by_code, coded);
         let mut named: Vec<String> = kinds.iter().map(|kind| kind.name().to_owned()).collect();
         named.sort();
-        let mut steps: Vec<String> = documented("| kind |")
+        let mut steps: Vec<String> = documented("| Kind |")
             .into_iter()
             .map(|(_, name)| name)
             .collect();

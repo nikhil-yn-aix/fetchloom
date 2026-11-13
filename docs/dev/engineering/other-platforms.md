@@ -35,7 +35,7 @@ python3 -m unittest discover -s bench
 
 keep build output on the linux filesystem. the separate worktree lets windows and linux checks avoid rewriting the same build files. once finished, leave the worktree and remove it with `git -C ~/fetchloom worktree remove ~/fetchloom-gate`.
 
-## xfs loop mount
+## XFS loop mount
 
 ext4 does not exercise reflinks. on linux with `xfsprogs` installed, a local image gives the placement tests an xfs destination. the mount commands need root; run cargo as your normal user. the example puts test files outside the checkout; confirm that your home folder is not itself a git repository or fetchloom project.
 

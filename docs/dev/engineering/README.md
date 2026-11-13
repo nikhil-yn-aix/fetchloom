@@ -29,7 +29,7 @@ typos
 
 CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a local run leaves out the rest of CI: the installed artifact journeys, windows, macos, the filesystem lanes, cargo-deny, zizmor and cargo-machete. [windows clippy](other-platforms.md#windows-clippy-from-linux) catches most windows-only compile errors before CI does.
 
-## commands
+## Commands
 
 | command | when to use it |
 |---|---|
