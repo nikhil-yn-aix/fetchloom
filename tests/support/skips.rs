@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
 /// whether `FETCHLOOM_TEST_REQUIRE`, read once, names `capability`. ci lists what its runners
-/// have, as `script,git,hardlinks`, so a test that lacks one there fails instead of passing
-/// without having run.
+/// have, as `script,git,hardlinks`, so a missing one fails rather than skips there.
 fn required(capability: &str) -> bool {
     static REQUIRED: OnceLock<Vec<String>> = OnceLock::new();
     REQUIRED
