@@ -209,6 +209,8 @@ fn every_generated_lock_reads_back_alike_through_both_readers() {
     }
 }
 
+/// the readers agree on each change to a generated lock, and a change they take, of spacing, line
+/// ends or a comment, reads as the same lock, which the round trip test above reads back.
 #[test]
 fn lock_reader_mutations_agree() {
     for bytes in inputs() {
@@ -239,8 +241,8 @@ fn lock_reader_mutations_agree() {
                     assert_eq!(generic.as_ref().ok(), Some(&fast), "{changed}");
                 }
             }
-            if let Ok(lock) = normal.and_then(|parsed| resolve(parsed, Some(root.path()))) {
-                compare(&lock);
+            if let Ok(resolved) = normal.and_then(|parsed| resolve(parsed, Some(root.path()))) {
+                assert_eq!(resolved, lock, "{changed}");
             }
         }
     }
