@@ -1,6 +1,5 @@
-//! the volume under a folder fetchloom writes to: the cache, a project's data folder or the folder
-//! `get` fills. FAT32 and exFAT cannot hardlink, and on windows they refuse to remove a read-only
-//! file, which every object and, by default, every placed file is.
+//! the volume under a folder fetchloom writes to, such as the cache or a data folder. FAT32 and
+//! exFAT cannot hardlink, and on windows refuse to remove a read-only file, as every object is.
 
 use std::collections::HashSet;
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
@@ -123,18 +122,14 @@ impl Volume {
         (self.rename)(from, to)
     }
 
-    /// renames `from` to `to` without replacing anything already at `to`, which is refused with
-    /// `AlreadyExists`.
+    /// renames `from` to `to`, refusing a taken name with `AlreadyExists`.
     pub(crate) fn rename_new(&self, from: &Path, to: &Path) -> io::Result<()> {
         (self.rename_new)(from, to)
     }
 
-    /// renames a verified replacement over an old file without leaving its name empty. windows
-    /// may require clearing the old file's read-only flag; restoring it through the same handle
-    /// also restores any placed hardlinks, without changing the new file at the name. a volume
-    /// that cannot rename over the old file, as FAT and exFAT on windows may not, moves it aside
-    /// into the scratch folder first and puts it back when the new file cannot take its name, so
-    /// its bytes stay until the replacement is in place.
+    /// renames a verified replacement over an old file without leaving its name empty, clearing a
+    /// read-only flag windows refuses it for and restoring it through the same handle, for placed
+    /// hardlinks. where that fails, as on fat, the old file waits aside until the new has its name.
     pub(crate) fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
         // FAT and exFAT on windows answer a rename over a read-only file with "already exists"
         let refused = match self.rename(from, to) {
@@ -202,11 +197,9 @@ impl Volume {
         }
     }
 
-    /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
-    /// a read-only file on a volume that cannot hardlink, as they cannot, has no other name, so
-    /// it is made writable for a second try. on a volume that can hardlink the refusal stands:
-    /// read-only belongs to the file rather than one name, and clearing it could make a
-    /// project's placed hardlink of an object writable.
+    /// removes the file at `path`. a read-only file refused on a volume that cannot hardlink, as
+    /// fat on windows, has no other name, so it is made writable for a second try; elsewhere the
+    /// refusal stands, as the flag is shared with every hardlink of an object.
     pub(crate) fn remove(&self, path: &Path) -> io::Result<()> {
         if self.pretended.is_some() {
             return self.pretend_removal(path);
@@ -229,10 +222,9 @@ impl Volume {
         (self.remove_file)(path)
     }
 
-    /// clears the read-only flag of the plain file at `path` and removes it, putting the flag
-    /// back when that fails too. none when the file is not a read-only plain file or may have
-    /// another name. the flag changes through a handle that never follows a link, so a link
-    /// swapped in for the file cannot pass the change to a file outside the cache.
+    /// clears the read-only flag of the plain file at `path`, through a handle that never follows a
+    /// link, and removes it, putting the flag back when that fails too. none when the file is not
+    /// a read-only plain file or may have another name.
     fn remove_read_only(&self, path: &Path) -> Option<io::Result<()>> {
         let file = open_attributes(path).ok()?;
         let before = file.metadata().ok().filter(is_plain)?.permissions();
@@ -272,10 +264,9 @@ impl Volume {
     }
 }
 
-/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link at all.
-/// FAT32 and exFAT refuse hardlinks with code 1: `ERROR_INVALID_FUNCTION` on windows, `EPERM` on
-/// linux. `EPERM` can also refuse one file alone, such as another user's under linux's
-/// `protected_hardlinks`, which only a probe on a file of fetchloom's own tells apart.
+/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link: FAT32
+/// and exFAT answer code 1, `ERROR_INVALID_FUNCTION` or `EPERM`, though `EPERM` may refuse one file
+/// alone under linux's `protected_hardlinks`, which only a probe of fetchloom's own tells apart.
 pub(crate) fn refuses_links(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
 }
@@ -337,9 +328,8 @@ pub(crate) fn create_hidden(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-/// makes the plain file at `path` read-only for everyone, or writable by its owner again,
-/// through a handle that never follows a link, so a link swapped in for the file cannot pass the
-/// change to another file.
+/// makes the plain file at `path` read-only for everyone, or writable by its owner again, through
+/// a handle that never follows a link swapped in for it.
 pub(crate) fn set_read_only(path: &Path, read_only: bool) -> io::Result<()> {
     let file = open_attributes(path)?;
     let metadata = file.metadata()?;
@@ -449,10 +439,9 @@ impl Volume {
         }
     }
 
-    /// this volume, losing every rename to another writer: just before the rename, that writer
-    /// publishes the same bytes at the destination, read-only and dated [`other_writers_time`].
-    /// a rename that replaces then takes the name from it, as a rename on linux and macos does,
-    /// and one that never replaces is refused.
+    /// this volume, losing every rename to another writer, which publishes the same bytes at the
+    /// destination just before, read-only and dated [`other_writers_time`]: a rename that replaces
+    /// takes the name from it, as on linux and macos, and one that never replaces is refused.
     pub(crate) fn losing_renames(self) -> Volume {
         Volume {
             rename: |from, to| {
@@ -467,9 +456,8 @@ impl Volume {
         }
     }
 
-    /// this volume, without a rename that refuses a name already taken: asked for one, it
-    /// answers as its link refuses, as a disk without either does once linux falls back to a
-    /// link.
+    /// this volume without a rename that refuses a taken name: asked for one, it answers as its
+    /// link refuses, as a disk without either does once linux falls back to a link.
     pub(crate) fn replacing_only(self) -> Volume {
         Volume {
             rename_new: |_, _| Err(io::Error::from_raw_os_error(1)),
@@ -568,9 +556,8 @@ mod tests {
         assert_eq!(probes_left(dir.path()), 0);
     }
 
-    /// FAT and exFAT on windows may rename over no file at all, so a replacement moves the old
-    /// file aside first. the old bytes stay at their name until the new file takes it: when the
-    /// new file cannot, the old one goes back, read-only as it was.
+    /// fat on windows may rename over no file at all, so the old file moves aside first and, when
+    /// the new one cannot take its name, goes back, read-only as it was.
     #[test]
     fn a_replacement_on_fat_keeps_the_old_file_until_the_new_one_has_its_name() {
         let renaming_over_nothing: fn(&Path, &Path) -> io::Result<()> = |from, to| {
