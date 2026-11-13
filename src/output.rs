@@ -1930,8 +1930,6 @@ fn plain(text: &str) -> Cow<'_, str> {
     Cow::Owned(shown)
 }
 
-/// `json` as it goes to a terminal, with c1 and bidi controls, which a terminal may act on or show
-/// out of order, written as `\u` escapes, which json holds only in strings and reads back alike.
 /// a JSON document in pieces of at most 1 MiB: one growing buffer copies itself at each doubling,
 /// and the musl build's allocator keeps freed memory for a second, so the copies add to the peak.
 #[derive(Default)]
@@ -2002,6 +2000,8 @@ impl Write for Pieces {
     }
 }
 
+/// `json` as it goes to a terminal, with c1 and bidi controls, which a terminal may act on or show
+/// out of order, written as `\u` escapes, which json holds only in strings and reads back alike.
 fn escaped_for_terminal(json: Vec<u8>) -> Vec<u8> {
     let steers = |c: char| matches!(c, '\u{80}'..='\u{9f}') || crate::name::is_bidi_control(c);
     let text = match String::from_utf8(json) {
