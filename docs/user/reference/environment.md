@@ -8,7 +8,7 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the [resources level](../resources.md), the cache, job, retry, timeout, approval, memory, file-count and archive settings, the allowed origins, the S3 buckets your keys may sign for, the cloud storage buckets your google credentials may go to, the mirrors and the folder `push` writes to, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the [resources level](../resources.md), the cache, job, retry, timeout, approval, memory, file-count and archive settings, the allowed origins, the S3 buckets your keys may sign for, the cloud storage buckets, drive folders and azure containers your credentials may go to, the mirrors, mirror-only mode, the folder `push` writes to and the build floor, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 a variable one typo from one of these, such as `FETCHLOM_CACHE`, changes nothing, so every command but `help` and `completions` warns about it, naming the variable it is near and never its value. other unknown names are left alone.
 
