@@ -46,7 +46,8 @@ pub(super) struct Limit {
 }
 
 /// the limits an answer states. a 429 also says that a limit is used up, for at least as long as
-/// its `Retry-After` asks. `now` stands in for the host's clock when the answer has no `Date`.
+/// its `Retry-After` asks, and so does a 503 that asks for one, so every request to its host waits
+/// that long. `now` stands in for the host's clock when the answer has no `Date`.
 pub(super) fn limits(status: StatusCode, headers: &HeaderMap, now: SystemTime) -> Vec<Limit> {
     let clock = headers
         .get(header::DATE)
@@ -56,8 +57,12 @@ pub(super) fn limits(status: StatusCode, headers: &HeaderMap, now: SystemTime) -
         .into_iter()
         .chain(structured(headers))
         .collect();
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        let asked = retry_after(headers);
+    let refused = matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+    );
+    let asked = refused.then(|| retry_after(headers)).flatten();
+    if status == StatusCode::TOO_MANY_REQUESTS || asked.is_some() {
         let named = limits.iter().any(|limit| limit.remaining == 0);
         for limit in &mut limits {
             if !named || limit.remaining == 0 {

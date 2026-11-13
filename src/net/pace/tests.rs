@@ -258,6 +258,47 @@ fn a_429_is_used_up_for_as_long_as_it_asks() {
     );
 }
 
+/// a 503's `Retry-After` holds every request to its host until then, as a 429's does, not only the
+/// one it answered: a host that asks its requests to start apart waits for it past its own pause.
+#[test]
+fn a_503s_retry_after_holds_every_request_to_its_host() {
+    let now = SystemTime::now();
+    let asked = headers(&[("retry-after", "30")]);
+    assert_eq!(
+        used_up(&limits(StatusCode::SERVICE_UNAVAILABLE, &asked, now)),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(
+        used_up(&limits(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &HeaderMap::new(),
+            now
+        )),
+        None,
+        "a 503 that says nothing of when holds nothing"
+    );
+    let paces = Paces::default();
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    let arxiv = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
+    for host in ["zenodo.org", arxiv.as_str()] {
+        let ticket = paces.admit(host, at(0)).unwrap();
+        let refused = answered(StatusCode::SERVICE_UNAVAILABLE, ticket.sent, at(0), 0.0);
+        paces.answered(host, &refused);
+        Paces::heard(
+            ticket,
+            limits(StatusCode::SERVICE_UNAVAILABLE, &asked, now),
+            at(0),
+        );
+        assert_eq!(
+            paces.admit(host, at(4)).unwrap_err().until,
+            at(30),
+            "{host}"
+        );
+        assert!(paces.admit(host, at(30)).is_ok(), "{host}");
+    }
+}
+
 fn limit(remaining: u64, reset: u64, stamp: Option<u64>) -> Limit {
     Limit {
         name: String::new(),
