@@ -276,13 +276,19 @@ async fn find(
 }
 
 /// one candidate for a script reading stdout: its reference first, then its title and, when
-/// known, its size, separated by tabs so the first column stays the reference.
+/// known, its size, separated by tabs so the first column stays the reference. a control in the
+/// title reads as a space, and a bidi control as its escape, as the story writes one.
 fn line(candidate: &Candidate) -> String {
-    let shown: String = candidate
-        .title
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
+    let mut shown = String::with_capacity(candidate.title.len());
+    for c in candidate.title.chars() {
+        if c.is_control() {
+            shown.push(' ');
+        } else if crate::name::is_bidi_control(c) {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
     let title = units::clip(&shown, usize::MAX, "");
     let mut line = format!("{}\t{title}", candidate.reference);
     if let Some(size) = candidate.size {
@@ -506,6 +512,15 @@ mod tests {
         assert_eq!(
             line(&candidate),
             "kaggle:uciml/iris\tIris Species x\t3.6 KiB"
+        );
+        // a site's title cannot turn the line around on a terminal
+        let reversed = Candidate {
+            title: "Iris \u{202e}vsc.sirI".to_owned(),
+            ..candidate
+        };
+        assert_eq!(
+            line(&reversed),
+            "kaggle:uciml/iris\tIris \\u{202e}vsc.sirI\t3.6 KiB"
         );
     }
 
