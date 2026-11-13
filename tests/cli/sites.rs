@@ -745,3 +745,34 @@ fn a_web_page_is_pinned_only_when_asked_for() -> Result {
     }
     Ok(())
 }
+
+/// a public server's basic login, saved as `.netrc` keeps it, opens its file as curl's would.
+#[test]
+#[ignore = "live: talks to httpbin.org"]
+fn live_a_saved_login_opens_a_public_basic_auth_endpoint() -> Result {
+    let sandbox = Sandbox::new()?;
+    let link = "https://httpbin.org/basic-auth/ada/pw-live";
+    let refused = sandbox.run(&["--json", "get", link, "-o", "answer.json"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(40),
+        "{}",
+        text(&refused.stderr)?
+    );
+    let help = json(&refused)?["errors"][0]["help"].clone();
+    assert!(
+        help.as_str()
+            .is_some_and(|help| help.contains("`fetchloom auth login httpbin.org`")),
+        "{help}"
+    );
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", "httpbin.org", "--with-token"]),
+        "ada:pw-live\n",
+    )?;
+    assert!(login.status.success(), "{}", text(&login.stderr)?);
+    let output = sandbox.run(&["get", link, "-o", "answer.json"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let answer = std::fs::read_to_string(sandbox.work().join("answer.json"))?;
+    assert!(answer.contains("\"authenticated\": true"), "{answer}");
+    Ok(())
+}
