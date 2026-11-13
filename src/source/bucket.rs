@@ -268,6 +268,12 @@ struct Object {
 }
 
 impl Prefix {
+    /// whether it names a folder, its key ending in `/`, or a whole bucket or container, rather
+    /// than one object.
+    pub(crate) fn names_a_folder(&self) -> bool {
+        self.key.is_empty() || self.key.ends_with('/')
+    }
+
     /// reads the part after `s3:` or `gs:`, such as `//openneuro.org/ds000001/`, or for a
     /// bucket at another service, `https://minio.lab.example:9000/scans/raw/`, or after
     /// `azure:`, an account, a container and a prefix, such as `azureopendatastorage/mnist/`.

@@ -313,15 +313,17 @@ impl Listing {
 
     /// whether a generated name may come from the one file the listing holds. a paper is known by
     /// its title, and its file only by an id, as `1706.03762v7.pdf`; an arXiv month and a
-    /// semantic scholar dataset by their reference, and their files by ids and times.
+    /// semantic scholar dataset by their reference, and their files by ids and times; a bucket's
+    /// folder by its path, since folders often hold objects of one name, as `part_0000.gz`.
     pub(crate) fn names_its_file(&self) -> bool {
-        !matches!(
-            self.resolved,
+        match &self.resolved {
             Reference::Arxiv(_)
-                | Reference::ArxivMonth(_)
-                | Reference::S2Paper(_)
-                | Reference::S2Dataset(_)
-        )
+            | Reference::ArxivMonth(_)
+            | Reference::S2Paper(_)
+            | Reference::S2Dataset(_) => false,
+            Reference::Bucket(prefix) => !prefix.names_a_folder(),
+            _ => true,
+        }
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -1781,6 +1783,31 @@ mod tests {
         assert_eq!(
             titled("zenodo:3608990").naming_title(),
             Some("Multi-Genre Natural Language Inference")
+        );
+    }
+
+    /// a bucket's folder is named by its path even when it holds one object, so folders whose
+    /// objects share a name, as openalex's date folders' `part_0000.gz`, stay apart; a reference
+    /// to one object is named after it.
+    #[test]
+    fn a_bucket_folder_is_named_by_its_path_not_its_one_object() {
+        let holding_one = |text: &str| {
+            let mut listing = single(&Url::parse("https://example.org/part_0000.gz").unwrap());
+            listing.resolved = parse(text).reference;
+            listing
+        };
+        for folder in [
+            "s3://openalex/data/jsonl/works/updated_date=2016-06-24/",
+            "gs://lab-data/",
+            "s3:https://minio.lab.example:9000/scans/2026/",
+        ] {
+            assert!(!holding_one(folder).names_its_file(), "{folder}");
+        }
+        assert!(holding_one("s3://openalex/data/jsonl/works/part_0000.gz").names_its_file());
+        assert_eq!(
+            crate::name::reference_name("s3://openalex/data/jsonl/works/updated_date=2016-06-24/")
+                .as_deref(),
+            Some("updated_date-2016-06-24")
         );
     }
 

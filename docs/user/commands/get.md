@@ -42,7 +42,7 @@ without `-o`:
 3. unpack archives unless `--no-extract` says not to, then place the files in the output folder.
 4. print the absolute output folder on stdout. no project file is written.
 
-a single file goes in a folder named after its file name without its file type, such as `.csv` or `.gz`, so an id with dots, as `1706.03762v7`, stays whole, and several files in one named after their title or reference. a direct download's `Content-Disposition` file name, also one received after redirects, replaces the name guessed from the link.
+a single file goes in a folder named after its file name without its file type, such as `.csv` or `.gz`, so an id with dots, as `1706.03762v7`, stays whole, and several files, or a bucket's folder whose reference ends in `/` even when it holds one, in one named after their title or reference. a direct download's `Content-Disposition` file name, also one received after redirects, replaces the name guessed from the link.
 
 stderr from a snapshot of a single-file download on a filesystem that supports links, where `[time]` stands for the duration:
 
