@@ -1,8 +1,6 @@
-//! how often a host lets fetchloom ask, from the rate limit headers it sends: zenodo's
-//! `X-RateLimit-Remaining` and `X-RateLimit-Reset`, hugging face's `RateLimit` and
-//! `RateLimit-Policy`, and the `Retry-After` of a 429. requests to a host stop starting while one
-//! of its limits is used up, and start again when it resets. a host that asks its requests to
-//! start apart, as NCBI's do, gets them no closer together than that.
+//! how often a host lets fetchloom ask, from the rate limit headers it sends: requests to a host
+//! stop starting while one of its limits is used up, and a host that asks its requests to start
+//! apart, as NCBI's do, gets them no closer than that.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

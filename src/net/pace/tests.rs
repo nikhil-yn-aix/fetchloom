@@ -297,9 +297,8 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
     );
 }
 
-/// NCBI asks a program without a key for no more than 3 requests a second, so requests to its
-/// hosts start apart: however many try at once, no second holds more than three starts, and the
-/// waits are too short to tell. other hosts are not held.
+/// as NCBI asks of a program without a key, however many try at once, and the waits are too
+/// short to tell. other hosts are not held.
 #[test]
 fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
     let paces = Paces::default();
@@ -335,10 +334,8 @@ fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
     );
 }
 
-/// zenodo's answers once its limit is used up, as a download meets them: a 429 whose limit resets
-/// a second after its date, then 429s sent once that reset came. the first is waited out and told
-/// once, the later ones hold nothing, so no try is spent and no second wait is told. the host's
-/// date decides, whether this machine's clock is behind it or ahead.
+/// zenodo's answers once its limit is used up: a 429 whose limit resets a second after its date,
+/// then 429s sent after that reset, which spend no try. the host's clock decides, not this one.
 #[test]
 fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
     let sent = "Fri, 30 Oct 2026 08:55:06 GMT";
@@ -382,8 +379,7 @@ fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
     }
 }
 
-/// a wait is told by the first request to wait for a reset, and only while half a second of it
-/// is left; a wait that short passes without a line.
+/// by the first request to wait for the reset; a shorter wait passes without a line.
 #[test]
 fn a_wait_is_told_once_while_half_a_second_is_left() {
     let paces = Paces::default();
@@ -428,7 +424,7 @@ fn a_limit_that_resets_too_late_to_wait_for_is_left_to_the_host() {
     assert!(paces.admit("huggingface.co", start).is_ok());
 }
 
-/// a server may state any number, and adding the largest to a clock would end the process
+/// a server may state any number, and adding the largest to a clock would end the process.
 #[test]
 fn a_reset_too_far_to_add_to_a_clock_is_capped() {
     let answer = headers(&[("ratelimit", "\"api\";r=0;t=18446744073709551615")]);

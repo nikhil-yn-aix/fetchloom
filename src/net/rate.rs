@@ -22,7 +22,7 @@ pub(crate) struct Rate {
 }
 
 struct Bucket {
-    // byte-nanoseconds keep fractional tokens without rounding each chunk's refill down.
+    // byte-nanoseconds keep fractional tokens without rounding each chunk's refill down
     credit: u128,
     updated: Instant,
 }
@@ -69,7 +69,7 @@ impl Rate {
 
     async fn take(&self, bytes: usize, stop: &Stop) -> bool {
         // keeping the lock across sleeps gives queued streams their turn instead of letting
-        // a busy stream spend every refill before a sleeper wakes.
+        // a busy stream spend every refill before a sleeper wakes
         let mut bucket = tokio::select! {
             biased;
             () = stop.asked() => return false,
