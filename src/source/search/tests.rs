@@ -1,5 +1,5 @@
-//! captured with Invoke-WebRequest on 2026-10-31, and from ENA, GEO, dandi and openneuro with curl
-//! on 2026-11-12, keeping only fields read by search.
+//! tests on recorded catalog answers, captured with Invoke-WebRequest on 2026-10-31 and, for ENA,
+//! GEO, dandi and openneuro, with curl on 2026-11-12, keeping only the fields search reads.
 
 use super::*;
 use crate::error::Kind;
@@ -241,9 +241,8 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     assert_eq!(result.candidates.len(), 17);
 }
 
-/// kaggle lists a dataset it cannot serve as files, such as one kept in bigquery, with no bytes
-/// and no downloads. both are unknown then, not a size of 0 B: the match stays, as a site's own
-/// listing, while a dataset with bytes keeps a count of 0 downloads as kaggle gives it.
+/// kaggle lists a dataset it cannot serve as files, as one kept in bigquery, with no bytes and no
+/// downloads; the match stays, while a dataset with bytes keeps a count of 0 downloads.
 #[test]
 fn kaggle_zero_bytes_are_an_unknown_size_and_count() {
     let mut kaggle: serde_json::Value =
@@ -263,16 +262,14 @@ fn kaggle_zero_bytes_are_an_unknown_size_and_count() {
     assert_eq!(result.candidates.len(), 3);
 }
 
-/// once one catalog has answered, the others get a grace period and no more, so one slow site
-/// cannot hold up the matches the rest found. no grace starts before the first answer, however
-/// slow every catalog is.
+/// once one catalog answered, the others get a grace period and no more, and no grace starts before
+/// the first answer, however slow every catalog is.
 #[test]
 fn a_slow_catalog_cannot_hold_up_the_others() {
     use std::time::Duration;
 
     /// answers zenodo's first request after `zenodo`, never when none, and each other catalog's
-    /// first after `others`. the requests after a catalog's first, as GEO's for its summaries,
-    /// get their answers at once.
+    /// first after `others`; later requests, as GEO's for its summaries, are answered at once.
     struct Late {
         recorded: Recorded,
         zenodo: Option<Duration>,
@@ -586,9 +583,8 @@ fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
     );
 }
 
-/// dandi's search lists embargoed dandisets, which fetchloom cannot download, and dandisets with
-/// no assets yet; both are left out. one dandi never published is described by its draft, which
-/// is what fetchloom then reads.
+/// fetchloom cannot download an embargoed dandiset, and one with no assets has nothing to give; one
+/// never published is described by its draft, which fetchloom then reads.
 #[test]
 fn dandi_leaves_out_embargoed_and_empty_dandisets_and_reads_a_draft() {
     let mut dandi: serde_json::Value =
@@ -632,9 +628,8 @@ fn dandi_leaves_out_embargoed_and_empty_dandisets_and_reads_a_draft() {
     );
 }
 
-/// openneuro answers a query sent by GET only with the header that guards it against other
-/// sites, and answers a query it cannot run with errors and no data: that fails the catalog,
-/// while errors beside data, as for a private dataset in place of a match, do not.
+/// openneuro answers a GET query only with the header guarding it against other sites; errors with
+/// no data fail the catalog, while errors beside data, as for a private dataset, do not.
 #[test]
 fn openneuro_is_asked_with_its_header_and_fails_on_errors_alone() {
     let url = openneuro("iris", 3);
@@ -656,9 +651,8 @@ fn openneuro_is_asked_with_its_header_and_fails_on_errors_alone() {
     );
 }
 
-/// a search without a limit shows at most [`MOST`] matches: every catalog's best, then those
-/// named as the words, here zenodo's third, then the rest by rank, with the named ones first. it
-/// counts what it left out, and leaves out nothing when fewer were found.
+/// a search without a limit shows at most [`MOST`] matches, here zenodo's third among those named,
+/// and counts what it left out, which is nothing when fewer were found.
 #[test]
 fn a_search_without_a_limit_keeps_each_catalogs_best_then_names_then_ranks() {
     let mut zenodo: serde_json::Value =
@@ -694,8 +688,7 @@ fn a_search_without_a_limit_keeps_each_catalogs_best_then_names_then_ranks() {
     assert_eq!((result.candidates.len(), result.left_out), (9, 0));
 }
 
-/// however many matches are named as the words, every catalog's best still shows in a search
-/// without a limit: here eight matches past the first are named, and two of them give way.
+/// here eight matches past the first are named as the words, and two of them give way.
 #[test]
 fn every_catalogs_best_stays_however_many_others_are_named_as_the_words() {
     let named = |fixture: &str, edit: &dyn Fn(&mut serde_json::Value)| {

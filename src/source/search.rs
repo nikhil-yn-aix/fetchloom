@@ -118,14 +118,12 @@ pub(crate) const LIMIT: usize = 3;
 /// terminal 24 rows high.
 pub(crate) const MOST: usize = 12;
 
-/// how long the other catalogs may take once one has answered, so one slow site cannot hold up
-/// the matches the rest found. a healthy zenodo answered in 0.7 to 7 s; a failing one retried
-/// for 76 s.
+/// how long the other catalogs may take once one answered, so one slow site cannot hold up the
+/// rest: a healthy zenodo answered in 0.7 to 7 s, and a failing one retried for 76 s.
 const GRACE: Duration = Duration::from_secs(10);
 
-/// asks the `catalogs` together for `limit` matches each, keeping rank order while giving each
-/// catalog a turn, then moves matches named exactly as the words to the front, in that same
-/// order. with no `limit`, each gives [`LIMIT`] and [`MOST`] of them are shown.
+/// asks the `catalogs` together for `limit` matches each, taking turns in rank order, with exact
+/// names moved to the front; with no `limit`, each gives [`LIMIT`] and [`MOST`] of them are shown.
 pub(crate) async fn search(
     api: &impl Api,
     words: &str,
@@ -302,9 +300,8 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
             ("limit", &most),
             ("sort", "downloads"),
             ("direction", "-1"),
-            // asking for any field returns only those asked for. mainSize is the size of the
-            // files at the main revision, what fetchloom downloads; card data would add the
-            // title some repositories set, but runs to hundreds of KB for popular words
+            // asking for any field returns only those asked; mainSize is what fetchloom downloads,
+            // while card data, with titles some set, runs to hundreds of KB for popular words
             ("expand[]", "downloads"),
             ("expand[]", "mainSize"),
             ("expand[]", "gated"),
@@ -399,9 +396,8 @@ struct Published {
 }
 
 /// the public dataset one typo from `reference`, a hugging face or kaggle dataset its source would
-/// not show, among those its owner publishes there, the most downloaded first on hugging face.
-/// one try at one request, and none for any other reference; a request that fails, or that a
-/// rate limit would hold, finds none.
+/// not show, among its owner's others, the most downloaded first on hugging face. it makes one
+/// request, and a failed or rate-limited one finds none.
 pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> {
     let (owner, name, prefix, url) = match reference {
         Reference::HuggingFace(repo) => {
