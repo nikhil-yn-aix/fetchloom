@@ -1410,6 +1410,7 @@ mod split {
     use std::path::{Path, PathBuf};
 
     use super::{RAR, Result, Sandbox, Server, file, files_in, fs, next_step_into, ok, text};
+    use crate::support::without_copy_warning;
 
     /// five files under one top folder, as a dataset's authors zip them.
     const SCANS: [(&str, &[u8]); 5] = [
@@ -1761,7 +1762,7 @@ mod split {
             );
         }
         assert_eq!(
-            stderr.matches("warning: ").count(),
+            without_copy_warning(&stderr).matches("warning: ").count(),
             2,
             "one for each first part, since each part's name is its own: {stderr}"
         );
