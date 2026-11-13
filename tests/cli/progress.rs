@@ -309,7 +309,8 @@ fn a_second_ctrl_c_quits_at_once_and_leaves_a_fresh_folder_as_it_was() -> Result
 }
 
 /// the bar says which try comes next and when, in one line that changes in place, and never that
-/// no data came, since the server answered each try at once.
+/// no data came, since the server answered each try at once. two answers each ask for a pause of
+/// 1 s, the shortest pause a `Retry-After` can ask, so it takes 2 s.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_rate_limited_download_counts_its_tries_on_its_bar() -> Result {

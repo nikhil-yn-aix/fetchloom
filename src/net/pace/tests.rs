@@ -76,6 +76,8 @@ fn answer(mut stream: TcpStream, window: &Mutex<(u64, u64)>, refused: &AtomicUsi
     let _ = stream.write_all(text.as_bytes());
 }
 
+/// the server counts requests in each wall-clock second, as a quota does, so 12 at 5 a second
+/// take three windows, about 2 s; the decisions have fixed-instant tests below.
 #[test]
 fn concurrent_downloads_respect_the_hosts_quota() {
     let host = serve();

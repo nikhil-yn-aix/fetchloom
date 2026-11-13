@@ -688,7 +688,9 @@ impl Server {
     }
 
     /// [`Server::slow_file`], except that the first connection holds back its last 64 KiB until
-    /// its client hangs up, so a stop lands inside the body however busy the machine is.
+    /// its client hangs up, so a stop lands inside the body however busy the machine is. a download
+    /// puts its first bytes on disk at its first checkpoint, a second in, so a test waiting for
+    /// them waits that long.
     #[cfg(unix)]
     pub(crate) fn held_file(path: &str, body: Vec<u8>) -> Result<Server> {
         Server::file_twice(path, body, true)
@@ -1357,7 +1359,8 @@ fn no_aws_setting_of_the_machine_reaches_a_command() -> Result {
 }
 
 /// the command is ended, and the end of its debug log shows where it waited, here on a server
-/// that never answers; a command a test spawned keeps the deadline while the test waits.
+/// that never answers; a command a test spawned keeps the deadline while the test waits. each of
+/// the two runs waits out its deadline of 2 s.
 #[test]
 fn a_command_past_its_deadline_fails_with_its_stderr_and_debug_log() -> Result {
     let sandbox = Sandbox::new()?;

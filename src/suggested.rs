@@ -195,7 +195,8 @@ mod tests {
     }
 
     /// interactive bash and zsh expand `!` inside double quotes from their history. powershell
-    /// reads the same wherever it runs, so it gets windows' quoting.
+    /// reads the same wherever it runs, so it gets windows' quoting. powershell's start takes most
+    /// of its time, half a second to seconds where each other shell takes milliseconds.
     #[cfg(unix)]
     #[test]
     fn a_quoted_word_reads_back_whole_in_each_shell() {

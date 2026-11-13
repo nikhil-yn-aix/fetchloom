@@ -778,6 +778,8 @@ fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     Ok(())
 }
 
+/// the first run trickles for over a second, so the checkpoint it writes once a second keeps a
+/// range for the second run to continue from.
 #[test]
 fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     let body: Vec<u8> = (0..1_048_576u32).flat_map(u32::to_le_bytes).collect();

@@ -111,6 +111,8 @@ mod tests {
         assert_eq!(between("<b>one", "<b>", "</b>"), None);
     }
 
+    /// the largest page a download reads, 4 MiB, so an unescape that looked ahead without bound
+    /// would run for hours here; the bounded one takes a second or two in a debug build.
     #[test]
     fn a_maximum_sized_page_of_ampersands_is_unchanged() {
         let mut page = "&".repeat(4 * 1024 * 1024 - 1);
