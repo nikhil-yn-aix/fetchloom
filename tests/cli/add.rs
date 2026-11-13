@@ -86,6 +86,25 @@ fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
     Ok(())
 }
 
+/// a link `get` fetched has its bytes and their hash in the cache, so an offline add pins it
+/// from there, whether `--as` names the dataset or the link's file does.
+#[test]
+fn an_offline_add_pins_a_link_get_fetched_with_or_without_a_name() -> Result {
+    for (name, asked) in [("iris", &[][..]), ("tips", &["--as", "tips"][..])] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let got = sandbox.run(&["get", &server.url])?;
+        assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+        let output = sandbox.run(&[&["--offline", "add", &server.url][..], asked].concat())?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{asked:?}: {stderr}");
+        let placed = sandbox.work().join("data").join(name).join("iris.csv");
+        assert_eq!(fs::read(placed)?, IRIS, "{asked:?}");
+        assert_eq!(server.requests().len(), 1, "{asked:?}: only get downloads");
+    }
+    Ok(())
+}
+
 #[test]
 fn add_pins_downloads_and_places_a_link() -> Result {
     let sandbox = Sandbox::new()?;

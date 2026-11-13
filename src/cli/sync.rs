@@ -1199,9 +1199,14 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// refuses, when offline, the jobs whose bytes the cache lacks.
+    /// refuses, when offline, the jobs whose bytes the cache lacks. a job that learns its file's
+    /// hash finds it there too when the cache holds what its link served last, as after a `get`
+    /// of it, which the download then takes offline.
     fn refuse_offline(&self, jobs: &[Job]) -> Result<(), Error> {
-        self.refuse_offline_with(jobs, |job| in_cache(&self.cache, &job.fetch))
+        self.refuse_offline_with(jobs, |job| {
+            in_cache(&self.cache, &job.fetch)
+                || (job.fetch.revalidate && job.fetch.remembered(&self.cache).is_some())
+        })
     }
 
     fn refuse_offline_with(

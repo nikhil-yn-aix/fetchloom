@@ -137,7 +137,7 @@ fetchloom --offline path iris
 
 offline, fetchloom makes no HTTP or DNS requests. a locked project whose files are cached or already placed works as usual.
 
-whatever needs a source fails offline: search, and an entry the lock does not pin yet, even when you know its id or link, since listings are not cached. a link not pinned yet fails with `offline, and a new link must be downloaded once to learn its SHA-256`. `get` of a link works offline once a `get` on this machine kept its file, and with `-o`, once the file at that path still holds what the link served.
+whatever needs a source fails offline: search, and an entry the lock does not pin yet, even when you know its id or link, since listings are not cached. a link not pinned yet fails with `offline, and a new link must be downloaded once to learn its SHA-256`, unless a `get` on this machine kept its file, which `add` then pins from the cache, with `--as` or without. `get` of a link works offline once a `get` on this machine kept its file, and with `-o`, once the file at that path still holds what the link served.
 
 prepare the project online and keep `data.toml` and `data.lock` unchanged before you disconnect. `FETCHLOOM_OFFLINE=1` or `true` turns offline mode on too, and a value fetchloom cannot read, such as `yes`, stops a command before any request. offline, a folder [mirror](mirrors.md), such as a usb drive, still gives the pinned files the cache lacks, and so do the files already at their places in the data folder.
 
