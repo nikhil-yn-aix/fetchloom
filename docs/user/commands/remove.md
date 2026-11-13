@@ -39,7 +39,7 @@ warning: data/pets still holds 2 files fetchloom did not place, such as data/pet
 
 removing a table also removes its comments; other entries stay. commit `data.toml` and `data.lock` afterwards.
 
-if deleting files fails after `data.toml` and `data.lock` were written, fix the reported error and run `fetchloom sync` to finish. the bytes stay in the shared cache until [cache gc](cache.md#gc) frees them.
+if deleting files fails after `data.toml` and `data.lock` were written, as for permissions or a file another program holds open, fix the reported error and run `fetchloom sync` to finish. the bytes stay in the shared cache, which other projects may use, until [cache gc](cache.md#gc) frees them.
 
 ## dry run
 
@@ -64,12 +64,3 @@ error: remove needs <name>
 ```
 
 [exit codes](../reference/exit-codes.md) lists all kinds.
-
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| some dataset files remain | they were edited, or fetchloom did not place them; the warnings name them | inspect and move or delete them yourself |
-| cached bytes remain | other projects may use them, and gc has an age rule | run `cache gc` when cleanup is needed |
-| metadata changed but a file could not be deleted | permissions or an open handle blocked deletion | fix that error, then sync |
-| an identical file that was already there was removed, with a warning | sync adopted it as placed | keep your own files outside the data folder |

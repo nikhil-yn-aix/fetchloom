@@ -1,6 +1,6 @@
 # add
 
-`add` puts a dataset in your manifest, pins its files and syncs the whole project.
+`add` puts a dataset in `data.toml`, pins its files in `data.lock` and syncs the whole project.
 
 ```sh
 fetchloom add iris    # at a terminal, pick one from a list
@@ -29,21 +29,19 @@ fetchloom add [options] -i <file>
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
-[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`; quote several words, as in `fetchloom add "fashion mnist"`. data.toml records the id you chose, not the search words.
+[global options](README.md#global-options) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; quote several, as in `fetchloom add "fashion mnist"`. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
 
 ## what happens
 
-1. find the nearest project. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
+1. find the nearest project, or start one in the current folder, which a closing `Started a project in <folder>` line names. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
 2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../concepts.md#webdataset-shards) get a hint before anything downloads.
 3. download every file the project lacks into the cache, with the project still as it was.
 4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
-run in a folder below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search stops at a git repository, so inside a repository with no `data.toml` of its own, `add` starts a project there; [finding the project](../reference/project-folder.md#finding-the-project) says why.
+below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search for a project stops at a git repository, so in a repository with no `data.toml` of its own, `add` starts a project there, as [finding the project](../reference/project-folder.md#finding-the-project) explains. there is no `init` command: `fetchloom init` is a usage error, exit 2, whose help says `add` starts a project.
 
-there is no `init` command: `add` starts a project, and `fetchloom init` is a usage error, exit 2, whose help says so.
-
-stderr for a single-file addition in a new project, matching a test snapshot. `[time]` replaces the measured duration and `[sandbox]` the test's folder:
+stderr for a single-file addition in a new project, from a test snapshot, where `[time]` stands for the duration and `[sandbox]` for the test's folder:
 
 ```text
  Downloaded iris.csv · 32 B in [time]
@@ -52,9 +50,7 @@ stderr for a single-file addition in a new project, matching a test snapshot. `[
   hint: scripts can find it with `fetchloom path iris`
 ```
 
-commit `data.toml` and `data.lock`, not `data/`. a zenodo file-page link selects that file unless you supply `--select`.
-
-a link you type may be on this machine or your network, such as a lab server. `add` trusts its origin, the scheme, host and port, for that run alone; a later run that downloads from it, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists it. so the add warns, with `-q` too, and quotes the line to write. a clone's machine has its own settings, so the closing line says that anyone who clones lists the origin too, even when your settings list it already. the last lines of a real run in a git repository, on stderr:
+a typed link to this machine or your network, such as a lab server, is trusted for that run alone. a later run that downloads from its origin, the scheme, host and port, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists it. so the add warns, under `-q` too, with the line to write, and its closing line asks anyone who clones to list the origin too, even when your settings list it, since each machine has its own. the last lines of a real run in a git repository, on stderr:
 
 ```text
       Added cows, its files are in data/cows
@@ -71,17 +67,17 @@ error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
   help: check the link in a browser. if it moved, run `fetchloom add <new link>`
 ```
 
-a link data.toml has already keeps the help that names its `ref` there, whether you add it again or another add syncs it.
+for a link data.toml already has, the help names its `ref` there instead, whether you add it again or another add syncs it.
 
-adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry, and so does the same add with the `--as` name it already has, so a setup script can run twice. with other settings, or another link under a name data.toml has, it fails with `usage`, exit 2, and changes nothing: give an unused `--as` name, edit `data.toml` to change the entry, or run `fetchloom remove <name>` first to replace it. removing is your choice, so the JSON `fix` is null.
+adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry, and so does the same add with the `--as` name it already has, so a setup script can run twice. other settings, or another link under a name data.toml has, as in `data.toml already has a dataset called notes`, fail with `usage`, exit 2, and change nothing: give an unused `--as` name, edit `data.toml` to change the entry, or run `fetchloom remove <name>` first to replace it. removing is your choice, so the JSON `fix` is null.
 
-if the add fails, it puts `data.toml` and `data.lock` back as they were, or removes them if it made them, and removes the files it placed. what it downloaded stays cached, so running the add again reuses it. before it changes either file it saves a copy under `.fetchloom/`, readable only by you on unix; if putting a file back fails, the error names that copy, which stays, without printing it, since it may hold credentials.
+a failed add puts `data.toml` and `data.lock` back as they were, or removes them if it made them, and removes the files it placed; what it downloaded stays cached for the next try. before it changes either file it saves a copy under `.fetchloom/`, readable only by you on unix. if putting a file back fails, the error names that copy, which stays, without printing it, since it may hold credentials.
 
 ## files on this machine
 
-a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: every plain file in a folder, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`. a plain word that names a folder here, such as `iris` beside an `iris` folder, is not imported: it exits 2 and says to write `./iris`.
+a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: every plain file in a folder, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`. a plain word that names a folder here, such as `iris` beside an `iris` folder, is neither imported nor searched: `"iris" is a folder here, so fetchloom did not search for it` exits 2, and its help offers `fetchloom add ./iris` and `fetchloom search iris`.
 
-the files are copied into the cache and hashed as they are copied, several at once, as many as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
+the files are copied into the cache and hashed as they are copied, as many at once as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
 
 ```text
    Imported flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
@@ -108,9 +104,9 @@ error: flowers was imported from files, and this machine's cache does not hold t
   help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
 
-a [mirror](../mirrors.md) that `fetchloom push` filled gives them instead. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
+a [mirror](../mirrors.md) that `fetchloom push` filled gives them instead; when the mirrors asked lack them or hold damaged copies, the error says `neither this machine's cache nor a mirror holds them`, and whoever keeps the mirror can push them again. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
 
-`add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset. the paths and sizes are compared with data.lock first, then the bytes as they are copied; other files stop it with `local.io`, exit 50, naming the first difference, and leave data.toml and data.lock as they were. matching files change neither:
+`add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset. the paths and sizes are compared with data.lock first, then the bytes as they are copied; other files stop it with `local.io`, exit 50, as `<folder> does not hold the files data.lock pins for <name>`, naming the first difference, and leave data.toml and data.lock as they were. supply the folder the files came from, or remove the dataset and import the new files. matching files change neither:
 
 ```text
    Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
@@ -144,17 +140,17 @@ error: --as names one dataset, and 2 links add 2
 
 ## stopping an add
 
-ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were: `add` writes them only once every file is in the cache, and one stopped while it places files puts both back. the add ends with `Stopped, and nothing was added`, exit 130. what arrived stays in the cache, so running the same add again continues where it stopped. a ctrl-c after the last byte arrived lets the add finish, as [interruptions](../concepts.md#interruptions) explains.
+ctrl-c leaves `data.toml` and `data.lock` as they were: `add` writes them only once every file is in the cache, and one stopped while it places files puts both back. the add ends with `Stopped, and nothing was added`, exit 130. what arrived stays in the cache, so the same add again continues where it stopped. a ctrl-c after the last byte arrived lets the add finish, as [interruptions](../concepts.md#interruptions) explains.
 
 ## editing during an add
 
-an add reads `data.toml` and `data.lock` when it starts and writes them only after its downloads, which can take hours. if either file changed in the meantime, as when you edit `data.toml` or switch git branches, the add writes neither, keeps your change and stops with `project.changed`, exit 50. it checks again before each write, and a `data.lock` changed between them stays as you changed it while the add puts `data.toml` back. what it downloaded stays in the cache, so running the same add again adds the dataset to the files as they are now.
+an add reads `data.toml` and `data.lock` when it starts and writes them only after its downloads, which can take hours. if either changed in the meantime, as when you edit `data.toml` or switch git branches, the add writes neither, keeps your change and stops with `project.changed`, exit 50. it checks again before each write, and a `data.lock` changed between them stays as you changed it while the add puts `data.toml` back. what it downloaded stays in the cache, so the same add again adds the dataset to the files as they are now.
 
 a first add that ends without adding anything, because it failed, was stopped or was cancelled, leaves its folder as it was: it removes the `.fetchloom` folder it made, and the data folder it made when that holds no file. search words are answered before the project is touched, so q or ctrl-c at the list of results changes nothing. a first add that was killed can leave `.fetchloom` behind, and the next command in that folder takes it over.
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition. stderr from a git repository with no manifest yet, matching a test snapshot, where `[port]` stands for the test server's port:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition. stderr from a git repository with no manifest yet, from a test snapshot, where `[port]` stands for the test server's port:
 
 ```text
       Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
@@ -171,7 +167,7 @@ the plan covers the whole project, as the sync after a real addition would. a fi
 
 ## generated names
 
-the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions. use `--as` to choose your own. `-i` takes no `--as`, so when a line's name is taken its warning says to rename the dataset's table in data.toml afterwards, and the next sync moves its pin to the new name.
+the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions; `--as` chooses your own. `-i` takes no `--as`, so when a line's name is taken its warning says to rename the dataset's table in data.toml afterwards, and the next sync moves its pin to the new name.
 
 ## exit codes
 
@@ -184,14 +180,8 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | a pattern matches nothing | it targets a different source path | inspect listed paths and [pattern rules](../reference/data-toml.md#patterns) |
 | `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom drop`](drop.md) |
 | a shell expands a pattern | the glob was not quoted | use `--select "**/*.csv"` |
-| the same reference rejects new filters | the existing entry has different settings | edit its manifest entry, or use an unused `--as` name |
-| `data.toml already has a dataset called notes` | `--as` names a dataset the project has, for another link | give an unused `--as` name, or run `fetchloom remove notes` first if the new link should replace it. the same link with the same name changes nothing |
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
 | `could not find ./flower.csv: it does not exist` | the path has a typo, or the file is somewhere else | when one name in that folder is a typo away, the help line gives the command with it, as ``did you mean `fetchloom add ./flowers.csv`?``, keeping your other options; only that folder is read, and nothing is searched for |
 | `huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `hf:datasets/scikit-learn/irsi does not exist, or is not public` | a typo in a hugging face or kaggle id, or a private dataset: both sources answer the two alike | when the owner lists a public dataset a typo away, which `add` asks the source once, signed in or not, and never offline, the help gives your command with the name fixed, as ``did you mean `fetchloom add hf:datasets/scikit-learn/iris`?``, no sign-in is offered, and the error is `reference.unresolved`, exit 10. otherwise see [when a download is refused](auth.md#when-a-download-is-refused) |
-| `"iris" is a folder here, so fetchloom did not search for it` | a plain word names a file or folder in the current folder | write it as a path, `fetchloom add ./iris`, to import it, or run `fetchloom search iris` |
-| `... was imported from files, and this machine's cache does not hold them` | a clone has the pins of an import but not its files | copy them to the dataset's folder and sync, or run `fetchloom add <folder> --as <name>` where they are |
-| `... was imported from files, and neither this machine's cache nor a mirror holds them` | the mirrors asked lack the files named, or hold damaged copies | ask whoever keeps the mirror to push them again, or copy them to the dataset's folder and sync |
-| `... does not hold the files data.lock pins for ...` | the folder supplied is not the one imported | supply the folder the files came from, or remove the dataset and import the new files |

@@ -48,7 +48,7 @@ error: raw has place = false, so it has no folder in data/
 
 `path` returns a location, not proof of intact bytes: sync may have kept an edited file there. use [status](status.md) when correctness depends on unchanged inputs.
 
-`--locked` never writes data.lock. a dataset already in place answers as usual, since nothing needs writing; one that needs a sync first, such as a dataset added to data.toml by hand, fails with `lock.outdated` instead of being pinned and downloaded. only the named dataset's entry counts, so another dataset's stale entry stops nothing.
+`--locked` never writes data.lock, so scripts and CI pass it and run `fetchloom lock` themselves. a dataset already in place answers as usual, since nothing needs writing; one that needs a sync first, such as a dataset added to data.toml by hand, fails with `lock.outdated` instead of being pinned and downloaded. only the named dataset's entry counts, so another dataset's stale entry stops nothing.
 
 ## exit codes
 
@@ -58,8 +58,5 @@ error: raw has place = false, so it has no folder in data/
 
 | symptom | cause | fix |
 |---|---|---|
-| status still lists other datasets as missing after `path` | path syncs only the dataset it names | run `fetchloom sync` |
-| a script's `path` changed data.lock | a dataset added to data.toml by hand gets pinned by the sync `path` runs for it | pass `--locked` in scripts and CI, and run `fetchloom lock` yourself |
-| a requested member is rejected before syncing | the lock or cached tree already rules it out | choose a path the dataset holds |
 | an empty archive has no dataset folder | extraction produced no regular files | set `extract = false` and sync to keep the packed archive |
 | a notebook needs a filesystem object | CLI output is text | use the [python helper](../scripting.md#python-helper) for `pathlib.Path` |

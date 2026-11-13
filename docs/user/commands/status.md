@@ -81,7 +81,7 @@ and stderr the rest, since a dataset with `place = false` is no difference:
 
 a file changed too soon after the sync that placed it is hashed, since a coarse filesystem clock can hide an edit.
 
-a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made through any link to it, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back, keeping the changed copy as `<path>.changed`, as [local changes](sync.md#local-changes) describes:
+an edit through a hardlink, after making the file writable, changes the cache's copy that every project placing the file shares, so status reports the file as damaged rather than edited, and a plain `fetchloom sync` puts the pinned file back, keeping the changed copy as `<path>.changed`, as [local changes](sync.md#local-changes) describes:
 
 ```text
     Damaged data/iris/iris.csv · linked to the cache's copy, which was changed
@@ -110,17 +110,12 @@ datasets and archives are never cut short, and JSON includes every difference.
 
 ## exit codes
 
-0 means status completed, even when it found differences. scripts must inspect every array, or ask for `--check`, which exits 1 with `data.not_ready` while the data is not ready to use: a dataset data.lock does not pin as data.toml asks, or no data.lock at all, a recipe that needs a build or whose result is not here, or a file data.lock places that is missing, outdated, damaged, edited, blocked or held by a file fetchloom did not place. extra files, those no dataset needs and datasets with `place = false` leave the data ready. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
+0 means status completed, even when it found differences, so scripts inspect every array in JSON, or ask for `--check`, which exits 1 with `data.not_ready` while the data is not ready to use: a dataset data.lock does not pin as data.toml asks, or no data.lock at all, a recipe that needs a build or whose result is not here, or a file data.lock places that is missing, outdated, damaged, edited, blocked or held by a file fetchloom did not place. extra files, those no dataset needs and datasets with `place = false` leave the data ready. invalid usage exits 2, and local and project errors 50; [exit codes](../reference/exit-codes.md) lists every failure kind.
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
-| exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON, or use `status --check` |
-| a file shows as damaged that you did not touch | an edit through another project's link changed the cache's copy you share | run `fetchloom sync`; use `copy = true` on datasets you edit |
-| fewer paths appear in the terminal | a terminal shows 20 rows of each kind, and a gone folder as one row | run `fetchloom status \| less`, or use `--json` |
-| an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |
 | `warning: data.lock no longer names data.lock.d/clean.450ae405bf79.tsv.zst, so nothing reads it` | a list a build or a big dataset wrote is left after `git checkout` or a reset put an older data.lock back | run the delete or `git rm` its help names; never `git add data.lock.d` before that |
 | `warning: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which git does not have` | a build or a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |
 | `warning: git does not have prep.py, code of clean` | a recipe's code was never added to git, so `git commit -a` left it out | run the `git add` the help names, then commit |
-| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | someone edited a file's size in data.lock by hand, or data.lock was damaged. the file fetchloom placed, or the cache's copy, hashes to that SHA-256 at its real size, so no source or mirror can send what data.lock pins | restore data.lock from git, or set that size back by hand; `lock --check` and sync stop the same way until then |

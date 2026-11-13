@@ -18,7 +18,7 @@ fetchloom sync --force --dry-run
 fetchloom sync [options] [name]...
 ```
 
-name datasets, by their names in data.toml, to sync only those, as [named datasets](#named-datasets) describes; with no name, sync works on every dataset.
+names, as data.toml gives them, limit the sync to those datasets, as [named datasets](#named-datasets) describes; with none, sync works on every dataset.
 
 | option | effect |
 |---|---|
@@ -39,9 +39,9 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 5. save the project's state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed.
 
-with `--json`, `result.datasets` names the datasets whose pins changed, and `result.selected` the names the sync was given, or null. [JSON output](../reference/json-output.md) describes the rest. how files are placed, and when they are writable, is in [placement](../concepts.md#placement).
+with `--json`, `result.datasets` names the datasets whose pins changed and `result.selected` the names the sync was given, or null; [JSON output](../reference/json-output.md) has the rest. [placement](../concepts.md#placement) says how files are placed and when they are writable.
 
-if a locked 32-byte file is replaced upstream by a 15-byte file, stderr reports:
+a locked 32-byte file that upstream replaced with a 15-byte file fails (stderr):
 
 ```text
 error: iris/iris.csv is not the file data.lock records
@@ -55,7 +55,7 @@ a failed sync reports the step it stopped in, not every problem. archives are fe
 
 ## named datasets
 
-`fetchloom sync small` works on small alone. it resolves small when its entry in data.toml changed, downloads and places its files, and removes the files it placed for small that small no longer pins. every other dataset keeps its entry in data.lock and its files as they are, even one data.toml changed, dropped or added. stderr in a fresh clone of a project with datasets small and large, from a real run:
+`fetchloom sync small` works on small alone: it resolves small when its entry in data.toml changed, downloads and places its files, and removes the files it placed for small that small no longer pins. every other dataset keeps its entry in data.lock and its files as they are, even one data.toml changed, dropped or added. stderr in a fresh clone of a project with datasets small and large, from a real run:
 
 ```text
  Downloaded 1 file · 1 B in 26 ms
@@ -70,7 +70,7 @@ error: data.toml has no dataset called "smal"
   help: did you mean `fetchloom sync small`?
 ```
 
-a settled `sync small` looks at small alone, so it costs what small holds, and with `--json`, `result.placement` counts small's files alone. a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first.
+a settled `sync small` looks at small alone, so it costs what small holds, and JSON's `result.placement` counts small's files alone. `status` still lists what it left as it was, and since a named sync never records the project as fully synced, the next plain `sync` looks at every dataset again, placing what the named sync left out and removing the files of a dataset gone from data.toml. a file of another dataset where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first.
 
 ## already in place
 
@@ -101,14 +101,7 @@ warning: data/pets still holds data/pets/own.txt, a file fetchloom did not place
   help: `fetchloom status` lists it as extra; delete it when you no longer need it
 ```
 
-when `data_dir` changes, sync places the files in the new data folder and deletes nothing in the old one. it names the old folder once, since it then stops recording those files (stderr):
-
-```text
-warning: data still holds 2 files fetchloom placed before data_dir changed to inputs/raw, such as data/iris/iris.csv. fetchloom leaves them there
-  help: delete data when you no longer need what it holds
-```
-
-when the old folder also holds files fetchloom did not place, the warning names up to three, and its help says to move them out first. stderr from a real run after `data_dir` changed to `inputs`, with four such files in data:
+when `data_dir` changes, sync places the files in the new data folder and deletes nothing in the old one. it names the old folder once, since it then stops recording those files, as `warning: data still holds 2 files fetchloom placed before data_dir changed to inputs/raw, such as data/iris/iris.csv. fetchloom leaves them there`, with the help `delete data when you no longer need what it holds`. when the old folder also holds files fetchloom did not place, the warning names up to three, and its help says to move them out first. stderr from a real run after `data_dir` changed to `inputs`, with four such files in data:
 
 ```text
 warning: data still holds 2 files fetchloom placed before data_dir changed to inputs, such as data/iris/iris.csv, and 4 files it did not place: data/iris/my-notes.txt, data/readme.txt, data/scratch/plot.py and 1 more. fetchloom leaves them all there
@@ -119,23 +112,23 @@ a dry run warns the same way, and `-v` names each file. when the old folder hold
 
 ## local changes
 
-a file fetchloom placed that someone deleted or moved comes back, since data.lock still pins it, and sync names the first five and counts the rest. JSON lists them in `result.placement.put_back`. stderr after a sample was deleted by hand, from a test run:
+a file fetchloom placed that someone deleted or moved comes back, since data.lock still pins it, and sync names the first five and counts the rest; JSON lists them in `result.placement.put_back`. stderr after a sample was deleted by hand, from a test run:
 
 ```text
 warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it
   help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
 ```
 
-[`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names drop only where it works: a recipe's result gets its files from the recipe's step, as the example above shows, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once:
+[`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names drop only where it works: a recipe's result gets its files from the recipe's step, as in the `squares` example above, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once:
 
 ```text
 warning: put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/
   help: to leave a folder out for good, run `fetchloom drop data/many/part03`; keep files of your own in a folder outside data/
 ```
 
-a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere in the data folder stays, and status lists it as extra; outputs of your own belong in a folder outside the data folder. a dry run warns the same way, as `a sync would put back`.
+a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere in the data folder stays, and status lists it as extra. a dry run warns the same way, as `a sync would put back`.
 
-without `--force`, edited files and untracked files at pinned paths stay in place, and JSON lists them in `result.placement.kept`. other extra files are not listed there; [status](status.md) finds them. the warning about each names the `fetchloom sync --force` that replaces it. a sync that placed files ends with where a script finds the dataset, as `` next: `fetchloom path cows` tells your scripts where cows is``.
+without `--force`, edited files and untracked files at pinned paths stay in place, and JSON lists them in `result.placement.kept`; other extra files are not listed there, and [status](status.md) finds them. the warning about each names the `fetchloom sync --force` that replaces it. a sync that placed files ends with where a script finds the dataset, as `` next: `fetchloom path cows` tells your scripts where cows is``.
 
 a script that must not read an edited input asks for `--strict`. the sync does the same work and keeps the edit, then fails with `data.not_ready`, exit 1, while the data is not ready to use: a file kept with other bytes than data.lock pins, a recipe's result not on this machine or a mirror, or a recipe data.lock does not pin as building it now would make. `status --check` answers the same question without changing anything. stderr after `iris.csv` was edited, from a real run:
 
@@ -148,11 +141,11 @@ error: the data is not ready to use
   help: each line says what makes it ready
 ```
 
-once the file holds the pinned bytes again, `sync --strict` exits 0. a strict sync that fails tells no closing `Ok` line before its error, such as `Ok all pinned files are in place by size and time, nothing to do` when only a recipe is not built yet, since the error says what is not ready. with `--json`, `errors[0].kind` is `data.not_ready` and `result` holds the sync's report as without `--strict`.
+once the file holds the pinned bytes again, `sync --strict` exits 0. a strict sync that fails prints no closing `Ok` line before its error, such as `Ok all pinned files are in place by size and time, nothing to do` when only a recipe is not built yet, since the error says what is not ready. with `--json`, `errors[0].kind` is `data.not_ready` and `result` holds the sync's report as without `--strict`.
 
-save your files before using `--force`. it overwrites edited and untracked files at pinned paths and names each one, as in `Replaced data/iris/iris.csv · discarding your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete extra files, or edited files no dataset needs now. a file it replaces keeps its bytes until the pinned files are in place: sync renames it to `.fetchloom-<hex>.old` in the same folder, deletes that once the pinned files have their names, and renames it back if placing fails or is stopped. a run cut off midway can leave such a file, which status lists as extra.
+save your files before `--force`: it overwrites edited and untracked files at pinned paths, naming each, as `Replaced data/iris/iris.csv · discarding your edit`, and JSON lists them in `result.placement.overwritten`; `--dry-run` warns about each first. it deletes no extra file, nor an edited file no dataset needs now. until the pinned files are in place, a replaced file waits as `.fetchloom-<hex>.old` in its folder, deleted once they have their names and renamed back if placing fails or is stopped; a run cut off midway can leave one, which status lists as extra.
 
-a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made through any link to it, after making the read-only file writable, changes that shared copy, so sync treats it as damage, not as a project's edit: it downloads the file again and, without `--force`, puts the pinned file back in each project whose file is still that copy. each of those projects keeps the changed copy beside it as `<path>.changed`, or `<path>.changed.2` when that name is taken, so the edit is not lost; status lists it as extra until you delete it. each project's `.changed` file is its own copy, so editing one changes no other. a file saved anew, as most editors save, is the project's own and stays an edit. to edit a dataset's files, set `copy = true` for it. the warning reads:
+a hardlinked file is the cache's own copy, shared by every project that placed it. an edit through any of its links, after making it writable, changes that shared copy, so sync treats it as damage, not as a project's edit: it downloads the file again and, without `--force`, puts the pinned file back in each project whose file is still that copy. each of those keeps the changed bytes beside it as `<path>.changed`, or `<path>.changed.2` when that name is taken, its own copy that status lists as extra until you delete it, so the edit is not lost. a file saved anew, as most editors save, is the project's own and stays an edit. to edit a dataset's files, set `copy = true` for it. the warning reads:
 
 ```text
 warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as <path>.changed
@@ -171,7 +164,7 @@ if registering with the cache fails, sync still succeeds, with a warning that `c
 
 ## recipe results
 
-sync places a [recipe](../recipes.md)'s pinned result from the cache, the data folder or a [mirror](../mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset places the rest and leaves the result out with a warning naming the build that makes it, and so does `add`. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run:
+sync places a [recipe](../recipes.md)'s pinned result from the cache, the data folder or a [mirror](../mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset, or an `add`, places the rest and leaves the result out with a warning naming the build that makes it. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run:
 
 ```text
 warning: clean's pinned result is not on this machine or a mirror, so it is left out
@@ -179,17 +172,9 @@ warning: clean's pinned result is not on this machine or a mirror, so it is left
      Synced 1 dataset into data · 1 result left out until built
 ```
 
-when that leaves nothing to place, as in a clone whose only other dataset has `place = false`, the last line says so:
+when that leaves nothing to place, as in a clone whose only other dataset has `place = false`, the last line is `Ok nothing to place in data until clean is built`.
 
-```text
-warning: clean's pinned result is not on this machine or a mirror, so it is left out
-  help: run `fetchloom build clean` to make it here
-         Ok nothing to place in data until clean is built
-```
-
-`sync clean`, which names the recipe, stops instead with `build.needed`, exit 60, before anything is placed. `sync --locked` places every other file first, then stops with `build.needed`, exit 60, and its JSON `result` keeps what it placed.
-
-a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` and exits 0, while `sync clean` stops with `build.needed`, exit 60.
+`sync clean`, which names the recipe, stops instead with `build.needed`, exit 60, before anything is placed. `sync --locked` places every other file first, then stops with `build.needed`, exit 60, and its JSON `result` keeps what it placed. a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` and exits 0, while `sync clean` stops with `build.needed`, exit 60.
 
 a recipe that changed since its build, as when its code, `run`, `env` or a dataset it reads changed, keeps the result data.lock pins until `fetchloom build` makes another. sync places that result as it stands and says what changed on every run. stderr after clean.py changed:
 
@@ -201,19 +186,7 @@ warning: clean changed since it was built: clean.py changed
 
 `sync clean` works on clean alone and places nothing of the datasets it is made from, but it still tells when one changed, as `iris changed in data.toml`. `fetchloom build clean` pins the input again and builds clean.
 
-a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has nothing in the data folder: sync downloads nothing for it, and the first sync after `place = false` was set removes the unchanged files it placed of it before:
-
-```text
-    Retired data/raw · 1 file, since raw has place = false
-```
-
-after that, `fetchloom sync raw` says the dataset is not placed:
-
-```text
-         Ok raw is not placed · place = false in data.toml, nothing to do
-```
-
-and a sync of every dataset when each has `place = false` says `Ok nothing to place in data, nothing to do`.
+a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has nothing in the data folder: sync downloads nothing for it, and the first sync after `place = false` was set removes the unchanged files it placed of it before, as `Retired data/raw · 1 file, since raw has place = false`. after that, `fetchloom sync raw` says `Ok raw is not placed · place = false in data.toml, nothing to do`, and a sync of every dataset when each has `place = false` says `Ok nothing to place in data, nothing to do`.
 
 ## dry run
 
@@ -226,7 +199,7 @@ and a sync of every dataset when each has `place = false` says `Ok nothing to pl
          Ok dry run, nothing was changed
 ```
 
-each file it would download is listed with its size, or `size unknown` when only the download tells. a file the data folder already holds is no download. a file whose hash only a download can learn counts as one to place, or under `Would check` when a file already stands where it goes. an archive this machine has not unpacked is listed with `Would open`, without its members. with `--force`, files it would overwrite are listed under `Would renew`; without it, warnings name them, as a real sync does. files no dataset needs now are counted under `Would remove`, and those of a dataset now set to `place = false` under `Would retire`. `-v` names each file.
+each download is listed with its size, or `size unknown` when only the download tells, and a file the data folder already holds is none. a file whose hash only a download can learn counts as one to place, or as `Would check` when a file already stands where it goes. an archive not unpacked here is `Would open`, without its members. `--force` lists the files it would overwrite as `Would renew`; without it, warnings name them, as a real sync does. `Would remove` counts the files no dataset needs now, and `Would retire` those of a dataset now set to `place = false`; `-v` names each file.
 
 `--locked` still checks the lock first. offline, a dry run that would need a download fails as the sync would, with exit 20. a dry run takes no hold on the project, so a sync running at the same time can change what it reports. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
@@ -234,20 +207,25 @@ a checkout you may not write, such as a read-only mount in a job or a container,
 
 ## exit codes
 
-0 includes success with kept conflicts or a registration warning, unless `--strict` asks to fail with `data.not_ready`, exit 1, while the data is not ready to use. a name data.toml does not have exits 2. missing data offline exits 20, and downloaded bytes that differ from the pins exit 30. an unanswered question exits 1. under `--locked`, a missing or stale lock exits 1 with `lock.outdated` before anything changes, as `there is no data.lock, so nothing pins the files' bytes yet` for a missing one, and a recipe whose result is not built, or not on this machine, exits 60 with `build.needed`, as [recipe results](#recipe-results) says. other failures use the [shared exit codes](../reference/exit-codes.md).
+| exit | when |
+|---|---|
+| 0 | the sync succeeded, also with kept conflicts or a registration warning |
+| 1 | `--strict` found the data not ready to use, `data.not_ready`; `--locked` found a missing or stale lock, `lock.outdated`, before anything changed, as `there is no data.lock, so nothing pins the files' bytes yet`; or a question went unanswered |
+| 2 | a name data.toml does not have |
+| 20 | data missing offline |
+| 30 | downloaded bytes differ from the pins |
+| 60 | `build.needed`: under `--locked`, or for a recipe you named, its result is not built or not on this machine, as [recipe results](#recipe-results) says |
+
+other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
-| success leaves an edited input | sync preserves conflicts | inspect status and save the edit before choosing `--force`; a script asks for `sync --strict`, which fails instead |
-| offline sync needs resolution | the manifest changed or pins are missing | prepare the project online before disconnecting |
+| the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
 | `error: offline, and 2 files data.lock names are not in the cache`, though a web mirror holds them | offline asks no web mirror, and the help says so, as `offline asks no web mirror, so http://127.0.0.1:8000 was not asked` | go online, or use what needs no network: a cache that holds them in `FETCHLOOM_CACHE`, or a folder mirror that holds them with `--mirror <folder>` |
 | `error: flowers was imported from files, and this machine's cache does not hold them` offline, exit 20 with `offline.missing` | no link fetches an [imported](add.md#files-on-this-machine) file, so going online does not help, and the help offers no download | copy its files from the folder they came from into the dataset's folder by hand, then sync, or sync with `--mirror <folder>` naming a folder [mirror](../mirrors.md) that holds them; JSON's `fix` is null |
-| inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
-| the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
-| status still lists another dataset after `sync <name>` | a named sync leaves the other datasets as they are | run `fetchloom sync` |
-| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | someone edited a file's size in data.lock by hand, or data.lock was damaged. the file fetchloom placed, or the cache's copy, hashes to that SHA-256 at its real size, so no source or mirror can send what data.lock pins | restore data.lock from git, or set that size back by hand. `--force` does not help, and `fetchloom lock --upgrade` pins what the source serves now, which may be other bytes |
+| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | data.lock was edited by hand or damaged, as [data.lock](../reference/data-lock.md#encoding-and-validation) explains; `status`, `lock --check` and `push` stop the same way | restore data.lock from git, or set that size back by hand. `--force` does not help, and `fetchloom lock --upgrade` pins what the source serves now, which may be other bytes |
 | `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them. sync warns when it lists the source again and the pattern matches none of those files | run the [`fetchloom drop`](drop.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
 
 ## stopping a sync

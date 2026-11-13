@@ -112,7 +112,7 @@ error: offline, and 1 file data.lock names is not in the cache
 
 a file in the data folder with other bytes than its pin counts as missing, so push downloads the pinned bytes instead and never changes the file.
 
-push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60, and a pinned result the cache lacks, which no download brings, stops it with `offline.missing`, exit 20, naming the build that makes it. the JSON `fix` is null, since a build runs the project's code. from a clone that never built:
+push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60, and a pinned result neither the cache nor the data folder holds, as one never built here or freed by `cache gc`, stops it with `offline.missing`, exit 20, naming the build that makes it. the JSON `fix` is null, since a build runs the project's code. from a clone that never built:
 
 ```text
 error: this machine's cache lacks files the push needs, which only a build makes
@@ -182,19 +182,25 @@ the work counters count what push downloaded, as for a sync, and `data_folder_ob
 
 ## exit codes
 
-0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that a file it needs could not be downloaded, as offline or in mirror-only mode, or that the cache lacks a file of a recipe's result, which only a build makes; 30 that a download or a pushed file read back holds other bytes than expected, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, that data.lock pins a file at a size its cached bytes do not have, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
+| exit | when |
+|---|---|
+| 0 | every file the datasets need is on the mirror |
+| 1 | nobody said yes to data that asks first, or data.lock is out of date |
+| 2 | a usage error, such as no folder or a web address |
+| 20 | a file it needs could not be downloaded, as offline or in mirror-only mode, or the cache lacks a file of a recipe's result, which only a build makes |
+| 30 | a download or a pushed file read back holds other bytes than expected, or the cache's copy holds other bytes than its pin |
+| 50 | the folder is not a mirror, something else replaced a file push wrote, data.lock pins a file at a size its cached bytes do not have, or the disk refused a write or is full |
+| 60 | a recipe needs a build |
+| 130 | a stop |
+
+other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
 | `holds files, but no fetchloom-mirror file says it is a mirror` | `--to` names a folder that is not a mirror, or a network disk that is not mounted | name an empty folder or a mirror's top folder, and mount the disk |
-| `this machine's cache lacks files the push needs, which only a build makes` | a recipe's result was never built here, or `cache gc` freed it, and the data folder does not hold it | run the build the help names, then push again |
-| `offline, and 1 file data.lock names is not in the cache` | push needs to download a file the cache and the data folder lack, and the run is offline | run the push again online, or with `FETCHLOOM_CACHE` naming a cache that holds the file |
-| `data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine` | someone edited a file's size in data.lock by hand, or data.lock was damaged, and the cache holds the bytes of that SHA-256 at their real size. no download could bring other bytes | restore data.lock from git, or set that size back by hand, then push again |
-| `... so pushing them needs a yes` | a source wanted an account or accepted terms, or did not say who may read the data | check that everyone who can read the mirror may have it, then answer yes or add `--yes` |
 | `..., read back from ..., holds other bytes than were written, so it was not given its name` | the disk lost or changed a write, so the file read back is not what push wrote | check the disk that holds the mirror, then push again |
-| `something replaced ... in the mirror ... while push wrote it, so it was not given its name` | another program writes into the mirror's folder, such as a sync client, a backup tool or antivirus, and put another file in place of one push wrote | stop that program, or keep it out of the folder, then push again |
 | `push needs a folder to copy the files into` | neither `--to` nor `push_to` names one, or an empty `FETCHLOOM_PUSH_TO` cleared `push_to` | add `--to <folder>`, or set `push_to` in the settings file; for an empty `FETCHLOOM_PUSH_TO`, which the help names, add `--to <folder>` or unset it |
 | `<archive>: not there on <mirror>` | a members table on the pushing machine left those files out, and push never writes an archive whose files it lists | widen the members table, run `fetchloom sync` and `fetchloom status --verify`, then push again |
 | `holds a damaged copy of <file>, so it was not used` | a mirror file has the right size but other bytes, which push skips as already there | delete that file under the mirror's `objects/`, then push again |

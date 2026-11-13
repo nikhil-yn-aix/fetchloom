@@ -31,7 +31,7 @@ fetchloom get [options] <link>...
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
 | `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 
-[global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; quote several words, as in `fetchloom get "fashion mnist"`, since unquoted words read as several links. quote patterns too; they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
+[global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; quote several, as in `fetchloom get "fashion mnist"`. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
 
 ## what happens
 
@@ -44,14 +44,14 @@ without `-o`:
 
 a single file goes in a folder named after its file name without the extension, and several files in one named after their title or reference. a direct download's `Content-Disposition` file name, also one received after redirects, replaces the name guessed from the link.
 
-stderr excerpt from a snapshot for a single-file download on a filesystem that supports links. `[time]` replaces the measured duration:
+stderr from a snapshot of a single-file download on a filesystem that supports links, where `[time]` stands for the duration:
 
 ```text
  Downloaded iris.csv · 81 B in [time]
     Fetched iris.csv into iris · linked to the cache
 ```
 
-when a dataset has several files, the `Fetched` line is followed by the folder's top level, largest first, so the main file is easy to find. a folder shows how many files it holds. at most ten names are listed, then how many more there are:
+for several files, the `Fetched` line is followed by the folder's top level, largest first, so the main file is easy to find, with a folder's file count, and at most ten names, then how many more there are:
 
 ```text
     Fetched 7 files into wine-quality · linked to the cache
@@ -63,13 +63,13 @@ when a dataset has several files, the `Fetched` line is followed by the folder's
             README.md              913 B
 ```
 
-a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts.md#interruptions) shows. a slow disk can take a while longer to keep the file: a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. the time a download waits for your answer to a question, such as whether to download a large file, counts toward neither its time nor its speed.
+a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts.md#interruptions) shows. while a slow disk keeps the file, a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. time spent waiting for your answer to a question, such as whether to download a large file, counts toward neither the time nor the speed.
 
-a plain link whose server answers that the file is unchanged, with a 304, downloads nothing while the cache or the folder holds what it served last. without such validators, the bytes may download again. a later `get` takes changed bytes from the source; use [add](add.md) to pin them.
+a plain link whose server answers that the file is unchanged, with a 304, downloads nothing while the cache or the folder holds what it served last; without such validators, the bytes may download again. a later `get` takes changed bytes from the source, so use [add](add.md) and commit the pins, or check the bytes with `--sha256`, to keep them fixed.
 
 ## one file
 
-`-o <file>` writes the one file a link resolves to at exactly that path, as `curl -o` does, and prints the file's absolute path on stdout. stderr, then stdout, of a run against a server on the same machine, with the working folder shortened to `/home/me/work`:
+`-o <file>` writes the one file a link resolves to at exactly that path, as `curl -o` does, and prints the file's absolute path on stdout. stderr, then stdout, of a run against a local server, with the working folder shortened to `/home/me/work`:
 
 ```text
  Downloaded iris.csv · 81 B in 20 ms
@@ -84,7 +84,7 @@ a plain link whose server answers that the file is unchanged, with a 304, downlo
 - bytes this run downloaded leave the cache once the file holds them, unless a project pins them. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them, as do those of a run that stopped before the file took them, which a rerun reuses.
 - two runs of one link share its download: the second says `Waiting iris.csv · another fetchloom is downloading it`, then decides as a run started afterwards would.
 
-`-o` takes one link that resolves to one file. several links, `-i` and a dataset with several files left after `--select` are usage errors, exit 2, before any file downloads, and they say to use `--dir`. a path that names a folder is one too:
+`-o` takes one link that resolves to one file. several links, `-i` and a dataset with several files left after `--select` are usage errors, exit 2, before any file downloads, as `-o writes one file, and <link> has <n> files`, saying to keep one with `--select` or use `--dir`. a path that names a folder is one too:
 
 ```text
 $ fetchloom get https://example.org/data/iris.csv -o results
@@ -114,7 +114,7 @@ a file already at the path stays as it is unless `--force` asks to replace it:
 
 a file that still holds what the link served last time, while the link serves other bytes now, is refused the same way, and the error says its source changed it since. a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
 
-with `--sha256`, or a hash the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. a stated MD5 counts once this machine has downloaded bytes that match it. without such a hash, the bytes the link served the last time this machine fetched it stand in. offline they decide, so a run without a network keeps a file that still holds them. that holds for a link only its site can list, such as a hugging face link, too: once a run fetched its one file, an offline run takes that file in place of the listing, and with `--sha256` an offline run needs no earlier one. online, a file that still holds them makes the run ask the server whether they changed, even after they left the cache for the file: an unchanged answer leaves the file as it is, and a large file asks about its size only when new bytes come. otherwise the run downloads the file to compare it, and says so before it starts, so a large download never ends in a refusal you did not see coming; a file of another size than the source states is refused before any download. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
+with `--sha256`, or a hash the source states, the file there is hashed first, and a run that finds those bytes downloads nothing; a stated MD5 counts once this machine has downloaded bytes that match it. without such a hash, the bytes the link served when this machine last fetched it stand in, and offline they decide, so a run without a network keeps a file that still holds them. so does a link only its site can list, such as a hugging face link: an offline run takes the one file an earlier run fetched in place of the listing, and with `--sha256` needs no earlier run. online, a file that still holds them makes the run ask the server whether they changed, even after they left the cache for the file: an unchanged answer leaves the file as it is, and a large file asks about its size only when new bytes come. otherwise the run says before it starts that it downloads the file to compare it, so a large download never ends in a refusal you did not see coming; a file of another size than the source states is refused before any download. a refused run leaves the bytes in the cache, so a later `--force` can reuse them when the server says they are unchanged:
 
 ```text
 $ fetchloom get http://127.0.0.1:19450/files/iris81.csv -o other.csv
@@ -134,7 +134,7 @@ links given together, on the command line or with `-i`, share one run: fetchloom
 
 with several links, each must be a link, a DOI or an id; a bare word among them is a usage error. `--select`, `--exclude` and `--no-extract` apply to every link.
 
-a link that fails leaves the others to finish; one that fails before the downloads, as one that cannot be resolved, gets a `Failed` line at once. the run ends with one error naming each failed link, and exits with the code of the first failed link in the order given. stderr from a snapshot where the first link is cached and the second answers 404. `[port]` replaces the fixture server's port:
+a link that fails leaves the others to finish; one that fails before the downloads, as one that cannot be resolved, gets a `Failed` line at once. the run ends with one error naming each failed link, and exits with the code of the first failed link in the order given. stderr from a snapshot where the first link is cached and the second answers 404, with `[port]` for the test server's port:
 
 ```text
     Checked iris.csv · 127.0.0.1 still serves the bytes downloaded last time
@@ -208,7 +208,7 @@ with `--json`, `result` has `dry_run: true` and `changes`, shaped as a dry run o
 
 ## existing folders
 
-an output folder that already holds other files at its top is refused, so get never mixes its files with yours; files that match what it would place stay. before it replaces an earlier version of a file, get checks every file it would place in that folder, so a conflict leaves the earlier files in place. it replaces a file only when the cache holds that file's old bytes, and then says so, as `Replaced iris/iris.csv · the source changed it since this folder got it`. `--force` works only with `-o`, so choose another folder to keep your files.
+an output folder that already holds other files at its top is refused, so get never mixes its files with yours; files that match what it would place stay. before it replaces an earlier version of a file, get checks every file it would place in that folder, so a conflict leaves the earlier files in place. it replaces a file only when the cache holds that file's old bytes, and says so, as `Replaced iris/iris.csv · the source changed it since this folder got it`. `--force` works only with `-o`, so choose another folder with `--dir` to keep your files.
 
 the folder `--dir` names for a single link may be a link to a folder elsewhere; folders get names itself must be real folders, and links inside an output folder are refused.
 
@@ -222,8 +222,6 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 
 | symptom | cause | fix |
 |---|---|---|
-| a rerun fetches changed data | `get` has no project lock | use `add` and commit the pins, or check the bytes with `--sha256` |
-| an output folder has unrelated contents | `get` protects existing files | choose another folder with `--dir` |
 | offline get cannot resolve a repository | only a link that kept one file, fetched on this machine before, runs offline | run it once without `--offline`, or for several files follow [offline preparation](../concepts.md#offline) |
 | a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
@@ -231,6 +229,5 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
 | `hf:datasets/scikit-learn/iris@main has no file iris.csv` | the link names a file its site lists under another name, often in other case | write the name the help gives in the link |
 | `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
-| `data.csv already exists and holds other bytes than the link serves now` | `-o` never replaces a file without being asked | choose another name with `-o`, or add `--force` |
 | `--force replaces only the file -o names, so it cannot go with --dir` | `--force` replaces the one file `-o` writes, and get never replaces the files of a `--dir` folder | leave out `--force` and give `--dir` an empty folder, or write one file with `-o <file> --force` |
 | `data.csv already exists, and its bytes are not the ones --sha256 names` | the hash or the file is not the one you meant | check the hash; if it is right, choose another name with `-o`, or add `--force` |

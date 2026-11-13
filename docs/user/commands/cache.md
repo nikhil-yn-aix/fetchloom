@@ -38,7 +38,7 @@ it also says where the space goes. stderr from a test on a drive that makes hard
 - `Unneeded` is what no registered project needs, and when [gc](#gc) frees it: now, once it is a day old, or never while a folder outside the cache links it too, as one `get` made does. when nothing is unneeded, the report ends with `Ok every cached file is needed by a project`.
 - `Copies` is what the projects hold as files of their own beside the cached files: copies, clones, and hardlinks that lost their link, as [below](#copies-and-backups). a clone shares its blocks with the cache's copy until either changes, so it takes little room, and the line says how much of it is clones. an edited file is your own, so it does not count.
 
-the sizes count what the files hold. a disk stores each file in whole blocks, often 4 KiB, so `du` counts more, many times more for many small files: for a cache holding 4,000 files of about 33 bytes on ext4, `fetchloom cache` said `4,000 files · 128.9 KiB` while `du -sk` said 17388 KiB. plan free space by what `du` says. JSON adds `needed`, `linked`, `unneeded`, `freeable`, `copies`, `unlinked_copies`, `cloned` and `inputs_only`, which [JSON output](../reference/json-output.md#command-results) defines; a script promises `freeable`, what `cache gc` frees now, rather than `bytes`. the report looks once at each placed file of each project, so a project on a slow network drive slows it.
+the sizes count what the files hold, while a disk stores each file in whole blocks, often 4 KiB, so `du` counts more, many times more for many small files: 4,000 files of about 33 bytes on ext4 were `4,000 files · 128.9 KiB` to `fetchloom cache` and 17388 KiB to `du -sk`. plan free space by `du`. JSON adds `needed`, `linked`, `unneeded`, `freeable`, `copies`, `unlinked_copies`, `cloned` and `inputs_only`, as [JSON output](../reference/json-output.md#command-results) defines; a script that wants what `cache gc` frees now reads `freeable`, not `bytes`. the report looks once at each placed file of each project, so a project on a slow network drive slows it.
 
 downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them, and `fetchloom cache` counts them on an `Unfinished` line, as JSON's `unfinished_downloads` and `unfinished_bytes`. [cache folder](../reference/cache-folder.md) says where the cache is; `FETCHLOOM_CACHE` moves it.
 
@@ -57,7 +57,7 @@ deleting the copy's `data/` and running `fetchloom sync` there brought it from `
 
 ### moving a project to another machine
 
-a project copied with its data folder to a cache that never held its files, as `rsync -a` copies it to another machine or cluster, needs no download for what that folder holds. a command that needs a pinned file the cache lacks takes it from the data folder before it asks a mirror or the source, keeping it only when its bytes hash to the pin; the file in the data folder stays as it is. so `push`, `build`, `build --check` and `sync` work there with `--offline` too. an edited file holds other bytes, so it is never taken. the files inside an archive come back this way only once the cache or a mirror lists what the archive holds. stderr from a real run of `fetchloom --offline build --check` in such a copy, with an empty cache:
+a project copied with its data folder to a machine whose cache never held its files, as `rsync -a` copies it to another machine or cluster, needs no download for what that folder holds: a command that needs a pinned file the cache lacks takes it from the data folder before it asks a mirror or the source, when its bytes hash to the pin, and leaves the file there as it is. so `push`, `build`, `build --check` and `sync` work there `--offline` too. an edited file is never taken, and the files inside an archive come back this way only once the cache or a mirror lists what the archive holds. stderr of `fetchloom --offline build --check` in such a copy, with an empty cache:
 
 ```text
       Needs up to 63 B on the disk holding the cache, which has 326.2 GiB free
@@ -122,7 +122,7 @@ a project gc forgot, as one whose folder was moved away during gc, loses from th
 
 ### runs that use the cache
 
-every command that works with the cache, such as `add`, `sync`, `get`, `cache` and `cache verify`, shares a lock on the cache's `gc.lock` file while it works, and `cache gc` takes that lock alone, so gc never removes a file a running command is about to place. while another command uses the cache, gc prints `Waiting for other fetchloom runs to finish with the cache`, and a command started during gc waits for it the same way; ctrl-c stops either wait. dry runs take no lock, so what a gc dry run lists can differ from what gc later frees. gc refuses to delete without its lock, as on a filesystem without locks or a read-only cache folder; on NFS it needs write access to `gc.lock`.
+commands that work with the cache, such as `add`, `sync`, `get`, `cache` and `cache verify`, share a lock on its `gc.lock` file while they work, which `cache gc` takes alone, so gc never removes a file a running command is about to place. gc waits for them with `Waiting for other fetchloom runs to finish with the cache`, a command started during gc waits for it the same way, and ctrl-c stops either wait. dry runs take no lock, so what a gc dry run lists can differ from what gc later frees. gc deletes nothing without its lock, as on a filesystem without locks or a read-only cache folder; on NFS it needs write access to `gc.lock`.
 
 ### reminder
 
@@ -157,7 +157,7 @@ gc keeps every file a project needs, including the raw data of a dataset with [`
 - no name outside the cache shares it, such as a hardlink in a project, since freeing it would free nothing.
 - a folder [mirror](../mirrors.md), from `--mirror`, `FETCHLOOM_MIRRORS` or the `mirrors` setting, holds a copy that gc reads whole and that hashes to its name in this run. a web mirror does not count, nor does a link or a file of another size in a copy's place, and a folder without its `fetchloom-mirror` file is warned about and skipped, as sync skips it. the folder `push_to` names counts only when it is one of those mirrors, since a build reads only mirrors.
 
-[`fetchloom push --inputs <recipe>`](push.md) puts exactly that raw data on a folder mirror. gc reads each copy it relies on in full, so 200 GiB on the mirror means 200 GiB read; a `Checked` line says how much it read and how long it took. then it says what it would free and keep, and what freeing costs, and asks. stderr from a real run at a terminal on linux, the paths shortened, for a project whose python recipe `clean` reads a 93.8 MiB table and the 5 files of a zip, both with `place = false`, after `fetchloom push --inputs clean --to /home/me/lab-mirror`:
+[`fetchloom push --inputs <recipe>`](push.md) puts exactly that raw data on a folder mirror. gc reads each copy it relies on in full, so 200 GiB on the mirror means 200 GiB read, and a `Checked` line says how much and how long; then it says what it would free and keep and what freeing costs, and asks. stderr of a real run at a terminal on linux, paths shortened, for a project whose python recipe `clean` reads a 93.8 MiB table and the 5 files of a zip, both with `place = false`, after `fetchloom push --inputs clean --to /home/me/lab-mirror`:
 
 ```text
     Checked 6 files · 99.5 MiB on /home/me/lab-mirror in 392 ms
@@ -175,7 +175,7 @@ free adult and covid, 99.5 MiB, from the cache? [y/N] y
     Cleaned the cache, keeping the rest of what 1 project needs
 ```
 
-`du -sh` of the cache said `100M` before and `136K` after. the project still syncs, and `fetchloom build` finds clean up to date, since its result stays in the cache. a build that runs clean again, as after a change to clean.py or with `build --check`, copies the raw data back from a folder mirror, as `Copied 6 files · 99.5 MiB from /home/me/lab-mirror`, or downloads it from its source; folder mirrors are read with `--offline` too. so keep the mirror where builds can read it: a [mirror is not an archive](../mirrors.md#a-mirror-is-not-an-archive), and once it and the source have lost a file, no build can make the result again.
+`du -sh` of the cache went from `100M` to `136K`. the project still syncs, and `fetchloom build` finds clean up to date, since its result stays in the cache. a build that runs clean again, as after a change to clean.py or with `build --check`, copies the raw data back from a folder mirror, `--offline` too, as `Copied 6 files · 99.5 MiB from /home/me/lab-mirror`, or downloads it from its source. so keep the mirror where builds can read it: a [mirror is not an archive](../mirrors.md#a-mirror-is-not-an-archive), and once it and the source have lost a file, no build can make the result again. use `--inputs` for raw data you rarely rebuild from.
 
 no keeps everything as it was. `--yes` answers yes. without a terminal, and with `--json`, gc stops before it changes anything, the usual gc included, with `unconfirmed`, exit 1, and says what a yes would free; the JSON `fix` is null, since only a person may agree:
 
@@ -245,9 +245,5 @@ verification does not check copies in `data/`. after it finds changed bytes, run
 
 | symptom | cause | fix |
 |---|---|---|
-| a recent unused object remains | gc uses a 24-hour age rule | collect later or use `cache gc --now` |
 | `get` data is collected | one-off downloads do not register a project | use a project for inputs whose cache retention matters |
-| a damaged independent copy passes cache verification | only cache objects are checked | inspect that project's files separately |
-| gc reports errors after deleting files | cleanup can partially succeed | inspect the causes in `not_removed` and retry after fixing them |
 | `gc --inputs` keeps raw data with `no_copy` or `no_mirror` | the mirror lacks it, or gc was not told of the mirror | run `fetchloom push --inputs <recipe> --to <folder>`, then name that folder with `--mirror` or the `mirrors` setting |
-| a build after `gc --inputs` copies or downloads the raw data again | gc freed what the build reads | expected; use `--inputs` for raw data you rarely rebuild from |

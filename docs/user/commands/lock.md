@@ -60,18 +60,22 @@ after an upgrade, run `fetchloom sync` to place the new inputs, and commit `data
 
 ## after a git merge
 
-a git merge that could not combine two changes leaves both sides in `data.toml` or `data.lock`, between git's `<<<<<<<`, `=======` and `>>>>>>>` lines. every other command then stops with `project.invalid` and names `fetchloom lock`, which merges both files one dataset at a time, as `pnpm install` merges a lockfile, without resolving or downloading anything:
+a git merge that could not combine two changes leaves both sides in `data.toml` or `data.lock`, between git's `<<<<<<<`, `=======` and `>>>>>>>` lines. every other command then stops with `project.invalid`, as `data.toml has an unfinished git merge conflict`, and names `fetchloom lock`, which merges both files one dataset at a time, as `pnpm install` merges a lockfile, without resolving or downloading anything:
 
 - a dataset only one side added, changed or removed takes that side.
 - a dataset both sides have alike stays. two pins of the same files made at different times are alike.
 - a dataset each side changed its own way stops the merge with `unconfirmed`, exit 1, naming each one, and nothing is written. so does a dataset one side removed while the other pinned other files for it, by a re-import or `lock --upgrade`. those leave its entry in `data.toml` as it was, so git merges `data.toml` by itself and takes the removal, and only `data.lock` holds conflict lines.
 - `--ours <name>` keeps our side of such a dataset and `--theirs <name>` their side, its entry in `data.toml` and its pin alike, each whole as that side's branch has it when git can tell: a removed dataset comes back with its comments and every key of its entry. `--yes` never picks a side.
+- a pin is kept only when it answers the merged entry; an entry no pin answers is left for the next `fetchloom sync` or `fetchloom lock` to pin, with a warning.
+- a [recipe](../recipes.md)'s result merges as a pin does: from the side that built it anew, with a choice when both sides built it their own way, and dropped with the recipe. a merged data.toml whose recipes would not read, as when one side's recipe reads a dataset the other side removed, stops the merge, saying why.
+- the same values with other comments on each side keep one side's text, with a warning naming it.
+- `[project]` and comments outside the datasets must agree or have changed on one side only. otherwise the merge stops with `project.invalid`, exit 50, and that part is for a person: keep one side's lines between git's conflict lines, such as one `data_dir`, delete the other side's lines and the conflict lines, then run `fetchloom lock`.
 
 ours and theirs are git's sides. in a merge, ours is the branch checked out and theirs the branch merged in. in a rebase, ours is the branch you rebase onto, with the commits already replayed, and theirs is your commit being replayed. a cherry-pick's theirs is the commit picked.
 
-a dataset's pin follows its merged entry: one side's pin is kept only when it answers that entry, so a dataset whose entry no pin answers is left for the next `fetchloom sync` or `fetchloom lock` to pin, with a warning. a [recipe](../recipes.md)'s result merges as a pin does: taken from the side that built it anew, with a choice needed when both sides built it their own way, and dropped with the recipe; a merged data.toml whose recipes would not read, such as one side's recipe reading a dataset the other side removed, stops the merge and names why. the merge writes `data.toml`, the lists in `data.lock.d` the kept pins name, and `data.lock`, then removes the lists no pin names. `--dry-run` shows the merge without writing, and `--check` and `--upgrade` stop as other commands do until the merge is written. a dataset with the same values but other comments on each side keeps one side's text, with a warning naming it. `[project]` and comments outside the datasets must agree or have changed on one side only; otherwise the merge stops with `project.invalid`, exit 50, and that part is for a person: keep one side's lines between git's conflict lines, such as one `data_dir`, delete the other side's lines and the conflict lines, then run `fetchloom lock`. deleting `data.lock` to get past a conflict instead pins every dataset anew, which can pin newer data than either branch had.
+the merge writes `data.toml`, the lists in `data.lock.d` the kept pins name, and `data.lock`, then removes the lists no pin names. `--dry-run` shows the merge without writing, and `--check` and `--upgrade` stop as other commands do until it is written. deleting `data.lock` to get past a conflict instead pins every dataset anew, which can pin newer data than either branch had.
 
-telling an addition on one side from a removal on the other needs the merge base, what both branches started from. `lock` asks git for each side of a file, and for their base, from git's index or the commits being merged, so a side holds only the lines its branch wrote. git is found on `PATH` outside the project and runs with no shell, no input and no transport, under a time and size limit, so it never reaches the network.
+telling an addition on one side from a removal on the other needs the merge base, what both branches started from. `lock` asks git for each side of a file and for their base, from git's index or the commits being merged, so a side holds only the lines its branch wrote. git is found on `PATH` outside the project and runs with no shell, no input and no transport, under a time and size limit, so it never reaches the network.
 
 without git, or once `git add` has marked the files resolved, `lock` reads the sides from the conflict lines, and the base from the `|||||||` section that git's `diff3` and `zdiff3` conflict styles write. without a base, every dataset the sides disagree on needs a choice; `git config merge.conflictStyle zdiff3` before merging or rebasing makes the conflict lines show it. a pin read from conflict lines that does not read whole, as when git merged in lines of the other side's pin, stops the merge with `project.invalid`, exit 50, and help to copy that side's table back by hand.
 
@@ -95,16 +99,7 @@ $ fetchloom lock --ours iris --theirs penguins
      Merged data.toml and data.lock · iris from ours, penguins from theirs, 1 the same
 ```
 
-and with git, after one branch removed `udata` while the other ran `lock --upgrade udata`, merged either way:
-
-```sh
-$ fetchloom lock
-error: the merge needs a choice for udata
-  udata: one side changed it and the other removed it
-  help: choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat
-```
-
-`-v` also shows, after [what the run spends](../resources.md#see-what-a-run-uses), what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. the same merge, on the branch that removed `udata`:
+`-v` also shows, after [what the run spends](../resources.md#see-what-a-run-uses), what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. with git, after one branch removed `udata` while the other ran `lock --upgrade udata`, merged either way, on the branch that removed it:
 
 ```sh
 $ fetchloom -v lock
@@ -130,7 +125,15 @@ with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`,
 
 ## exit codes
 
-0 means pins were updated, a merge was written or a check passed. a stale lock under `--check` exits 1 with `lock.outdated`, a recipe data.lock does not pin as built now exits 60 with `build.needed`, and a merge that needs a choice exits 1 with `unconfirmed`. incompatible options exit 2, as do `--ours` and `--theirs` without conflict lines, or naming a dataset that needs no choice. conflict lines out of git's order, a side that does not read, a pin read from the conflict lines that does not read whole, or a `[project]` part that differs on both sides, exit 50 with `project.invalid`. resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).
+| exit | when |
+|---|---|
+| 0 | pins were updated, a merge was written or a check passed |
+| 1 | `lock.outdated`: a stale lock under `--check`; `unconfirmed`: a merge that needs a choice |
+| 2 | incompatible options, or `--ours` and `--theirs` without conflict lines or naming a dataset that needs no choice |
+| 50 | `project.invalid`: conflict lines out of git's order, a side that does not read, a pin read from the conflict lines that does not read whole, or a `[project]` part that differs on both sides |
+| 60 | `build.needed`: a recipe data.lock does not pin as built now |
+
+resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -140,5 +143,3 @@ with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`,
 | an explicit version did not advance | the reference still names that version | edit `ref` deliberately, then lock |
 | `--check` passes despite edited data | it checks specs, not contents | use `status`; use `cache verify` for cached objects |
 | rebuilding a broken lock changes inputs | fresh resolution can choose newer data | restore the original lock from git when those pins matter |
-| `data.toml has an unfinished git merge conflict`, or the same for `data.lock` | a git merge left both sides between its conflict lines | run `fetchloom lock`, which [merges them](#after-a-git-merge) |
-| `the merge needs a choice` for a dataset only one side has | no merge base: git is not on `PATH`, or the files were already `git add`ed, and git's conflict lines show none, as its default style does | choose with `--ours` or `--theirs`, or merge again with `git config merge.conflictStyle zdiff3` |

@@ -22,7 +22,7 @@ fetchloom auth logout [options] <account>
 
 ## signing in
 
-`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, and what to pick there, and for a gated dataset or a competition, accept its terms on its own page with the same account. paste the key; it stays hidden, then only its first and last four characters and its length show, so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it. a file below your home folder reads as `~/…`, here and in `fetchloom auth`. stderr excerpt from a loopback check with a synthetic key:
+`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, what to pick there, and for a gated dataset or a competition, accept its terms on its own page with the same account. the key you paste stays hidden, then shows as its first and last four characters and its length, so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it. a file below your home folder reads as `~/…`, here and in `fetchloom auth`. stderr from a loopback check with a made-up key:
 
 ```text
     Sign in hugging face
@@ -37,7 +37,7 @@ save it to ~/.cache/huggingface/token? [Y/n] yes
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
-when a key is already saved, it asks before replacing it; `--yes` answers both questions yes. a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github and earthdata check a key without naming whose it is, and a login for any other host is not checked.
+it asks before replacing a saved key; `--yes` answers both questions yes, and a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github and earthdata check a key without naming whose it is, and a login for any other host is not checked.
 
 | account | where the key goes | also read by |
 |---|---|---|
@@ -61,7 +61,7 @@ echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --wi
 
 ## when a download is refused
 
-at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`: its first line names what was refused. the question defaults to no, so enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those refusals the offer first says to check the name, and where:
+at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`, its first line naming what was refused, and defaults to no: enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those the offer first says to check the name, and where:
 
 ```text
     Refused huggingface.co has no dataset acme-lab/field-notes, or it is private
@@ -105,7 +105,15 @@ it lists each account with a key, where the key came from and, online, who the s
   Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure
 ```
 
-`aws`, `google` and `azure` are the keys [private buckets](../signing-in.md#private-buckets-and-folders), containers and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret. for `aws`, that is the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each shown by the last four characters of its id, else the program that would give them: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role. each program is named, and runs only once a bucket needs keys. for `google`, it is the application default credentials file, as a service account with its email or a person's login. for `azure`, it is the SAS in `AZURE_STORAGE_SAS_TOKEN` or the key in `AZURE_STORAGE_KEY`, each named by its variable, else the az cli, named by its path and as the user its saved login names, once `az login` has signed it in, or this machine's managed identity, when `AZURE_TOKEN_CREDENTIALS` asks for it. keys your AWS settings send to another endpoint are listed for it, as `s3 at https://minio.lab.example:9000`, and AWS has none. a SAS or a key kept to the account `AZURE_STORAGE_ACCOUNT` names is listed for that account, as `azure account lab`, and `azure` then names what the other accounts' containers get. settings fetchloom cannot use, such as an `AWS_PROFILE` neither AWS file has, get a warning with what would fix them:
+`aws`, `google` and `azure` are the keys [private buckets](../signing-in.md#private-buckets-and-folders), containers and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret.
+
+| row | what it names |
+|---|---|
+| `aws` | the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each by the last four characters of its id; else the program that would give them, which runs only once a bucket needs keys: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role |
+| `google` | the application default credentials file, as a service account with its email or a person's login |
+| `azure` | the SAS in `AZURE_STORAGE_SAS_TOKEN` or the key in `AZURE_STORAGE_KEY`, by its variable; else the az cli, by its path and the user its saved login names, once `az login` signed it in; or this machine's managed identity, when `AZURE_TOKEN_CREDENTIALS` asks for it |
+
+keys your AWS settings send to another endpoint are listed for it, as `s3 at https://minio.lab.example:9000`, and `aws` then has none. a SAS or a key kept to the account `AZURE_STORAGE_ACCOUNT` names is listed for that account, as `azure account lab`, and `azure` then names what other accounts' containers get. settings fetchloom cannot use, such as an `AWS_PROFILE` neither AWS file has, get a warning with what would fix them:
 
 ```text
   Signed in to aws with key …MPLE · profile default in ~/.aws/credentials

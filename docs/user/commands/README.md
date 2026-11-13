@@ -33,7 +33,7 @@ from the first release, the archives and debian packages also carry a manual pag
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C <dir>`, `--mirror <url>` and `--no-config`. `add`, `get`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>`, `--no-extract` and `-i <file>`, which reads links from a list. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
+every command takes these; each command's page lists its own options.
 
 | option | effect |
 |---|---|
@@ -53,7 +53,7 @@ every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | `--help` | print the whole help, including after a command. the first of `-h` and `--help` on a line decides |
 | `-V`, `--version` | print the version; with `-v`, also the OS, the architecture, the git commit the build came from and the cache folder; root-level option |
 
-all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists persistent shell settings and color precedence. a [settings file](../reference/environment.md#settings-file), `settings.toml`, keeps settings for every run, and [`fetchloom settings`](settings.md) shows each setting and where it came from.
+all but `--version` and `--dry-run` go before or after the command; `--dry-run` goes after it, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists the variables and color precedence, a [settings file](../reference/environment.md#settings-file), `settings.toml`, keeps settings for every run, and [`fetchloom settings`](settings.md) shows each setting and where it came from.
 
 ```sh
 fetchloom help concepts
@@ -63,24 +63,20 @@ fetchloom help cache gc
 fetchloom help --json
 ```
 
-`help <command>` matches `<command> --help`, the whole help. help is text for people. `fetchloom help --json` prints one JSON document describing every command, option and example instead; `<command> --help --json` describes only that command. help and messages always say `fetchloom`, also when you typed `fl`, its short name.
+`help <command>` is `<command> --help`, the whole help, as text for people. `fetchloom help --json` prints one JSON document describing every command, option and example, and `<command> --help --json` only that command. help and messages always say `fetchloom`, also when you typed `fl`, its short name.
 
 ## project discovery
 
-project commands find the nearest `data.toml` at or above the working directory, inside the git repository the working directory is in. `-C` chooses where that search starts, and is how you use a project above the repository. after a run with `-C`, a hint, `next:` line, help or error that names a command for the project, or a `get` into that folder, names the folder after `-C` as a full path, as `` hint: `fetchloom -C /home/ada/first sync` places missing or updated files and reports any conflicts it keeps``, so it works as typed in the folder you ran it from. a command for the whole machine, such as `auth`, `cache`, `search` or `settings`, and a line about what other clones run keep the plain command. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one. [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule.
+project commands find the nearest `data.toml` at or above the working directory, inside its git repository; [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule. `-C` chooses where that search starts, and is how you use a project above the repository. after a run with `-C`, a hint, `next:` line, help or error that names a command for the project, or a `get` into that folder, names the folder after `-C` as a full path, as `` hint: `fetchloom -C /home/ada/first sync` places missing or updated files and reports any conflicts it keeps``, so it works as typed where you ran it. a command for the whole machine, such as `auth`, `cache`, `search` or `settings`, and a line about what other clones run keep the plain command. `add` starts a project in the current folder when none is found, and bare `fetchloom` shows status inside a project and a welcome outside one.
 
 ## typos
 
-a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close to what you typed, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. close means at most one change for every three letters, and at least one: a letter added, dropped, changed or swapped with its neighbour. a command is matched in any case, so `fetchloom Serach iris` suggests `fetchloom search iris`, and the names other tools use for three of them are taken too: `fetchloom rm iris` suggests `fetchloom remove iris`, `fetchloom ls` suggests `fetchloom list` and `fetchloom version` suggests `fetchloom --version`. a help topic that does not exist lists the topics: concepts, recipes, environment and exit-codes, or a command. a line holding a link with a query, a fragment or a login is never repeated, since any of them may carry a secret under a name fetchloom does not know, such as dropbox's `rlkey`, so then the suggestion names the command and the corrected word alone.
+a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. close means at most one change for every three letters, and at least one: a letter added, dropped, changed or swapped with its neighbour. commands match in any case, so `fetchloom Serach iris` suggests `fetchloom search iris`, and other tools' names for three of them count too: `fetchloom rm iris` suggests `fetchloom remove iris`, `fetchloom ls` suggests `fetchloom list` and `fetchloom version` suggests `fetchloom --version`. an unknown help topic lists the topics: concepts, recipes, environment and exit-codes, or a command. a line holding a link with a query, a fragment or a login is never repeated, since any of them may carry a secret under a name fetchloom does not know, such as dropbox's `rlkey`; the suggestion then names the command and the corrected word alone.
 
 ## output
 
-stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
+stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON; `cache` and `search` print their bare path or references there when stdout is redirected or `-q` hides the story, which already shows them at a terminal. stderr carries progress, warnings, summaries and errors.
 
 at a terminal, a line on stderr wider than the terminal wraps between words, never inside backticks or quotes. help there puts an example's comment below it when both do not fit, and continues a command too long for a line after `\`, or a backtick on windows, so it still runs when pasted. a pipe, a file or a coding agent gets each line whole.
 
-a ready `path` has no closing summary. a successful `lock --check` ends with `Ok data.lock matches data.toml`. quiet mode keeps stdout answers, warnings and errors. JSON mode returns one document and never prompts; `--progress` keeps plain progress lines on stderr beside it, and explicit debug logging can still write stderr.
-
-[terminal output](../../dev/architecture/output.md) defines the palette and terminal fallbacks. [search selection](search.md#choosing-a-dataset) explains the picker and noninteractive refusal to guess.
-
-[scripting](../scripting.md) covers machine-readable answers. [exit codes](../reference/exit-codes.md) distinguishes usage, network, integrity and local failures.
+a ready `path` has no closing summary, and a passing `lock --check` ends with `Ok data.lock matches data.toml`. [terminal output](../../dev/architecture/output.md) defines the palette and terminal fallbacks, [search selection](search.md#choosing-a-dataset) the picker and why it never guesses without a terminal, [scripting](../scripting.md) the machine-readable answers and [exit codes](../reference/exit-codes.md) the failure kinds.

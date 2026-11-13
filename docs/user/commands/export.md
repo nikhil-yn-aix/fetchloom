@@ -22,7 +22,7 @@ fetchloom export [options] [name]...
 | `--format sha256` | the default: one `<sha256>  <path>` line for each file in the data folder, archive members included, as `sha256sum -c` reads them |
 | `--format links` | one `<link> <sha256>` line for each file downloaded: a plain file, or an archive as one packed file, as `fetchloom add -i` and `fetchloom get -i` read it. `wget -i` and `aria2c -i` take the whole line as one link, which the server does not know |
 | `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=` its place below the data folder and `checksum=sha-256=` |
-| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty` |
+| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists` |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
 
 [global options](README.md#global-options) also apply.
@@ -38,7 +38,7 @@ data/iris/iris.csv: OK
 
 after `fetchloom build`, which ran the step and placed `clean`, both lines say `OK`.
 
-the `sha256` paths start at the project's folder, so check them from there. from a real run with a zenodo dataset and a zip from UCI, which unpacks to four files:
+the `sha256` paths start at the project's folder, so run `sha256sum -c` there, or it finds no such file. from a real run with a zenodo dataset and a zip from UCI, which unpacks to four files:
 
 ```sh
 $ fetchloom export -o data.sha256
@@ -83,7 +83,7 @@ aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
 
 `out=` puts each file in the folder its dataset is placed in, so `aria2c -i sources.aria2 -d data`, run in the project's folder, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
-aria2c writes a file already in its folder again under a new name, as `tips.1.csv` beside `tips.csv`. `--check-integrity=true --auto-file-renaming=false` stops that: aria2c then keeps a file whose SHA-256 matches, downloads one changed at the same size again, and stops with exit 13 at a file of another size; delete that file and run it again. it cannot write the read-only files sync placed, so point it at a folder sync did not fill. a second run with both options, over the files the first wrote, then the check, from real runs of aria2c 1.37 for a project whose `iris` and `tips` have `path = "raw"`:
+aria2c writes a file already in its folder again under a new name, as `tips.1.csv` beside `tips.csv`, unless it runs into an empty folder or with `--check-integrity=true --auto-file-renaming=false`: it then keeps a file whose SHA-256 matches, downloads one changed at the same size again, and stops with exit 13 at a file of another size, which you delete before running it again. it cannot write the read-only files sync placed, so point it at a folder sync did not fill. a second run with both options, over the files the first wrote, then the check, from real runs of aria2c 1.37 for a project whose `iris` and `tips` have `path = "raw"`:
 
 ```sh
 $ aria2c -q -i sources.aria2 -d data --check-integrity=true --auto-file-renaming=false
@@ -135,14 +135,4 @@ a refused link is never shown, in the error or in JSON.
 
 ## exit codes
 
-0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, and 50 that a link cannot be written or that `-o` names a file already there. a folder or `-` for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).
-
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| `sha256sum -c` says no such file | it ran outside the project's folder | run it where `data.toml` is |
-| `the files inside ... are not known on this machine` | the cache never unpacked that archive, as in a fresh clone | run `fetchloom sync`, or export `--format links` |
-| `data.sha256 already exists` | `-o` never replaces a file without `--force` | choose another name, or add `--force` |
-| `wget -i` or `aria2c -i` asks for a link ending in `%20` and a hash, and gets 404 | they read a whole line of the `links` form as one link | give aria2c the `aria2` form; `fetchloom add -i` and `get -i` read `links` |
-| aria2c leaves `tips.1.csv` beside `tips.csv` | aria2c renames a file already in its folder | run it into an empty folder, or add `--check-integrity=true --auto-file-renaming=false` |
+0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, 50 that a link cannot be written or that `-o` names a file already there, and 60 that a recipe is not built yet. a folder or `-` for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).
