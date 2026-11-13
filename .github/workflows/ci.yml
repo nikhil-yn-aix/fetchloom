@@ -145,9 +145,9 @@ jobs:
         # what each runner has, so a test that lacks one fails rather than skips
         include:
           - os: ubuntu-24.04
-            require: script,git,hardlinks,raw-names,distinct-names,unprivileged,pwsh,fish
+            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish
           - os: ubuntu-24.04-arm
-            require: script,git,hardlinks,raw-names,distinct-names,unprivileged
+            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash
           - os: windows-11-arm
             require: git,hardlinks
           - os: macos-15

@@ -638,7 +638,7 @@ mod tests {
         let staging = cache.staging().unwrap();
         let object = staging.new_object().unwrap();
         if staging.lock.is_none() {
-            return;
+            return crate::test_skips::skip("file-locks", "this disk takes no file locks");
         }
         let mut paths = vec![staging.folder.clone()];
         let mut at = 0;

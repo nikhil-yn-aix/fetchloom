@@ -596,7 +596,7 @@ mod tests {
         let mut object = cache.new_object().unwrap();
         object.write_all(b"slow bytes").unwrap();
         let Some(born) = birth(&object.temp.path, &object.file.metadata().unwrap()) else {
-            return;
+            return crate::test_skips::skip("birth-time", "this disk keeps no birth time");
         };
         object
             .file
@@ -615,7 +615,7 @@ mod tests {
         let mut object = cache.new_object().unwrap();
         object.write_all(b"bytes").unwrap();
         let Some(born) = birth(&object.temp.path, &object.file.metadata().unwrap()) else {
-            return;
+            return crate::test_skips::skip("birth-time", "this disk keeps no birth time");
         };
         let stored = object.seal(true).unwrap().publish(&cache).unwrap();
         let path = cache.object_path(&stored.digest);

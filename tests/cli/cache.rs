@@ -534,7 +534,10 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
         drop(file);
         fs::remove_file(&object)?;
         if cache.starts_with(build.path()) {
-            return Ok(());
+            return crate::support::skipped(
+                "sparse-files",
+                "neither disk holds a sparse file of 64 GiB",
+            );
         }
         cache = build.path().join("cache");
     };

@@ -784,7 +784,10 @@ fn cli_output_non_unicode_paths_return_error_documents() -> Result {
     // fetchloom there
     match std::fs::create_dir(&project) {
         Err(err) if err.raw_os_error() == Some(rustix::io::Errno::ILSEQ.raw_os_error()) => {
-            return Ok(());
+            return crate::support::skipped(
+                "raw-names",
+                "this filesystem refuses names that are not text",
+            );
         }
         made => made?,
     }

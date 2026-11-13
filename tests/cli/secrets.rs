@@ -912,7 +912,7 @@ fn generated_output_roots_refuse_links_outside_the_working_directory() -> Result
             };
             fs::create_dir_all(&root)?;
             if !link_folder(&outside, &root.join("payload")) {
-                return Ok(());
+                return crate::support::skipped("symlinks", "no symbolic link can be made here");
             }
             let body = if archive {
                 marker_zip()?

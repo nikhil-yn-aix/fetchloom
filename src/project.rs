@@ -1292,7 +1292,7 @@ mod tests {
         #[cfg(windows)]
         let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
         if !made {
-            return;
+            return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
         let err = read_owner(&path).err().map(|err| err.kind());
         assert_eq!(err, Some(io::ErrorKind::InvalidInput));
@@ -1314,7 +1314,7 @@ mod tests {
             #[cfg(windows)]
             let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
             if !made {
-                return;
+                return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
             }
             let (answer, answered) = std::sync::mpsc::channel();
             let holder = Project {
@@ -1373,7 +1373,7 @@ mod tests {
         #[cfg(windows)]
         let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
         if !made {
-            return;
+            return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
         assert_eq!(project.state().1, 0);
     }
@@ -1637,7 +1637,10 @@ mod tests {
         // fat and exfat on windows keep a removed file's name until its last handle closes, so
         // there no lock can lose its name while it is held
         if path.exists() {
-            return;
+            return crate::test_skips::skip(
+                "freed-names",
+                "this disk keeps a removed file's name while it is open",
+            );
         }
         assert!(!names(&path, &waiting).unwrap());
         let Hold::Held(held) = project.hold("sync").unwrap() else {

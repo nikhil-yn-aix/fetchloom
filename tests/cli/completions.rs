@@ -159,7 +159,9 @@ fn bash_loads_the_script() -> Result {
         .output()
     {
         Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return crate::support::skipped("bash", "no bash, so no bash completion to load");
+        }
         Err(err) => return Err(err.into()),
     };
     assert!(loaded.status.success(), "{}", text(&loaded.stderr)?);
@@ -175,6 +177,13 @@ fn bash_loads_the_script() -> Result {
 #[cfg(unix)]
 #[test]
 fn bash_completes_the_dataset_names_data_toml_has() -> Result {
+    if std::process::Command::new("bash")
+        .args(["-c", ":"])
+        .output()
+        .is_err()
+    {
+        return crate::support::skipped("bash", "no bash, so no bash completion to load");
+    }
     let sandbox = Sandbox::new()?;
     std::fs::write(
         sandbox.work().join("data.toml"),
@@ -201,7 +210,7 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
             _fetchloom fetchloom "${{COMP_WORDS[COMP_CWORD]}}" "${{COMP_WORDS[COMP_CWORD - 1]}}" &&
             printf 'offered %s\n' "${{COMPREPLY[@]}}""#
         );
-        let output = match std::process::Command::new("bash")
+        let output = std::process::Command::new("bash")
             .arg("-c")
             .arg(complete)
             .arg("bash")
@@ -210,12 +219,7 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
             .env("PATH", &path)
             .env("FETCHLOOM_SETTINGS", &settings)
             .env("HOME", &home)
-            .output()
-        {
-            Ok(output) => output,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err.into()),
-        };
+            .output()?;
         assert!(output.status.success(), "{}", text(&output.stderr)?);
         Ok(text(&output.stdout)?
             .lines()
@@ -225,9 +229,6 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
             .collect())
     };
     let work = sandbox.work();
-    if offered(&work, "fetchloom ca")?.is_empty() {
-        return Ok(());
-    }
     assert_eq!(offered(&work, "fetchloom path ir")?, ["iris", "irises"]);
     for words in [
         "fetchloom sync cows ir",
@@ -306,7 +307,9 @@ fn bash_takes_the_names_it_is_given_literally() -> Result {
         .output()
     {
         Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return crate::support::skipped("bash", "no bash, so no bash completion to load");
+        }
         Err(err) => return Err(err.into()),
     };
     let stderr = text(&output.stderr)?;

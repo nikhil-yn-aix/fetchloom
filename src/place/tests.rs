@@ -1218,7 +1218,7 @@ fn a_link_at_the_root_is_never_followed() {
     fs::create_dir(&outside).unwrap();
     let root = folder.path().join("data");
     if !link_folder(&outside, &root) {
-        return;
+        return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let mut placer = Placer::new(&root);
 
@@ -1239,7 +1239,7 @@ fn a_link_inside_the_root_is_never_followed() {
     fs::create_dir_all(&outside).unwrap();
     let link = root.join("dataset");
     if !link_folder(&outside, &link) {
-        return;
+        return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let mut placer = Placer::new(&root);
 
@@ -1676,7 +1676,7 @@ fn aliases_above_the_selected_root_keep_their_filesystem_meaning() {
     let alias = folder.path().join("alias");
     fs::create_dir(&real).unwrap();
     if !link_folder(&real, &alias) {
-        return;
+        return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let root = alias.join("data");
     let mut placer = Placer::new(&root);

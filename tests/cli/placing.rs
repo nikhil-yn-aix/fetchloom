@@ -1043,7 +1043,7 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_them_in_pl
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     let before = fs::metadata(&placed)?;
     if before.created().is_err() {
-        return Ok(());
+        return skipped("birth-time", "this disk keeps no birth time");
     }
     let mut changed = V1.to_vec();
     changed[0] = b'X';

@@ -913,7 +913,10 @@ fn a_build_that_cannot_fetch_a_changed_cache_copy_again_says_why() -> Result {
     sandbox.allow(&server.url);
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     if added["work"]["hardlinks"] != 1 {
-        return Ok(());
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
     }
     let manifest = sandbox.work().join("data.toml");
     fs::write(

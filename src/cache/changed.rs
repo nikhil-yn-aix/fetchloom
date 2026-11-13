@@ -507,7 +507,7 @@ mod tests {
             .and_then(|found| super::super::object::birth(&object, &found))
             .is_none()
         {
-            return;
+            return crate::test_skips::skip("birth-time", "this disk keeps no birth time");
         }
         let sealed = fs::metadata(&object).unwrap().modified().unwrap();
         rewrite(&object, b"evil");
@@ -538,7 +538,7 @@ mod tests {
             .ok()
             .and_then(|found| super::super::object::birth(&object, &found))
         else {
-            return;
+            return crate::test_skips::skip("birth-time", "this disk keeps no birth time");
         };
         rewrite(&object, b"good");
         fs::File::options()
@@ -572,7 +572,7 @@ mod tests {
             .ok()
             .and_then(|found| super::super::object::birth(&object, &found))
         else {
-            return;
+            return crate::test_skips::skip("birth-time", "this disk keeps no birth time");
         };
         let placed = dir.path().join("placed");
         if fs::hard_link(&object, &placed).is_err() {

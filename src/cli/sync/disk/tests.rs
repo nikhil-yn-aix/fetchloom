@@ -103,7 +103,10 @@ fn two_spellings_both_listed_are_two_files() {
     }
     // apfs and hfs+ see both spellings as one name, which leaves one folder
     if fs::read_dir(root.join("data")).unwrap().count() < 2 {
-        return;
+        return crate::test_skips::skip(
+            "distinct-names",
+            "this disk takes one unicode form of `café` for the other",
+        );
     }
     let mut listings = Listings::new();
     for name in [composed, decomposed] {

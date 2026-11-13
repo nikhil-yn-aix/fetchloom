@@ -539,7 +539,10 @@ fn a_kept_changed_copy_never_replaces_a_file_already_there() -> Result {
     sandbox.allow(&server.url);
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     if added["work"]["hardlinks"] != 1 {
-        return Ok(());
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
     }
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     fs::write(placed.with_file_name("iris.csv.changed"), "my notes\n")?;

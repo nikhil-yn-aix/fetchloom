@@ -234,7 +234,10 @@ fn a_finished_download_leaves_a_lock_file_another_run_holds() {
     fs::remove_file(&lock).unwrap();
     // fat and exfat on windows keep a removed file's name until its last handle closes
     if lock.exists() {
-        return;
+        return crate::test_skips::skip(
+            "freed-names",
+            "this disk keeps a removed file's name while it is open",
+        );
     }
     let second = owned(&cache, url);
     drop(first);
@@ -261,7 +264,10 @@ fn a_sweep_takes_only_a_lock_file_nobody_holds_under_its_own_name() {
     drop(held);
     // fat and exfat on windows keep a removed file's name until its last handle closes
     if lock.exists() {
-        return;
+        return crate::test_skips::skip(
+            "freed-names",
+            "this disk keeps a removed file's name while it is open",
+        );
     }
     let second = owned(&cache, url);
     assert!(unheld(&lock, stale).is_none(), "the name moved on");

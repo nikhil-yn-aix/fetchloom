@@ -425,7 +425,10 @@ fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
     sandbox.allow(&server.url);
     let added = crate::support::json(&sandbox.run(&["--json", "add", &server.url])?)?;
     if added["work"]["hardlinks"] != 1 {
-        return Ok(());
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
     }
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     crate::support::edit(&placed, b"changed in place\n")?;
