@@ -986,6 +986,7 @@ fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
 #[test]
 fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
     const SENTINEL: &str = "s3ntinel";
+    // values under unknown names are masked; rlkey's shows as written, so a repeat would show it
     for suffix in ["?rlkey=s3ntinel&dl=1", "#s3ntinel"] {
         for mode in [&[][..], &["--json"]] {
             let sandbox = Sandbox::new()?;
