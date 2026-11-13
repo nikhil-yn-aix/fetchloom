@@ -12,6 +12,8 @@ BLOB = "https://github.com/nikhil-yn-aix/fetchloom/blob/main/"
 
 
 def relink(match):
+    """a markdown link of llms.txt as the site serves it: a docs page becomes its site page, a skill
+    its copy beside llms.txt, another repository file its page on github; an address stays."""
     label, url = match.group(1), match.group(2)
     if re.match(r"[a-z]+:", url):
         return match.group(0)
@@ -24,6 +26,8 @@ def relink(match):
 
 
 def export_agents(root, site):
+    """write the agent skills, llms.txt with the site's links and llms-full.txt, every user page in
+    SUMMARY.md's order, into ``site``."""
     shutil.copytree(root / "skills", site / "skills", dirs_exist_ok=True)
     llms = re.sub(r"\[([^\]]*)\]\(([^)\s]+)\)", relink,
                   (root / "llms.txt").read_text(encoding="utf-8"))

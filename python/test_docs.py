@@ -1,7 +1,8 @@
-"""Links in the docs and the files around them."""
+"""links in the docs and the files around them reach their files and headings."""
 
 from pathlib import Path
 import re
+import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
 
@@ -37,12 +38,38 @@ def anchors(page):
     for _, line in prose(page):
         heading = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
         if heading:
-            slug = re.sub(r"[^\w\- ]", "", heading[1].replace("`", "").lower()).replace(" ", "-")
+            slug = re.sub(r"[^\w\- ]", "", heading[1].lower()).replace(" ", "-")
             unique, count = slug, 1
             while unique in found:
                 unique, count = f"{slug}-{count}", count + 1
             found.add(unique)
     return found
+
+
+class Readers(unittest.TestCase):
+    """what the checks below read from a page, on small pages."""
+
+    def page(self, text):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name, "page.md")
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_prose_leaves_out_each_fenced_block(self):
+        # a fence closes only on its own character, and one left open hides the rest
+        page = self.page("one\n```sh\nfetchloom sync\n~~~\n```\ntwo\n  ~~~~\n```\n  ~~~~\nthree\n````\nunclosed\n")
+        self.assertEqual(list(prose(page)), [(1, "one"), (6, "two"), (10, "three")])
+
+    def test_links_are_read_outside_fences(self):
+        page = self.page("see [a](a.md) and [b](b.md#part)\n```\n[c](c.md)\n```\n[d](https://example.org)\n")
+        self.assertEqual(list(links(page)), [(1, "a.md"), (1, "b.md#part"), (5, "https://example.org")])
+
+    def test_anchors_are_the_fragments_github_gives_headings(self):
+        page = self.page("# Getting Started\n## the `sync` command\n## local changes ##\n## what's new?\n## a  b\n"
+                         "## données é\n```\n# not a heading\n```\n## local changes\n## local changes\n#hashtag\n")
+        self.assertEqual(anchors(page), {"getting-started", "the-sync-command", "local-changes", "whats-new", "a--b",
+                                         "données-é", "local-changes-1", "local-changes-2"})
 
 
 class DocumentationLinks(unittest.TestCase):
