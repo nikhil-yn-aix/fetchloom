@@ -12,6 +12,8 @@ TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
 
 
 def summarize(rows):
+    """one tool's runs in one case: median, fastest and slowest passed run, failure counts, and
+    medians of the other measures."""
     successful = [r for r in rows if r.get("status") == "passed"]
     times = [r["wall_seconds"] for r in successful]
     def metric(name):
@@ -34,11 +36,13 @@ def no_bar(result):
 
 
 def failures(entry):
+    """failures over rounds, such as 2/5, with timed out when every failure was one."""
     text = f"{entry['failures']}/{entry['rounds']}"
     return text + " timed out" if entry["failures"] and entry.get("timeouts") == entry["failures"] else text
 
 
 def seconds(value):
+    """a duration in ms, s or min, or n/a."""
     if value is None:
         return "n/a"
     if value < 1:
@@ -49,6 +53,7 @@ def seconds(value):
 
 
 def size(value):
+    """a byte count in binary units, such as 1.5 KiB, or n/a."""
     if value is None:
         return "n/a"
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -58,6 +63,8 @@ def size(value):
 
 
 def ratio(value, base):
+    """value over base, such as 1.23x, even (<5%) within 5% either way, or n/a without a value
+    and a positive base."""
     if value is None or base is None or base <= 0:
         return "n/a"
     result = value / base
@@ -98,6 +105,7 @@ TIMES = 90
 
 
 def font_faces():
+    """the card fonts as @font-face rules carrying the font files inline."""
     import base64
     faces = []
     for family, file, weight in (("Instrument Serif", "InstrumentSerif.woff2", 400),
@@ -115,6 +123,7 @@ def times(result):
 
 
 def ordered(summaries):
+    """tools fastest first, those with a failure or no median last."""
     return sorted(summaries.items(), key=lambda pair: (bool(pair[1]["failures"]) or pair[1]["median"] is None,
                                                        pair[1]["median"] or float("inf"), pair[0]))
 
@@ -132,11 +141,13 @@ def verdict(summaries):
     return f"{times(result)} faster" if result > 1 else f"{times(1 / result)} slower"
 
 def story(scenario, count, file_size):
+    """what a scenario does in words, with its file count and size."""
     files = f"{count:,} file" + ("" if count == 1 else "s")
     return STORIES.get(scenario, "{files}").format(files=files, size=size(file_size))
 
 
 def text(x, y, value, colors, role="text", size=13, weight=400, anchor="start", family=MONO, spacing=0):
+    """an svg text element; the value is escaped."""
     extra = f' letter-spacing="{spacing}"' if spacing else ""
     return (f'<text x="{x:.1f}" y="{y:.1f}" fill="{colors[role]}" font-family="{family}" font-size="{size}" '
             f'font-weight="{weight}" text-anchor="{anchor}"{extra}>{html.escape(value)}</text>')
@@ -187,12 +198,16 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
     Path(path).write_text("\n".join(parts) + "\n")
 
 def picture(name, title):
+    """markdown for a card that follows the reader's light or dark theme."""
     escaped = html.escape(title, quote=True)
     return (f'<picture>\n  <source media="(prefers-color-scheme: dark)" srcset="../../assets/bench/{name}-dark.svg">\n'
             f'  <img src="../../assets/bench/{name}.svg" alt="{escaped}">\n</picture>\n')
 
 
 def load_results(results):
+    """every runs.jsonl under results, each with its meta.json; ValueError for mixed conditions, a
+    run recorded twice or live bytes off the reference. returns the rows and the metadata oldest
+    first."""
     paths = sorted(results.rglob("runs.jsonl"))
     if not paths:
         raise ValueError("no runs.jsonl found")
@@ -245,6 +260,8 @@ def load_results(results):
 
 
 def render(results, repo):
+    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md, from every
+    campaign under results."""
     all_rows, metas = load_results(results)
     rows = [row for row in all_rows if not row.get("warmup") and row.get("kind") in ("lab", "live")]
     conditions = {}

@@ -20,11 +20,13 @@ AA = "fetchloom+aa"
 
 
 def disjoint(cpus, build_cpus):
+    """raises ValueError unless both cpu lists are nonempty and share no cpu."""
     if not cpus or not build_cpus or set(cpus) & set(build_cpus):
         raise ValueError("measurement and build CPU lists must be nonempty and disjoint")
 
 
 def case_choice(value):
+    """a filesystem/profile/scenario case the lab measures, for argparse."""
     parts = value.split("/")
     if len(parts) != 3 or parts[0] not in ("ext4", "xfs") or parts[1] not in lab.PROFILES or parts[2] not in fixtures.ALL_SCENARIOS:
         raise argparse.ArgumentTypeError("case must be filesystem/profile/scenario")
@@ -34,6 +36,8 @@ def case_choice(value):
 
 
 def campaign_command(binary, output, cpus, rounds, seed, case=None):
+    """the run.py command of an a/a campaign: plain fetchloom against itself under a setting
+    nothing reads."""
     fs, profile, scenarios = case.split("/") if case else ("ext4", "lan", ",".join(SCENARIOS))
     return [sys.executable, "-B", str(Path(__file__).with_name("run.py")), "--fetchloom", str(binary),
             "--only-tools", "fetchloom", "--profiles", profile, "--scenarios", scenarios,
@@ -42,17 +46,21 @@ def campaign_command(binary, output, cpus, rounds, seed, case=None):
 
 
 def build_commands(cargo, target, jobs):
+    """the cargo clean and release build whose loop is the compiler load."""
     return ([cargo, "clean", "-p", "fetchloom", "--target-dir", str(target)],
             [cargo, "build", "--locked", "--release", "--jobs", str(jobs), "--target-dir", str(target)])
 
 
 def write_state(path, value):
+    """replaces the state file whole, so a reader never sees half of it."""
     pending = path.with_suffix(path.suffix + ".new")
     pending.write_text(json.dumps(value) + "\n")
     pending.replace(path)
 
 
 def build_load(args):
+    """the compiler load: clean release builds on the build cpus, back to back, until one fails;
+    returns its exit code. refuses a target this check did not make."""
     owner = json.loads((args.target / ".fl-bench-island.json").read_text())
     if owner != dict(output=str(args.ready.parent.resolve()), worktree=str(args.worktree.resolve())):
         raise ValueError("compiler target does not belong to this island check")
@@ -73,6 +81,8 @@ def build_load(args):
 
 
 def stop(process, signum=signal.SIGTERM):
+    """ends a process's group: signum, SIGKILL if the process outlives 5 s, and SIGKILL for any member
+    left."""
     if process is None:
         return
     try:
@@ -88,6 +98,8 @@ def stop(process, signum=signal.SIGTERM):
 
 
 def campaign_case(args, output, load=None, case=None):
+    """one case's a/a campaign, failing when it fails or the compiler load ends during it; returns
+    its ab.compare results."""
     command = campaign_command(args.fetchloom, output, args.cpus, args.rounds, args.seed, case)
     log_path = args.out / f"{output.parent.name}-{output.name}.log"
     with log_path.open("w") as log:
@@ -112,6 +124,7 @@ def campaign_case(args, output, load=None, case=None):
 
 
 def campaign(args, output, load=None):
+    """every chosen case's a/a campaign, each in its own folder under output."""
     results = []
     for case in args.cases:
         print(f"{output.name}: {case}", flush=True)
@@ -128,6 +141,8 @@ def noise_reference(noise):
 
 
 def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=20, cases=DEFAULT_CASES):
+    """each case's quiet and loaded a/a results judged against the noise file; a case passes with
+    no reasons against it."""
     reference = noise_reference(noise)
     campaigns = [{r["case"]: r for r in records if r["variant"] == AA}
                  for records in (quiet, loaded)]
@@ -183,6 +198,9 @@ def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=
 
 
 def check(args):
+    """the island check: an a/a campaign per case on a quiet island, then again beside a compiler
+    load, both judged against the noise file. writes island.json; returns 0 only when every case
+    passes."""
     lab.require_root()
     args.cases = args.cases or list(DEFAULT_CASES)
     if len(set(args.cases)) != len(args.cases):

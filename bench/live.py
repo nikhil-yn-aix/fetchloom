@@ -22,6 +22,9 @@ PYTHON = str(lab.VENV / "bin" / "python")
 
 
 def compare(first, second):
+    """how a client's files differ from the reference, both name to sha256: identical,
+    layout-difference for the same bytes under other names, content-difference, or empty when
+    either has none."""
     if not first or not second:
         status = "empty"
     elif first == second:
@@ -36,6 +39,7 @@ def compare(first, second):
 
 
 def request(url):
+    """a GET of url with the benchmark's user agent and a 45 s timeout; returns the open response."""
     return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "fetchloom-benchmark/1"}), timeout=45)
 
 
@@ -45,6 +49,9 @@ def get_json(url):
 
 
 def catalog(service, quick):
+    """the dataset a service's runs fetch, from its public api: fetchloom's ref, the native client's
+    id, and each file's name, size, url and checksum. quick picks a small dataset or only its small
+    files. ValueError when no file matches."""
     result = dict(service=service, select=[], quick=quick)
     files = []
     if service == "zenodo":
@@ -115,6 +122,8 @@ def catalog(service, quick):
 
 
 def reference(dataset, root):
+    """downloads each file straight from its url, checked against the api's size and checksum;
+    returns name to sha256."""
     root.mkdir(parents=True)
     hashes = {}
     for index, item in enumerate(dataset["files"]):
@@ -134,6 +143,8 @@ def reference(dataset, root):
 
 
 def fingerprint(root, client=None):
+    """name to sha256 of the files a client left, without .cache, .fetchloom or datahugger's
+    generated checksums; a root that is a file is that file alone."""
     if root.is_file():
         return {root.name: fixtures.sha256(root)}
     result = {}
@@ -150,6 +161,8 @@ def fingerprint(root, client=None):
     return result
 
 def command(name, dataset, work, fetchloom):
+    """the argv that runs a client on a dataset; hf and kagglehub run inside a script that also
+    checks each sha256."""
     dest = work / "output"
     if name == "fetchloom":
         argv = [str(fetchloom), "-q", "--yes", "get", dataset["ref"], "--no-extract", "--dir", str(dest)]
@@ -190,6 +203,7 @@ def command(name, dataset, work, fetchloom):
 
 
 def versions(services):
+    """the version of each python client these services use, or why it is unknown."""
     distributions = {"zenodo": ("zenodo_get",), "huggingface": ("huggingface_hub", "hf_xet"),
                      "kaggle": ("kagglehub",), "figshare": ("datahugger",), "dataverse": ("datahugger",)}
     result = {}
@@ -206,6 +220,8 @@ def versions(services):
 
 
 def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=None):
+    """one measured run of a client against the reference; appends the row to runs.jsonl and
+    returns it."""
     expected = dataset["expected_sha256"]
     service = dataset["service"]
     row = dict(kind="live", service=service, scenario=service, tool=name, round=number, warmup=False,

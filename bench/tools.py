@@ -13,21 +13,26 @@ NOOP = ("s6", "s9")
 
 
 def shell(argv):
+    """argv as one shell-quoted line."""
     return shlex.join([str(x) for x in argv])
 
 
 def script(path, lines):
+    """writes lines as a bash script that stops at the first failure; returns the argv that runs it."""
     path.write_text("set -eu\n" + "\n".join(lines) + "\n")
     return ["bash", str(path)]
 
 
 def reset(path):
+    """an empty folder at path, whatever was there."""
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True)
 
 
 class Tool:
+    """how one tool fetches a case. a subclass names the tool, the scenarios it runs and its command;
+    this base lays out the work folder and lists the files a run must leave."""
     name = ""
     scenarios = set(fixtures.ALL_SCENARIOS)
 
@@ -35,6 +40,7 @@ class Tool:
         self.fetchloom = str(fetchloom)
 
     def version(self):
+        """the first line of --version, or the error that stopped it."""
         try:
             return subprocess.check_output([self.name, "--version"], env=lab.environment(),
                                            stderr=subprocess.STDOUT, text=True).splitlines()[0]
@@ -46,6 +52,7 @@ class Tool:
 
     @property
     def prepared_as(self):
+        """the tool whose prepared project this one uses."""
         return self.name
 
     def cwd(self, workdir):
@@ -61,6 +68,8 @@ class Tool:
         return env
 
     def prepare(self, scenario, workdir):
+        """the work folder before the clock starts; a warm scenario first fetches its base scenario,
+        untimed."""
         workdir.mkdir(parents=True, exist_ok=True)
         for folder in ("home", "cache", "project", "scratch"):
             (workdir / folder).mkdir(exist_ok=True)
@@ -87,15 +96,18 @@ class Tool:
         (workdir / "project" / "data").mkdir(exist_ok=True)
 
     def outputs(self, scenario, workdir):
+        """each file a run must leave, with its sha256."""
         items = scenario["members"] or scenario["files"]
         return [(workdir / "project" / "data" / item["name"], item["sha256"]) for item in items]
 
     def checks(self, scenario, workdir):
+        """writes the expected sums; returns the command that checks them."""
         path = workdir / "SHA256SUMS"
         path.write_text("".join(f'{item["sha256"]}  data/{item["name"]}\n' for item in scenario["files"]))
         return shell(["sha256sum", "-c", path])
 
     def unpack(self, scenario):
+        """the commands that unpack an archive case; none for the others."""
         if scenario["id"] == "s4":
             return [shell(["unzip", "-q", "data/members.zip", "-d", "data"])]
         if scenario["id"] == "s8":
@@ -298,6 +310,7 @@ CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Wget, Pooch, Dvc, Datalad)
 
 
 def available(fetchloom, variants=(), only=None):
+    """the tool adapters by name: every tool, or those in only, plus one per variant."""
     adapters = {cls.name: cls(fetchloom) for cls in CLASSES if only is None or cls.name in only}
     for label, settings in variants:
         tool = Variant(fetchloom, label, settings)

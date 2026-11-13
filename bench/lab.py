@@ -34,6 +34,8 @@ PREPARE_TIMEOUT = 1200
 
 
 def cpu_list(value, available=None):
+    """the cpus in a list such as 0-3,8, or every available cpu for an empty one; ValueError for a
+    malformed list or a cpu this process may not use."""
     available = set(os.sched_getaffinity(0) if available is None else available)
     if not value or not value.strip():
         if not available:
@@ -63,6 +65,7 @@ def cpu_choice(value):
 
 @contextmanager
 def affinity(cpus):
+    """runs the block on these cpus, then restores the old set; None leaves affinity alone."""
     if cpus is None:
         yield
         return
@@ -140,12 +143,15 @@ def run_group(argv, input=None, timeout=None, **kwargs):
 
 
 def call(argv, **kwargs):
+    """subprocess.run with check; TMPDIR is the lab's scratch once it exists, unless env is given."""
     if (ROOT / "scratch").is_dir():
         kwargs.setdefault("env", dict(os.environ, TMPDIR=str(ROOT / "scratch")))
     return subprocess.run([str(x) for x in argv], check=True, **kwargs)
 
 
 def environment():
+    """the environment of every lab command: the shell's, less keys, accounts and tool settings,
+    plus the lab's ca bundle, home, caches, venv and proxy bypass."""
     env = {key: value for key, value in os.environ.items() if not INHERITED.match(key)}
     env.update(REQUESTS_CA_BUNDLE=BUNDLE, SSL_CERT_FILE=BUNDLE,
                TMPDIR=str(ROOT / "scratch"), HOME=str(ROOT / "home"),
@@ -159,6 +165,8 @@ def environment():
 
 
 def exclusive(path=None):
+    """the lab lock, held until the returned file is closed; RuntimeError when another benchmark
+    has it."""
     lock = (path or ROOT / "run.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -173,12 +181,15 @@ def require_root():
 
 
 def shaping(profile):
+    """the client and server netem specs of a profile: half the delay on each side, the loss on
+    both, the rate cap on the server's."""
     delay, loss, rate, _, _ = PROFILES[profile]
     common = ["netem", "delay", f"{delay / 2:g}ms", "loss", f"{loss}%"]
     return common[:], common + (["rate", f"{rate}mbit"] if rate else [])
 
 
 def profile(name):
+    """shapes both ends of the lab link for a profile, starting from no shaping."""
     require_root()
     if not (ROOT / "owned.json").exists():
         raise RuntimeError("run lab.py setup before changing a profile")
@@ -237,6 +248,8 @@ def filesystems():
 
 
 def drop_caches(files):
+    """flushes the lab filesystems and drops the page cache, then reads these files back in, so
+    only they start cached."""
     require_root()
     flush(*filesystems())
     DROP.write_text("3\n")
@@ -247,6 +260,9 @@ def drop_caches(files):
 
 
 def setup(image_gib=12, cpus=None):
+    """makes the lab: a 7-day ca and certificate for lab.flb, nginx serving www in its own network
+    namespace, and loop-mounted ext4 and xfs images. refuses to replace what it did not make, and
+    undoes itself if a step fails."""
     require_root()
     if (ROOT / "owned.json").exists():
         teardown()
@@ -330,6 +346,7 @@ http {{
 
 
 def teardown():
+    """removes everything setup made, results included."""
     require_root()
     if not (ROOT / "owned.json").exists():
         print("lab is already absent")

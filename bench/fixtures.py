@@ -22,6 +22,7 @@ EPOCH = 1577836800
 
 
 def content(seed, name, size):
+    """size bytes fixed by seed and name, the same on every machine."""
     return hashlib.shake_256(f"{seed}:{name}".encode()).digest(size)
 
 
@@ -50,6 +51,8 @@ def sha256(path):
 
 
 def case_specs(profiles, scenarios, quick):
+    """the cases to measure, with file count and size. s1 and s2 run at every profile, s7 only at
+    home and the rest only on lan."""
     cases = []
     for profile in profiles:
         for scenario in scenarios:
@@ -73,10 +76,12 @@ def case_specs(profiles, scenarios, quick):
 
 
 def identity(value):
+    """a hash of a json value that ignores key order."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def read_json(path):
+    """the parsed file, or None when it is unreadable or not json."""
     try:
         return json.loads(path.read_text())
     except (OSError, ValueError):
@@ -84,12 +89,15 @@ def read_json(path):
 
 
 def write_json(path, value):
+    """replaces the file whole, so a reader never sees half of it."""
     pending = path.with_suffix(path.suffix + ".new")
     pending.write_text(json.dumps(value, indent=2) + "\n")
     pending.replace(path)
 
 
 def build(case, seed):
+    """the case's files under www, written once per fixture signature; returns the case with its key,
+    files and server folder."""
     key = f"{seed}-{'quick' if case['quick'] else 'full'}-{case['profile']}-{case['base']}"
     if case["id"] == "s7" and case["quick"]:
         key += "-interrupt"
@@ -150,6 +158,8 @@ def build(case, seed):
 
 
 def prepare_native(case, fetchloom, names):
+    """each named tool's project for the case, made outside the clock and kept until the fixture,
+    the harness or the fetchloom build changes; returns the case with the folder they are in."""
     root = lab.ROOT / "prepared" / case["key"]
     root.mkdir(parents=True, exist_ok=True)
     env = lab.environment()

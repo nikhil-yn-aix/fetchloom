@@ -25,6 +25,8 @@ TIME = "/usr/bin/time"
 
 
 def verify(outputs):
+    """what is wrong with a run's outputs: a line per wrong or unreadable file, or one saying there
+    were none to check; empty when all match."""
     failures = []
     if not outputs:
         return ["no expected outputs"]
@@ -39,6 +41,7 @@ def verify(outputs):
 
 
 def positive_seconds(value):
+    """the value as seconds; ValueError unless it is a finite number above 0."""
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -56,6 +59,9 @@ def seconds_choice(value):
 
 
 def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None):
+    """runs argv under GNU time in its own process group, with SIGINT at the deadline, then
+    SIGKILL. returns wall, cpu and peak memory, the exit code, and whether it timed out or was
+    interrupted."""
     timeout = positive_seconds(timeout)
     if interrupt_after is not None:
         interrupt_after = positive_seconds(interrupt_after)
@@ -168,6 +174,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
 
 
 def group(pgid):
+    """the pids in a process group, read from /proc."""
     members = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -182,6 +189,8 @@ def group(pgid):
 
 
 def parse_access(lines, file_paths):
+    """requests and bytes served, from the server's json access log, and the bytes of requests
+    for these file paths."""
     result = dict(requests=0, bytes_served=0, file_bytes_served=0)
     for line in lines:
         if not line.strip():
@@ -214,6 +223,8 @@ def settled_free_bytes(path, attempts=50):
 
 
 def repo_head():
+    """the commit the repository is at, asking windows git under wsl too; unavailable when neither
+    answers."""
     repo = Path(__file__).resolve().parent.parent
     for argv in (["git", "-C", str(repo), "rev-parse", "HEAD"],
                  ["git.exe", "-C", subprocess.check_output(["wslpath", "-w", str(repo)], text=True).strip(),
@@ -229,6 +240,8 @@ def repo_head():
 
 def native_versions(packages=("nginx", "aria2", "wget", "curl", "git-annex", "git", "iproute2",
                               "python3", "xfsprogs", "e2fsprogs", "unzip", "openssl", "time")):
+    """each package with its installed debian version or not installed; a note when dpkg cannot
+    answer."""
     try:
         result = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Status}\t${Version}\n",
                                  *packages], capture_output=True, text=True)
@@ -245,6 +258,7 @@ def native_versions(packages=("nginx", "aria2", "wget", "curl", "git-annex", "gi
 
 
 def python_packages():
+    """name==version for every package in the lab's python env, or a note why there is none."""
     try:
         return subprocess.check_output(
             [str(lab.VENV / "bin" / "python"), "-c",
@@ -258,6 +272,7 @@ def python_packages():
 
 
 def binary_identity(path):
+    """the executable's path, sha256 and size; RuntimeError if it changes while it is hashed."""
     path = Path(path).resolve(strict=True)
     before = path.stat()
     digest = fixtures.sha256(path)
@@ -269,6 +284,8 @@ def binary_identity(path):
 
 
 def metadata(args, adapters):
+    """the campaign record: machine, kernel, filesystems, versions of every tool and package, the
+    fetchloom build and the run settings."""
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.machine())
     memory = next(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith("MemTotal"))
@@ -292,6 +309,7 @@ def metadata(args, adapters):
 
 
 def write_metadata(path, value):
+    """replaces the file whole, syncing it and its folder, so a crash leaves the old or the new."""
     pending = path.with_suffix(path.suffix + ".new")
     try:
         with pending.open("w") as output:
@@ -310,6 +328,7 @@ def write_metadata(path, value):
 
 
 def append(path, row):
+    """adds a row as one json line and syncs it, so a crash keeps every finished run."""
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
         f.flush()
@@ -317,6 +336,7 @@ def append(path, row):
 
 
 def exact_command(argv, workdir):
+    """argv with the scripts and lists it reads, so a row records exactly what ran."""
     result = {"argv": [str(x) for x in argv]}
     for name in ("command.sh", "retrieve.py", "registry.json", "urls.txt", "aria2.txt", "SHA256SUMS"):
         path = workdir / name
@@ -326,6 +346,8 @@ def exact_command(argv, workdir):
 
 
 def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
+    """one measured run of a tool on a case, from cold caches unless the scenario is warm; appends
+    the row to runs.jsonl and returns it."""
     row = dict(kind="lab", tool=tool.name, scenario=case["id"], profile=case["profile"],
                filesystem=workdir.parent.name, round=number, warmup=warmup, quick=case["quick"],
                count=case["count"], file_size=case["size"], status="failed")
@@ -391,6 +413,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
 
 
 def csv_choices(value, allowed):
+    """distinct comma-separated values from allowed, for argparse."""
     values = value.split(",")
     if not values or any(x not in allowed for x in values) or len(set(values)) != len(values):
         raise argparse.ArgumentTypeError(f"choose distinct comma-separated values from {','.join(allowed)}")
@@ -398,6 +421,7 @@ def csv_choices(value, allowed):
 
 
 def case_rng(seed, fs, case):
+    """the source of one case's tool orders, fixed by the seed, filesystem and case."""
     return random.Random(f"{seed}/{fs}/{case['profile']}/{case['id']}")
 
 

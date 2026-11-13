@@ -47,6 +47,7 @@ def sizes(scale):
 
 
 def write(path, data):
+    """writes data to path, making its folders first."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
 
@@ -171,6 +172,7 @@ def drop_paths(project):
 
 
 def fresh(target, template):
+    """an emptied target holding copies of the template's data.toml, data.lock and data.lock.d."""
     remove(target)
     target.mkdir(parents=True)
     for item in template.iterdir():
@@ -214,6 +216,7 @@ def cases(root, arm, binary, folder, origin):
 
 
 class Files(native.Quiet):
+    """serves files, handing each body to the kernel."""
     def copyfile(self, source, outputfile):
         # the kernel copies the body, so the server is not what a 1 GiB get waits on; the headers
         # are already out, as wfile holds no buffer
@@ -221,6 +224,7 @@ class Files(native.Quiet):
 
 
 def serve(www, port):
+    """serves www on port, 0 for a free one, from a background thread; returns the server."""
     server = native.Server(("127.0.0.1", port), functools.partial(Files, directory=str(www)))
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()

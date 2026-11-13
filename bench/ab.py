@@ -16,6 +16,7 @@ THRESHOLD = .03
 
 
 def number(value):
+    """the value if it is a finite int or float, else None; a bool is not a number here."""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     try:
@@ -25,6 +26,7 @@ def number(value):
 
 
 def value(row, key):
+    """a row's metric as a finite number or None; key None means cpu time, user plus system."""
     if key is None:
         user, system = number(row.get("user_seconds")), number(row.get("sys_seconds"))
         return number(user + system) if user is not None and system is not None else None
@@ -32,6 +34,7 @@ def value(row, key):
 
 
 def exponent(value):
+    """e to the value, or None for no value or an overflow."""
     if value is None:
         return None
     try:
@@ -41,12 +44,14 @@ def exponent(value):
 
 
 def quantile(values, q):
+    """the q quantile of sorted values, interpolating between the two nearest."""
     position = (len(values) - 1) * q
     lower, upper = math.floor(position), math.ceil(position)
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
 def bootstrap(values, seed, resamples):
+    """a seeded 95% percentile interval for the median of values; None for no values."""
     if not values:
         return None
     if min(values) == max(values):
@@ -57,6 +62,8 @@ def bootstrap(values, seed, resamples):
 
 
 def summarize(pairs, metric, *, seed, resamples, threshold, min_pairs, complete, failed):
+    """one metric over the paired runs: the median log ratio of variant over plain, its interval
+    and a decision. a win needs the whole interval below 1 - threshold."""
     values = [(value(a, metric), value(b, metric)) for a, b in pairs]
     available = [(a, b) for a, b in values if a is not None and b is not None]
     logs = [math.log(b) - math.log(a) for a, b in available if a > 0 and b > 0]
@@ -92,6 +99,8 @@ def summarize(pairs, metric, *, seed, resamples, threshold, min_pairs, complete,
 
 
 def compare(rows, *, threshold=THRESHOLD, resamples=RESAMPLES, seed=1729, min_pairs=MIN_PAIRS):
+    """each fetchloom variant against plain fetchloom, per case, with runs paired by round.
+    ValueError for a bad setting or round, a round measured twice, or a case under mixed conditions."""
     if number(threshold) is None or not 0 <= threshold < 1:
         raise ValueError("threshold must be a finite fraction from 0 up to 1")
     if not isinstance(resamples, int) or isinstance(resamples, bool) or resamples < 1:
@@ -139,6 +148,7 @@ def compare(rows, *, threshold=THRESHOLD, resamples=RESAMPLES, seed=1729, min_pa
 
 
 def table(results, threshold=THRESHOLD, min_pairs=MIN_PAIRS):
+    """the results as a markdown table, ending with what a win requires."""
     lines = ["case | variant | metric | log median | ratio | 95% ratio interval | wins/n | ties | n log | missing/nonpositive | decision | failed (base/variant) | unmatched (base/variant)",
              "--- | --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | ---:"]
     def cell(value):

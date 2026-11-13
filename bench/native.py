@@ -35,6 +35,7 @@ RESAMPLES = 20000
 
 
 def content(seed, name, size):
+    """size bytes fixed by seed and name, the same on every machine."""
     return hashlib.shake_256(f"{seed}:{name}".encode()).digest(size)
 
 
@@ -76,12 +77,14 @@ def build_fixture(www, name, spec, seed):
 
 
 def manifest(base_url, scenario, names):
+    """a data.toml with one dataset per file, named f00000, f00001 and on."""
     return "".join(f'[datasets.f{index:05}]\nref = "{base_url}/{scenario}/{name}"\n\n'
                    for index, name in enumerate(names))
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
     # keep-alive, as real file servers do; http/1.0 would cost a new connection per file
+    """serves files without logging each request."""
     protocol_version = "HTTP/1.1"
     # headers and body go out in separate writes; with nagle on, the client's delayed ack holds
     # the body back about 40 ms on every response
@@ -97,6 +100,7 @@ class Server(http.server.ThreadingHTTPServer):
 
 
 def serve(www):
+    """serves www on a free localhost port from a background thread; returns the server."""
     handler = functools.partial(Quiet, directory=str(www))
     server = Server(("127.0.0.1", 0), handler)
     server.daemon_threads = True
@@ -106,6 +110,7 @@ def serve(www):
 
 
 def run(argv, cwd, env):
+    """runs a command; returns its wall seconds, or raises RuntimeError with its stderr when it fails."""
     start = time.perf_counter()
     done = subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     seconds = time.perf_counter() - start
@@ -136,6 +141,7 @@ def prepare(binary, label, scenario, text, work):
 
 
 def fresh_project(template, path):
+    """a new project at path holding the template's data.toml and data.lock."""
     remove(path)
     path.mkdir(parents=True)
     for name in ("data.toml", "data.lock"):
@@ -179,6 +185,7 @@ def summarize(baseline, candidate, seed):
 
 
 def probe(argv):
+    """a command's trimmed stdout, or None when it cannot run, fails or takes over 30 s."""
     try:
         done = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
@@ -187,6 +194,8 @@ def probe(argv):
 
 
 def filesystem(root):
+    """what filesystem holds root: fsutil's name and dev drive state on windows, the longest
+    matching mount on macos, stat's type elsewhere."""
     system = platform.system()
     if system == "Windows":
         drive = os.path.splitdrive(str(root.resolve()))[0]
@@ -210,6 +219,7 @@ def filesystem(root):
 
 
 def defender():
+    """windows defender's real-time protection state; None on other systems."""
     if platform.system() != "Windows":
         return None
     state = probe(["powershell", "-NoProfile", "-Command",
