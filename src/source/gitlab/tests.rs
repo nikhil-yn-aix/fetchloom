@@ -196,7 +196,7 @@ fn a_refused_key_offers_the_gitlab_account() {
 #[test]
 fn an_answer_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);
-    let rows: [(&str, Change, &str); 6] = [
+    let rows: [(&str, Change, &str); 7] = [
         (
             "another tag",
             |value| value["tag_name"] = "v19.3.5".into(),
@@ -206,6 +206,15 @@ fn an_answer_that_cannot_be_trusted_says_why() {
             "fewer assets than it counts",
             |value| value["assets"]["count"] = 43.into(),
             "lists 42 of the 43 assets it counts",
+        ),
+        (
+            "none of the one asset it counts",
+            |value| {
+                value["assets"]["count"] = 1.into();
+                value["assets"]["links"] = serde_json::json!([]);
+                value["assets"]["sources"] = serde_json::json!([]);
+            },
+            "lists 0 of the 1 asset it counts",
         ),
         (
             "a download link on another host",

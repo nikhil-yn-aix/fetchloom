@@ -121,9 +121,9 @@ impl Accession {
         let mut rows = self.report(api, count).await?;
         if rows.len() < count {
             return Err(self.invalid(&format!(
-                "the report ends after {} of the {} runs ENA counts",
+                "the report ends after {} of the {} ENA counts",
                 grouped(rows.len() as u64),
-                grouped(count as u64)
+                crate::units::count(count as u64, "run", "runs")
             )));
         }
         rows.sort_by(|a, b| a.run_accession.cmp(&b.run_accession));

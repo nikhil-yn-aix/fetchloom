@@ -206,7 +206,8 @@ impl Dataset {
         }
         if seen < total {
             return Err(self.invalid(&format!(
-                "the listing ends after {seen} of the {total} files it counts"
+                "the listing ends after {seen} of the {} it counts",
+                crate::units::count(total as u64, "file", "files")
             )));
         }
         Ok(files)

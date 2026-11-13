@@ -107,9 +107,9 @@ impl Release {
         let assets = answer.assets;
         if assets.count > assets.links.len() + assets.sources.len() {
             return Err(self.invalid(&format!(
-                "it lists {} of the {} assets it counts",
+                "it lists {} of the {} it counts",
                 assets.links.len() + assets.sources.len(),
-                assets.count
+                crate::units::count(assets.count as u64, "asset", "assets")
             )));
         }
         if assets.links.len() > super::most_files() {

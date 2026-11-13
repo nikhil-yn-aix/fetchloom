@@ -122,7 +122,7 @@ warning: data/mc/measure_clean.csv has changed, so it stays, but it is an edit o
       Needs up to 135 B on the disk holding the cache, which has 329.1 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
-    Checked clean · 1 of 1 files match data.lock
+    Checked clean · 1 of 1 file matches data.lock
          Ok every step made the files data.lock pins
 ```
 

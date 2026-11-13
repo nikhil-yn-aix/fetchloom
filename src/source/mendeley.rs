@@ -172,8 +172,8 @@ impl Dataset {
             if listed.is_empty() {
                 if total.is_some_and(|total| seen < total) {
                     return Err(self.invalid(&format!(
-                        "the listing of a folder ends after {seen} of the {} files it counts",
-                        total.unwrap_or_default()
+                        "the listing of a folder ends after {seen} of the {} it counts",
+                        crate::units::count(total.unwrap_or_default(), "file", "files")
                     )));
                 }
                 return Ok(());

@@ -215,6 +215,21 @@ fn a_listing_that_ends_before_its_count_is_refused() {
         "{}",
         error.message
     );
+    let none = changed("dryad/files.json", |value| {
+        value["total"] = 1.into();
+        value["_embedded"]["stash:files"] = serde_json::json!([]);
+    });
+    let recorded = Recorded::default()
+        .fixture(DATASET, "dryad/dataset.json")
+        .on(FILES, 200, none);
+    let error = block_on(dataset("10.5061/dryad.j1fd7").resolve(&recorded)).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("ends after 0 of the 1 file it counts"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

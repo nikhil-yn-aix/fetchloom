@@ -227,6 +227,15 @@ fn a_folder_listing_that_ends_short_or_repeats_itself_is_refused() {
         assert_eq!(error.kind, Kind::SourceInvalid, "{row}");
         assert!(error.message.contains(reason), "{row}: {}", error.message);
     }
+    let recorded = version_two().on(ROOT, 200, b"[]".to_vec()).total(ROOT, 1);
+    let error = block_on(dataset("rscbjbr9sj@2").resolve(&recorded)).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("ends after 0 of the 1 file it counts"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

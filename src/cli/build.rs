@@ -1381,9 +1381,14 @@ fn taken(name: &str, fault: Fault) -> Error {
 /// how many of the files data.lock pins a rerun made as they are: `9,998 of 10,000 files match`.
 fn matched(compared: &Compared) -> String {
     format!(
-        "{} of {} files match",
+        "{} of {} {}",
         units::grouped(compared.matching as u64),
-        units::grouped(compared.pinned() as u64)
+        units::count(compared.pinned() as u64, "file", "files"),
+        if compared.matching == 1 {
+            "matches"
+        } else {
+            "match"
+        }
     )
 }
 
@@ -1458,6 +1463,26 @@ mod tests {
         assert_eq!(shown("two words"), "'two words'");
         assert_eq!(shown("it's"), "'it'\\''s'");
         assert_eq!(shown(""), "''");
+    }
+
+    /// one file, pinned or matching, takes the singular.
+    #[test]
+    fn a_rerun_tells_how_many_of_its_files_match() {
+        let compared = |matching, changed| Compared {
+            matching,
+            changed: vec!["out.bin".to_owned(); changed],
+            missing: Vec::new(),
+            extra: Vec::new(),
+        };
+        for (matching, changed, said) in [
+            (1, 0, "1 of 1 file matches"),
+            (0, 1, "0 of 1 file match"),
+            (1, 2, "1 of 3 files matches"),
+            (2, 1, "2 of 3 files match"),
+            (9_998, 2, "9,998 of 10,000 files match"),
+        ] {
+            assert_eq!(matched(&compared(matching, changed)), said);
+        }
     }
 
     /// a result matches when a rerun for a pin the cache lost makes what data.lock already pins.

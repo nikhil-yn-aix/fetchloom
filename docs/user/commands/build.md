@@ -167,11 +167,11 @@ error: clean cannot be built: its code clean.py is not in the project
       Needs up to 135 B on the disk holding the cache, which has 320.4 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
-    Checked clean · 1 of 1 files match data.lock
+    Checked clean · 1 of 1 file matches data.lock
     Running emb · python3 embed.py <build>/in/iris <build>/out
             embedded 3 rows
-    Differs emb · 0 of 1 files match data.lock
-error: emb differs from data.lock: 0 of 1 files match
+    Differs emb · 0 of 1 file match data.lock
+error: emb differs from data.lock: 0 of 1 file match
   changed vectors.bin
   help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```
@@ -225,8 +225,8 @@ a step that runs again for a key `data.lock` pins, and makes other files than th
  Up to date clean
     Running emb · python3 embed.py <build>/in/iris <build>/out
             embedded 3 rows
-    Differs emb · 0 of 1 files match data.lock
-error: emb differs from data.lock: 0 of 1 files match
+    Differs emb · 0 of 1 file match data.lock
+error: emb differs from data.lock: 0 of 1 file match
   changed vectors.bin
   help: the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it
 ```

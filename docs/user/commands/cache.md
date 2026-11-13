@@ -63,7 +63,7 @@ a project copied with its data folder to a cache that never held its files, as `
       Needs up to 63 B on the disk holding the cache, which has 326.2 GiB free
      Copied 1 file · 21 B from data into the cache
     Running squares · cp -R <build>/in/table/. <build>/out
-    Checked squares · 1 of 1 files match data.lock
+    Checked squares · 1 of 1 file matches data.lock
          Ok every step made the files data.lock pins
 ```
 

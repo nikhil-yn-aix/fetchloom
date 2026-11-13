@@ -272,17 +272,22 @@ fn a_study_larger_than_a_listing_may_hold_is_refused_before_its_report() {
 /// more than it was asked for.
 #[test]
 fn a_report_that_does_not_match_its_count_is_refused() {
-    for (runs, fixture, reason) in [
-        (3, "ena/run.json", "ends after 1 of the 3 runs"),
+    for (runs, body, reason) in [
+        (
+            3,
+            fixture_bytes("ena/run.json"),
+            "ends after 1 of the 3 runs",
+        ),
         (
             1,
-            "ena/experiment.json",
+            fixture_bytes("ena/experiment.json"),
             "more than the 1 run it was asked for",
         ),
+        (1, b"[]".to_vec(), "ends after 0 of the 1 run ENA counts"),
     ] {
-        let recorded = answered("SRR390728", runs, fixture_bytes(fixture));
+        let recorded = answered("SRR390728", runs, body);
         let error = block_on(accession("SRR390728").resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::SourceInvalid, "{fixture}");
+        assert_eq!(error.kind, Kind::SourceInvalid, "{reason}");
         assert!(error.message.contains(reason), "{}", error.message);
     }
 }

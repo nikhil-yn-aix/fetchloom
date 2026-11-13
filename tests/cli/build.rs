@@ -1983,7 +1983,7 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     let document = json(&output)?;
     let (kind, message, details, help, fix) = error(&document);
     assert_eq!(kind, "build.differs");
-    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert_eq!(message, "clean differs from data.lock: 0 of 1 file match");
     assert_eq!(details, ["changed random.bin"]);
     assert!(
         help.contains("data.lock and data/clean are as they were"),
@@ -2132,7 +2132,7 @@ fn check_reproduces_a_deterministic_step() -> Result {
     assert_eq!(step["candidate"], Value::Null);
     let told = text(&build(&sandbox, &["build", "--check"])?.stderr)?;
     assert!(
-        told.contains("    Checked clean · 1 of 1 files match data.lock\n"),
+        told.contains("    Checked clean · 1 of 1 file matches data.lock\n"),
         "{told}"
     );
     assert_eq!(runs(&sandbox.work())?, 3, "each check runs the step");
@@ -2164,7 +2164,7 @@ fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
     let document = json(&checked)?;
     let (kind, message, details, _, fix) = error(&document);
     assert_eq!(kind, "build.differs");
-    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert_eq!(message, "clean differs from data.lock: 0 of 1 file match");
     assert_eq!(details, ["changed random.bin"]);
     assert_eq!(fix, &Value::Null);
     let kept = document["result"]["steps"][0]["candidate"].clone();
@@ -2244,9 +2244,9 @@ fn checks_report_every_step() -> Result {
     assert_eq!(
         details,
         [
-            "clean: 0 of 1 files match data.lock",
+            "clean: 0 of 1 file match data.lock",
             "changed random.bin",
-            "noise: 0 of 1 files match data.lock",
+            "noise: 0 of 1 file match data.lock",
             "changed random.bin"
         ]
     );
