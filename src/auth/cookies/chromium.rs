@@ -147,8 +147,8 @@ pub(crate) fn derive(secret: &[u8], iterations: u32) -> [u8; 16] {
 }
 
 /// the cookie database of the profile `named` asks for in the browser's folder `root`: a
-/// profile's folder name, as `Profile 1`, or its folder; without a name, the one the browser
-/// wrote to last.
+/// profile's folder name there, as `Profile 1`, or a folder by its absolute path; without a
+/// name, the one the browser wrote to last.
 pub(crate) fn file(root: &Path, named: Option<&str>) -> Option<PathBuf> {
     let in_profile = |folder: &Path| {
         [
@@ -159,7 +159,17 @@ pub(crate) fn file(root: &Path, named: Option<&str>) -> Option<PathBuf> {
         .find(|file| file.is_file())
     };
     if let Some(named) = named {
-        return in_profile(Path::new(named)).or_else(|| in_profile(&root.join(named)));
+        let named = Path::new(named);
+        if named.is_absolute() {
+            return in_profile(named);
+        }
+        // a name is never a path from where fetchloom runs, which a cloned repo could fill, nor
+        // one that leaves the browser's folder
+        let mut parts = named.components();
+        return match (parts.next(), parts.next()) {
+            (Some(std::path::Component::Normal(_)), None) => in_profile(&root.join(named)),
+            _ => None,
+        };
     }
     let mut found: Vec<PathBuf> = in_profile(root).into_iter().collect();
     if let Ok(entries) = std::fs::read_dir(root) {
@@ -197,7 +207,6 @@ pub(crate) fn read(
             &[
                 "host_key",
                 "name",
-                "value",
                 "encrypted_value",
                 "path",
                 "expires_utc",
@@ -222,36 +231,36 @@ pub(crate) fn read(
             read.left.push(left(Why::Elsewhere));
             continue;
         }
-        if !text(9).is_empty() {
+        if !text(8).is_empty() {
             read.left.push(left(Why::Apart));
             continue;
         }
-        let encrypted = match &row[3] {
+        let encrypted = match &row[2] {
             Value::Blob(bytes) => bytes.as_slice(),
             _ => &[],
         };
-        let value = if encrypted.is_empty() {
-            Some(text(2))
-        } else {
-            let tag = String::from_utf8_lossy(&encrypted[..encrypted.len().min(3)]).into_owned();
-            let key = *keys.entry(tag.clone()).or_insert_with(|| key(&tag));
-            opened(encrypted, key, &domain, version)
-        };
-        let Some(value) = value else {
+        // chromium seals every cookie it keeps, so a plain one was put there by someone else
+        if encrypted.is_empty() {
+            read.left.push(left(Why::Unsealed));
+            continue;
+        }
+        let tag = String::from_utf8_lossy(&encrypted[..encrypted.len().min(3)]).into_owned();
+        let key = *keys.entry(tag.clone()).or_insert_with(|| key(&tag));
+        let Some(value) = opened(encrypted, key, &domain, version) else {
             read.left.push(left(Why::Locked));
             continue;
         };
-        let expires = (row[6].integer() != Some(0))
-            .then(|| row[5].integer())
+        let expires = (row[5].integer() != Some(0))
+            .then(|| row[4].integer())
             .flatten()
             .filter(|micros| *micros > 0)
             .map(|micros| micros / 1_000_000 - EPOCHS_APART);
-        let secure = row[7].integer().or_else(|| row[8].integer()) == Some(1);
+        let secure = row[6].integer().or_else(|| row[7].integer()) == Some(1);
         read.found.push(Cookie {
             name,
             value,
             domain,
-            path: text(4),
+            path: text(3),
             secure,
             expires,
         });

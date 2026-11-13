@@ -381,6 +381,7 @@ fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
             "the browser keeps apart, for a container, a private window or another site's frames",
         ),
         (Why::Locked, "no key fetchloom could read opens"),
+        (Why::Unsealed, "kept unsealed, which chromium never does"),
     ] {
         let mut domains: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut order: Vec<&str> = Vec::new();

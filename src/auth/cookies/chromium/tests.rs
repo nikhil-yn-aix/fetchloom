@@ -145,15 +145,16 @@ fn a_hosts_cookies_open_with_the_key_of_their_tag_and_no_other_is_asked() {
     assert_eq!(
         found,
         [
-            ("plain", "p-value", None, true),
             ("old", "o-value", Some(2_000_000_000), true),
             ("new", "n-value", Some(2_000_000_000), true),
         ]
     );
+    // chromium seals every cookie, so one kept plain was put there by someone else
     let left: Vec<_> = read.left.iter().map(|l| (l.name.as_str(), l.why)).collect();
     assert_eq!(
         left,
         [
+            ("plain", Why::Unsealed),
             ("wrong", Why::Locked),
             ("framed", Why::Apart),
             ("away", Why::Elsewhere)

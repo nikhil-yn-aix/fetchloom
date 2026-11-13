@@ -97,15 +97,14 @@ fn profiles(root: &Path) -> Vec<(PathBuf, Option<String>)> {
     found
 }
 
-/// the cookie file of the profile `named` asks for, in one of `roots`: a profile's folder, its
-/// name in `profiles.ini`, or the last part of its folder's name, as `default-release`; without
-/// a name, the one firefox wrote to last.
+/// the cookie file of the profile `named` asks for, in one of `roots`: its name in
+/// `profiles.ini`, or the last part of its folder's name, as `default-release`, or a folder by
+/// its absolute path; without a name, the one firefox wrote to last.
 pub(super) fn file(roots: &[PathBuf], named: Option<&str>) -> Option<PathBuf> {
-    if let Some(named) = named {
-        let folder = Path::new(named);
-        if folder.join("cookies.sqlite").is_file() {
-            return Some(folder.join("cookies.sqlite"));
-        }
+    // a name is never a path from where fetchloom runs, which a cloned repo could fill
+    if let Some(named) = named.map(Path::new).filter(|named| named.is_absolute()) {
+        let file = named.join("cookies.sqlite");
+        return file.is_file().then_some(file);
     }
     let candidates = roots.iter().flat_map(|root| profiles(root));
     let matching: Vec<PathBuf> = candidates

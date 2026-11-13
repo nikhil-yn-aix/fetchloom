@@ -512,8 +512,12 @@ fn firefox_profile(sandbox: &Sandbox, rows: &[(&str, &str, i64, &str)]) -> Resul
     } else {
         home.join(".mozilla/firefox")
     };
-    let folder = root.join("Profiles/q1w2e3r4.default-release");
-    std::fs::create_dir_all(&folder)?;
+    firefox_cookies(&root.join("Profiles/q1w2e3r4.default-release"), rows)
+}
+
+/// firefox's `cookies.sqlite` in `folder`, holding `rows` as [`firefox_profile`] does.
+fn firefox_cookies(folder: &std::path::Path, rows: &[(&str, &str, i64, &str)]) -> Result {
+    std::fs::create_dir_all(folder)?;
     let db = rusqlite::Connection::open(folder.join("cookies.sqlite"))?;
     db.execute_batch(
         "PRAGMA journal_mode = WAL; PRAGMA user_version = 17; \
@@ -601,6 +605,18 @@ fn cookies_from_firefox_are_shown_and_saved_only_with_a_yes() -> Result {
 /// chromium's fixed key, after the SHA-256 of its domain.
 #[cfg(target_os = "linux")]
 fn chrome_profile(sandbox: &Sandbox, domain: &str, name: &str, value: &str) -> Result {
+    let folder = sandbox
+        .work()
+        .parent()
+        .ok_or("no sandbox")?
+        .join("home/.config/google-chrome/Default");
+    chrome_cookies(&folder, &[(domain, name, value, true)])
+}
+
+/// chrome's cookie database in the profile `folder`, holding `rows` of domain, name, value and
+/// whether chrome sealed it, as [`chrome_profile`] does; an unsealed row keeps its value plain.
+#[cfg(target_os = "linux")]
+fn chrome_cookies(folder: &std::path::Path, rows: &[(&str, &str, &str, bool)]) -> Result {
     use aes::cipher::block_padding::Pkcs7;
     use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
     use sha2::Digest as _;
@@ -610,18 +626,7 @@ fn chrome_profile(sandbox: &Sandbox, domain: &str, name: &str, value: &str) -> R
         0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27,
         0x78,
     ];
-    let plain = [
-        sha2::Sha256::digest(domain.as_bytes()).as_slice(),
-        value.as_bytes(),
-    ]
-    .concat();
-    let sealed = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
-        .encrypt_padded_vec::<Pkcs7>(&plain);
-    let folder = sandbox
-        .work()
-        .parent()
-        .ok_or("no sandbox")?
-        .join("home/.config/google-chrome/Default/Network");
+    let folder = folder.join("Network");
     std::fs::create_dir_all(&folder)?;
     let db = rusqlite::Connection::open(folder.join("Cookies"))?;
     db.execute_batch(
@@ -635,11 +640,128 @@ fn chrome_profile(sandbox: &Sandbox, domain: &str, name: &str, value: &str) -> R
          source_port INTEGER NOT NULL,last_update_utc INTEGER NOT NULL,source_type INTEGER NOT NULL,\
          has_cross_site_ancestor INTEGER NOT NULL);",
     )?;
-    let sealed = [b"v10".as_slice(), &sealed].concat();
-    db.execute(
-        "INSERT INTO cookies VALUES (0, ?1, '', ?2, '', ?3, '/', 0, 0, 1, 0, 0, 0, 1, 0, 1, 80, 0, 0, 0)",
-        rusqlite::params![domain, name, sealed],
+    for (domain, name, value, sealed) in rows {
+        let (plain, sealed) = if *sealed {
+            let plain = [
+                sha2::Sha256::digest(domain.as_bytes()).as_slice(),
+                value.as_bytes(),
+            ]
+            .concat();
+            let sealed = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
+                .encrypt_padded_vec::<Pkcs7>(&plain);
+            (String::new(), [b"v10".as_slice(), &sealed].concat())
+        } else {
+            ((*value).to_owned(), Vec::new())
+        };
+        db.execute(
+            "INSERT INTO cookies VALUES (0, ?1, '', ?2, ?3, ?4, '/', 0, 0, 1, 0, 0, 0, 1, 0, 1, 80, 0, 0, 0)",
+            rusqlite::params![domain, name, plain, sealed],
+        )?;
+    }
+    Ok(())
+}
+
+/// a project folder holding a folder named as a profile, as a cloned repo may, is never read for
+/// it: a profile's name is looked up under firefox's own folders, and only an absolute path names
+/// a folder of its own.
+#[test]
+fn a_profile_name_never_reads_the_project_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let later = 4_000_000_000_000;
+    firefox_profile(&sandbox, &[("session", "127.0.0.1", later, "")])?;
+    let planted = sandbox.work().join("default-release");
+    firefox_cookies(&planted, &[("planted", "127.0.0.1", later, "")])?;
+    let login = |profile: &str| {
+        sandbox.run(&[
+            "auth",
+            "login",
+            &host,
+            "--browser",
+            &format!("firefox:{profile}"),
+            "--yes",
+        ])
+    };
+    let named = login("default-release")?;
+    let stderr = text(&named.stderr)?;
+    assert!(named.status.success(), "{stderr}");
+    assert!(stderr.contains("session · 127.0.0.1"), "{stderr}");
+    assert!(!stderr.contains("planted"), "{stderr}");
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        heard(&site, "cookie"),
+        [Some("session=session-value".to_owned())]
+    );
+    for relative in ["./default-release", "default-release/../default-release"] {
+        let refused = login(relative)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{relative}: {stderr}");
+        assert!(
+            stderr.contains("found no firefox profile with cookies"),
+            "{stderr}"
+        );
+    }
+    let absolute = login(&planted.display().to_string())?;
+    let stderr = text(&absolute.stderr)?;
+    assert!(absolute.status.success(), "{stderr}");
+    assert!(stderr.contains("planted · 127.0.0.1"), "{stderr}");
+    Ok(())
+}
+
+/// chrome's profile names go by its own folder too, and a cookie chrome left unsealed, which it
+/// never does, is left out: it was put there by someone else.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_chrome_profile_name_never_reads_the_project_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    chrome_cookies(
+        &home.join(".config/google-chrome/Default"),
+        &[
+            ("127.0.0.1", "sid", "sealed-value", true),
+            ("127.0.0.1", "plain", "plain-value", false),
+        ],
     )?;
+    chrome_cookies(
+        &sandbox.work().join("Default"),
+        &[("127.0.0.1", "planted", "planted-value", true)],
+    )?;
+    let login = sandbox.run(&[
+        "auth",
+        "login",
+        &host,
+        "--browser",
+        "chrome:Default",
+        "--yes",
+    ])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(!stderr.contains("planted"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Left out 1 cookie kept unsealed, which chromium never does: plain of 127.0.0.1"
+        ),
+        "{stderr}"
+    );
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        heard(&site, "cookie"),
+        [Some("sid=sealed-value".to_owned())]
+    );
+    let refused = sandbox.run(&[
+        "auth",
+        "login",
+        &host,
+        "--browser",
+        "chrome:./Default",
+        "--yes",
+    ])?;
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
     Ok(())
 }
 

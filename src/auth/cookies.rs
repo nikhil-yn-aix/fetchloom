@@ -26,6 +26,8 @@ pub(crate) enum Why {
     Apart,
     /// it is encrypted with a key fetchloom could not read.
     Locked,
+    /// it is kept in the clear, where the browser seals every cookie it keeps.
+    Unsealed,
 }
 
 /// what a browser's profile holds: its cookies, and those it keeps apart or cannot open.
