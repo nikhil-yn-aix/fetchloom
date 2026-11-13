@@ -202,9 +202,8 @@ fn lock_merges_independent_additions_offline() -> Result {
     Ok(())
 }
 
-/// git's usual conflict lines show no merge base. git gives fetchloom the base from its index,
-/// whatever its version, so the two additions merge by themselves. where fetchloom finds no git,
-/// each dataset only one side has needs a choice, which gives the same data.lock.
+/// git's usual conflict lines show no merge base, so fetchloom reads it from git's index, as any
+/// git version gives it; without git, choices for the datasets one side added give the same lock.
 #[test]
 fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     let sandbox = Sandbox::new()?;
@@ -253,8 +252,7 @@ fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     Ok(())
 }
 
-/// both teammates upgraded the same link and each pinned other bytes. no merge can tell which
-/// one counts, and --yes never picks one: a person names the side, and nothing is downloaded.
+/// no merge can tell which pin counts, so --yes never picks one, and nothing is downloaded.
 #[test]
 fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -331,8 +329,7 @@ fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Resul
     Ok(())
 }
 
-/// datasets whose files data.lock keeps in data.lock.d: each branch's new parts are there after
-/// the merge, and the merged lock names them.
+/// each branch's new parts in data.lock.d survive the merge, and the merged lock names them.
 #[test]
 fn lock_merges_datasets_listed_in_parts() -> Result {
     let sandbox = Sandbox::new()?;
@@ -410,10 +407,8 @@ fn choices_need_a_merge_and_conflict_lines_in_git_order() -> Result {
     Ok(())
 }
 
-/// both branches add a dataset of the same name, labels, each with its own files, and one more
-/// each. zdiff3 moves the lines both sides share, such as the table's first lines, out of each
-/// conflict, so the base fetchloom reads is rebuilt around them: labels needs a choice, as each
-/// side added it its own way, and alpha and beta merge by themselves, as with diff3.
+/// zdiff3 moves lines both sides share, such as a table's first lines, out of each conflict, so
+/// the base is rebuilt around them; only labels, added on both sides, needs a choice.
 #[test]
 fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
     let sandbox = Sandbox::new()?;
@@ -519,10 +514,9 @@ fn metadata(sandbox: &Sandbox) -> Result<(String, String)> {
     ))
 }
 
-/// branch kept changes only the pin of `name`, as `change` does, while branch removed removes
-/// it: git merges data.toml by itself, taking the removal, and stops in data.lock alone. for each
-/// way of meeting the two, `fetchloom lock` must ask, then write the side a person names: the
-/// kept side's entry, as its branch writes it, with its pin, or neither. none without git.
+/// branch kept changes only the pin of `name`, through `change`, and branch removed removes it,
+/// so git stops in data.lock alone. at each of `meetings`, `fetchloom lock` must ask, then write
+/// the kept side whole or neither, as a person names. none without git.
 fn removal_meets_a_new_pin(
     sandbox: &Sandbox,
     name: &str,
@@ -631,10 +625,8 @@ fn removal_meets_a_new_pin(
     Ok(Some(()))
 }
 
-/// j3's merge of a removal and a re-import: one branch removes labels, the other pins other files
-/// for it the way add's docs say, with remove and add, which writes its entry in data.toml as it
-/// was. the other branch's new pin must not vanish without a choice, whichever branch is
-/// checked out, in a rebase too, where the branch replayed is theirs.
+/// the re-import is remove then add, as add's docs say, which leaves data.toml as it was; the new
+/// pin must not vanish unasked from either branch or a rebase, where the replayed one is theirs.
 #[test]
 fn lock_asks_before_a_removal_drops_a_reimported_pin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -671,9 +663,8 @@ fn lock_asks_before_a_removal_drops_a_reimported_pin() -> Result {
     Ok(())
 }
 
-/// j3's merge of a removal and an upgrade: one branch removes series, the other pins what its
-/// link serves now. its entry holds more than the link, a note and the folder its files go to,
-/// and the kept side brings all of it back, without asking the server.
+/// the entry holds more than the link, a note and the folder its files go to, and the kept side
+/// brings all of it back without asking the server.
 #[test]
 fn lock_asks_before_a_removal_drops_an_upgraded_pin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -750,11 +741,8 @@ fn upstream() -> Result<Server> {
     )
 }
 
-/// wft's merge: branch b builds b-mk again from an upgraded input while branch a adds c-new,
-/// which data.lock holds right after b-mk. git merges some of the lines of b-mk's entry by itself
-/// and stops at the others, so the conflict lines hold neither side's entry whole. read whole,
-/// with the base, b-mk changed on b alone, so the merge needs no choice: whichever branch is
-/// checked out, with git's usual conflict lines or zdiff3's, and in a rebase.
+/// c-new lands right after b-mk in data.lock, so git merges part of b-mk's entry and stops at the
+/// rest; read whole with the base, b-mk changed on b alone, so the merge needs no choice.
 #[test]
 fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
     let sandbox = Sandbox::new()?;
@@ -815,10 +803,8 @@ fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
     Ok(())
 }
 
-/// both branches build b-mk again their own way: a after changing its command, b after
-/// upgrading its input. git merges b's new input into a's side of the conflict lines, which would
-/// pin a's files as made from b's input. each choice takes its side's pin whole, as its branch
-/// committed it, and asks no server.
+/// a changes b-mk's command and b upgrades its input, and git merges b's input into a's side of
+/// the conflict, which would pin a's files as made from b's input.
 #[test]
 fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
     let sandbox = Sandbox::new()?;
