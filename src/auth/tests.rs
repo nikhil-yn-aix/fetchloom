@@ -170,6 +170,7 @@ fn a_dataverse_host_keeps_its_port_and_nothing_else() {
         ("dv.lab:443", "dv.lab"),
         ("https://dv.lab", "dv.lab"),
         ("[::1]:8443", "[::1]:8443"),
+        ("dv_lab.example", "dv_lab.example"),
     ] {
         assert_eq!(
             parse(typed).unwrap(),
@@ -185,6 +186,13 @@ fn a_dataverse_host_keeps_its_port_and_nothing_else() {
         "dv.lab#top",
         "dv.lab:port",
         "",
+        "data.$(id).invalid",
+        "dv.lab;id",
+        "dv.lab&id",
+        "`id`.dv.lab",
+        "dv'lab'.org",
+        "dv!lab.org",
+        "{dv,lab}.org",
     ] {
         let error = parse(typed).unwrap_err();
         assert_eq!(error.kind, Kind::Usage, "{typed}");
@@ -420,7 +428,11 @@ fn names_people_type_find_their_account() {
         Account::parse("hf", Some("x.org")).unwrap_err().kind,
         Kind::Usage
     );
-    for name in ["intended.example\nmachine\tother.example", "a.example\tb"] {
+    for name in [
+        "intended.example\nmachine\tother.example",
+        "a.example\tb",
+        "x.$(id).example",
+    ] {
         assert_eq!(Account::parse(name, None).unwrap_err().kind, Kind::Usage);
     }
     assert_eq!(
@@ -437,6 +449,52 @@ fn names_people_type_find_their_account() {
         Account::Login("urs.earthdata.nasa.gov".into()).command(),
         "fetchloom auth login earthdata"
     );
+}
+
+/// a host comes from a link or a server's answer, so the command a help names keeps it one
+/// literal word for a shell, whatever it holds.
+#[test]
+fn a_sign_in_command_keeps_each_host_one_literal_word() {
+    for (account, named) in [
+        (Account::HuggingFace, &["hf"][..]),
+        (Account::Kaggle, &["kaggle"]),
+        (Account::Zenodo, &["zenodo"]),
+        (Account::Figshare, &["figshare"]),
+        (Account::Osf, &["osf"]),
+        (Account::Dryad, &["dryad"]),
+        (Account::GitHub, &["github"]),
+        (Account::GitLab, &["gitlab"]),
+        (Account::Dataverse(HARVARD.into()), &["dataverse"]),
+        (
+            Account::Dataverse("a;b$(c)".into()),
+            &["dataverse", "--host", "a;b$(c)"],
+        ),
+        (
+            Account::Dataverse("[::1]:8443".into()),
+            &["dataverse", "--host", "[::1]:8443"],
+        ),
+        (Account::Login(EARTHDATA.into()), &["earthdata"]),
+        (Account::Login(PHYSIONET.into()), &["physionet"]),
+        (
+            Account::Login("x.$(id)`id`.example".into()),
+            &["x.$(id)`id`.example"],
+        ),
+        (
+            Account::Login("it's!{a,b}&.example".into()),
+            &["it's!{a,b}&.example"],
+        ),
+    ] {
+        let command = account.command();
+        let words: Vec<&str> = ["fetchloom", "auth", "login"]
+            .into_iter()
+            .chain(named.iter().copied())
+            .collect();
+        assert_eq!(
+            crate::suggested::command_words(&command, cfg!(windows)),
+            Some(words.into_iter().map(str::to_owned).collect()),
+            "{command}"
+        );
+    }
 }
 
 /// a key with a line break cannot go in a header, and `auth` says so rather than drop it silently.

@@ -1119,6 +1119,15 @@ mod tests {
                 "leave key out of the link: sign in once with `fetchloom auth login dataverse --host demo.dataverse.org`, and fetchloom sends your key to demo.dataverse.org itself"
             )
         );
+        // a host no real installation has, as one holding `$(`, gets no command to paste
+        let hostile = parse("https://data.$(id).invalid/api/access/datafile/1?key=abc");
+        let error = hostile.check_shareable().unwrap_err();
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "use a link that works without it, or download the file once with `fetchloom get`"
+            )
+        );
     }
 
     /// a long run of empty pages is refused too, in the words every source's error carries.

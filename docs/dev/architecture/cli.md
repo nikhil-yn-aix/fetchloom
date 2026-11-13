@@ -37,7 +37,7 @@ put parsing and conflicts in `args.rs`, then pass the value through `Context` or
 
 | files | cargo filter |
 |---|---|
-| `src/cli/args.rs`, `src/cli.rs`, `src/cli/typed.rs` | `cargo test --locked --lib cli::args::`; `cargo test --locked --lib cli::tests::`; `cargo test --locked --lib cli::typed::` |
+| `src/cli/args.rs`, `src/cli.rs`, `src/cli/typed.rs`, `src/suggested.rs` | `cargo test --locked --lib cli::args::`; `cargo test --locked --lib cli::tests::`; `cargo test --locked --lib cli::typed::`; `cargo test --locked --lib suggested::` |
 | `tests/cli/basics.rs`, `tests/cli/caps.rs` | `cargo test --locked --test cli basics::`; `cargo test --locked --test cli caps::` |
 | `tests/cli/add.rs`, `tests/cli/remove.rs`, `tests/cli/path.rs` | `cargo test --locked --test cli add::`; `cargo test --locked --test cli remove::`; `cargo test --locked --test cli path::` |
 | `tests/cli/project.rs`, `tests/cli/get.rs` | `cargo test --locked --test cli project::`; `cargo test --locked --test cli get::` |

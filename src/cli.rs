@@ -44,9 +44,10 @@ use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
 
+pub(in crate::cli) use crate::suggested::shell_word;
 pub(crate) use typed::judged;
+pub(in crate::cli) use typed::meant;
 use typed::{TYPED, command_line, moved_command};
-pub(in crate::cli) use typed::{meant, shell_word};
 
 /// how long retries to one host stay quiet after the line that told one, so downloads that lost
 /// the network together do not fill the screen with the same line.

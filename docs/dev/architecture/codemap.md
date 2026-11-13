@@ -24,7 +24,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/args.rs` | the clap definition of every command and option | `Args`, `Command`, `Global` | `Filter`, `read` |
 | `src/cli/usage.rs` | a command line clap cannot read, answered like any failure, with the command or option meant | `answer` |  |
 | `src/cli/help.rs` | the ideas behind fetchloom or one command's help, as text, and `help --json`, which describes every command in one call | `show` |  |
-| `src/cli/typed.rs` | commands as a person types them: words quoted for a shell, a suggested command judged with clap for `output::fix`, and this run's own line, which help repeats with a typo fixed | `judged`, `command_line` | `shell_word`, `command_words`, `meant` |
+| `src/cli/typed.rs` | commands as a person types them: a suggested command judged with clap for `output::fix`, and this run's own line, which help repeats with a typo fixed | `judged`, `command_line` | `meant` |
 | `src/cli/logs.rs` | the `-vv` and `FETCHLOOM_LOG` debug log, and the `FETCHLOOM_TRACE` timeline perfetto opens | `start` | `Logs`, `on_stderr` |
 | `src/cli/project.rs` | `sync` and `lock`, and what project commands share: finding the project, taking its lock, the settled-run shortcut, dry runs and running the sync loop | `sync`, `lock`, `sync_all` | `Report`, `Outcome`, `Run`, `preview_all`, `selected`, `find`, `hold`, `known`, `register` |
 | `src/cli/project/conflicts.rs` | `lock` on files a git merge left with conflict lines, merged a dataset at a time | `merge` |  |
@@ -293,7 +293,7 @@ every layer shares these small types and limits; [primitives](primitives.md) giv
 | `src/threads.rs` | the optional ceiling on local worker groups, and the scoped worker helper | `Threads`, `scoped` | `read`, `limit`, `archives` |
 | `src/error.rs` | failures with stable kinds, exit codes and advice, for people and scripts: details cut to the first few, a command's report so far, and the help for an answer only a newer fetchloom can read | `Error`, `Kind` | `FileFailure`, `exit_code`, `with_result`, `name`, `advice`, `details_up_to`, `with_report`, `report_answer`, `ISSUES` |
 | `src/stop.rs` | cancellation every task shares, as an `Error` or, for work on files, an `io::Error`; the first ctrl-c asks every task to wind down and keep what it has | `Stop` | `ask`, `asked`, `is_asked`, `check`, `check_io` |
-| `src/suggested.rs` | the commands hints name, carrying the folder a `-C` run worked in | `command` | `set_directory` |
+| `src/suggested.rs` | the commands hints name, carrying the folder a `-C` run worked in, and words quoted for a shell, read back as a shell reads them | `command`, `shell_word` | `set_directory`, `command_words` |
 | `src/work.rs` | atomic counters of the work a run did, apart from output, which tests assert, `-v` prints and `--json` carries | `Work`, `Counts` | `Work::add`, `Work::counts` |
 
 ## tests

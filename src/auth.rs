@@ -153,7 +153,7 @@ impl Account {
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
             other if other.contains('.') && one_word(other) && !other.contains(['/', '\\', ':', '@', '?', '#', '%'])
-                && url::Host::parse(other).is_ok() => {
+                && dataverse_host(other).is_some() => {
                 Account::Login(other.to_owned())
             }
             _ => {
@@ -212,22 +212,19 @@ impl Account {
         }
     }
 
-    /// the command that signs in to this account.
+    /// the command that signs in to this account, its host quoted for a shell, since a link or a
+    /// server's answer named it.
     pub(crate) fn command(&self) -> String {
-        match self {
-            Account::Dataverse(host) if host == HARVARD => {
-                "fetchloom auth login dataverse".to_owned()
-            }
-            Account::Dataverse(host) => format!("fetchloom auth login dataverse --host {host}"),
-            Account::Login(host) if host == EARTHDATA => {
-                "fetchloom auth login earthdata".to_owned()
-            }
-            Account::Login(host) if host == PHYSIONET => {
-                "fetchloom auth login physionet".to_owned()
-            }
-            Account::Login(host) => format!("fetchloom auth login {host}"),
-            other => format!("fetchloom auth login {}", other.id()),
-        }
+        let quoted = |word: &str| crate::suggested::shell_word(word).into_owned();
+        let named = match self {
+            Account::Dataverse(host) if host == HARVARD => "dataverse".to_owned(),
+            Account::Dataverse(host) => format!("dataverse --host {}", quoted(host)),
+            Account::Login(host) if host == EARTHDATA => "earthdata".to_owned(),
+            Account::Login(host) if host == PHYSIONET => "physionet".to_owned(),
+            Account::Login(host) => quoted(host),
+            other => quoted(&other.id()),
+        };
+        format!("fetchloom auth login {named}")
     }
 
     pub(crate) fn secret(&self) -> Secret {
@@ -704,9 +701,15 @@ pub(crate) fn dataverse_host(typed: &str) -> Option<String> {
     installation(&url)
 }
 
-/// the installation a dataverse URL is on: its host, with its port when that is not 443.
+/// the installation a dataverse URL is on: its host, with its port when that is not 443. none
+/// for a host with other characters than letters, digits, dots, hyphens and underscores, such as
+/// the `$(` a shell reads.
 fn installation(url: &Url) -> Option<String> {
     let host = url.host_str()?.to_ascii_lowercase();
+    let named = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
+    if matches!(url.host(), Some(url::Host::Domain(_))) && !host.chars().all(named) {
+        return None;
+    }
     Some(match url.port().filter(|port| *port != 443) {
         Some(port) => format!("{host}:{port}"),
         None => host,
