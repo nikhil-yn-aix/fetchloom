@@ -685,6 +685,23 @@ class JourneyTests(unittest.TestCase):
             remove_tree(data)
             self.assertFalse(data.exists())
             remove_tree(data)
+        # windows refuses to delete it, so it is made writable and deleted again
+        with tempfile.TemporaryDirectory() as directory:
+            placed = Path(directory, 'iris.csv')
+            placed.write_bytes(DATA)
+            placed.chmod(stat.S_IREAD)
+            retried = []
+
+            def unlink(name):
+                retried.append(stat.S_IMODE(os.stat(name).st_mode) & stat.S_IWRITE)
+                os.unlink(name)
+
+            def refused(path, onerror):
+                onerror(unlink, str(placed), (PermissionError, PermissionError(13, 'Access is denied'), None))
+
+            with patch.object(ci_journey.shutil, 'rmtree', refused):
+                remove_tree(Path(directory))
+            self.assertEqual((retried, placed.exists()), ([stat.S_IWRITE], False))
 
     def test_the_fixtures_hold_the_bytes_the_journey_checks(self):
         served = fixtures()
