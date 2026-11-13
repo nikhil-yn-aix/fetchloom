@@ -64,6 +64,15 @@ the memory a level gives sizes only the hash queues of downloads (`hash_batches`
 
 `Settings::spending` turns the settings, the run's `Threads` and the processors online into what `-v` tells as a command that downloads, hashes or places files starts (`cli::spends` names them): downloads at once, to one host (never more than downloads at once), local workers (`Threads` over the processors this process may use), the memory budget and hash lanes, with a reason for each that a level, a variable, the settings file, the processors or the memory room holds. it is a pure function of its inputs, tested on a table of machines and settings; the processors online are read only at `-v`, from `/sys/devices/system/cpu/online`.
 
+to add a setting:
+
+1. name its settings-file key and the variable that overrides it in `KEYS` in [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs), which the file reader, `variable` and the typo check `misnamed` read, and add the key to `LISTS`, `BOOLEANS` or `CLEARED` when it holds a list or true or false, or when an empty variable must clear it. a variable without a key goes in `OTHERS`.
+2. give `Settings` a `Set` field, its default in `Settings::defaults`, and read it in `Settings::read` with the reader of its kind, such as `count`, `size`, `seconds` or `boolean`, which records where the value came from.
+3. when a level derives it, add it to `Limits` in [settings/resources.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings/resources.rs), give each level its value in `Level::limits` and read it in `Settings::read` through `derived`, so a value set by name still wins; a setting no level derives joins the values `the_default_level_keeps_the_defaults_and_no_level_moves_what_it_does_not_derive` compares.
+4. add its row to `rows` in [cli/settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/settings.rs), so `fetchloom settings` shows its value and where it came from.
+5. describe the variable in `ENVIRONMENT` in [cli/help.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/help.rs), within 80 columns, and the key in the list of what a settings file keeps below it.
+6. document the variable and the key in the [environment reference](../../user/reference/environment.md), and anything new about its origin in the [settings command](../../user/commands/settings.md) page. `every_setting_is_documented_and_every_documented_one_is_read` in `tests/cli/docs.rs` fails until the reference names a variable the code reads, and `the_environment_topic_names_every_variable_the_docs_do` in cli/help.rs until the help topic names the same ones.
+
 ### volume, errors and cancellation
 
 `Volume` learns hardlink support only when an operation needs the answer. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
