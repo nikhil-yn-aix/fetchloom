@@ -146,11 +146,19 @@ mod tests {
         String::from_utf8(line).unwrap()
     }
 
-    fn same(mode: &Termios, found: &Termios) -> bool {
-        mode.local_modes == found.local_modes
-            && mode.input_modes == found.input_modes
-            && mode.output_modes == found.output_modes
-            && mode.control_modes == found.control_modes
+    /// asserts `terminal` is back in the mode it was `found` in. macos adds `PENDIN` as a terminal
+    /// returns to line mode, a note to reprint pending input that its next read clears.
+    #[track_caller]
+    fn restored(terminal: &OwnedFd, found: &Termios) {
+        let modes = |mode: &Termios| {
+            (
+                mode.local_modes - LocalModes::PENDIN,
+                mode.input_modes,
+                mode.output_modes,
+                mode.control_modes,
+            )
+        };
+        assert_eq!(modes(&tcgetattr(terminal).unwrap()), modes(found));
     }
 
     /// echo is off before the prompt goes out, so a key typed at once is never shown, and the mode
@@ -177,13 +185,13 @@ mod tests {
         });
         assert_eq!(typed, "hf_secret");
         assert_eq!(String::from_utf8_lossy(&shown(&person)), "key ");
-        assert!(same(&tcgetattr(&terminal).unwrap(), &found));
+        restored(&terminal, &found);
 
         let failed: std::io::Result<()> = super::question_at(terminal.as_fd(), || {
             Err(std::io::ErrorKind::BrokenPipe.into())
         });
         assert!(failed.is_err());
-        assert!(same(&tcgetattr(&terminal).unwrap(), &found));
+        restored(&terminal, &found);
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             super::question_at(terminal.as_fd(), || {
@@ -191,12 +199,12 @@ mod tests {
             })
         }));
         assert!(panicked.is_err());
-        assert!(same(&tcgetattr(&terminal).unwrap(), &found));
+        restored(&terminal, &found);
 
         super::question_at(terminal.as_fd(), || {
             super::release();
-            assert!(same(&tcgetattr(&terminal).unwrap(), &found));
+            restored(&terminal, &found);
         });
-        assert!(same(&tcgetattr(&terminal).unwrap(), &found));
+        restored(&terminal, &found);
     }
 }
