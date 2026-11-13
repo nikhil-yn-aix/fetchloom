@@ -34,13 +34,13 @@ pub(super) struct State {
     account: String,
     signed_in: bool,
     from: Option<String>,
-    /// who the key belongs to, when the source says
+    /// who the key belongs to, when the source says.
     user: Option<String>,
-    /// whether the source accepted the key: none when it was not asked
+    /// whether the source accepted the key: none when it was not asked.
     valid: Option<bool>,
     /// how keys for buckets and containers come, for AWS, google and azure, which `auth` never
     /// asks: `keys`, `credential_process`, `sso`, `role`, `service_account`, `authorized_user`,
-    /// `sas`, `key`, `az_cli` or `managed_identity`
+    /// `sas`, `key`, `az_cli` or `managed_identity`.
     kind: Option<&'static str>,
 }
 
@@ -164,9 +164,8 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     Ok(Report::Status { accounts })
 }
 
-/// the rows of the AWS keys buckets would be signed with: AWS's, or those of the endpoint the
-/// settings send S3 requests to, which leaves AWS with none. a program that gives them is named,
-/// never run, and nothing is asked. settings fetchloom cannot use are warned of.
+/// the rows of the AWS keys buckets are signed with, or the settings' S3 endpoint's instead, naming
+/// but never running a key program and asking nothing; unusable settings are warned of.
 fn aws_keys(output: &crate::output::Output, missing: &mut Vec<String>) -> Vec<State> {
     use crate::auth::aws::How;
     let described = auth::aws::describe(&auth::env).unwrap_or_else(|error| {
@@ -348,9 +347,8 @@ fn unusable(output: &crate::output::Output, error: &Error) {
     );
 }
 
-/// signs in to `account`: shows where to get a key, takes it, checks it with the source, and
-/// saves it where the source's own tools read it, once the person agrees. `rerun` says the
-/// command runs again after signing in, which a key kept out of files still serves.
+/// signs in to `account`, saving the checked key where the source's own tools read it once the
+/// person agrees; with `rerun` the command runs again after, which an unsaved key still serves.
 async fn sign_in(
     context: &Arc<Context>,
     account: &Account,
@@ -413,9 +411,8 @@ async fn sign_in(
     } else if context.mirrors.mirrors.only {
         output.hint("mirrors_only lets fetchloom ask its mirrors alone, so the key was not checked with its site");
     }
-    // the key checked out, so from here `auth login` ends as it would: a ctrl-c at the question
-    // below is a key that cancels it, and a stop asked otherwise lets it finish. a sign-in offered
-    // after a refusal runs its command again after it, which a stop must still reach
+    // the key checked out, so a ctrl-c at the question below cancels it and any other stop lets it
+    // finish; a sign-in after a refusal runs its command again, which a stop must still reach
     if !rerun {
         context.stop.finish();
     }
@@ -458,9 +455,8 @@ async fn sign_in(
     })
 }
 
-/// what a no while signing in, to replacing a key or to saving it, leaves: a command that runs
-/// again after signing in, `rerun`, goes on with the key it has. nothing runs after `auth login`
-/// to use a key, so there the no is a cancel that changed nothing.
+/// what a no while signing in leaves: with `rerun` the command goes on with the key it has, while
+/// after `auth login`, where nothing uses the key, it is a cancel that changed nothing.
 fn after_no(rerun: bool) -> Result<(), Error> {
     if rerun {
         return Ok(());
@@ -468,8 +464,7 @@ fn after_no(rerun: bool) -> Result<(), Error> {
     Err(answered_no())
 }
 
-/// a no to a question about a key, as a cancel of what its caller names. like ctrl-c at the same
-/// question, it changed nothing.
+/// a no to a key question: a cancel of what its caller names that, like ctrl-c, changed nothing.
 fn answered_no() -> Error {
     Error::new(Kind::Unconfirmed, "answered no").cancelled("the question")
 }
@@ -606,10 +601,8 @@ async fn check(
     }
 }
 
-/// saves the key where it belongs, asking first. returns where it went, or none when it was
-/// kept for this command only.
-/// asks `question`, unless `--yes` answered it, as it answers every question a person could
-/// have been asked. nobody to ask still answers none.
+/// asks `question`, unless `--yes` answered it, as it answers every question a person could have
+/// been asked. nobody to ask still answers none.
 fn agree(context: &Context, question: &str, default: bool) -> Result<Option<bool>, Error> {
     if context.yes && context.output.can_ask() {
         return Ok(Some(true));
@@ -617,6 +610,8 @@ fn agree(context: &Context, question: &str, default: bool) -> Result<Option<bool
     context.output.ask_yes_no(question, default)
 }
 
+/// saves the key where it belongs, asking first. returns where it went, or none when it was kept
+/// for this command only.
 fn save(
     context: &Context,
     account: &Account,
@@ -853,10 +848,9 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     })
 }
 
-/// when a command failed for want of an account and a person is at the terminal: offers to sign
-/// in, or to accept a gated dataset's terms, then says whether running the command again could
-/// now work. `refusal` is the command's error when it was not told above the offer: a line then
-/// names what was refused first, and a no is a cancel, which ends the run with one line.
+/// offers a person at the terminal, after a command failed for want of an account, to sign in or
+/// accept a gated dataset's terms, then says whether running it again could work. `refusal`, the
+/// command's error when not told yet, gets a line first, and a no then ends the run as a cancel.
 pub(super) async fn offer(
     context: &Arc<Context>,
     need: &Need,
@@ -956,8 +950,7 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
     );
 }
 
-/// the account as `fetchloom auth login` takes it, such as hf or earthdata, so the listing names
-/// what a person types next.
+/// the account as `fetchloom auth login` takes it, such as hf, so the listing names what to type.
 fn login_name(account: &Account) -> String {
     match account {
         Account::Dataverse(_) => title(account),
@@ -1071,9 +1064,7 @@ mod tests {
         );
     }
 
-    /// a no while signing in, to replacing a key or to saving it, ends `auth login` as a cancel
-    /// that changed nothing, with exit 1 as any no does, since nothing runs after it to use the
-    /// key. a command that runs again after signing in goes on with the key it has.
+    /// a no at `auth login` exits 1 as any no does, since nothing runs after it to use the key.
     #[test]
     fn a_no_ends_auth_login_as_a_cancel_but_lets_a_rerun_go_on() {
         assert!(after_no(true).is_ok());
