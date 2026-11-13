@@ -27,7 +27,8 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   partial/<first sha256 digit>/<sha256 of URL>.part
   partial/<first sha256 digit>/<sha256 of URL>.json
   partial/<first sha256 digit>/<sha256 of URL>.lock
-  urls/<sha256 of URL>.json
+  urls/<first sha256 digit of URL>.log
+  urls/<first sha256 digit of URL>.idx
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>-<sha256 of URL>
   unpacked/<archive sha256, or the key a split archive's parts give>
   projects/<sha256 of project root>.json
@@ -48,11 +49,11 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 ## URL and partial records
 
-`urls/` records what a link served last, so a later run can ask the server only whether it changed, and an offline `get` can do without a site's listing. gc removes a record once neither its file nor what it unpacked to is left:
+`urls/` records what a link served last, so a later run can ask the server only whether it changed, and an offline `get` can do without a site's listing. a record is one line of JSON in one of 16 `.log` files, picked by the first digit of the SHA-256 of the link, after the first 16 digits of the SHA-256 of the JSON and a space; a line that does not match its digits, as one a killed run cut short, is passed over. beside each `.log`, its `.idx` holds a 12-byte entry for each line: the first 8 bytes of the link's SHA-256, then where the line starts, both little-endian. a new record for a link is appended, and the last one counts. gc writes each file again with only the last record of each link, and drops a record once neither its file nor what it unpacked to is left:
 
 | field | value |
 |---|---|
-| `url` | `sha256:` followed by the SHA-256 of the original URL's UTF-8 bytes; the same digest names the file |
+| `url` | `sha256:` followed by the SHA-256 of the original URL's UTF-8 bytes |
 | `sha256` | full object hash |
 | `size` | total bytes |
 | `name` | server-supplied file name, or null; for a link a `get` kept one file from, that file's path in the listing |

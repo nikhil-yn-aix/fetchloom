@@ -487,25 +487,21 @@ impl Cache {
     }
 
     /// drops the record of each link whose object and unpack record are both gone, which would
-    /// otherwise only grow; the next download of that link writes a new one.
+    /// otherwise only grow, and the older records of each link; the next download of a link
+    /// writes a new one. a pretend sweep leaves them, as it leaves the files they name.
     fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<Failure>) -> Result<(), Error> {
-        for entry in scan_entries(&self.root.join("urls"), not_removed, stop)? {
+        if self.volume.is_pretending() {
+            return Ok(());
+        }
+        let held = |record: &super::UrlRecord| {
+            let exists = |path: &Path| path.try_exists().is_ok_and(|exists| exists);
+            exists(&self.object_path(&record.sha256)) || exists(&self.unpacked_path(&record.sha256))
+        };
+        let scratch = self.root.join("tmp");
+        for shard in 0..super::urls::SHARDS {
             stop.check()?;
-            let path = entry.path();
-            let Some(record) = fs::read(&path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<super::UrlRecord>(&bytes).ok())
-            else {
-                continue;
-            };
-            // a pretend sweep keeps what it would remove, so their records go as well
-            let missing = |path: &Path| {
-                self.volume.pretends_removed(path) || path.try_exists().is_ok_and(|exists| !exists)
-            };
-            if missing(&self.object_path(&record.sha256))
-                && missing(&self.unpacked_path(&record.sha256))
-            {
-                removed(&path, self.remove_inside(&path), not_removed);
+            if let Err(err) = self.urls.rewrite(&self.root, &scratch, shard, &held) {
+                not_removed.push(Failure::new(&self.root.join("urls"), &err));
             }
         }
         Ok(())

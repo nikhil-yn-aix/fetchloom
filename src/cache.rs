@@ -10,6 +10,7 @@ mod results;
 mod staging;
 mod unpacked;
 mod upkeep;
+mod urls;
 mod usage;
 
 #[cfg(test)]
@@ -63,6 +64,8 @@ pub(crate) struct Cache {
     deferred: Arc<deferred::Deferred>,
     /// the cache-wide lock this run holds, let go when the last clone is dropped.
     held: Option<Arc<File>>,
+    /// the url records as this run read them, shared by every clone.
+    urls: Arc<urls::Shards>,
 }
 
 /// a file's bytes on their way into the cache from a folder on this machine, and how they came.
@@ -190,6 +193,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            urls: Arc::default(),
         };
         cache.tag(|tag, bytes| cache.write_atomically(tag, bytes))?;
         Ok(cache)
@@ -237,6 +241,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            urls: Arc::default(),
         })
     }
 
@@ -412,18 +417,11 @@ impl Cache {
     }
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
-        let text = fs::read(self.url_record_path(url)).ok()?;
-        let mut record: UrlRecord = serde_json::from_slice(&text).ok()?;
-        if !recorded_url_matches(&record.url, url) {
-            return None;
-        }
-        url.clone_into(&mut record.url);
-        Some(record)
+        self.urls.find(&self.root, url)
     }
 
     pub(crate) fn save_url_record(&self, record: &UrlRecord) -> io::Result<()> {
-        let text = serde_json::to_vec_pretty(record).map_err(io::Error::other)?;
-        self.write_hint(&self.url_record_path(&record.url), &text)
+        self.urls.save(&self.root, record)
     }
 
     /// the object holding the bytes `url` served when an earlier download hashed them to this
@@ -459,12 +457,6 @@ impl Cache {
             Stated { digest, size, .. } => format!("{digest} {size}\n"),
         };
         self.write_hint(&path, line.as_bytes())
-    }
-
-    fn url_record_path(&self, url: &str) -> PathBuf {
-        self.root
-            .join("urls")
-            .join(format!("{}.json", digest::sha256(url.as_bytes()).hex()))
     }
 
     fn stated_path(&self, md5: &Md5, url: &str) -> PathBuf {

@@ -47,19 +47,25 @@ fn url_records_hide_the_url_without_losing_exact_lookup_identity() {
     let (_folder, cache) = cache();
     let record = record();
     cache.save_url_record(&record).unwrap();
-    let path = cache.url_record_path(URL);
-    let text = fs::read_to_string(&path).unwrap();
-    assert!(
-        !text.contains(SECRET),
-        "a URL-record secret was persisted: {text}"
-    );
-    assert!(
-        !text.contains("https://"),
-        "the metadata stores an identity, not a URL"
-    );
+    let files = fs::read_dir(cache.root().join("urls")).unwrap();
+    let mut read = 0;
+    for file in files {
+        let bytes = fs::read(file.unwrap().path()).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(SECRET),
+            "a URL-record secret was persisted: {text}"
+        );
+        assert!(
+            !text.contains("https://"),
+            "the metadata stores an identity, not a URL"
+        );
+        read += 1;
+    }
+    assert!(read > 0, "the check must not be vacuous");
     assert_eq!(cache.url_record(URL), Some(record));
     let other = "https://example.org/data?token=another-secret";
-    fs::copy(path, cache.url_record_path(other)).unwrap();
+    urls::copy_record(cache.root(), URL, other);
     assert!(
         cache.url_record(other).is_none(),
         "a copied record cannot describe another URL"

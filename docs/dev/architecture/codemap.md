@@ -234,6 +234,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/cache/results.rs` | recipe results under `builds/<key>/<tree>`, their key locks, and captured files moved into `objects/` | `Cache::record_result`, `Cache::hold_key` | `Built`, `KeyHold`, `Seen`, `Cache::results`, `seal_captured`, `Cache::publish_captured` |
 | `src/cache/changed.rs` | objects found changed, remembered after repair so projects can check their old hardlinks | `Cache::mark_changed`, `Doubt` | `Cache::trusted`, `Cache::mark_replaced`, `Cache::changed` |
 | `src/cache/upkeep.rs` | the projects that use the cache, scans, verification and gc, and how each project uses the objects it needs | `Cache::register`, `Needed` | `Use`, `Supply`, `Freed`, `Checked`, `Cache::scan_objects`, `Cache::sweep_with_stop`, `sweep_results`, `Cache::verify_scanned`, `Cache::free_input` |
+| `src/cache/urls.rs` | what each link served last: records appended to 16 shards with an index of where each starts, found by a run's first read of a shard's index, and written again by gc | `Shards::find`, `Shards::save` | `Shards::rewrite`, `SHARDS` |
 | `src/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cache/failure.rs` | the filesystem failures inspection and cleanup keep to report | `Failure` |  |
 
