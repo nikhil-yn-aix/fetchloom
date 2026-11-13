@@ -9,6 +9,22 @@
   {{ super() }}
 {% endblock %}
 {% block scripts %}
+  <script>
+    // the search dialog draws in a shadow root of its own, out of the stylesheet's reach
+    new MutationObserver(function (changes) {
+      changes.forEach(function (change) {
+        change.addedNodes.forEach(function (node) {
+          if (node.shadowRoot) {
+            var style = document.createElement("style");
+            style.textContent = "*, *::before, *::after { border-radius: 0 !important; box-shadow: none !important;"
+              + " -webkit-backdrop-filter: none !important; backdrop-filter: none !important;"
+              + " --alpha-light: 1 !important; --alpha-lighter: .9 !important; }";
+            node.shadowRoot.append(style);
+          }
+        });
+      });
+    }).observe(document.body, { childList: true });
+  </script>
   {% if page and page.content and 'class="mermaid"' in page.content %}
     <script src="{{ 'assets/javascripts/mermaid.tiny.js' | url }}"></script>
   {% endif %}

@@ -28,6 +28,8 @@ nav_file = "SUMMARY.md"
 custom_dir = "docs-site/theme"
 language = "en"
 font = false
+# fl, the short command, in geist mono and the accent
+favicon = "assets/images/favicon.svg"
 features = [
   "content.action.edit",
   "content.code.copy",

@@ -41,6 +41,11 @@
   --fl-sage: #3c7a37;
   --fl-amber: #8f6200;
   --fl-red: #bf213a;
+  /* the search dialog's colors, as rgb triplets */
+  --color-foreground: 20 20 19;
+  --color-background: 250 249 245;
+  --color-background-subtle: 239 236 228;
+  --color-backdrop: 250 249 245;
 }
 
 [data-md-color-scheme="slate"] {
@@ -53,6 +58,10 @@
   --fl-sage: #8fc086;
   --fl-amber: #e8b65a;
   --fl-red: #f25c6a;
+  --color-foreground: 242 239 231;
+  --color-background: 27 26 23;
+  --color-background-subtle: 36 35 31;
+  --color-backdrop: 27 26 23;
   color-scheme: dark;
 }
 
