@@ -286,8 +286,8 @@ fn net(url: &Url, jobs: usize) -> Net {
     let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
     net.split = Split {
         when: Splitting::Always,
-        above: MIB,
-        piece: 64 * KIB,
+        above: MIB / 4,
+        piece: 16 * KIB,
         window: Duration::from_millis(100),
         slow: 4 * MIB,
     };
@@ -323,7 +323,7 @@ fn parts(server: &Server) -> Vec<String> {
 
 #[test]
 fn a_large_file_arrives_over_several_streams_and_hashes_as_one() {
-    let body = body(8 * MIB);
+    let body = body(2 * MIB);
     let serving = Serving {
         version: Some("v1"),
         ..SERVING
@@ -375,7 +375,7 @@ fn a_file_is_split_only_when_it_is_large_and_its_ranges_are_safe_to_join() {
             true,
             "a weak validator",
         ),
-        (fast, MIB / 2, true, "small"),
+        (fast, MIB / 8, true, "small"),
         (fast, MIB, false, "turned off"),
     ] {
         let body = body(size);
@@ -395,7 +395,7 @@ fn a_file_is_split_only_when_it_is_large_and_its_ranges_are_safe_to_join() {
 
 #[test]
 fn a_pinned_file_splits_without_validators() {
-    let body = body(4 * MIB);
+    let body = body(MIB);
     let server = serve(
         body.clone(),
         Serving {
@@ -428,7 +428,7 @@ fn from_the_start(server: &Server) -> usize {
 /// a pinned file's hash decides, while an unpinned file starts over.
 #[test]
 fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
-    let body = body(4 * MIB);
+    let body = body(MIB);
     let (sha256_pin, md5) = {
         let mut hasher = crate::digest::Hasher::with_md5();
         hasher.update(&body);
@@ -449,7 +449,7 @@ fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
         (
             Expect {
                 md5,
-                size: Some(4 * MIB),
+                size: Some(MIB),
                 ..Expect::default()
             },
             "a stated md5 and size",
@@ -478,7 +478,7 @@ fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
 #[test]
 fn a_whole_answer_to_a_range_stops_splitting() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
-        let body = body(2 * MIB);
+        let body = body(MIB / 2);
         let server = serve(
             body.clone(),
             Serving {
@@ -506,7 +506,7 @@ fn a_whole_answer_to_a_range_stops_splitting() {
 
 #[test]
 fn a_slow_stream_hands_its_answer_over_to_more_streams() {
-    let body = body(8 * MIB);
+    let body = body(2 * MIB);
     let server = serve(body.clone(), SERVING);
     let mut net = net(&server.url, 8);
     net.split.when = Splitting::WhenSlow;
@@ -593,7 +593,7 @@ fn a_stream_that_makes_the_download_faster_lets_another_in() {
 
 #[test]
 fn a_stream_is_added_only_when_a_slot_is_free() {
-    let body = body(2 * MIB);
+    let body = body(MIB / 2);
     let server = serve(body.clone(), SERVING);
     let net = net(&server.url, 1);
     let (_folder, cache) = cache();
@@ -605,7 +605,7 @@ fn a_stream_is_added_only_when_a_slot_is_free() {
 #[test]
 fn a_resume_fetches_only_the_ranges_not_kept() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
-        let body = body(4 * MIB);
+        let body = body(MIB);
         let server = serve(body.clone(), SERVING);
         let mut net = net(&server.url, 8);
         net.split.when = when;
@@ -619,24 +619,27 @@ fn a_resume_fetches_only_the_ranges_not_kept() {
             panic!("nothing else holds the download");
         };
         let mut writer = partial
-            .writer(0, Some(4 * MIB), validators, false, true)
+            .writer(0, Some(MIB), validators, false, true)
             .unwrap();
-        let mib = usize::try_from(MIB).unwrap();
-        writer.write_at(0, &body[..mib]).unwrap();
-        writer.write_at(3 * MIB, &body[3 * mib..]).unwrap();
+        let quarter = usize::try_from(MIB / 4).unwrap();
+        writer.write_at(0, &body[..quarter]).unwrap();
+        writer.write_at(3 * MIB / 4, &body[3 * quarter..]).unwrap();
         writer.save().unwrap();
         drop(writer);
         drop(partial);
         let fetched = download(&net, &cache, &server.url, Expect::default());
         assert_eq!(fetched.digest, sha256(&body), "{when:?}");
         let first = &server.heads()[0];
-        assert!(first.contains(&format!("range: bytes={MIB}-")), "{first}");
+        assert!(
+            first.contains(&format!("range: bytes={}-", MIB / 4)),
+            "{first}"
+        );
         assert!(first.contains("if-range: \"v1\""), "{first}");
         let counts = net.work.counts();
         assert_eq!(counts.resumes, 1, "{when:?}");
         assert!(
-            counts.bytes_down < 3 * MIB,
-            "the kept megabyte at the end came again, {when:?}: {} bytes",
+            counts.bytes_down < 3 * MIB / 4,
+            "the kept quarter at the end came again, {when:?}: {} bytes",
             counts.bytes_down
         );
     }
@@ -645,7 +648,7 @@ fn a_resume_fetches_only_the_ranges_not_kept() {
 #[test]
 fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
-        let body = body(4 * MIB);
+        let body = body(MIB);
         let server = serve(body.clone(), SERVING);
         let rate = Rate::read(&|_| Some("1M".into())).unwrap();
         let mut net = net(&server.url, 8).with_rate(rate);
@@ -660,17 +663,17 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
             panic!("nothing else holds the download");
         };
         let mut writer = partial
-            .writer(0, Some(4 * MIB), validators, false, true)
+            .writer(0, Some(MIB), validators, false, true)
             .unwrap();
-        let mib = usize::try_from(MIB).unwrap();
-        writer.write_at(0, &body[..mib]).unwrap();
-        writer.write_at(3 * MIB, &body[3 * mib..]).unwrap();
+        let quarter = usize::try_from(MIB / 4).unwrap();
+        writer.write_at(0, &body[..quarter]).unwrap();
+        writer.write_at(3 * MIB / 4, &body[3 * quarter..]).unwrap();
         writer.save().unwrap();
         drop(writer);
         drop(partial);
         let fetch = Fetch::new(server.url.clone());
-        // a hang guard only: a round takes about a second, and a busy disk has held the cache's
-        // writes for 15 s
+        // a hang guard only: a round takes about half a second, and a busy disk has held the
+        // cache's writes for 15 s
         let fetched = block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(120),
@@ -680,18 +683,21 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
             .unwrap()
         })
         .unwrap();
-        assert_eq!(fetched.size, 4 * MIB, "{when:?}");
+        assert_eq!(fetched.size, MIB, "{when:?}");
         assert_eq!(fetched.digest, sha256(&body), "{when:?}");
         assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), *body);
         let first = &server.heads()[0];
-        assert!(first.contains(&format!("range: bytes={MIB}-")), "{first}");
+        assert!(
+            first.contains(&format!("range: bytes={}-", MIB / 4)),
+            "{first}"
+        );
         assert!(first.contains("if-range: \"v1\""), "{first}");
         let counts = net.work.counts();
         assert_eq!(counts.resumes, 1, "{when:?}");
         assert_eq!(counts.retries, 0, "{when:?}");
         assert!(
-            counts.bytes_down < 3 * MIB,
-            "the kept megabyte at the end came again, {when:?}: {} bytes",
+            counts.bytes_down < 3 * MIB / 4,
+            "the kept quarter at the end came again, {when:?}: {} bytes",
             counts.bytes_down
         );
     }
