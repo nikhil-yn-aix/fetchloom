@@ -21,7 +21,7 @@ pub(super) struct Logs {
 }
 
 impl Logs {
-    /// whether logs share stderr with the story.
+    /// whether logs share stderr with the run's own output.
     pub(super) fn on_stderr(&self) -> bool {
         self.on_stderr
     }
@@ -146,7 +146,7 @@ mod tests {
             drop(logs);
             return;
         }
-        // Each child owns its global subscriber; tests in this process never replace it.
+        // each child owns its global subscriber; tests in this process never replace it
         let dir = tempfile::tempdir().unwrap();
         for mode in ["timeline", "debug", "explicit"] {
             let path = dir.path().join(format!("{mode}.json"));

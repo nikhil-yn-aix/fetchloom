@@ -110,8 +110,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     })
 }
 
-/// the error for `remove` given no name: the datasets the project has, and the command for one,
-/// as an example, since only a person knows which to remove.
+/// the error for `remove` given no name, listing the datasets, since only a person knows which.
 fn unnamed(context: &Context) -> Error {
     const NAMED: usize = 10;
     let error = Error::new(Kind::Usage, "remove needs <name>");

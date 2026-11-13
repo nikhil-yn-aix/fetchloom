@@ -64,8 +64,7 @@ fn read_text(path: &Path) -> Result<(String, String), Error> {
     Ok((name, text))
 }
 
-/// the links `text`, the list `name`, gives, each with the SHA-256 its line gives. a line of
-/// search words is refused here, since its second word is no hash.
+/// a line of search words is refused here, since its second word is no hash.
 pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
     let mut lines = Vec::new();
     for (index, written) in text.trim_start_matches('\u{feff}').lines().enumerate() {
@@ -109,9 +108,8 @@ pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
     Ok(lines)
 }
 
-/// reads a SHA-256 as sites and lists write one: 64 hex digits in either case, or the same after
-/// `sha256:`, with spaces around ignored. otherwise says why it is none, naming the hash it looks
-/// like, since a site often states an MD5, or for a file kept in git a SHA-1, beside it.
+/// reads a SHA-256 as sites and lists write one, bare or after `sha256:`. otherwise it says why,
+/// naming the hash it looks like, since a site often states an MD5, or git a SHA-1, beside it.
 pub(super) fn sha256(text: &str) -> Result<Sha256, String> {
     let text = text.trim();
     let hex = match text.get(..7) {
@@ -138,10 +136,8 @@ pub(super) fn sha256(text: &str) -> Result<Sha256, String> {
     })
 }
 
-/// `lines` of the list `name`, each with its reference, once every line names data to fetch: no
-/// path on this machine or line naming what another names, and, `for_project`, no link carrying
-/// a secret data.toml and data.lock would keep. the first line that fails is named, any secret
-/// in it masked.
+/// `lines` with their references once every one names data to fetch: no path on this machine,
+/// no two naming the same data and, `for_project`, no secret data.toml and data.lock would keep.
 pub(super) fn checked(
     name: &str,
     lines: Vec<Line>,
@@ -195,7 +191,6 @@ pub(super) fn checked(
     Ok(checked)
 }
 
-/// `error`, about the link on `at`, a line such as `line 2 of links.txt`, saying so.
 pub(super) fn on_line(mut error: Error, at: &str) -> Error {
     error.message = format!("{at}: {}", error.message);
     error
@@ -209,10 +204,8 @@ fn one_at_a_time() -> String {
     )
 }
 
-/// several links typed on the command line for one add, each a line of a list that messages name
-/// by its link, once every one names data to fetch: search words go alone, files on this machine
-/// one folder at a time, and no link may carry a secret data.toml and data.lock would keep or name
-/// what another names. any secret in a link a message shows is masked.
+/// links typed for one add, checked as a list's lines are, each named by its own link: search
+/// words go alone, and a path on this machine is added one at a time.
 pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
     if let Some(word) = links.iter().find(|link| is_search(link)) {
         let example = if links.iter().all(|link| is_search(link)) {
@@ -297,8 +290,6 @@ mod tests {
 
     const IRIS: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    /// a SHA-256 is read as sites and lists write one, and a hash of another kind, which a site
-    /// may state beside it, is named.
     #[test]
     fn a_sha256_is_read_as_copied_and_another_hash_is_named() {
         for text in [
@@ -429,9 +420,6 @@ mod tests {
         );
     }
 
-    /// links typed for one add are checked as a list's lines are, before any request, and each
-    /// is named by its own link, any secret masked: search words go alone, and a path on this
-    /// machine is added one at a time.
     #[test]
     fn typed_links_are_checked_and_named_by_their_links() {
         let typed = |links: &[&str]| typed(links.iter().map(|link| (*link).to_owned()).collect());

@@ -43,8 +43,7 @@ struct Listed {
     /// who may read the data, as its source said: a hint for sharing it, `unknown` when the
     /// source said nothing.
     access: Option<Access>,
-    /// each source file data.lock pins. `files` was already the count, so the list has its own
-    /// name.
+    /// each source file data.lock pins, named so because `files` is the count.
     locked_files: Option<Vec<ListedFile>>,
     /// the files `files` and `bytes` count, by their paths in the dataset's folder, with their
     /// sizes.
@@ -97,9 +96,8 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     Ok(report)
 }
 
-/// one dataset's files on stdout, a path and a size per line. a line naming the dataset, with
-/// its title, size, license and DOI, is an aside for a person, since data.lock and `--json` keep
-/// them.
+/// one dataset's files on stdout, a path and a size per line. the heading is an aside for a
+/// person, since data.lock and `--json` keep what it says.
 fn one(output: &crate::output::Output, dataset: &Listed) {
     let Some(files) = &dataset.held else {
         output.done("Ok", &format!("{} is not locked yet", dataset.name));
@@ -117,8 +115,6 @@ fn one(output: &crate::output::Output, dataset: &Listed) {
     }
 }
 
-/// the line above a dataset's files: its name, title, how many files and bytes, license and DOI,
-/// each that data.lock has.
 fn heading(dataset: &Listed) -> String {
     let mut facts = vec![dataset.name.clone()];
     facts.extend(dataset.title.clone());
@@ -159,10 +155,9 @@ fn file_lines(files: &[(String, u64)]) -> String {
         .join("\n")
 }
 
-/// the files the fetched dataset `name`, pinned as `locked`, puts in its folder, by their paths
-/// there: each archive stands for the files `cache` recorded it unpacked to that its members
-/// table keeps, or for itself, all its parts, while the cache has no record of it. a members
-/// table that does not fit the pin leaves every pinned file as it is.
+/// the files the fetched dataset `name` puts in its folder, by their paths there: an archive as
+/// the files its members table keeps of what `cache` recorded, else as itself, every part. a
+/// members table that does not fit the pin leaves every pinned file as it is.
 fn held(
     manifest: &Manifest,
     name: &str,
@@ -191,13 +186,11 @@ fn held_total(
     totals
 }
 
-/// `totals`, files and bytes, with one more file of `size` bytes.
 fn counted((files, bytes): (u64, u64), size: u64) -> (u64, u64) {
     (files + 1, bytes.saturating_add(size))
 }
 
-/// calls `each` with the path in its folder and the size of each file [`held`] lists, in no
-/// order.
+/// calls `each` for every file [`held`] lists, with its path in the folder and size, in no order.
 fn each_held(
     manifest: &Manifest,
     name: &str,
@@ -263,7 +256,6 @@ struct View<'n> {
     pinned: bool,
 }
 
-/// the list `list` shows: every dataset, or the one `name`, with what a person or `--json` reads.
 fn report(
     manifest: &Manifest,
     lock: &Lock,
@@ -367,9 +359,8 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
 /// a license longer than this is cut, so one long statement does not push the table off screen.
 const LICENSE: usize = 32;
 
-/// the datasets as aligned columns, one per line, for a person or for `grep`. on a terminal
-/// too narrow for every column, the source gives way, then the license, since `--json` and
-/// `list <name>` keep them.
+/// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
+/// the source gives way, then the license, since `--json` and `list <name>` keep them.
 fn table(datasets: &[Listed], width: Option<usize>) -> String {
     let widest = |text: &str| {
         text.lines()
@@ -466,7 +457,6 @@ mod tests {
         );
     }
 
-    /// `list <name>` names the dataset on the line its license is on, never the license alone.
     #[test]
     fn the_heading_names_the_dataset_beside_its_license() {
         let mut dataset = Listed {
@@ -517,8 +507,7 @@ mod tests {
         );
     }
 
-    /// a dataset with `place = false` lists where its folder would be in JSON, beside `placed`,
-    /// and as not placed in the table.
+    /// its JSON keeps where its folder would be, beside `placed`.
     #[test]
     fn an_unplaced_dataset_lists_as_not_placed() {
         let manifest = Manifest::parse(
@@ -585,9 +574,8 @@ mod tests {
         );
     }
 
-    /// an archive counts as the files it puts in its dataset's folder, as this machine's cache
-    /// recorded what it unpacked to, less those a members table leaves out, and `list <name>`
-    /// names them by their paths there. one never unpacked here counts as itself until then.
+    /// less what a members table leaves out, named by their paths in `list <name>`; one never
+    /// unpacked here counts as itself until then.
     #[test]
     fn an_archive_counts_as_the_files_it_places() {
         use crate::cache::Member;
@@ -768,10 +756,7 @@ mod tests {
         (manifest, lock, folder, cache)
     }
 
-    /// each view a list shows, every dataset or one, for a person or as `--json`, lists what it
-    /// did when every view was built whole: files a recorded archive's members table keeps, an
-    /// archive this machine never unpacked as itself, a recipe's result, a link that holds a
-    /// secret left out, and datasets not locked or not placed.
+    /// the views: every dataset or one, for a person or as `--json`.
     #[test]
     fn each_view_lists_what_the_whole_list_has() {
         let (manifest, lock, _folder, cache) = every_kind();

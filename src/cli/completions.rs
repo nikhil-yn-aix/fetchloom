@@ -1,6 +1,5 @@
 //! `fetchloom completions`: a script that teaches a shell fetchloom's commands, options and
-//! dataset names. the script is text for the shell, so `--json` is a usage error rather than a
-//! document around it.
+//! dataset names. it is text for the shell, so `--json` is a usage error rather than a document.
 
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
@@ -13,8 +12,7 @@ use clap_complete::Shell;
 use super::{Context, args, finish};
 use crate::error::{Error, Kind};
 
-/// prints the script for the shell `asked` names on stdout, or the usage error `--json` gets.
-/// the scripts' own call, `--names`, gets the dataset names [`names`] finds instead.
+/// prints the script, or for the scripts' own call, `--names`, the dataset names [`names`] finds.
 pub(super) fn print(context: &Context, asked: &args::Completions, started: Instant) -> ExitCode {
     if let Some(current) = &asked.names {
         return names_told(current, &asked.words);
@@ -34,9 +32,7 @@ pub(super) fn print(context: &Context, asked: &args::Completions, started: Insta
     finish(context, Some("completions"), outcome, started)
 }
 
-/// prints the names [`names`] finds for `current`, one to a line, and exits 0, or prints nothing
-/// and exits 1 where it is no dataset's name, so the script completes it as it would without
-/// them.
+/// exits 1 where no dataset's name goes, so the script falls back on its own completer.
 fn names_told(current: &str, before: &[String]) -> ExitCode {
     let Some(names) = names(current, before) else {
         return ExitCode::FAILURE;
@@ -52,12 +48,9 @@ fn names_told(current: &str, before: &[String]) -> ExitCode {
     }
 }
 
-/// the names of the datasets data.toml has, when the word `current`, after the words `before` it
-/// on a command line as the shell holds them, stands where a dataset's name goes: after a command
-/// such as `path` or `sync`, or an option such as `lock --upgrade`. the project is the one `-C`
-/// names, else the one the current folder is in, found as every command finds it. none for any
-/// other word, such as an option or the file of `name/file`, and outside a project. only
-/// data.toml is read, and nothing is asked of the network.
+/// the dataset names of the project `-C` names, else the current folder's, when `current`, after
+/// `before`, stands where a dataset's name goes, as after `path` or `lock --upgrade`. it reads
+/// data.toml alone and asks nothing of the network.
 fn names(current: &str, before: &[String]) -> Option<Vec<String>> {
     if current.starts_with('-') || current.contains('/') {
         return None;
@@ -207,10 +200,8 @@ fn takes_names(arg: &clap::Arg) -> bool {
             .is_some_and(|names| names.iter().any(|name| name == "name"))
 }
 
-/// the completion script for `shell`, for a program on PATH as `fetchloom`, which completes
-/// `fl` the same way: the short name installers make for the same program. after a command that
-/// takes a dataset's name, it asks fetchloom for the names data.toml has; everything else it
-/// completes from fetchloom's command line as it was written.
+/// the completion script for `shell`, for `fetchloom` on PATH and `fl`, the short name installers
+/// make for it, asking fetchloom for dataset names where they go.
 pub(super) fn script(shell: Shell) -> Vec<u8> {
     let mut script = Vec::new();
     clap_complete::generate(shell, &mut completed(), "fetchloom", &mut script);
@@ -270,9 +261,8 @@ fn naming_options() -> Vec<(String, String)> {
         .collect()
 }
 
-/// `script` with a completer that asks `fetchloom completions --names` for the dataset names
-/// after a command that takes them, and leaves every other word to the script's own completer,
-/// as when it answers that the word is no name.
+/// `script` with a completer that asks `fetchloom completions --names` after a command that takes
+/// dataset names, and else, or when that fails, uses the script's own completer.
 fn with_names(shell: Shell, script: &str) -> String {
     let commands = naming();
     match shell {

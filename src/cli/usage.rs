@@ -13,9 +13,8 @@ use crate::name;
 use crate::net;
 use crate::output::{ColorChoice, Level, Output, Style};
 
-/// text help goes to stdout as clap writes it; argument reading routes JSON help separately.
-/// a command-line mistake becomes one of our own errors, in the document `--json` asks for,
-/// or with the detail and colors the options clap read ask for.
+/// a command-line mistake as one of our errors, in the document `--json` asks for or with the
+/// detail and colors the options clap read ask for. argument reading routes JSON help itself.
 pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         let color = args::color();
@@ -71,6 +70,7 @@ fn named_command(read: &ArgMatches) -> Option<String> {
     }
     (!names.is_empty()).then(|| names.join(" "))
 }
+
 /// `verify` for `cache verify`: the full command when `command` only exists one level down.
 fn nested(command: &str) -> Option<String> {
     args::Args::command().get_subcommands().find_map(|parent| {
@@ -97,9 +97,7 @@ fn typed(err: &clap::Error, kind: ContextKind) -> Vec<String> {
     }
 }
 
-/// options that cannot go together for a reason one sentence gives better than clap's words, as
-/// the message and the help: --force replaces the one file -o names, and get never replaces the
-/// files of a --dir folder.
+/// a conflict whose reason one sentence gives better than clap's words, as message and help.
 fn explained(err: &clap::Error) -> Option<(&'static str, &'static str)> {
     if err.kind() != ErrorKind::ArgumentConflict {
         return None;
@@ -280,8 +278,7 @@ fn needs(command: &str, forms: &[String]) -> String {
     format!("{command} needs {}", crate::units::listed(&wanted, "or"))
 }
 
-/// the command the person likely meant, with a command or option that does not exist changed
-/// to the one meant.
+/// the command line the person likely meant, with a wrong command or option corrected.
 fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
     let raw = |kind| typed(err, kind).into_iter().next();
     match err.kind() {
@@ -318,9 +315,8 @@ fn option_meant(typed: &str, parent: Option<&str>) -> Option<String> {
     Some(super::meant(&[typed], &[&option], option.clone()))
 }
 
-/// the command whose name is nearest to `typed` in spelling, ignoring case, among those of
-/// `parent`, or the whole command when `typed` names one a level down, as `verify` does
-/// `cache verify`.
+/// the command nearest to `typed` in spelling, ignoring case, among those of `parent`, or the
+/// whole command when `typed` names one a level down, as `verify` does `cache verify`.
 fn command_meant(typed: &str, parent: Option<&str>) -> Option<String> {
     let root = args::Args::command();
     let holder = parent.map_or(Some(&root), |parent| {
@@ -500,8 +496,7 @@ mod tests {
         Ok(())
     }
 
-    /// every command clap refuses without an argument says so in one shape: the command, then
-    /// what it needs, as its usage names it, above the usage.
+    /// in one shape for every command: the command, what its usage says it needs, then the usage.
     #[test]
     fn a_missing_argument_is_named_as_what_the_command_needs()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -745,8 +740,7 @@ mod tests {
         Ok(())
     }
 
-    /// --force replaces the one file -o names, so with --dir it says that, in either order,
-    /// rather than only that the two cannot go together.
+    /// in either order, rather than only that the two cannot go together.
     #[test]
     fn force_with_a_folder_says_what_force_replaces() -> Result<(), Box<dyn std::error::Error>> {
         for arguments in [
