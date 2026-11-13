@@ -208,63 +208,92 @@ impl Shards {
         keep: &dyn Fn(&UrlRecord) -> bool,
     ) -> io::Result<()> {
         let (records, entries) = paths(root, shard);
-        let (lines, index) = match (fs::read(&records), fs::read(&entries)) {
-            (Ok(lines), Ok(index)) => (lines, index),
-            (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
-                return Err(err);
-            }
-            // lines without their index, or an index without its lines, name no record
-            _ => {
-                *self.indexes[shard]
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) = Index::default();
-                remove(&records)?;
-                return remove(&entries);
-            }
-        };
-        let mut latest: HashMap<u64, u32> = HashMap::new();
-        let mut order = Vec::new();
-        for entry in index.as_chunks::<ENTRY>().0 {
-            let (key, start) = parse(entry);
-            if latest.insert(key, start).is_none() {
-                order.push(key);
-            }
-        }
-        let mut kept = Vec::new();
-        let mut kept_index = Vec::new();
-        for key in order {
-            let Some(line) = lines
-                .get(latest[&key] as usize..)
-                .and_then(|rest| Some(&rest[..rest.iter().position(|&byte| byte == b'\n')?]))
-            else {
-                continue;
-            };
-            let held = checked(line)
-                .and_then(|json| serde_json::from_slice::<UrlRecord>(json).ok())
-                .is_some_and(|record| keep(&record));
-            if held {
-                kept_index.extend_from_slice(&key.to_le_bytes());
-                let start = u32::try_from(kept.len()).map_err(io::Error::other)?;
-                kept_index.extend_from_slice(&start.to_le_bytes());
-                kept.extend_from_slice(line);
-                kept.push(b'\n');
-            }
-        }
-        if kept == lines && kept_index == index {
+        let Some(kept) = kept(root, shard, keep)? else {
             return Ok(());
-        }
+        };
         *self.indexes[shard]
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Index::default();
-        if kept.is_empty() {
+        if kept.lines.is_empty() {
             remove(&records)?;
             remove(&entries)
         } else {
             // the lines first: an index never names lines its file does not hold
-            replace(scratch, &records, &kept)?;
-            replace(scratch, &entries, &kept_index)
+            replace(scratch, &records, &kept.lines)?;
+            replace(scratch, &entries, &kept.index)
         }
     }
+
+    /// the files of shard `shard` a [`Shards::rewrite`] would remove, as a pretend gc lists them:
+    /// both, when it would keep no record there.
+    pub(crate) fn emptied(
+        root: &Path,
+        shard: usize,
+        keep: &dyn Fn(&UrlRecord) -> bool,
+    ) -> io::Result<Vec<PathBuf>> {
+        let (records, entries) = paths(root, shard);
+        Ok(match kept(root, shard, keep)? {
+            Some(kept) if kept.lines.is_empty() => vec![records, entries],
+            _ => Vec::new(),
+        })
+    }
+}
+
+/// what a shard holds once only the latest good record of each key `keep` takes is left.
+struct Kept {
+    lines: Vec<u8>,
+    index: Vec<u8>,
+}
+
+/// shard `shard` with only the latest good record of each key `keep` takes; none when that is
+/// what it holds already. lines without their index, or an index without its lines, name no
+/// record.
+fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
+    let (records, entries) = paths(root, shard);
+    let (lines, index) = match (fs::read(&records), fs::read(&entries)) {
+        (Ok(lines), Ok(index)) => (lines, index),
+        (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
+            return Err(err);
+        }
+        (Err(_), Err(_)) => return Ok(None),
+        _ => {
+            return Ok(Some(Kept {
+                lines: Vec::new(),
+                index: Vec::new(),
+            }));
+        }
+    };
+    let mut latest: HashMap<u64, u32> = HashMap::new();
+    let mut order = Vec::new();
+    for entry in index.as_chunks::<ENTRY>().0 {
+        let (key, start) = parse(entry);
+        if latest.insert(key, start).is_none() {
+            order.push(key);
+        }
+    }
+    let mut kept = Kept {
+        lines: Vec::new(),
+        index: Vec::new(),
+    };
+    for key in order {
+        let Some(line) = lines
+            .get(latest[&key] as usize..)
+            .and_then(|rest| Some(&rest[..rest.iter().position(|&byte| byte == b'\n')?]))
+        else {
+            continue;
+        };
+        let held = checked(line)
+            .and_then(|json| serde_json::from_slice::<UrlRecord>(json).ok())
+            .is_some_and(|record| keep(&record));
+        if held {
+            kept.index.extend_from_slice(&key.to_le_bytes());
+            let start = u32::try_from(kept.lines.len()).map_err(io::Error::other)?;
+            kept.index.extend_from_slice(&start.to_le_bytes());
+            kept.lines.extend_from_slice(line);
+            kept.lines.push(b'\n');
+        }
+    }
+    Ok((kept.lines != lines || kept.index != index).then_some(kept))
 }
 
 /// the shard of `url` and its key: the first 8 bytes of the url's SHA-256, whose first 4 bits
@@ -575,6 +604,15 @@ mod tests {
             fs::read(&records).unwrap(),
             before,
             "a clean shard stays as it is"
+        );
+        assert_eq!(
+            Shards::emptied(root, 0, &|_| true).unwrap(),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(
+            Shards::emptied(root, 0, &|_| false).unwrap(),
+            [records.clone(), entries.clone()],
+            "a pretend gc lists what a real one removes"
         );
         rewrite(&shards, root, &|_| false);
         assert!(!records.exists() && !entries.exists());
