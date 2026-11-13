@@ -1,6 +1,5 @@
-//! `fetchloom status`: what differs between the data folder and data.lock. it changes nothing,
-//! downloads nothing and hashes only files whose size and time cannot vouch for them, so it
-//! answers at once even for large projects. asked to verify, it hashes every placed file.
+//! `fetchloom status`: what differs between the data folder and data.lock, changing and downloading
+//! nothing and hashing only files their size and time cannot vouch for, or all for `--verify`.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -30,53 +29,44 @@ use crate::units;
 
 pub(super) mod ready;
 
-/// the most rows a terminal shows of each kind of difference. a pipe, a file and `--json` get
-/// them all.
+/// the most rows of each kind a terminal shows; a pipe, a file and `--json` get them all.
 const SHOWN: usize = 20;
 
 #[derive(Default, Serialize)]
 pub(super) struct Status {
     project: PathBuf,
-    /// datasets whose entry in data.toml changed since data.lock was written, and recipes whose
-    /// result data.lock does not pin as building them now would make.
+    /// datasets data.toml changed since data.lock was written, and stale recipes.
     unlocked: Vec<String>,
     /// datasets still in data.lock whose entries were removed from data.toml.
     removed: Vec<String>,
     missing: Vec<String>,
     /// files fetchloom placed that changed since.
     edited: Vec<String>,
-    /// files where the lock places one, which fetchloom did not place, with other bytes than it
-    /// pins there.
+    /// files fetchloom did not place at paths the lock places, with other bytes than it pins.
     untracked: Vec<String>,
-    /// files where the lock places one, which fetchloom did not place, that already hold the bytes
-    /// it pins there, which `sync` adopts without `--force`.
+    /// untracked files holding the pinned bytes, which `sync` adopts without `--force`.
     adoptable: Vec<String>,
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files in the data folder that no dataset places, and that fetchloom did not place or that
-    /// changed since, which `sync` keeps.
+    /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps.
     extra: Vec<String>,
-    /// files fetchloom placed that no dataset needs now and that nobody changed, which the next
-    /// `sync` removes.
+    /// unchanged files fetchloom placed that no dataset needs now, which the next `sync` removes.
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
-    /// recipes whose pinned result the data folder lacks files of that neither the cache nor a
-    /// folder mirror holds, so only `fetchloom build` makes it here. their files are in no other
-    /// list.
+    /// recipes whose pinned result lacks files here that no cache or folder mirror holds, so only
+    /// `fetchloom build` makes it; their files are in no other list.
     unbuilt: Vec<String>,
     /// datasets data.toml keeps out of the data folder with `place = false`.
     unplaced: Vec<String>,
-    /// entries in the way of files data.lock places, by path: a link or special file at a
-    /// file's path, a folder there, or a file, link or special file where a folder on a file's
-    /// way belongs. `sync --force` replaces them, except a folder that holds anything.
+    /// entries in the way of files data.lock places, by path, at a file's path or where a folder on
+    /// its way belongs; `sync --force` replaces them, except a folder that holds anything.
     #[serde(serialize_with = "blocker_paths")]
     blocked: Vec<Blocker>,
-    /// placed files that no longer hold the pinned bytes, though no edit of this project's shows:
-    /// links to the cache's copy, which an edit through a link changed, here or in another
-    /// project, and copies and reflinks that still look as placed, which only hashing finds.
-    /// `sync` puts them back, or `sync --verify` for those only hashing finds.
+    /// placed files that no longer hold the pinned bytes though no edit of this project's shows:
+    /// cache links an edit changed, here or in another project, which `sync` puts back, and copies
+    /// only hashing finds, which `sync --verify` puts back.
     damaged: Vec<String>,
     /// recipes with a rebuild that differs from data.lock kept, which `fetchloom build --accept`
     /// pins, each with where its files that differ are.
@@ -87,8 +77,7 @@ pub(super) struct Status {
     /// whether the project has no data.lock, so nothing pins its files yet.
     #[serde(skip)]
     lockless: bool,
-    /// damaged files that are links to the cache's changed copy, for the reason the terminal
-    /// gives.
+    /// damaged files linked to the cache's changed copy, for the reason the terminal gives.
     #[serde(skip)]
     linked: HashSet<String>,
     /// edited files placed as hardlinks, whose change every project sharing the link sees.
@@ -100,8 +89,7 @@ pub(super) struct Status {
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
-    /// the recipes among `unlocked`, each with what moved since it was built, which only
-    /// `fetchloom build` brings in line.
+    /// recipes among `unlocked` with what moved since each was built, which only a build fixes.
     #[serde(skip)]
     building: BTreeMap<String, String>,
     /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
@@ -126,8 +114,7 @@ pub(super) struct Status {
     gone: HashMap<String, String>,
 }
 
-/// the rebuild a build kept of a recipe, files that differ from what data.lock pins for the
-/// same key.
+/// a rebuild a build kept of a recipe, whose files differ from what data.lock pins for its key.
 #[derive(Serialize)]
 struct Kept {
     name: String,
@@ -136,8 +123,7 @@ struct Kept {
     /// whether it came from another recipe or pin than data.lock has now, as after a checkout of
     /// another commit, so `build --accept` refuses it.
     stale: bool,
-    /// each file that differs from data.lock: changed ones, then missing, then extra, each by
-    /// path.
+    /// each file that differs from data.lock, by path: changed ones, then missing, then extra.
     files: Vec<Differing>,
 }
 
@@ -153,9 +139,8 @@ struct Differing {
     pinned: Option<PathBuf>,
 }
 
-/// `status`, hashing every placed file when `verify` asks, as `status --verify` does, and failing
-/// with `data.not_ready` when `strict` asks, as `status --check` does, and the data is not ready
-/// to use.
+/// `status`, hashing every placed file for `verify`, as `--verify` asks, and failing with
+/// `data.not_ready` for `strict`, as `--check` asks, when the data is not ready to use.
 pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Status, Error> {
     let project = super::project::find(&context.output)?;
     let status = check(
@@ -263,10 +248,9 @@ fn warn_git(output: &Output, project: &Project) -> Result<(), Error> {
 /// the most lists a warning about lists nothing reads names in its command; `-v` names each.
 const NAMED_LISTS: usize = 5;
 
-/// warns of the lists in data.lock.d that data.lock no longer names, as one a build wrote before
-/// `git checkout` put an older data.lock back: nothing reads them, and `git add data.lock.d` would
-/// commit them. the help names the exact command that takes them away, `git rm` for those git
-/// has; status itself deletes nothing, since only data.lock's next write sweeps them.
+/// warns of the lists in data.lock.d that data.lock no longer names, as after `git checkout` of an
+/// older data.lock, which `git add data.lock.d` would commit. the help names the command that
+/// removes them, since status deletes nothing and only data.lock's next write sweeps them.
 fn warn_unnamed(output: &Output, project: &Project) {
     use crate::project::lock::{self, lists};
     let Ok(text) = std::fs::read_to_string(project.root.join(lock::FILE)) else {
@@ -340,9 +324,8 @@ fn warn_unnamed(output: &Output, project: &Project) {
     }
 }
 
-/// warns of the lists data.lock names in data.lock.d that git does not have, which a commit then
-/// leaves out, so a clone of it cannot read data.lock. `-v` names each. nothing is said with no
-/// git, outside a repository, or for a data.lock that names no list.
+/// warns of the lists data.lock names that git does not have, so a clone could not read data.lock;
+/// `-v` names each. without git or a repository, nothing is said.
 fn warn_untracked(output: &Output, project: &Project) {
     let Ok(text) = std::fs::read_to_string(project.root.join(crate::project::lock::FILE)) else {
         return;
@@ -396,8 +379,7 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
     (unlocked, removed)
 }
 
-/// each recipe whose result data.lock does not pin as building it now would make, with what
-/// moved since it was built.
+/// each stale recipe, with what moved since it was built.
 fn unbuilt(
     project: &Project,
     manifest: &Manifest,
@@ -416,12 +398,9 @@ fn unbuilt(
     Ok(building)
 }
 
-/// compares the data folder with data.lock, reading only what the disk says about each file,
-/// or, given `verify`, hashing every placed file too, under a bar `verify` draws. a project
-/// still as a complete sync left it is settled as sync finds it, without a plan, so status agrees
-/// with sync even once the cache no longer records what an archive holds, as after a move and
-/// `cache gc --now`. a recipe's result is looked for in the cache and the folder `mirrors`, never
-/// on a web mirror, since status makes no request.
+/// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
+/// placed file under its bar. a settled project is answered as sync finds it, without a plan, and a
+/// result is looked for in the cache and folder `mirrors` only, as status makes no request.
 fn check(
     project: &Project,
     threads: Threads,
@@ -550,10 +529,9 @@ fn gone(
         .collect()
 }
 
-/// moves to `unbuilt` each recipe whose result sync would leave out: one with a missing or
-/// outdated file whose bytes neither the cache, another file in place in the data folder, a
-/// folder mirror nor a download of the same sync gives. a web mirror may hold them, and only a
-/// sync asks it, so with one set nothing moves.
+/// moves to `unbuilt` each recipe whose result sync would leave out, a missing or outdated file of
+/// it found nowhere: not in the cache, the data folder, a folder mirror or the sync's downloads.
+/// with a web mirror set nothing moves, as only a sync asks one.
 fn unbuilt_here(
     status: &mut Status,
     manifest: &Manifest,
@@ -690,10 +668,9 @@ fn kept(
     }
 }
 
-/// whether this machine holds every file a build reads of the fetched dataset `locked`: each
-/// file in the cache or in place in the data folder, as `holding` says, and an archive whole in
-/// the cache or standing for the files the cache records it unpacked to that its table in
-/// `members` keeps, as gc keeps them.
+/// whether this machine holds every file a build reads of `locked`: each in the cache or in place,
+/// as `holding` says, and an archive whole in the cache or as the recorded files its `members`
+/// table keeps, as gc keeps them.
 fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked, members: &Members) -> bool {
     let has = |sha256: &Sha256, size| {
         cache.find(sha256, Some(size)).is_some() || holding.contains(sha256)
@@ -824,9 +801,8 @@ fn compare(
     Ok(())
 }
 
-/// the files in the data folder that no dataset places, sorted. what an interrupted placement
-/// left under the hidden names it stages files in is not listed, as `get` never counts it,
-/// since the next sync deletes it.
+/// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an
+/// interrupted placement, which the next sync deletes.
 fn extra(survey: &Survey, wanted: &HashSet<&str>) -> Vec<String> {
     let leftovers: HashSet<&String> = survey.leftovers().collect();
     let mut extra: Vec<String> = survey
@@ -860,8 +836,7 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 }
 
 impl Status {
-    /// each kind of file difference, under the verb that marks it, with what follows each path
-    /// of it, if anything.
+    /// each kind of file difference with its verb and what follows each path, if anything.
     fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 7] {
         [
             ("Missing", &self.missing, None),
@@ -907,9 +882,8 @@ impl Status {
     }
 }
 
-/// a line for each dataset with `place = false`: faint on stderr, as no difference, once no file
-/// an earlier sync placed of it is left, and a row saying the next sync removes them while some
-/// are.
+/// a line for each dataset with `place = false`: faint on stderr once no file of it is left, else a
+/// row saying the next sync removes them.
 fn tell_unplaced(output: &Output, status: &Status) {
     for name in &status.unplaced {
         let Some((folder, paths)) = status.retiring.get(name) else {
@@ -935,10 +909,8 @@ fn tell_unplaced(output: &Output, status: &Status) {
     }
 }
 
-/// a row on stdout for each difference, after the lines of the datasets with `place = false`,
-/// so a pipe or a file gets the rows and stderr keeps the story. a script gets every file; a
-/// person at a terminal reads a folder whose files are all gone as one row, and at most `SHOWN`
-/// rows of each kind.
+/// a row on stdout per difference, so a pipe or file gets rows and stderr the story; a script gets
+/// every file, a terminal one row per folder gone whole and at most `SHOWN` per kind.
 fn list(output: &Output, status: &Status) {
     let shown = output.answer_width().map(|_| SHOWN);
     tell_unplaced(output, status);

@@ -1,7 +1,6 @@
-//! whether the data a run asked for is ready to use: each file data.lock places is in place with
-//! the bytes it pins, each recipe's pinned result is here, and data.lock pins what data.toml
-//! asks. `sync --strict` and `status --check` share it: when the data is not ready, both fail
-//! with `data.not_ready`, with a line for each file or dataset in the way, saying what to do.
+//! whether the data a run asked for is ready to use: every placed file holds its pinned bytes,
+//! every pinned result is here, and data.lock pins what data.toml asks. `sync --strict` and
+//! `status --check` share it, failing with `data.not_ready`.
 
 use super::Status;
 use crate::cli::project::command;
@@ -102,9 +101,8 @@ impl Unready {
     }
 }
 
-/// fails with `data.not_ready` when anything in `unready` keeps the data from being ready,
-/// naming each with what to do. only when a plain `fetchloom sync` makes all of it ready does
-/// the help name it, so `fix` never replaces an edit, repins or runs a build.
+/// fails with `data.not_ready` naming each of `unready` with what to do; only when a plain sync
+/// makes all of it ready does `fix` name it, so it never replaces an edit, repins or builds.
 pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
     if unready.is_empty() {
         return Ok(());
@@ -120,10 +118,8 @@ pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
         .help(help))
 }
 
-/// what keeps the data of `scope` from being ready once a sync left the data folder as
-/// `placement` says: the files it kept, except those no dataset needs, the recipes whose results
-/// it left out, and the recipes data.lock does not pin as building them now would make, which
-/// only a build changes.
+/// what keeps the data of `scope` from being ready after a sync left `placement`: the files it kept
+/// but unneeded ones, the results it left out, and stale recipes, which only a build changes.
 pub(in crate::cli) fn after_sync(
     project: &Project,
     scope: &Scope,
