@@ -1,8 +1,6 @@
-//! a program that prints a credential, such as a `credential_process`, the AWS CLI or the az
-//! cli. it is found by a full path and runs with no shell, from its own folder, with nothing on
-//! its input. what it prints on stdout is read up to 64 KiB and kept in memory alone; stderr is
-//! never read, so nothing it prints reaches a message, a log or a file. a stop, or a run past its
-//! time, ends it.
+//! a program that prints a credential, such as a `credential_process` or the az cli: run by full
+//! path with no shell and nothing on its input, its stdout read up to 64 KiB into memory alone and
+//! its stderr never, so nothing it prints reaches a message, a log or a file.
 
 use std::io::Read as _;
 use std::path::Path;
