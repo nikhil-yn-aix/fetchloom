@@ -2,7 +2,7 @@
 
 `data.lock` pins every selected source file by SHA-256 and size.
 
-a lock entry for the iris dataset, with no filters:
+the data.lock `fetchloom add zenodo:3608990` writes in a new project, with no filters:
 
 ```toml
 version = 1
@@ -12,7 +12,11 @@ name = "iris"
 ref = "zenodo:3608990"
 spec = "sha256:7e24dc80010999fe1ec2eaa0e602e1a3af375a2a5bd0e9d70173e62871f56744"
 resolved = "zenodo:3608990"
-locked = "2026-10-28T00:00:00Z"
+title = "DatasetIris"
+license = "cc-by-4.0"
+doi = "10.5281/zenodo.3608990"
+access = "public"
+locked = "2026-11-13T00:09:08Z"
 files = [
   { path = "iris.csv", size = 4177, sha256 = "b1f0b46c3e27350cbf0f75fb3b7d36adcd997c443e764bf09255126feeb11f31", md5 = "395d6abd001abf3760a1a794ef4c453c", url = "https://zenodo.org/api/records/3608990/files/iris.csv/content" },
 ]
