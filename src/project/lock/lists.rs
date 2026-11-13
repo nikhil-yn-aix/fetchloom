@@ -1,10 +1,6 @@
-//! the file lists kept beside data.lock in `data.lock.d`: those of sources too big to list
-//! inline, past [`INLINE`] files, and those of every result a recipe made. they are compressed
-//! and in parts, so data.lock stays small enough to read and review, and git takes every part
-//! under its size limits. a part's first line names its columns, which differ for the two kinds,
-//! so a list of one kind never stands for the other. data.lock records each list with the count,
-//! the bytes and the SHA-256 of the text its parts hold, so a part that changed or went missing
-//! is found as the lock is read.
+//! the file lists in `data.lock.d`, of sources past [`INLINE`] files and of every recipe result,
+//! compressed and in parts so data.lock stays reviewable and git takes each part under its size
+//! limits. data.lock records each list's count, bytes and SHA-256 to catch a changed part.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -20,8 +16,7 @@ pub(crate) const FOLDER: &str = "data.lock.d";
 /// the most files a source lists in data.lock itself. a rule of the format, not a setting, so
 /// every machine writes the same lock for the same files.
 pub(crate) const INLINE: usize = 50_000;
-/// the most files a source lists in data.lock itself in this run: [`INLINE`], or fewer for a CLI
-/// test that asks for them, which release builds never read.
+/// [`INLINE`], or fewer when a debug build's CLI test asks.
 pub(crate) fn inline() -> usize {
     #[cfg(debug_assertions)]
     if let Some(inline) = std::env::var("FETCHLOOM_TEST_INLINE")
@@ -236,9 +231,8 @@ pub(crate) fn compress(text: &str) -> std::io::Result<Vec<u8>> {
     zstd::encode_all(text.as_bytes(), LEVEL)
 }
 
-/// the rows of the dataset `name`'s list, read from the parts `listed` names below `root` and
-/// checked against what data.lock records of them. a list of more files than a run may list is
-/// refused before it is read, as a listing of them would be.
+/// the rows of `name`'s list from the parts `listed` names below `root`, checked against what
+/// data.lock records; refused unread when it holds more files than a run may list.
 pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
     if listed.parts.is_empty() || listed.parts != names(name, &listed.sha256, listed.parts.len()) {
         return Err(broken(format!(
@@ -329,8 +323,7 @@ fn other_kind<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
     )))
 }
 
-/// `text` with backslashes, tabs and line breaks written as `\\`, `\t`, `\n` and `\r`, so a field
-/// never splits a line.
+/// appends `text` with backslashes, tabs and line breaks escaped, so a field never splits a line.
 fn escape(text: &str, out: &mut String) {
     for character in text.chars() {
         match character {
@@ -409,8 +402,7 @@ mod tests {
             .collect()
     }
 
-    /// writes `rows` as `name`'s list below `root`, as a writer would, and says how data.lock
-    /// names it.
+    /// writes `rows` as `name`'s list below `root`, returning how data.lock names it.
     fn write<R: Row>(root: &Path, name: &str, rows: &[R]) -> Listed {
         let texts = texts(rows);
         let listed = listed(name, rows, &texts);
@@ -475,7 +467,7 @@ mod tests {
         );
         let mut changed = written.clone();
         changed[1].sha256 = digest::sha256(b"changed");
-        // the suffix changes, so the part name still reaches the content check.
+        // a part's name holds only the hash's start, so changing its end reaches the content check
         let mut wrong_hash = listed.sha256.hex();
         let last = wrong_hash.pop().unwrap();
         wrong_hash.push(if last == '0' { '1' } else { '0' });

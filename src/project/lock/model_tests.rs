@@ -200,7 +200,6 @@ fn compare(lock: &Lock) {
     assert_eq!(shuffled.render_with(INLINE), rendered);
 }
 
-/// the fast reader of canonical text and the toml reader read every generated lock alike,
 /// whatever its line ends, a leading byte order mark or the order it was built in.
 #[test]
 fn every_generated_lock_reads_back_alike_through_both_readers() {

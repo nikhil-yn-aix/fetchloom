@@ -1,12 +1,6 @@
 //! `fetchloom lock` after a git merge it could not finish: data.toml and data.lock merged one
-//! dataset at a time, as pnpm merges a lockfile both of whose sides read. a dataset only one side
-//! changed takes that side, one both sides have alike stays, and one each side changed its own way
-//! waits for a person to choose a side, as does a removal on one side of a dataset whose pin the
-//! other side changed, even when git merged data.toml by itself. without a merge base, every
-//! dataset the sides disagree on needs a choice, since an addition on one side looks like a
-//! removal on the other. a choice takes its side whole, entry and pin, as git holds that side when
-//! it can tell. nothing is resolved or downloaded: data.lock keeps a pin only when it answers the
-//! merged data.toml.
+//! dataset at a time, each disagreement the base cannot settle left to a person's choice. nothing
+//! is resolved or downloaded: data.lock keeps a pin only when it answers the merged data.toml.
 
 pub(crate) mod markers;
 #[cfg(test)]
@@ -90,8 +84,7 @@ pub(crate) struct Summary {
     pub(crate) same: Vec<String>,
     /// removed on one side while the other left it as it was, or by a choice.
     pub(crate) removed: Vec<String>,
-    /// fetched datasets in the merged data.toml that no data.lock entry of either side answers,
-    /// so `fetchloom lock` pins them.
+    /// fetched datasets no data.lock entry of either side answers, which `fetchloom lock` pins.
     pub(crate) unpinned: Vec<String>,
     /// those that need a choice, in an error's result only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -118,8 +111,7 @@ enum Why {
     BothAdded,
     /// the sides differ and no merge base shows which one changed it.
     NoBase,
-    /// only one side has it and no merge base shows whether that side added it or the other
-    /// removed it.
+    /// only one side has it, and no base shows whether that side added it or the other removed it.
     OneSided(Side),
 }
 
@@ -174,8 +166,7 @@ fn decide<T>(
     })
 }
 
-/// what a merge decided so far: the version kept of each dataset in data.toml and in data.lock,
-/// the conflicts nothing settled, and the datasets a choice settled.
+/// what a merge has decided so far, kept apart for data.toml's entries and data.lock's records.
 #[derive(Default)]
 struct Decided {
     entries: BTreeMap<String, Take>,
@@ -213,8 +204,9 @@ struct Manifests<'a> {
     sides: &'a Sides,
     ours: Manifest,
     theirs: Manifest,
-    /// each dataset's own text on each side and at the base, when the base reads.
+    /// each dataset's own text on each side.
     texts: [BTreeMap<String, String>; 2],
+    /// the same at the merge base, when it reads.
     base: Option<BTreeMap<String, String>>,
     /// each side whole, as git holds it, with each dataset's own text, when git gives both sides
     /// and they read.
@@ -253,16 +245,10 @@ impl Manifests<'_> {
     }
 }
 
-/// data.toml and data.lock merged from their sides, `lock` none when neither side has a
-/// data.lock, with the lists of the datasets data.lock keeps read from below `root`. a dataset the
-/// sides disagree on without a base to settle it stops the merge, unless `choices` names a side
-/// for it; what each side pins of it is `told` first, as `-v` shows it.
-///
-/// # Errors
-///
-/// `unconfirmed` naming each dataset that needs a choice, `usage` for a choice no dataset needs,
-/// and `project.invalid` for a side that does not read or text outside the datasets that differs
-/// on both sides.
+/// data.toml and data.lock merged from their sides, the lists data.lock keeps read below `root`;
+/// `lock` is none when neither side has one. a dataset the base cannot settle and `choices` does
+/// not name is `unconfirmed`, after `told` gets each side's pin, as `-v` shows. an unneeded choice
+/// is `usage`; an unreadable side, or text outside the datasets both changed, `project.invalid`.
 pub(crate) fn merge(
     manifest: &Sides,
     lock: Option<&Sides>,
@@ -339,8 +325,7 @@ fn read_merged(text: &str) -> Result<Manifest, Error> {
     })
 }
 
-/// decides which version of each dataset in data.toml the merge keeps. the same values written
-/// apart on each side, as with other comments, keep `frame`'s text.
+/// values alike on both sides but written apart, as with other comments, keep `frame`'s text.
 fn decide_entries(
     manifests: &Manifests<'_>,
     frame: Side,
@@ -399,8 +384,7 @@ fn check_choices(
     Err(Error::new(Kind::Usage, message).help(format!("leave out --{} {name}", side.word())))
 }
 
-/// how each dataset came out, from what `decided` kept of data.toml and of data.lock's `records`,
-/// none when neither side has a data.lock.
+/// how each dataset came out; `records` is none when neither side has a data.lock.
 fn summarize(decided: &Decided, merged: &Manifest, records: Option<&[Parsed]>) -> Summary {
     let mut summary = Summary::default();
     let names: BTreeSet<&String> = decided
@@ -509,8 +493,7 @@ fn frame(sides: &Sides) -> Result<Side, Error> {
     }
 }
 
-/// data.toml's merged text: the `frame` side's text, with each dataset the merge takes from the
-/// other side copied in or taken out.
+/// the `frame` side's text, with each dataset taken from the other side copied in or taken out.
 fn merged_text(
     manifests: &Manifests<'_>,
     frame: Side,
@@ -636,9 +619,8 @@ fn read_locks(sides: &Sides) -> Result<Locks, Error> {
     })
 }
 
-/// the data.lock entries a merge keeps for `merged`, the merged data.toml, sorted by name: for a
-/// fetched dataset, an entry that answers its spec, the chosen side's when a person chose one for
-/// its entry in data.toml; for a recipe's result, the merge of both sides' entries.
+/// the data.lock entries kept for `merged`, sorted by name: a fetched dataset's answers its spec,
+/// and is the chosen side's when its entry was chosen; a recipe's result merges both sides'.
 fn pick_records(
     locks: &Locks,
     merged: &Manifest,
@@ -682,11 +664,9 @@ fn pick_records(
     kept
 }
 
-/// decides each dataset data.lock pins on a side that the merged data.toml no longer has. it goes
-/// with its entry, unless its pin changed or came on one side since the base while the other
-/// side removed it: that removal would drop the change unseen, so it waits for a person, as it
-/// does without a base when only one side pins it. a choice of the side that pins it takes back
-/// that side's entry whole, which needs git to give each side whole.
+/// decides each dataset a side of data.lock pins that the merged data.toml lacks. its pin goes
+/// with its entry, unless a side changed or added the pin, or no base tells: then it waits for a
+/// choice rather than drop a change unseen. choosing the pinning side needs git to give it whole.
 fn decide_removals(
     manifests: &Manifests<'_>,
     locks: &Locks,
@@ -728,8 +708,7 @@ fn decide_removals(
     Ok(())
 }
 
-/// the error for a choice of `side` for `name`, whose entry neither the conflict lines nor git
-/// can give back.
+/// the error for choosing `side` for `name`, whose entry neither conflict lines nor git give back.
 fn entry_gone(name: &str, side: Side) -> Error {
     Error::new(
         Kind::ProjectInvalid,
@@ -745,9 +724,8 @@ fn entry_gone(name: &str, side: Side) -> Error {
     ))
 }
 
-/// `text`, the merged data.toml, with each dataset a person chose a side for as that side's
-/// branch writes it, whole: a choice keeps one side of a dataset, not lines git merged into it
-/// from the other, nor its removal by the other.
+/// `text`, the merged data.toml, with each chosen dataset as its side's branch writes it, whole,
+/// not with lines git merged in from the other side, nor removed by it.
 fn chosen_whole(
     manifests: &Manifests<'_>,
     choices: &Choices,
@@ -800,8 +778,7 @@ fn check_chosen(
     Ok(())
 }
 
-/// `records` with the pin of each dataset a person chose a side for as that side has it, when
-/// it answers the dataset's entry in `merged`.
+/// `records` with each chosen dataset's pin as its side has it, when it answers `merged`'s entry.
 fn chosen_records(
     records: &mut Vec<Parsed>,
     locks: &Locks,
@@ -827,9 +804,8 @@ fn chosen_records(
     records.sort_by(|a, b| a.name().cmp(b.name()));
 }
 
-/// the merged data.lock of `records`, the pins a merge keeps, with each list read below `root`.
-/// a pin that does not read stops the merge with how to put back the side it came from, never
-/// with advice to pin anew.
+/// the merged data.lock of `records`, each list read below `root`. a pin that does not read
+/// stops the merge with how to restore its side, never with advice to pin anew.
 fn kept(
     records: Vec<Parsed>,
     locks: &Locks,
@@ -914,8 +890,7 @@ fn find<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
         .map(|at| &records[at])
 }
 
-/// the entry of `records` that pins the fetched dataset `name` for `wanted`, the spec its entry in
-/// data.toml has now.
+/// `name`'s entry in `records` when it pins a fetched dataset for `wanted`, the spec it has now.
 fn answering<'a>(records: &'a [Parsed], name: &str, wanted: &str) -> Option<&'a Parsed> {
     find(records, name)
         .filter(|record| matches!(record, Parsed::Source(locked, _) if locked.spec == wanted))
@@ -929,9 +904,8 @@ fn result<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
 /// the most files a side's pin of a dataset that needs a choice shows of those only it pins.
 const SHOWN: usize = 3;
 
-/// what each side of a merge pins for `name`, a dataset that needs a choice, as lines a person
-/// compares: a recipe result's key, how many files and bytes, and up to [`SHOWN`] of the files
-/// only that side pins, with their sizes and hashes. it says nothing of which side to take.
+/// what each side pins for `name`, which needs a choice, as lines to compare, never saying which
+/// to take: a result's key, the files and bytes, and up to [`SHOWN`] files only that side pins.
 fn pinned_on_each_side(locks: &Locks, name: &str) -> Vec<String> {
     let [ours, theirs] = [Side::Ours, Side::Theirs].map(|side| find(locks.of(side), name));
     let mut lines = Vec::new();
@@ -1067,9 +1041,8 @@ pub(crate) fn reads(file: &str, text: &str) -> bool {
     }
 }
 
-/// the error that names each dataset in `conflicts` and why it needs a choice, with the merge as
-/// far as it got. `shown` says git's conflict lines showed a base, so the conflict style that
-/// shows one is in use already and the help names none.
+/// the error naming each dataset in `conflicts` and why, with the merge so far. `shown` says the
+/// conflict lines showed a base, so the help names no conflict style: one is in use already.
 fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) -> Error {
     let message = match conflicts.keys().collect::<Vec<_>>().as_slice() {
         [one] => format!("the merge needs a choice for {one}"),

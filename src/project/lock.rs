@@ -1,7 +1,5 @@
-//! `data.lock`: what each dataset resolved to and every file it downloaded, or, for a dataset a
-//! recipe made, what it was made from and the files it holds. only fetchloom writes it, in a
-//! fixed order, so the same inputs always give the same bytes and a diff shows exactly what
-//! changed.
+//! `data.lock`: what each dataset resolved to and the files it pins, or what a recipe made it
+//! from. only fetchloom writes it, in a fixed order, so the same inputs give the same bytes.
 
 pub(crate) mod archives;
 mod canonical;
@@ -30,12 +28,10 @@ use crate::name;
 use crate::source::Access;
 
 pub(crate) const FILE: &str = "data.lock";
-/// the one format of data.lock. a dataset of more files than it lists in itself keeps them in
-/// [`lists::FOLDER`], in the same format.
+/// the one format of data.lock, a lock that keeps lists in [`lists::FOLDER`] included.
 const VERSION: u32 = 1;
-/// the least memory reading a project takes for each file data.lock pins: a status or settled
-/// sync of 100,000 files peaked at 76.7 MiB on glibc and 92.5 MiB on musl, of 1,000,001 at 690
-/// and 668.
+/// a lower bound on the memory a read takes per pinned file: a status or settled sync peaked at
+/// 76.7 MiB on glibc and 92.5 MiB on musl for 100,000 files, and 690 and 668 MiB for 1,000,001.
 const PER_FILE: u64 = 650;
 /// what a run holds before it reads a project, which the musl build's allocator starts larger.
 const BASE: u64 = if cfg!(target_env = "musl") {
@@ -48,15 +44,13 @@ const BASE: u64 = if cfg!(target_env = "musl") {
 /// what a system without such a limit has available is no such wall: it can page out instead.
 static ROOM: AtomicU64 = AtomicU64::new(u64::MAX);
 
-/// sets the memory a container's limit leaves this run, none without one, for every later read
-/// of a lock.
+/// sets [`ROOM`] for every later read of a lock; none means no container limit.
 pub(crate) fn set_room(room: Option<u64>) {
     ROOM.store(room.unwrap_or(u64::MAX), Ordering::Relaxed);
 }
 
-/// refuses to read the files `parsed` pins when that takes more memory than `room` leaves, so a
-/// run too big for its container says so instead of being ended partway. their lists are not
-/// read yet.
+/// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
+/// too big for its container says so instead of being killed partway.
 fn fits(parsed: &[Parsed], room: u64) -> Result<(), Error> {
     let files: u64 = parsed.iter().map(Parsed::files).sum();
     let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
@@ -154,8 +148,7 @@ pub(crate) struct LockedFile {
 /// a dataset as the text of data.lock gives it, before a list it keeps beside data.lock is read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Parsed {
-    /// a dataset fetched from a source, with its files, or with none yet and the list that holds
-    /// them.
+    /// a fetched dataset with its files, or with none yet and the list that holds them.
     Source(Locked, Option<lists::Listed>),
     /// a dataset a recipe made, with none of its files yet and the list that holds them.
     Derived(Derived, lists::Listed),
@@ -186,8 +179,7 @@ struct Stored {
     dataset: Vec<StoredDataset>,
 }
 
-/// a dataset as data.lock holds it: a source's or a recipe's keys, with its files or where a
-/// list of them is kept.
+/// one `[[dataset]]` table, a source's or a recipe's, so each key only one kind has is optional.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredDataset {
@@ -233,7 +225,6 @@ struct StoredCode {
 }
 
 impl StoredDataset {
-    /// the dataset, with its files or the list that holds them.
     fn parsed(mut self) -> Result<Parsed, Error> {
         let listed = self.listed()?;
         let recipe = self.from.is_some()
@@ -309,8 +300,7 @@ impl StoredDataset {
         }
     }
 
-    /// the dataset a recipe made. a key only a fetched dataset has, or files listed in data.lock
-    /// itself, make it no dataset fetchloom writes.
+    /// the dataset a recipe made, refused with a key only a fetched one has, `files` among them.
     fn derived(self, listed: Option<lists::Listed>) -> Result<Parsed, Error> {
         let name = self.name;
         let fetched = [
@@ -410,15 +400,13 @@ struct VersionOnly {
 }
 
 impl Lock {
-    /// the lock `text` holds, when it lists every file in itself. runs read through
-    /// [`Lock::read`], which reads the lists a lock keeps beside it too.
+    /// a test's lock that lists every file in itself; runs read through [`Lock::read`].
     #[cfg(test)]
     pub(crate) fn parse(text: &str) -> Result<Lock, Error> {
         resolve(parse(text)?, None)
     }
 
-    /// the lock `text` holds, with the file lists it keeps in [`lists::FOLDER`] below `root`
-    /// read and checked.
+    /// the lock `text` holds, its lists in [`lists::FOLDER`] below `root` read and checked.
     pub(crate) fn read(text: &str, root: &Path) -> Result<Lock, Error> {
         resolve(parse(text)?, Some(root))
     }
@@ -445,8 +433,7 @@ impl Lock {
         self.datasets.get(index)
     }
 
-    /// the result of the recipe named `name`, found by halving, as [`Lock::get`] finds a
-    /// fetched dataset.
+    /// the result of the recipe named `name`, found by halving as [`Lock::get`] is.
     pub(crate) fn result(&self, name: &str) -> Option<&Derived> {
         let index = self
             .derived
@@ -455,9 +442,8 @@ impl Lock {
         self.derived.get(index)
     }
 
-    /// the lock's text, the same bytes for the same contents. a source of more than
-    /// [`lists::INLINE`] files, and every recipe's result, names the list [`Lock::lists`] gives
-    /// instead of its files.
+    /// the lock's text, the same bytes for the same contents. a source past [`lists::INLINE`]
+    /// files, and every recipe result, names its list from [`Lock::lists`] instead of its files.
     pub(crate) fn render(&self) -> String {
         self.render_with(lists::inline())
     }
@@ -559,8 +545,7 @@ fn write_listed(out: &mut String, listed: &lists::Listed) {
 }
 
 impl Lock {
-    /// the parts of every file list the lock keeps beside it, each with its path below the
-    /// project and its text, as [`Lock::render`] names them.
+    /// each part of the lists [`Lock::render`] names, as its path below the project and its text.
     pub(crate) fn lists(&self) -> Vec<(String, String)> {
         self.lists_with(lists::inline())
     }
@@ -583,8 +568,7 @@ impl Lock {
     }
 }
 
-/// the parts of the file lists the text of data.lock names, by path below the project, read
-/// without the lists themselves. none for a text that does not read.
+/// the list parts data.lock's `text` names, as paths below the project; none if it does not read.
 pub(crate) fn parts(text: &str) -> Vec<String> {
     parse(text)
         .unwrap_or_default()
@@ -603,8 +587,7 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
     sorted
 }
 
-/// the datasets the text of a lock gives, in name order: through the narrow reader when the text
-/// is in the writer's form, otherwise through the general TOML reader.
+/// the datasets a lock's text gives in name order, by the narrow reader when it is the writer's.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
     parse_only(text, &|_| true)
 }
@@ -630,8 +613,7 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
     Ok(parsed)
 }
 
-/// the datasets any valid TOML of the lock's format gives, sorted by name, each source's files
-/// sorted by path.
+/// the datasets any TOML of the lock's format gives, sorted by name, a source's files by path.
 fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     let stored = match toml::from_str::<Stored>(text) {
         Ok(stored) if stored.version == VERSION => stored,
@@ -784,9 +766,8 @@ fn quoted(text: &str) -> String {
     out
 }
 
-/// why the lock in `text` cannot be read, when its `version` is not this fetchloom's format: a
-/// whole number is another format, and anything else is none, which the error says without the
-/// rest of the lock. none when the version is this format or missing, or the text is no TOML.
+/// the error for a lock whose `version` is another format or no whole number, which says so
+/// without the rest of the lock; none when it is this format or missing, or the text is no TOML.
 fn unread_version(text: &str) -> Option<Error> {
     let what = match toml::from_str::<VersionOnly>(text).ok()?.version? {
         toml::Value::Integer(version) if version == i64::from(VERSION) => return None,
@@ -840,9 +821,8 @@ fn check_paths(dataset: &Locked) -> Result<(), Error> {
     Ok(())
 }
 
-/// refuses a dataset's file link that carries a login or a secret, such as a token. fetchloom
-/// never pins one, so the lock was edited, and a download would send it on. an import's empty
-/// link carries nothing. a link from a list in [`lists::FOLDER`] is mended from git.
+/// refuses a file link carrying a login or a secret: fetchloom never pins one, so the lock was
+/// edited, and a download would send it on. a listed link's help is to restore from git.
 fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
     // parsing each of a million links doubled the time a lock took to read. links mostly differ
     // in the values of the same keys, so a cleared link's keys are reused where keys alone decide
@@ -895,9 +875,8 @@ fn raw_keys(link: &str) -> impl Iterator<Item = &str> {
         .map(|pair| pair.split_once('=').map_or(pair, |(key, _)| key))
 }
 
-/// the marks a URL's parts need, as a text holds them. a URL has a login only after an `@`, and a
-/// query or a fragment only after a `?` or `#`, once the parser has dropped every tab and line
-/// break.
+/// whether a text holds what a link needs for a login (`@`) or a query or fragment (`?`, `#`),
+/// and a tab or line break, which the URL parser drops before it splits the link.
 struct Marks {
     at: bool,
     split: bool,
@@ -917,10 +896,8 @@ impl Marks {
     }
 }
 
-/// refuses a resolved reference that is a web link carrying a login or a secret, as
-/// [`check_links`] refuses a file's: a sync asks it again for a dataset whose filters changed or
-/// whose file link died. another reference, such as `drive:<id>?resourcekey=<key>`, is no link a
-/// request carries as it is written.
+/// refuses a resolved web link with a login or a secret, as [`check_links`] does: a sync may
+/// request it again. a reference like `drive:<id>?resourcekey=<key>` is never sent as written.
 fn check_resolved(dataset: &Locked) -> Result<(), Error> {
     let marks = Marks::of(&dataset.resolved);
     let web = (marks.at || marks.split)
@@ -939,8 +916,7 @@ fn check_resolved(dataset: &Locked) -> Result<(), Error> {
 /// what a link carries that lets anyone holding it in.
 enum Carried {
     Login,
-    /// the key of a query or fragment value, such as `token`, as [`crate::net::secret`] names
-    /// it.
+    /// the key of the query or fragment value [`crate::net::secret`] names, such as `token`.
     Secret(String),
 }
 
@@ -952,8 +928,7 @@ impl Carried {
         crate::net::secret(url).map(Carried::Secret)
     }
 
-    /// the error for `subject`, a phrase such as "the link data.lock gives x/a.csv", carrying
-    /// this.
+    /// the error for `subject`, such as "the link data.lock gives x/a.csv", carrying this.
     fn refused(&self, subject: &str) -> Error {
         let message = match self {
             Carried::Login => format!("{subject} carries a login, which fetchloom never pins"),
@@ -985,9 +960,8 @@ fn tree<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Sha256>, D:
 
 #[cfg(test)]
 impl Lock {
-    /// the datasets as a reader gives them, by name, when every source lists its files in
-    /// data.lock itself: each recipe's result without its files and with the list that holds
-    /// them.
+    /// the datasets as a reader gives them when every source lists its files inline: by name,
+    /// each recipe's result without its files and with the list that holds them.
     fn parsed(&self) -> Vec<Parsed> {
         let mut parsed: Vec<Parsed> = self
             .datasets
@@ -1106,8 +1080,6 @@ mod tests {
         }
     }
 
-    /// a cloned data.lock is untrusted, and a name becomes a path in data.lock.d, so the lock
-    /// takes only names data.toml takes.
     #[test]
     fn a_name_data_toml_refuses_is_refused_by_both_readers() {
         for name in ["../outside", "a/b", "a\\b"] {
@@ -1194,8 +1166,7 @@ mod tests {
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
 
-    /// a version that is no whole number names no format, so the error says what the field holds
-    /// and what it takes, and leaves the rest of the lock out.
+    /// the error says what the field holds, and leaves the rest of the lock out.
     #[test]
     fn a_version_that_is_no_whole_number_says_what_it_takes() {
         let rest = sample().render().replacen("version = 1\n", "", 1);
@@ -1269,9 +1240,8 @@ mod tests {
         (root, text)
     }
 
-    /// a read of some datasets leaves the others out, passing over the lines of their files
-    /// unread where no string among them could hide a line of the lock, and reads the ones it
-    /// keeps as a read of the whole lock does.
+    /// the others are left out, their file lines passed over unread where no string among them
+    /// could hide a line of the lock.
     #[test]
     fn a_read_of_some_datasets_reads_them_as_a_whole_read_does() {
         let mut lock = Lock {
@@ -1357,8 +1327,7 @@ mod tests {
         assert!(error.message.contains("which only a project can read"));
     }
 
-    /// a folder of code enters the key by the tree of its files, which data.lock keeps prefixed,
-    /// as every tree hash, beside the plain hash of a file.
+    /// data.lock keeps the tree prefixed, as every tree hash, beside a file's plain hash.
     #[test]
     fn a_code_folder_is_pinned_by_its_tree() {
         let mut result = clean();
@@ -1510,11 +1479,8 @@ mod tests {
         );
     }
 
-    /// a dataset of more files than data.lock lists in itself keeps them in parts beside it, in
-    /// the same format 1 as every other lock.
-    /// a lock whose files would take more memory than a container leaves is refused before its
-    /// lists are read, counting a dataset's files in data.lock or in its list; a read of some
-    /// datasets counts only theirs.
+    /// a dataset's files count whether data.lock or its list holds them; a read of some datasets
+    /// counts only theirs.
     #[test]
     fn a_lock_too_big_for_its_room_is_refused_before_its_lists() {
         let text = sample_sorted()
@@ -1631,9 +1597,7 @@ mod tests {
         ]
     }
 
-    /// fetchloom never pins a link that carries a login or a secret, so one in data.lock was
-    /// edited in, and a request would send it on. each reader refuses it, naming the key and
-    /// never its value.
+    /// each reader names the key and never its value.
     #[test]
     fn a_link_with_a_login_or_a_secret_is_refused_by_every_reader() {
         const CANARY: &str = "canary-value";
@@ -1706,9 +1670,8 @@ mod tests {
         }
     }
 
-    /// the links fetchloom pins carry no secret, though many carry a query, and an import pins
-    /// an empty one. a reference that is no web link, such as a hugging face commit, is no link
-    /// a request would carry as it is written.
+    /// links fetchloom pins carry queries but no secret, and an import's is empty; a reference
+    /// that is no web link, such as `drive:1?resourcekey=key`, is never sent as written.
     #[test]
     fn a_link_without_a_secret_is_read_as_written() {
         for (resolved, url) in [

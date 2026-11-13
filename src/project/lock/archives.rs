@@ -1,6 +1,5 @@
-//! the archives among a dataset's pinned files: a file that unpacks, or the parts of an archive
-//! split into several files. data.lock gives `unpacks_to` to a split archive's first part only;
-//! its other parts are known by their names, as [`parts`] reads them.
+//! the archives among a dataset's pinned files. data.lock gives `unpacks_to` to a split
+//! archive's first part only; [`parts`] knows the others by their names.
 
 use std::collections::HashMap;
 
@@ -15,8 +14,7 @@ pub(crate) struct Archive<'a> {
     /// the file data.lock gives `unpacks_to`: the archive itself, or a split archive's first part,
     /// whose path names it in members tables and messages.
     pub(crate) file: &'a LockedFile,
-    /// a split archive's parts in order, its first part among them; none for an archive in one
-    /// file.
+    /// a split archive's parts in order, the first among them; empty for a one-file archive.
     pub(crate) parts: Vec<&'a LockedFile>,
 }
 
@@ -30,9 +28,8 @@ impl<'a> Archive<'a> {
         }
     }
 
-    /// what this machine recorded it unpacks to, when that is the tree data.lock pins: the
-    /// lookup every plan of what a lock places takes, by [`Archive::key`], never by a split
-    /// archive's first part alone.
+    /// what this machine recorded it unpacks to, when that is the tree data.lock pins. every plan
+    /// looks it up here, by [`Archive::key`], never by a split archive's first part alone.
     pub(crate) fn recorded(&self, cache: &Cache) -> Option<Vec<Member>> {
         cache.unpacked(&self.key(), self.file.unpacks_to.as_ref())
     }
@@ -67,9 +64,8 @@ pub(crate) enum Pinned<'a> {
     Archive(Archive<'a>),
 }
 
-/// a dataset's pinned `files`, in their order, as placing takes them: each archive once, a split
-/// one at its first part when data.lock gives that part `unpacks_to`, and every other file as it
-/// is, the parts of a split archive that stays packed too.
+/// `files` in their order as placing takes them: each archive once, a split one at its first
+/// part when that part has `unpacks_to`, and every other file as it is, packed parts too.
 pub(crate) fn pinned(files: &[LockedFile]) -> Vec<Pinned<'_>> {
     let split = parts::split(files.iter().map(|file| file.path.as_str()));
     let mut sets: HashMap<usize, Vec<&LockedFile>> = HashMap::new();
@@ -98,10 +94,8 @@ pub(crate) fn pinned(files: &[LockedFile]) -> Vec<Pinned<'_>> {
         .collect()
 }
 
-/// the archive `file`, one of a dataset's pinned `files`, unpacks as when data.lock gives it
-/// `unpacks_to`: the file, or each part of the split archive it is the first part of. a split
-/// archive's parts share the path before their counters, and data.lock sorts files by path, so
-/// only the files sharing that path are read.
+/// what `file`, given `unpacks_to`, unpacks as: itself or the split archive it is the first part
+/// of. `files` is sorted by path, so its parts, sharing a prefix, are found by halving.
 pub(crate) fn archive<'a>(files: &'a [LockedFile], file: &'a LockedFile) -> Archive<'a> {
     let whole = || Archive {
         file,

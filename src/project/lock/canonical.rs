@@ -17,10 +17,9 @@ pub(super) fn read(text: &str, comments: bool) -> Option<Vec<Parsed>> {
     read_only(text, comments, &|_| true)
 }
 
-/// the datasets `text` gives, when it is in the exact form [`super::Lock::render`] writes, with
-/// either line ending. `comments` additionally accepts blank lines and valid TOML comments around
-/// it. the lines of the files of a source `keep` refuses by name are passed over unread where
-/// they cannot hide a line of the lock, and that source is read with no files.
+/// the datasets `text` gives in the exact form [`super::Lock::render`] writes, either line
+/// ending; `comments` also allows blank lines and TOML comments. a source `keep` refuses is
+/// read with no files, their lines passed over unread where they cannot hide a line of the lock.
 pub(super) fn read_only(
     text: &str,
     comments: bool,
@@ -115,9 +114,8 @@ impl<'a> Lines<'a> {
         integer(digits)
     }
 
-    /// passes over the lines of a list of files up to the line `]` that closes it, unread, when
-    /// none of them can hold that line in a string: the writer's form, with no literal or
-    /// multi-line string. false, having passed nothing, otherwise.
+    /// passes over a list of files up to its closing `]` unread, when no line can hide that `]`
+    /// in a literal or multi-line string; false, having passed nothing, otherwise.
     fn pass_files(&mut self) -> bool {
         if self.comments {
             return false;
@@ -441,8 +439,7 @@ fn string(text: &str) -> Option<(Cow<'_, str>, &str)> {
     None
 }
 
-/// whether TOML refuses `c` as it is inside a basic string: a control character below U+0020
-/// other than tab, or U+007F.
+/// whether TOML refuses `c` unescaped inside a basic string.
 fn refused(c: char) -> bool {
     (c < ' ' && c != '\t') || c == '\u{7f}'
 }
@@ -515,8 +512,7 @@ mod tests {
         ]
     }
 
-    /// a recipe's result of `count` files, with escapes and unicode in its command, code and
-    /// variables.
+    /// a result of `count` files, escapes and unicode in its command, code and variables.
     fn recipe(name: &str, count: usize) -> Derived {
         let files: Vec<Member> = (0..count)
             .map(|index| Member {

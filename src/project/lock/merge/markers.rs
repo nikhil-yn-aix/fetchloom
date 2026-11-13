@@ -1,9 +1,6 @@
-//! the two sides git leaves in a file when a merge could not combine them: lines at the start of
-//! a line, `<<<<<<<` before our side, `|||||||` before the merge base in git's diff3 and zdiff3
-//! styles, `=======` before their side and `>>>>>>>` after it. the lines outside them are on
-//! both sides. zdiff3 also moves the lines both sides share at either end of a conflict out of
-//! it, though the base may never have had them, so a base read from its conflict lines may hold
-//! a table cut in two.
+//! the sides of a file from git's conflict lines, each at a line's start: `<<<<<<<` before ours,
+//! `|||||||` before the base (diff3, zdiff3), `=======` before theirs and `>>>>>>>` after. zdiff3
+//! moves lines both sides share out of a conflict, so a base read from them may cut a table.
 
 use crate::error::{Error, Kind};
 
@@ -15,20 +12,17 @@ pub(crate) struct Sides {
     pub(crate) theirs: String,
     /// the lines outside the conflicts, with each conflict's base where the conflict was.
     pub(crate) base: Option<String>,
-    /// [`Sides::base`] without the lines outside the conflicts that start or end a table a
-    /// conflict cuts, the lines zdiff3 may have moved out of it: a second reading of the base,
-    /// for when the first does not read. none when it is the first.
+    /// [`Sides::base`] without the outside lines of each table a conflict cuts, which zdiff3 may
+    /// have moved: a second reading for when the first does not read, none when it is the same.
     pub(crate) trimmed: Option<String>,
     /// whether every conflict showed git's merge base, as the diff3 and zdiff3 styles do.
     pub(crate) shows_base: bool,
-    /// each side's file whole, ours then theirs, as git holds it for the merge, rebase,
-    /// cherry-pick or revert: lines git merged by itself belong to the side that wrote them, not
-    /// to both, as they do in `ours` and `theirs`. none when git cannot tell.
+    /// each side's file whole from git, ours then theirs: lines git merged by itself belong to
+    /// the side that wrote them, not to both as in `ours` and `theirs`. none when git cannot tell.
     pub(crate) whole: Option<[String; 2]>,
 }
 
-/// a stretch of a file with conflict lines, as the base sees it: lines outside every conflict, or
-/// what one conflict shows of the base.
+/// a stretch of a file with conflict lines, as the base sees it.
 enum Part<'a> {
     Outside(Vec<&'a str>),
     Base(Vec<&'a str>),
@@ -145,10 +139,9 @@ fn starts_table(line: &str) -> bool {
     line.trim_start().starts_with('[')
 }
 
-/// for each outside stretch of `parts`, by its place, how many lines from its start and from its
-/// end belong to a table a conflict cuts: from the conflict before it to the first table that
-/// starts in it, and from the last table that starts in it, its first line included, to the
-/// conflict after it. a stretch with no table start belongs to its conflicts whole.
+/// for each outside stretch of `parts`, the lines at its start and end that belong to a table a
+/// conflict cuts: after a conflict, those before its first table header; before one, those from
+/// its last header on. a stretch with no header belongs to its conflicts whole.
 fn cut_tables(parts: &[Part<'_>]) -> Vec<(usize, usize)> {
     parts
         .iter()
@@ -180,8 +173,7 @@ fn cut_tables(parts: &[Part<'_>]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// the base `parts` give, each outside stretch without the lines `cut` names at its start and
-/// end, by its place in `parts`.
+/// the base `parts` give, each outside stretch without the lines `cut` names for its place.
 fn whole(parts: &[Part<'_>], cut: &[(usize, usize)]) -> String {
     let mut base = String::new();
     for (at, part) in parts.iter().enumerate() {
@@ -261,9 +253,8 @@ mod tests {
         );
     }
 
-    /// zdiff3 moved lines both sides added out of each conflict, as git 2.43 wrote them when both
-    /// branches added labels and one other dataset each: the base read around them leaves out
-    /// every table a conflict cuts, while the base read with them does not read.
+    /// as git 2.43 wrote it when both branches added labels and one other dataset each: the base
+    /// with zdiff3's moved lines does not read, and the trimmed one leaves out every cut table.
     #[test]
     fn the_base_is_read_again_around_what_zdiff3_moved_out() {
         let manifest = "<<<<<<< HEAD\n[datasets.alpha]\n||||||| 3507bb5\n=======\n[datasets.beta]\n>>>>>>> B\nref = \"local\"\n\n[datasets.kappa]\nref = \"local\"\n\n[datasets.labels]\nref = \"local\"\n";
@@ -292,7 +283,6 @@ mod tests {
         assert_eq!(split(MERGE, "data.toml").unwrap().unwrap().trimmed, None);
     }
 
-    /// a base only some conflicts show is no base.
     #[test]
     fn a_base_in_only_some_conflicts_is_none() {
         let mixed = format!(

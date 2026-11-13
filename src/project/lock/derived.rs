@@ -1,8 +1,5 @@
-//! datasets a recipe makes: what each was made from, by which command and code, and the tree of
-//! files its result holds. only `fetchloom build` makes them; every other command reads them and
-//! keeps them as they are, and a sync places their files as it places a fetched dataset's. a
-//! result's files always live in a list in [`lists::FOLDER`], since a rebuild rewrites them
-//! wholesale and data.lock stays about recipes and pins.
+//! the results of recipes in data.lock, which only `fetchloom build` makes. a result's files
+//! always live in a list in [`lists::FOLDER`], since a rebuild rewrites them wholesale.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -52,9 +49,8 @@ pub(crate) struct Code {
     pub(crate) folder: bool,
 }
 
-/// refuses what fetchloom never writes for a recipe: no input, the dataset as its own input or
-/// one input twice, no program, a code path that leaves the project or comes twice, or a
-/// variable no program can be given. the files are checked once their list is read.
+/// refuses a recipe entry fetchloom never writes, such as one with no input or a code path that
+/// leaves the project. [`check_files`] checks its files once their list is read.
 pub(super) fn check(derived: &Derived) -> Result<(), Error> {
     let name = &derived.name;
     if derived.from.is_empty() {
@@ -111,8 +107,7 @@ fn has_nul(text: &str) -> bool {
     text.contains('\0')
 }
 
-/// refuses files that would land outside the result's folder, or that are not the tree data.lock
-/// records.
+/// refuses files that would land outside the result's folder, or are not the recorded tree.
 pub(super) fn check_files(derived: &Derived) -> Result<(), Error> {
     let name = &derived.name;
     for file in &derived.files {

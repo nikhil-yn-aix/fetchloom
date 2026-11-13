@@ -94,9 +94,8 @@ fn two_additions(base: bool) -> (Sides, Sides) {
     (manifest, locks)
 }
 
-/// the merge checks the data.toml it wrote before keeping it: one that lost or changed a dataset
-/// the merge decided on, as the sides agreed it (`check_merged`) or as a person chose it
-/// (`check_chosen`), is refused, with help to merge by hand.
+/// whether the sides agreed on the dataset (`check_merged`) or a person chose it
+/// (`check_chosen`); the help is to merge by hand.
 #[test]
 fn a_merged_data_toml_that_lost_or_changed_a_decided_dataset_is_refused() {
     let ours = toml(&[("alpha", "zenodo:1")]);
@@ -201,8 +200,7 @@ fn a_removal_survives_with_a_base() {
     assert_eq!(merged.summary.from_theirs, ["beta"]);
 }
 
-/// a base git's conflict lines showed but fetchloom could not read leaves the conflict style
-/// alone: the style that shows a base is in use already, so the help names only git.
+/// the style that shows a base is in use already, so the help names only git.
 #[test]
 fn a_base_shown_but_unread_names_no_conflict_style() {
     let (mut manifest, mut locks) = two_additions(false);
@@ -215,8 +213,6 @@ fn a_base_shown_but_unread_names_no_conflict_style() {
     );
 }
 
-/// a merge that needs a choice for more datasets than a thousand counts them with their
-/// thousands apart.
 #[test]
 fn a_thousand_choices_are_counted_with_their_thousands_apart() {
     let conflicts = (0..1_200)
@@ -529,8 +525,7 @@ fn recipe_results_merge_by_name() {
     assert_eq!(merged.summary.removed, ["clean"]);
 }
 
-/// each side's recipes read, yet the merge of them does not: a person merges data.toml, told
-/// why.
+/// each side's recipes read but their merge does not: a person merges data.toml, told why.
 #[test]
 fn a_merge_whose_recipes_would_not_read_says_why() {
     let recipe = |name: &str, from: &str| {
@@ -559,8 +554,7 @@ fn a_merge_whose_recipes_would_not_read_says_why() {
     );
 }
 
-/// a recipe is pinned only by a build, so a merge leaving one unbuilt does not name it as a
-/// dataset the next sync or lock pins.
+/// only a build pins a recipe.
 #[test]
 fn an_unbuilt_recipe_is_not_left_for_sync_to_pin() {
     let text = format!(
@@ -608,8 +602,7 @@ fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
     );
 }
 
-/// the same dataset written two ways on each side, with no base to tell which changed, is
-/// written as our side has it.
+/// with no base to tell which side changed it.
 #[test]
 fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
     let ours = "[datasets.a]\nref = \"zenodo:1\" # ours\n".to_owned();
@@ -626,11 +619,9 @@ fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
     );
 }
 
-/// one side removed beta, entry and pin, while the other pinned other files for it and left its
-/// entry as it was, so git merged data.toml by itself, without beta. the new pin is not dropped
-/// unasked. a choice of the side that pinned it takes back that side's entry whole, note and
-/// folder too, which needs each side whole from git; a choice of the other side removes it. a pin
-/// the other side left as it was goes with the removal.
+/// git merged data.toml without beta, which one side removed while the other pinned other files
+/// for it. choosing the pinning side brings back its entry whole, note and folder too; the other
+/// side's choice removes it, and an unchanged pin goes with the removal.
 #[test]
 fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     let core = toml(&[("core", "zenodo:3")]);
@@ -699,10 +690,9 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     assert_eq!(gone.summary.removed, ["beta"]);
 }
 
-/// git merged their new list's name into our side of data.lock's conflict lines, beside our
-/// list's hash, and took our list's part away. read from those lines, our pin of photos is no pin
-/// either side made: the merge stops and says how to put ours back by hand, with no command to
-/// run as it is. with each side whole from git, our pin is the one we made.
+/// git merged their new list's name into our side's conflict lines beside our list's hash, and
+/// took our part away: read from those lines, the merge stops with help to restore ours by hand.
+/// read whole from git, our pin is the one we made.
 #[test]
 fn a_pin_mixed_from_both_sides_is_never_kept() {
     let root = tempfile::tempdir().unwrap();
@@ -794,10 +784,9 @@ fn a_side_that_changed_a_note_gives_the_layout_our_additions_go_into() {
     );
 }
 
-/// with the text outside the datasets alike on both sides, the merge keeps our layout: their
-/// additions go in before the dataset each comes before, or last, a change of theirs replaces
-/// ours where it stands, and their removal takes our table out with the comment touching it,
-/// leaving the note that stood apart above what follows.
+/// with the text outside the datasets alike, our layout stays: their additions go in before the
+/// dataset each precedes, or last; their change replaces ours in place; their removal takes our
+/// table out with the comment touching it, leaving a note that stood apart.
 #[test]
 fn a_merge_of_many_edits_keeps_our_layout_and_their_comments() {
     let ours = format!(
@@ -816,8 +805,7 @@ fn a_merge_of_many_edits_keeps_our_layout_and_their_comments() {
     );
 }
 
-/// a choice of a side keeps that side's entry whole, as its branch writes it, or its removal,
-/// each in its place, whichever side each choice names.
+/// as its side's branch writes it, or removed, whichever side each choice names.
 #[test]
 fn choices_keep_each_chosen_entry_whole_in_place() {
     let ours = format!(
@@ -845,8 +833,7 @@ fn choices_keep_each_chosen_entry_whole_in_place() {
     );
 }
 
-/// a merge reads data.toml as often for many datasets as for few, rather than once more for each
-/// dataset it copies in, changes in place or takes out.
+/// rather than once more for each dataset it copies in, changes in place or takes out.
 #[test]
 fn a_merge_reads_data_toml_as_often_for_many_datasets_as_for_few() {
     let datasets = |prefix: &str, count: usize, record: &dyn Fn(usize) -> Option<usize>| {
