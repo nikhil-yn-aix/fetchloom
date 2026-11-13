@@ -15,6 +15,9 @@ const MOST: usize = 128 << 10;
 /// the most row bytes the reader takes for one input: past any planned table, and far short of
 /// what pages shared by many parents would make it take.
 const BUDGET: u64 = 4 << 20;
+/// the longest a planned table's statement grows to, its edits included: a crafted one nests a
+/// default a hundred thousand parentheses deep.
+const LONGEST: usize = 256 << 10;
 /// the moment the browsers' readers judge expiry at.
 const NOW: u64 = 1_700_000_000;
 /// the hosts a planned cookie belongs to, the one the readers ask for among them.
@@ -49,9 +52,9 @@ impl Take<'_> {
         self.at < self.bytes.len()
     }
 
-    /// text of the length the next byte gives.
+    /// text of the length the next two bytes give.
     fn text(&mut self) -> String {
-        let length = usize::from(self.byte());
+        let length = usize::from(self.u16());
         let start = self.at.min(self.bytes.len());
         let end = start.saturating_add(length).min(self.bytes.len());
         self.at = self.at.saturating_add(length);
@@ -118,14 +121,91 @@ pub(super) enum Edit {
     Size(u16),
     /// gives a row's record a header of the most bytes a number can say.
     Header(u16),
-    /// sets a character of the table's statement.
-    Sql { at: u8, value: u8 },
+    /// sets a character of the table's statement, before the database is built.
+    Sql { at: u16, value: u8 },
+    /// puts `count` copies of a character into the table's statement at `at`, before the
+    /// database is built, as a crafted statement nests a default deep.
+    Echo { at: u16, count: u16, value: u8 },
     /// cuts the file, or the log, to `length` bytes.
     Cut { log: bool, length: u32 },
     /// points a row's first overflow page at itself.
     Loop(u16),
     /// leaves the log's checksums as the edits left them.
     Unsum,
+}
+
+impl Edit {
+    /// writes the bytes [`Plan::read`] reads back as this edit.
+    fn write(&self, bytes: &mut Vec<u8>) {
+        match self {
+            Edit::Point { page, slot, target } => {
+                bytes.push(0);
+                bytes.extend(page.to_be_bytes());
+                bytes.push(*slot);
+                bytes.extend(target.to_be_bytes());
+            }
+            Edit::Interior {
+                page,
+                children,
+                right,
+            } => {
+                bytes.push(1);
+                bytes.extend(page.to_be_bytes());
+                bytes.push(u8::try_from(children.len() - 1).unwrap_or(0));
+                for child in children {
+                    bytes.extend(child.to_be_bytes());
+                }
+                bytes.extend(right.to_be_bytes());
+            }
+            Edit::Spill { pick, target } => {
+                bytes.push(2);
+                bytes.extend(pick.to_be_bytes());
+                bytes.extend(target.to_be_bytes());
+            }
+            Edit::Repeat { page, from, to } => {
+                bytes.push(3);
+                bytes.extend(page.to_be_bytes());
+                bytes.extend([*from, *to]);
+            }
+            Edit::Claim(pages) => {
+                bytes.push(4);
+                bytes.extend(pages.to_be_bytes());
+            }
+            Edit::Byte { log, at, value } => {
+                bytes.extend([5, u8::from(*log)]);
+                bytes.extend(at.to_be_bytes());
+                bytes.push(*value);
+            }
+            Edit::Size(pick) => {
+                bytes.push(6);
+                bytes.extend(pick.to_be_bytes());
+            }
+            Edit::Header(pick) => {
+                bytes.push(7);
+                bytes.extend(pick.to_be_bytes());
+            }
+            Edit::Sql { at, value } => {
+                bytes.push(8);
+                bytes.extend(at.to_be_bytes());
+                bytes.push(*value);
+            }
+            Edit::Echo { at, count, value } => {
+                bytes.push(11);
+                bytes.extend(at.to_be_bytes());
+                bytes.extend(count.to_be_bytes());
+                bytes.push(*value);
+            }
+            Edit::Cut { log, length } => {
+                bytes.extend([9, u8::from(*log)]);
+                bytes.extend(length.to_be_bytes());
+            }
+            Edit::Loop(pick) => {
+                bytes.push(10);
+                bytes.extend(pick.to_be_bytes());
+            }
+            Edit::Unsum => bytes.push(255),
+        }
+    }
 }
 
 /// what a fuzzer's bytes plan: a database, its log and the edits that bend them.
@@ -195,7 +275,7 @@ impl Plan {
         }
         while take.more() {
             let op = take.byte();
-            plan.edits.push(match op % 11 {
+            plan.edits.push(match op % 12 {
                 _ if op == 255 => Edit::Unsum,
                 0 => Edit::Point {
                     page: take.u16(),
@@ -229,7 +309,12 @@ impl Plan {
                 6 => Edit::Size(take.u16()),
                 7 => Edit::Header(take.u16()),
                 8 => Edit::Sql {
-                    at: take.byte(),
+                    at: take.u16(),
+                    value: take.byte(),
+                },
+                11 => Edit::Echo {
+                    at: take.u16(),
+                    count: take.u16(),
                     value: take.byte(),
                 },
                 9 => Edit::Cut {
@@ -266,69 +351,16 @@ impl Plan {
         bytes.extend(self.salts.to_be_bytes());
         bytes.extend([self.change, self.user_version]);
         if self.browser == Browser::Raw {
-            bytes.push(u8::try_from(self.sql.len()).unwrap_or(u8::MAX));
+            bytes.extend(
+                u16::try_from(self.sql.len())
+                    .unwrap_or(u16::MAX)
+                    .to_be_bytes(),
+            );
             bytes.extend(self.sql.as_bytes());
             bytes.push(self.columns - 1);
         }
         for edit in &self.edits {
-            match edit {
-                Edit::Point { page, slot, target } => {
-                    bytes.push(0);
-                    bytes.extend(page.to_be_bytes());
-                    bytes.push(*slot);
-                    bytes.extend(target.to_be_bytes());
-                }
-                Edit::Interior {
-                    page,
-                    children,
-                    right,
-                } => {
-                    bytes.push(1);
-                    bytes.extend(page.to_be_bytes());
-                    bytes.push(u8::try_from(children.len() - 1).unwrap_or(0));
-                    for child in children {
-                        bytes.extend(child.to_be_bytes());
-                    }
-                    bytes.extend(right.to_be_bytes());
-                }
-                Edit::Spill { pick, target } => {
-                    bytes.push(2);
-                    bytes.extend(pick.to_be_bytes());
-                    bytes.extend(target.to_be_bytes());
-                }
-                Edit::Repeat { page, from, to } => {
-                    bytes.push(3);
-                    bytes.extend(page.to_be_bytes());
-                    bytes.extend([*from, *to]);
-                }
-                Edit::Claim(pages) => {
-                    bytes.push(4);
-                    bytes.extend(pages.to_be_bytes());
-                }
-                Edit::Byte { log, at, value } => {
-                    bytes.extend([5, u8::from(*log)]);
-                    bytes.extend(at.to_be_bytes());
-                    bytes.push(*value);
-                }
-                Edit::Size(pick) => {
-                    bytes.push(6);
-                    bytes.extend(pick.to_be_bytes());
-                }
-                Edit::Header(pick) => {
-                    bytes.push(7);
-                    bytes.extend(pick.to_be_bytes());
-                }
-                Edit::Sql { at, value } => bytes.extend([8, *at, *value]),
-                Edit::Cut { log, length } => {
-                    bytes.extend([9, u8::from(*log)]);
-                    bytes.extend(length.to_be_bytes());
-                }
-                Edit::Loop(pick) => {
-                    bytes.push(10);
-                    bytes.extend(pick.to_be_bytes());
-                }
-                Edit::Unsum => bytes.push(255),
-            }
+            edit.write(&mut bytes);
         }
         bytes
     }
@@ -430,6 +462,46 @@ const META: &str = "CREATE TABLE meta(key LONGVARCHAR NOT NULL, value LONGVARCHA
 const INDEX: &str = "CREATE INDEX meta_key ON meta(key)";
 
 fn layout(plan: &Plan) -> Layout {
+    let mut layout = browser_layout(plan);
+    for edit in &plan.edits {
+        reword(&mut layout.sql, edit);
+    }
+    layout
+}
+
+/// a character an edit puts into a statement: those that open, close and split one, most often.
+fn character(value: u8) -> char {
+    if value < 128 {
+        char::from(b"()',\" x"[usize::from(value) % 7])
+    } else {
+        char::from(value)
+    }
+}
+
+/// makes `edit` to `sql`, when it is an edit of the statement, as long as it stays within
+/// [`LONGEST`].
+fn reword(sql: &mut String, edit: &Edit) {
+    let (at, count, value) = match edit {
+        Edit::Sql { at, value } => (*at, 0, *value),
+        Edit::Echo { at, count, value } => (*at, usize::from(*count), *value),
+        _ => return,
+    };
+    let mut at = usize::from(at) % (sql.len() + 1);
+    while !sql.is_char_boundary(at) {
+        at -= 1;
+    }
+    let value = character(value);
+    if count == 0 {
+        if let Some(old) = sql[at..].chars().next() {
+            sql.replace_range(at..at + old.len_utf8(), value.encode_utf8(&mut [0; 4]));
+        }
+    } else if sql.len() + count * value.len_utf8() <= LONGEST {
+        sql.insert_str(at, &value.to_string().repeat(count));
+    }
+}
+
+/// the table a plan's browser keeps, its statement as the browser writes it.
+fn browser_layout(plan: &Plan) -> Layout {
     let named = |columns: &[(&str, Fill)]| {
         columns
             .iter()
@@ -881,8 +953,6 @@ fn pointers(children: &[(u32, i64)]) -> Vec<Vec<u8>> {
 struct Image {
     pages: Vec<Vec<u8>>,
     tree: Tree,
-    /// where the table's statement is on page 1, when all of it is there.
-    sql: Option<(usize, usize)>,
 }
 
 /// the record of a table or index named in the schema.
@@ -924,7 +994,6 @@ fn image(plan: &Plan, layout: &Layout, rows: &[Row], meta: &[Row], counter: u32)
         pages.table(meta_root, 0, &records);
         schema.push(entry("table", "meta", "meta", meta_root, META));
     }
-    let at = schema.len();
     schema.push(entry(
         "table",
         layout.table,
@@ -954,24 +1023,12 @@ fn image(plan: &Plan, layout: &Layout, rows: &[Row], meta: &[Row], counter: u32)
         schema.push(entry("index", "meta_key", "meta", index_root, INDEX));
     }
     let schema: Vec<(i64, Vec<u8>)> = (1..).zip(schema).collect();
-    let listed = pages.table(1, 100, &schema);
-    let sql = listed
-        .cells
-        .get(at)
-        .filter(|(page, _, spills)| *page == 1 && !spills)
-        .map(|(_, offset, _)| {
-            let first = &pages.list[0];
-            let (size, read) = varint(first, *offset).unwrap_or((0, 1));
-            let (_, read_id) = varint(first, offset + read).unwrap_or((0, 1));
-            let end = offset + read + read_id + usize::try_from(size).unwrap_or(0);
-            (end - layout.sql.len(), layout.sql.len())
-        });
+    pages.table(1, 100, &schema);
     let free = free(&mut pages, plan.stale, &tree.leaves);
     header(&mut pages, plan, counter, &free);
     Image {
         pages: pages.list,
         tree,
-        sql,
     }
 }
 
@@ -1295,19 +1352,8 @@ impl Bent {
                     self.swell(*page, *offset, matches!(edit, Edit::Header(_)));
                 }
             }
-            Edit::Sql { at, value } => {
-                let Some((offset, length)) = image.sql.filter(|(_, length)| *length > 0) else {
-                    return;
-                };
-                let value = if *value < 128 {
-                    b"()',\" x"[usize::from(*value) % 7]
-                } else {
-                    *value
-                };
-                if let Some(bytes) = self.page(1) {
-                    bytes[offset + usize::from(*at) % length] = value;
-                }
-            }
+            // the statement was edited before the database was built
+            Edit::Sql { .. } | Edit::Echo { .. } => {}
             Edit::Cut { length, .. } => {
                 let length = *length as usize % (self.file.len() + 1);
                 self.file.truncate(length);
@@ -1559,7 +1605,7 @@ fn plain(browser: Browser, size: u8, rows: u8) -> Plan {
 /// the plans the weekly fuzz pass starts from: two browser files as they are, and one for each
 /// way a crafted file has broken the reader.
 fn seeds() -> Vec<(&'static str, Plan)> {
-    vec![
+    let mut seeds = vec![
         (
             "firefox-in-a-log",
             Plan {
@@ -1585,6 +1631,14 @@ fn seeds() -> Vec<(&'static str, Plan)> {
                 ..plain(Browser::Chromium, 0, 238)
             },
         ),
+    ];
+    seeds.extend(crafted());
+    seeds
+}
+
+/// a seed for each way a crafted file has broken the reader.
+fn crafted() -> Vec<(&'static str, Plan)> {
+    vec![
         (
             "cycle",
             Plan {
@@ -1629,6 +1683,22 @@ fn seeds() -> Vec<(&'static str, Plan)> {
             },
         ),
         (
+            "deep-default",
+            Plan {
+                sql: "CREATE TABLE cookies(name DEFAULT 1, value, host)".to_owned(),
+                columns: 3,
+                edits: vec![
+                    Edit::Echo {
+                        at: 34,
+                        count: u16::MAX,
+                        value: 0,
+                    };
+                    2
+                ],
+                ..plain(Browser::Raw, 0, 5)
+            },
+        ),
+        (
             "row-header",
             Plan {
                 edits: vec![Edit::Header(0)],
@@ -1662,8 +1732,9 @@ fn read(plan: &Plan) -> Result<Vec<Vec<Value>>, super::super::Broken> {
 
 /// the seeds in tests/fixtures/fuzz/cookie-databases are the plans [`seeds`] makes, and each
 /// reaches what it was made for: the reader refuses a page reached twice, a cell listed twice
-/// and an overflow page that leads back to itself, reads a table whose statement is broken
-/// without a panic, and reads what was left unbent as it was built.
+/// and an overflow page that leads back to itself, reads a table whose statement is broken or
+/// nests a default 131,070 parentheses deep without a panic, and reads what was left unbent as
+/// it was built.
 #[test]
 fn the_seeds_reach_what_they_were_made_for() {
     for (name, plan) in seeds() {
@@ -1689,6 +1760,11 @@ fn the_seeds_reach_what_they_were_made_for() {
                 "{name}: {read:?}"
             ),
             "row-header" => assert!(read.is_err(), "{name}"),
+            "deep-default" => assert!(
+                read.as_ref().is_ok_and(|rows| rows.len() == 5),
+                "{name}: {:?}",
+                read.map(|rows| rows.len())
+            ),
             _ => assert_eq!(read.ok(), build(&plan).expected, "{name}"),
         }
     }

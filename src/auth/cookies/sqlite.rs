@@ -526,7 +526,22 @@ const CONSTRAINTS: [&str; 11] = [
 /// blob, `NULL`, `TRUE` or `FALSE`, or one of those in parentheses. none for anything else, as an
 /// expression or a time is.
 fn literal(text: &str) -> Option<(Value, &str)> {
-    let text = text.trim_start();
+    // parentheses are counted, not recursed into, so no depth of them runs out of stack
+    let mut text = text.trim_start();
+    let mut depth = 0_usize;
+    while let Some(rest) = text.strip_prefix('(') {
+        depth += 1;
+        text = rest.trim_start();
+    }
+    let (value, mut rest) = bare(text)?;
+    for _ in 0..depth {
+        rest = rest.trim_start().strip_prefix(')')?;
+    }
+    Some((value, rest))
+}
+
+/// the value of the literal `text` starts with, outside any parentheses, and what follows it.
+fn bare(text: &str) -> Option<(Value, &str)> {
     if let Some(rest) = text.strip_prefix('\'') {
         let mut value = String::new();
         let mut chars = rest.char_indices().peekable();
@@ -552,11 +567,6 @@ fn literal(text: &str) -> Option<(Value, &str)> {
             .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
             .collect::<Option<Vec<u8>>>()?;
         return Some((Value::Blob(bytes), &rest[end + 1..]));
-    }
-    if let Some(rest) = text.strip_prefix('(') {
-        let (value, after) = literal(rest)?;
-        let after = after.trim_start().strip_prefix(')')?;
-        return Some((value, after));
     }
     let length = text
         .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_')))

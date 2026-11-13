@@ -297,6 +297,24 @@ fn a_broken_statement_or_row_is_refused_without_a_panic() {
     assert!(decode(&record).is_err());
 }
 
+/// a default in parentheses of any depth, as a crafted statement nests one a hundred thousand
+/// deep, reads in a loop rather than a call for each, so it never runs out of stack; one whose
+/// parentheses never close is no constant.
+#[test]
+fn a_default_in_parentheses_of_any_depth_reads_without_running_out_of_stack() {
+    let deep = 100_000;
+    let nested = format!(
+        "CREATE TABLE t(a INTEGER DEFAULT {}7 {}, b)",
+        "( ".repeat(deep),
+        ") ".repeat(deep)
+    );
+    let read = columns(&nested);
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[0].default, Some(Value::Integer(7)));
+    let unclosed = format!("CREATE TABLE t(a INTEGER DEFAULT {}7)", "(".repeat(deep));
+    assert_eq!(columns(&unclosed)[0].default, None);
+}
+
 /// SQLite's variable-length integer for `value`, as `varint` reads it.
 fn put_varint(value: u64) -> Vec<u8> {
     if value > 0x00ff_ffff_ffff_ffff {
