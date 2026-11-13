@@ -191,32 +191,36 @@ pub(crate) fn read(
     host: &str,
     key: &dyn Fn(&str) -> Option<[u8; 16]>,
 ) -> std::io::Result<Read> {
-    let database = Database::open(path)?;
-    let invalid =
-        |why: super::sqlite::Broken| std::io::Error::new(std::io::ErrorKind::InvalidData, why.0);
+    taken(&Database::open(path)?, host, key)
+        .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why.0))
+}
+
+/// the cookies for `host` in `database`, a chromium `Cookies` file, as [`read`] takes them.
+pub(super) fn taken(
+    database: &Database,
+    host: &str,
+    key: &dyn Fn(&str) -> Option<[u8; 16]>,
+) -> Result<Read, super::sqlite::Broken> {
     let version = database
-        .rows("meta", &["key", "value"])
-        .map_err(invalid)?
+        .rows("meta", &["key", "value"])?
         .iter()
         .find(|row| row[0].text() == Some("version"))
         .and_then(|row| row[1].text().and_then(|text| text.parse().ok()))
         .unwrap_or(0);
-    let rows = database
-        .rows(
-            "cookies",
-            &[
-                "host_key",
-                "name",
-                "encrypted_value",
-                "path",
-                "expires_utc",
-                "has_expires",
-                "is_secure",
-                "secure",
-                "top_frame_site_key",
-            ],
-        )
-        .map_err(invalid)?;
+    let rows = database.rows(
+        "cookies",
+        &[
+            "host_key",
+            "name",
+            "encrypted_value",
+            "path",
+            "expires_utc",
+            "has_expires",
+            "is_secure",
+            "secure",
+            "top_frame_site_key",
+        ],
+    )?;
     let mut keys: HashMap<String, Option<[u8; 16]>> = HashMap::new();
     let mut read = Read::default();
     for row in rows {

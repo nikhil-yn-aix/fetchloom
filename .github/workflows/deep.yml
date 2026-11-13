@@ -123,10 +123,20 @@ jobs:
             name=${entry%%=*}
             results="target/fuzz-results/$name"
             mkdir -p "target/fuzz-corpus/$name" "$results/crashes"
+            # a target's seeds, kept with the tests, start its corpus
+            if [ -d "tests/fixtures/fuzz/$name" ]; then
+              cp "tests/fixtures/fuzz/$name"/* "target/fuzz-corpus/$name/"
+            fi
+            engine=()
+            # a planned cookie database holds a few MiB, so one allocation past 256 MiB is a fault;
+            # a plan's edits follow 29 bytes of header, so inputs run full length from the start
+            if [ "$name" = cookie-databases ]; then
+              engine=(--engine-args=-malloc_limit_mb=256 --engine-args=-len_control=0)
+            fi
             echo "::group::$name"
             timeout --signal=TERM --kill-after=30s "$limit" cargo bolero test --toolchain nightly-2026-11-03 \
               --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
-              --corpus-dir "target/fuzz-corpus/$name" --crashes-dir "$results/crashes" \
+              --corpus-dir "target/fuzz-corpus/$name" --crashes-dir "$results/crashes" "${engine[@]}" \
               "${entry#*=}" 2>&1 | tee "$results/run.log" || failed="$failed $name"
             echo "::endgroup::"
             # a later target took 5 min 2 s, so 25 + 8 x 6 = 73 minutes stay under the job cap

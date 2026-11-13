@@ -127,21 +127,24 @@ pub(super) fn file(roots: &[PathBuf], named: Option<&str>) -> Option<PathBuf> {
 /// the cookies in firefox's `cookies.sqlite` at `path`. those a container, a private window or
 /// another site's frames keep apart are left out.
 pub(super) fn read(path: &Path) -> std::io::Result<Read> {
-    let database = Database::open(path)?;
-    let rows = database
-        .rows(
-            "moz_cookies",
-            &[
-                "name",
-                "value",
-                "host",
-                "path",
-                "expiry",
-                "isSecure",
-                "originAttributes",
-            ],
-        )
-        .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why.0))?;
+    taken(&Database::open(path)?)
+        .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why.0))
+}
+
+/// the cookies in `database`, firefox's `cookies.sqlite`, as [`read`] takes them.
+pub(super) fn taken(database: &Database) -> Result<Read, super::sqlite::Broken> {
+    let rows = database.rows(
+        "moz_cookies",
+        &[
+            "name",
+            "value",
+            "host",
+            "path",
+            "expiry",
+            "isSecure",
+            "originAttributes",
+        ],
+    )?;
     let milliseconds = database.user_version >= MILLISECONDS;
     let mut read = Read::default();
     for row in rows {

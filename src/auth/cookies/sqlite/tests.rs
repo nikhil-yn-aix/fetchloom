@@ -2,6 +2,9 @@ use rusqlite::Connection;
 
 use super::*;
 
+#[cfg(test)]
+mod built;
+
 /// a database SQLite writes at `path` with pages of `page_size` bytes, in `journal` mode.
 fn written(path: &Path, page_size: u32, journal: &str) -> Connection {
     let db = Connection::open(path).unwrap();
@@ -499,26 +502,10 @@ fn pages_and_bytes_are_kept_to_what_the_files_hold() {
     assert!(read.is_err_and(|Broken(why)| why.contains("larger than")));
 }
 
-/// a database with any of its bytes changed, and any log beside it, never panics the reader:
-/// it reads, or refuses.
+/// a database a fuzzer plans, built as SQLite writes one and then bent as a crafted file would
+/// be, never panics the reader or the browsers' readers over it, nor makes them give more rows
+/// than its pages hold; unbent, it reads as it was built.
 #[test]
 fn fuzz_cookie_databases() {
-    let folder = tempfile::tempdir().unwrap();
-    let path = folder.path().join("cookies.sqlite");
-    let db = written(&path, 512, "DELETE");
-    insert(&db, 0..40);
-    drop(db);
-    let file = std::fs::read(&path).unwrap();
-    bolero::check!()
-        .with_type::<(Vec<(u16, u8)>, Vec<u8>)>()
-        .for_each(|(changes, log)| {
-            let mut bytes = file.clone();
-            for (at, byte) in changes {
-                let at = usize::from(*at) % bytes.len();
-                bytes[at] = *byte;
-            }
-            if let Ok(database) = Database::parse(bytes, Some(log)) {
-                let _ = database.rows("cookies", &["name", "value", "number"]);
-            }
-        });
+    bolero::check!().for_each(built::exercise);
 }
