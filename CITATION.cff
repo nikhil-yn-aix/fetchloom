@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "if you use fetchloom in your research, cite it with the metadata in this file."
+title: fetchloom
+abstract: "put the exact data a project needs onto any machine with one command"
+type: software
+authors:
+  - name: "Nikhil Y N"
+  - name: "KairosLab India Private Limited"
+repository-code: "https://github.com/nikhil-yn-aix/fetchloom"
+url: "https://nikhil-yn-aix.github.io/fetchloom/"
+license: Apache-2.0
+keywords:
+  - dataset
+  - research
+  - reproducibility
+  - download
+  - lockfile
+version: 0.1.0
