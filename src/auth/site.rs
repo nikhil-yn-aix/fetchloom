@@ -282,6 +282,16 @@ fn origin(var: Var<'_>, place: store::Place) -> Origin {
     }
 }
 
+/// the most bytes windows' credential store keeps for an entry, `CRED_MAX_CREDENTIAL_BLOB_SIZE`.
+const WINDOWS_ENTRY: usize = 2_560;
+
+/// whether `saved` outgrows windows' credential store, which keeps [`WINDOWS_ENTRY`] bytes an
+/// entry and takes the saved text as UTF-16, two bytes a unit.
+pub(crate) fn too_big_for_windows(saved: &Saved) -> bool {
+    serde_json::to_string(saved)
+        .is_ok_and(|text| text.encode_utf16().count().saturating_mul(2) > WINDOWS_ENTRY)
+}
+
 /// saves `saved` for `host` in `place`, in place of what was saved for it before. returns
 /// where it went.
 ///

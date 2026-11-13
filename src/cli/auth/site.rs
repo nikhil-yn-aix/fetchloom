@@ -532,10 +532,9 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             agrees(context, host, saved, &question, true)?;
         }
         return site::save(var, host, saved, store::Place::Keyring).map_err(|err| {
-            // windows' store keeps 2,560 bytes an entry, which a site's cookies often pass
             let error = failed(err);
-            if matches!(saved, Saved::Cookies { .. }) {
-                error.help("set FETCHLOOM_KEYRING=false to keep them in fetchloom's own file, readable only by you, then run it again")
+            if site::too_big_for_windows(saved) {
+                error.help(format!("set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file, readable only by you, then run it again"))
             } else {
                 error
             }

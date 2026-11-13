@@ -24,6 +24,33 @@ fn cookie(name: &str, domain: &str, expires: Option<i64>) -> Cookie {
     }
 }
 
+/// windows' credential store keeps 2,560 bytes an entry and takes the saved text as UTF-16, two
+/// bytes a unit, so a long token or header outgrows it as cookies do, at half its UTF-8 length.
+#[test]
+fn any_credential_past_windows_store_is_too_big_for_it() {
+    let token = |token: String| Saved::Token { token };
+    let overhead = serde_json::to_string(&token(String::new())).unwrap().len();
+    assert!(!too_big_for_windows(&token("t".repeat(1_280 - overhead))));
+    assert!(too_big_for_windows(&token("t".repeat(1_281 - overhead))));
+    assert!(too_big_for_windows(&token("t".repeat(1_500))));
+    // a unit past the basic plane takes two
+    assert!(too_big_for_windows(&token("\u{1f600}".repeat(640))));
+    let header = |value: &str| Saved::Header {
+        name: "X-API-Key".to_owned(),
+        value: value.to_owned(),
+    };
+    assert!(!too_big_for_windows(&header("sk_live_short")));
+    assert!(too_big_for_windows(&header(&"k".repeat(1_300))));
+    let cookies = |count: usize| Saved::Cookies {
+        from: Taken::File(PathBuf::from("/home/ada/cookies.txt")),
+        cookies: (0..count)
+            .map(|at| cookie(&format!("c{at}"), "data.lab", None))
+            .collect(),
+    };
+    assert!(!too_big_for_windows(&cookies(2)));
+    assert!(too_big_for_windows(&cookies(40)));
+}
+
 /// a time past what a clock can hold, as a cookie set to last for ever has, is the last second
 /// of year 9999, and one before 1970 is 1970, so neither panics.
 #[test]
