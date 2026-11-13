@@ -119,7 +119,16 @@ CPU affinity does not isolate shared cache, memory bandwidth, filesystem flushes
 
 `island.py check` is an operator-only measurement. it runs full-size A/A campaigns first with a quiet island, then with a repeated release build on disjoint cores. `--case filesystem/profile/scenario` is repeatable and selects exactly those cases; the default is ext4/lan s2, s3 and s5. use the unchanged executable from the quiet noise campaign. it compares both paired noise distributions with `noise.json` and reports the loaded/quiet-island wall shift. default acceptance requires 20 complete pairs per case, A/A 95% intervals within 0.97 to 1.03, robust log spread no more than twice the old spread (with a 0.01 log-scale floor), and a central loaded/quiet-island shift within 3%. the loaded interval width must stay within twice the larger quiet/historical width (with a 1-percentage-point floor), and the A/A median bias may shift by at most 1 percentage point. the width and bias floors are one third of `--effect`. these are explicit operational checks, not a proof of independence or an 80% power guarantee.
 
-run the check with nothing else on the machine: it creates its own compiler load on the build CPUs. give it a new target directory used by no other process, because the load worker repeatedly cleans fetchloom in that target before rebuilding. load failure aborts the measurement, and the worker group is stopped on exit. source is read without modification. `--noise` names the paired noise file of an earlier quiet A/A campaign on the same machine and lab. as root, after sourcing the Rust toolchain environment:
+run the check with nothing else on the machine: it creates its own compiler load on the build CPUs. give it a new target directory used by no other process, because the load worker repeatedly cleans fetchloom in that target before rebuilding. load failure aborts the measurement, and the worker group is stopped on exit. source is read without modification. `--noise` names the `ab.py --json` output of an earlier quiet A/A campaign on the same machine and lab, with the same cases, measured like this:
+
+```sh
+python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom \
+  --profiles lan --scenarios s2,s3,s5 --fs ext4 --rounds 20 \
+  --variant aa:FETCHLOOM_EXP_NONE=1 --cpus 0-7 --out "$FL_BENCH_ROOT/results/noise"
+python3 bench/ab.py "$FL_BENCH_ROOT/results/noise" --json "$FL_BENCH_ROOT/results/noise.json"
+```
+
+then, as root, after sourcing the Rust toolchain environment:
 
 ```sh
 sudo env PATH="$PATH" \

@@ -15,6 +15,8 @@ import lab
 
 SCENARIOS = ("s2", "s3", "s5")
 DEFAULT_CASES = tuple(f"ext4/lan/{scenario}" for scenario in SCENARIOS)
+# the variant an a/a campaign compares with the plain build, as campaign_command names it
+AA = "fetchloom+aa"
 
 
 def disjoint(cpus, build_cpus):
@@ -117,12 +119,22 @@ def campaign(args, output, load=None):
     return results
 
 
-def compare_noise(quiet, loaded, baseline, *, effect=.03, noise_multiple=2, rounds=20, cases=DEFAULT_CASES):
-    reference = {f"{r['fs']}/{r['profile']}/{r['scenario']}": r for r in baseline}
-    campaigns = [{r["case"]: r for r in records if r["variant"] == "fetchloom+aa"}
+def noise_reference(noise):
+    """each case's a/a result in the noise file, which is `ab.py --json` output of a quiet a/a campaign."""
+    results = noise.get("results") if isinstance(noise, dict) else None
+    if not isinstance(results, list):
+        raise ValueError("the noise file must be ab.py --json output of a quiet a/a campaign")
+    return {r["case"]: r for r in results if r.get("variant") == AA}
+
+
+def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=20, cases=DEFAULT_CASES):
+    reference = noise_reference(noise)
+    campaigns = [{r["case"]: r for r in records if r["variant"] == AA}
                  for records in (quiet, loaded)]
     results = []
     for key in cases:
+        if key not in reference:
+            raise ValueError(f"the noise file has no a/a result for {key}")
         old = reference[key]["metrics"]["wall"]
         sigma = old["log_ratio_robust_sd"]
         if sigma is None or sigma < 0 or not math.isfinite(sigma):
@@ -192,10 +204,10 @@ def check(args):
         raise ValueError("the compiler target must be outside source and measured filesystems")
     if args.out.exists() or args.target.exists():
         raise ValueError("output and compiler target must be new paths")
-    baseline = json.loads(args.noise.read_text())
-    keys = {(r["fs"], r["profile"], r["scenario"]) for r in baseline}
-    if any(tuple(case.split("/")) not in keys for case in args.cases):
-        raise ValueError("noise.json must contain every selected case")
+    noise = json.loads(args.noise.read_text())
+    missing = [case for case in args.cases if case not in noise_reference(noise)]
+    if missing:
+        raise ValueError(f"the noise file has no a/a result for {', '.join(missing)}")
     args.out.mkdir(parents=True)
     args.target.mkdir(parents=True)
     write_state(args.target / ".fl-bench-island.json", dict(output=str(args.out), worktree=str(args.worktree)))
@@ -227,7 +239,7 @@ def check(args):
                 raise RuntimeError("compiler load has the wrong CPU affinity")
             loaded = campaign(args, args.out / "loaded-island", load)
             report["build_end"] = json.loads(ready.read_text())
-        report["cases"] = compare_noise(quiet, loaded, baseline, effect=args.effect,
+        report["cases"] = compare_noise(quiet, loaded, noise, effect=args.effect,
                                        noise_multiple=args.noise_multiple, rounds=args.rounds, cases=args.cases)
         report["passed"] = all(r["passed"] for r in report["cases"])
     except Exception as error:

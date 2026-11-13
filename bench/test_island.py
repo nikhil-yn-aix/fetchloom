@@ -198,13 +198,32 @@ class IslandCheckTests(unittest.TestCase):
                         log_ratio_robust_sd=.01, plain_median=1, median_ratio=1)))
         quiet = [result(s) for s in island.SCENARIOS]
         loaded = [result(s) for s in island.SCENARIOS]
-        baseline = [dict(fs="ext4", profile="lan", scenario=s,
-                         metrics=dict(wall=dict(log_ratio_robust_sd=.01, plain_median=1, median_ratio=1))) for s in island.SCENARIOS]
-        self.assertTrue(all(r["passed"] for r in island.compare_noise(quiet, loaded, baseline)))
+        noise = dict(results=[dict(case=f"ext4/lan/{s}", variant="fetchloom+aa",
+                                   metrics=dict(wall=dict(log_ratio_robust_sd=.01, plain_median=1, median_ratio=1)))
+                              for s in island.SCENARIOS])
+        self.assertTrue(all(r["passed"] for r in island.compare_noise(quiet, loaded, noise)))
         loaded[0]["metrics"]["wall"]["plain_median"] = 1.2
         loaded[1]["metrics"]["wall"]["log_ratio_robust_sd"] = .1
-        results = island.compare_noise(quiet, loaded, baseline)
+        results = island.compare_noise(quiet, loaded, noise)
         self.assertEqual([r["passed"] for r in results], [False, False, True])
+
+    def test_the_noise_file_is_ab_json_output_of_a_quiet_aa_campaign(self):
+        import island
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = [dict(kind="lab", tool=tool, filesystem="ext4", profile="lan", scenario="s2", round=n,
+                         warmup=False, status="passed", quick=False, count=1000, file_size=102400,
+                         wall_seconds=wall)
+                    for n in range(1, 21) for tool, wall in (("fetchloom", 1 + n / 1000), ("fetchloom+aa", 1 + n % 3 / 1000))]
+            (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            subprocess.run([sys.executable, str(Path(island.__file__).with_name("ab.py")), str(root), "--resamples", "200",
+                            "--json", str(root / "noise.json")], check=True, capture_output=True)
+            noise = json.loads((root / "noise.json").read_text())
+        quiet = loaded = noise["results"]
+        [result] = island.compare_noise(quiet, loaded, noise, cases=("ext4/lan/s2",))
+        self.assertTrue(result["passed"], result["reasons"])
+        with self.assertRaisesRegex(ValueError, "ext4/lan/s3"):
+            island.compare_noise(quiet, loaded, noise, cases=("ext4/lan/s3",))
 
 
 if __name__ == "__main__":
