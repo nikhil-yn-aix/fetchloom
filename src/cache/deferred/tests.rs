@@ -103,6 +103,8 @@ fn discarding_a_duplicate_updates_only_its_last_pending_digest() {
     );
 }
 
+/// a full group of 256 downloads takes its names at once, so only the 10 after it stay claimed
+/// until the batch ends. it writes 266 downloads, which takes seconds on windows.
 #[test]
 fn a_long_batch_keeps_only_its_latest_downloads_claimed() {
     let (_dir, cache) = cache();
@@ -134,6 +136,8 @@ fn a_long_batch_keeps_only_its_latest_downloads_claimed() {
     }
 }
 
+/// a download of the first group that cannot take its name fails the batch when it ends, so the
+/// group needs all 256 downloads, which takes seconds on windows.
 #[test]
 fn a_failure_in_an_early_group_is_reported_when_the_batch_ends() {
     let (_dir, cache) = cache();

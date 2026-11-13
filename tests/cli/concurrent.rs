@@ -324,7 +324,8 @@ fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
 }
 
 /// a run that waits on no other names its finished downloads within a second, so another run
-/// needing them never waits for its longest, which here lasts until the second run is done.
+/// needing them never waits for its longest, which here lasts until the second run is done. it
+/// takes 70 small files, past the 64 a run flushes one by one, for them to wait in a batch.
 #[cfg(debug_assertions)]
 #[test]
 fn a_run_names_its_finished_downloads_while_its_largest_still_downloads() -> Result {
