@@ -19,6 +19,7 @@ CLIENT = "flb-client"
 SERVER = "flb-server"
 BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
+HOSTS = Path("/etc/hosts")
 SERVER_ADDRESS = "10.77.0.2"
 HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
@@ -268,7 +269,7 @@ def setup(image_gib=12, cpus=None):
         teardown()
     if ROOT.exists() and any(ROOT.iterdir()):
         raise SystemExit(f"refusing to overwrite unowned {ROOT}")
-    if CA.exists() or "lab.flb" in Path("/etc/hosts").read_text():
+    if CA.exists() or "lab.flb" in HOSTS.read_text():
         raise SystemExit("lab.flb or its CA already exists without an ownership marker")
     namespaces = subprocess.check_output(["ip", "netns", "list"], text=True)
     if NS in namespaces or subprocess.run(["ip", "link", "show", CLIENT],
@@ -295,7 +296,7 @@ def setup(image_gib=12, cpus=None):
             key.chmod(0o600)
         shutil.copyfile(cert / "ca.crt", CA)
         call(["update-ca-certificates"], **quiet)
-        with Path("/etc/hosts").open("a") as f:
+        with HOSTS.open("a") as f:
             f.write(HOST_LINE)
         call(["ip", "netns", "add", NS])
         call(["ip", "link", "add", CLIENT, "type", "veth", "peer", "name", SERVER])
@@ -365,8 +366,7 @@ def teardown():
     time.sleep(0.2)
     subprocess.run(["ip", "netns", "del", NS], capture_output=True)
     subprocess.run(["ip", "link", "del", CLIENT], capture_output=True)
-    hosts = Path("/etc/hosts")
-    hosts.write_text(hosts.read_text().replace(HOST_LINE, ""))
+    HOSTS.write_text(HOSTS.read_text().replace(HOST_LINE, ""))
     CA.unlink(missing_ok=True)
     call(["update-ca-certificates"], stdout=subprocess.DEVNULL)
     shutil.rmtree(ROOT)
