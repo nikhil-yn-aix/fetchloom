@@ -90,7 +90,7 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 
 ## publish a version
 
-1. set the Cargo version, refresh `Cargo.lock` through cargo and commit on main. wait for [CI](ci.md) on that commit.
+1. set the Cargo version and refresh `Cargo.lock` through cargo. in the same commit, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper). pypi and crates.io show README.md as each version's description as it was when that version was published, so a rewrite after the tag would leave those pages saying there is no release. commit on main and wait for [CI](ci.md) on that commit.
 2. create the matching tag and publish it. for version 0.1.0, the commands are `git tag v0.1.0` and `git push origin v0.1.0`.
 3. watch the workflow with `gh run watch`. if it fails, fix the cause before retrying. a failed prerequisite does not create a release. retag only an unpublished failed release; published version tags must remain stable.
 4. inspect the draft's archives, debian packages, wheels, installers and checksums. download and check provenance:
@@ -102,8 +102,7 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
 6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version`, `fl --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
-7. after the first release, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper).
-8. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
+7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 
 to rehearse without a tag, dispatch `release.yml` against the branch being checked. only its read-only artifact workflow runs; `attest` and `release` remain tag-only. no branch trigger, tag or publication is needed.
 
