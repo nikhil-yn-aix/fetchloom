@@ -506,13 +506,15 @@ mod tests {
         fs::read_dir(dir.join("tmp")).unwrap().count()
     }
 
-    /// a dry run of a large cache asks after every removal whether a path is among them.
+    /// a dry run removes nothing and keeps each removal, in the order made, for a sweep to ask
+    /// about. the names go in out of sorted order, so a sorted list could not pass for that order.
     #[test]
     fn a_dry_run_preserves_removal_membership_order_and_files() {
         let dir = tempfile::tempdir().unwrap();
         let volume = Volume::pretend(dir.path().to_path_buf());
-        let paths: Vec<PathBuf> = (0..10_000)
-            .map(|index| dir.path().join(format!("object{index:05}")))
+        let paths: Vec<PathBuf> = ["object2", "object0", "object1"]
+            .iter()
+            .map(|name| dir.path().join(name))
             .collect();
         for path in &paths {
             fs::write(path, b"").unwrap();
