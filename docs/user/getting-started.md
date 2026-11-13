@@ -1,18 +1,16 @@
 # getting started
 
-you will install fetchloom, download a small dataset into a project folder, find the file, restore it on another machine and undo it all.
+install fetchloom, add a small dataset to a project, find its files, restore them on another machine and undo it all.
 
 ## open a terminal
 
-a terminal is a window where you type a command and press enter to run it.
+a terminal is a window where you type a command and press enter to run it. type each command below on its own line.
 
 - windows: open the start menu, type `powershell` and open windows powershell.
 - macos: press cmd and space, type `terminal` and press enter.
 - linux: press ctrl, alt and t, or open terminal from your applications.
 
-type each command below on its own line and press enter after it.
-
-with a screen reader, run `export FETCHLOOM_ACCESSIBLE=1` in that terminal first, or `$env:FETCHLOOM_ACCESSIBLE = '1'` in powershell. fetchloom then draws nothing over again: progress comes as plain lines instead of redrawn bars, a question such as whether to download a file over 1 GiB is a plain line you answer with y or n, and plain words such as `iris` list the matching datasets with numbers, so you type the number of the one to add instead of moving through a list. add `export TERM=dumb`, or `$env:TERM = 'dumb'`, to drop colors and symbols such as `·` as well.
+with a screen reader, run `export FETCHLOOM_ACCESSIBLE=1` first, or `$env:FETCHLOOM_ACCESSIBLE = '1'` in powershell. fetchloom then redraws nothing: progress comes as plain lines, a question such as whether to download a file over 1 GiB is a line you answer with y or n, and words such as `iris` list the matching datasets by number, so you type the number of the one to add. `export TERM=dumb`, or `$env:TERM = 'dumb'`, drops colors and symbols such as `·` too.
 
 ## install
 
@@ -97,7 +95,7 @@ the folder now holds:
 | `data/iris/Iris.csv` | the table, next to the other files the dataset ships, all read-only so you cannot change them by accident |
 | `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
 
-the downloaded bytes also live once in a shared cache, so another project that needs iris gets it without a second download. [concepts](concepts.md) explains the cache and how files are placed.
+the downloaded bytes also live once in a shared cache, so another project that needs iris gets them without a second download. [concepts](concepts.md) explains the cache and how files are placed.
 
 ## find your files
 
@@ -117,20 +115,20 @@ fetchloom path iris/Iris.csv
 
 ## restore it somewhere else
 
-copy `data.toml` and `data.lock` to another machine, or commit them to git. leave `data/` and `.fetchloom/` out. there, in the project folder, run:
+commit `data.toml` and `data.lock` to git, or copy them to another machine; leave `data/` and `.fetchloom/` out. in a git repository, `add` already put `data/` in `.gitignore`, and its `next:` line said `commit data.toml, data.lock and .gitignore`. if you start git later, `git init` and then `fetchloom sync` write it. then:
+
+```sh
+git add data.toml data.lock .gitignore
+git commit -m "pin iris"
+```
+
+on the other machine, in the project folder, run:
 
 ```sh
 fetchloom sync
 ```
 
 `sync` downloads what is missing and checks every download against `data.lock`, so you get the same bytes. files it already checked are not hashed again; `fetchloom cache verify` rehashes the cache when you want to be sure.
-
-in a git repository, `add` already put `data/` in `.gitignore`, and its `next:` line said `commit data.toml, data.lock and .gitignore`. if you start git later, run `git init` and then `fetchloom sync`, which writes `.gitignore`. then:
-
-```sh
-git add data.toml data.lock .gitignore
-git commit -m "pin iris"
-```
 
 ## undo
 
@@ -140,7 +138,7 @@ remove the dataset from the project:
 fetchloom remove iris
 ```
 
-this deletes its entry in `data.toml` and `data.lock` and its files in `data/iris`. a file you edited stays. add `--dry-run` first to see what it would delete.
+this deletes its entry in `data.toml` and `data.lock` and its files in `data/iris`, except a file you edited. with `--dry-run`, it only shows what it would delete.
 
 the shared cache still holds the bytes. `fetchloom cache gc` frees bytes no project needs once they are a day old, in case you want them back. to free them now:
 
@@ -152,8 +150,8 @@ to remove the whole project, delete its folder. to remove every copy of a datase
 
 ## uninstall
 
-1. sign out of anything you signed in to with fetchloom, if you want those keys gone too: `fetchloom auth` lists them, and `fetchloom auth logout <account>` removes one. keys you saved with a source's own tools, such as `~/.kaggle` or the hugging face token, are shared with those tools.
-2. run `fetchloom -q cache` to find the cache folder, then delete it if you no longer need its bytes. this respects `FETCHLOOM_CACHE` and, on linux, an absolute `XDG_CACHE_HOME`; the [cache locations](reference/cache-folder.md#location) list the defaults.
+1. to delete the keys you saved with fetchloom, `fetchloom auth` lists them and `fetchloom auth logout <account>` removes one. keys you saved with a source's own tools, such as `~/.kaggle` or the hugging face token, are shared with those tools.
+2. `fetchloom -q cache` prints the cache folder; delete it if you no longer need its bytes. it follows `FETCHLOOM_CACHE` and, on linux, an absolute `XDG_CACHE_HOME`; [cache locations](reference/cache-folder.md#location) lists the defaults.
 3. remove the program, the way you installed it:
 
 | installed with | remove with |
