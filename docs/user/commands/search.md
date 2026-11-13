@@ -20,7 +20,7 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 | option | meaning |
 |---|---|
 | `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi` or `openneuro`. repeat it or separate names with commas. any other name is a usage error |
-| `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives 3 and 12 show in all, as [results](#results) says; any other value is a usage error, exit 2 |
+| `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives up to 3 and at most 12 show, as [results](#results) says; any other value is a usage error, exit 2 |
 
 [global options](README.md#global-options) apply.
 
@@ -32,13 +32,14 @@ without `--limit`, at most 12 matches show, so the list and the picker fit a ter
 
 each site finds its own kind of dataset. ENA's matches are studies, found through EBI's search, and adding one adds every run in it. GEO's are series, found through NCBI's E-utilities, which take a second request for their titles. dandi leaves out embargoed dandisets and ones with no assets yet, and describes one never published by its draft. openneuro leaves out the private datasets it finds and ones with no snapshot yet.
 
-at a terminal, each match is one row with its reference, then title, size, download count and access note in columns, and no number, since `add` takes the reference, not a row's place in the list:
+at a terminal, each match is one row with its reference, then title, size, download count and access note in columns, and no number, since `add` takes the reference, not a row's place in the list. a hugging face row has no title, since its title is the repository id the reference already shows. from a real run at a 100-column terminal, shortened:
 
 ```text
       Found 12 datasets for "iris"
-            hf:datasets/scikit-learn/iris                                    18.1 KiB
-            kaggle:uciml/iris                            Iris Species         3.6 KiB
-            zenodo:23233774                              IRIS: ICESat-2…      1.1 GiB
+            hf:datasets/scikit-learn/iris                                  18.1 KiB   11k downloads
+            kaggle:uciml/iris                    Iris Species               3.6 KiB  964k downloads
+            zenodo:23233774                      IRIS: ICESat-2 River…      1.1 GiB  2.4k downloads
+  hint: each site's best matches are shown, 12 in all; `--limit 20` shows up to 20 from each
 ```
 
 the reference is never cut. on a narrow terminal the download count gives way first, then the title; the size and the access note move to a line of their own when they do not fit. a fact the site does not give stays blank, as ENA and GEO give no size or download count, and dandi no download count. sizes are as each site lists them: hugging face gives the size of a dataset's files, while kaggle gives the size of its zipped download, so the files `add` reports can be larger. kaggle lists a dataset it does not serve as files, such as one kept in bigquery, with 0 bytes and 0 downloads, which fetchloom shows as unknown.
@@ -67,22 +68,22 @@ with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same ro
 ```text
   Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
   which one?
-    1 hf:datasets/scikit-learn/iris                                       18.1 KiB   12k downloads
-    2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  959k downloads
+    1 hf:datasets/scikit-learn/iris                                       18.1 KiB   11k downloads
+    2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  964k downloads
     3 zenodo:23233774                      IRIS: ICESat-2 River Surface…   1.1 GiB  2.4k downloads
     more matches: fetchloom search iris --limit 20
   type a number from 1 to 12 and press enter, or q to cancel: 2
       Chose kaggle:uciml/iris
 ```
 
-without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 100-column terminal with `TERM=dumb`, shortened:
+without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 110-column terminal with `TERM=dumb`, shortened:
 
 ```text
   Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
       Found 12 datasets for "iris"; add one by its id:
-            hf:datasets/scikit-learn/iris                                      18.1 KiB
-            kaggle:uciml/iris                            Iris Species           3.6 KiB
-            zenodo:23233774                              IRIS: ICESat-2...      1.1 GiB
+            hf:datasets/scikit-learn/iris                                            18.1 KiB   11k downloads
+            kaggle:uciml/iris                    Iris Species                         3.6 KiB  964k downloads
+            zenodo:23233774                      IRIS: ICESat-2 River Surface...      1.1 GiB  2.4k downloads
 error: "iris" is not a link or an id, and fetchloom will not guess which dataset you mean
   help: run it again with one of these, such as `fetchloom add hf:datasets/scikit-learn/iris`
 ```
@@ -93,4 +94,4 @@ run it again with the reference you mean; `data.toml` records that reference, no
 
 search needs the internet: `--offline` fails with `offline.missing`, exit 20, and help to search again online. knowing an id does not make a new dataset available offline; see [offline](../concepts.md#offline).
 
-[exit codes](../reference/exit-codes.md) covers catalog and network failures.
+[exit codes](../reference/exit-codes.md) covers failures of the search sites and the network.
