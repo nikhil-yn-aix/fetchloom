@@ -37,7 +37,8 @@ pub(crate) struct Palette {
 pub(crate) enum Theme {
     /// the terminal's own sixteen colors, which follow whatever theme it has
     Ansi,
-    /// clay, sage and amber, as the benchmark charts use them, for a dark background
+    /// indigo for work and for what a person types, with green, amber and red, for a dark
+    /// background. the docs site and the benchmark charts use the same colors.
     Dark,
     /// the same colors, deeper, for a light background
     Light,
@@ -55,24 +56,24 @@ impl Theme {
                 accent: AnsiColor::Cyan.into(),
             },
             Theme::Dark => Palette {
-                done: rgb(0x8f, 0xc0, 0x86),
-                work: rgb(0xee, 0x7a, 0x4c),
-                warn: rgb(0xe8, 0xb6, 0x5a),
-                fail: rgb(0xf2, 0x5c, 0x6a),
-                accent: rgb(0xee, 0x7a, 0x4c),
+                done: rgb(0x86, 0xc9, 0x8b),
+                work: rgb(0x9e, 0xa9, 0xf2),
+                warn: rgb(0xe4, 0xb2, 0x5a),
+                fail: rgb(0xf2, 0x73, 0x6d),
+                accent: rgb(0x9e, 0xa9, 0xf2),
             },
             Theme::Light => Palette {
-                done: rgb(0x3c, 0x7a, 0x37),
-                work: rgb(0xb4, 0x4f, 0x26),
-                warn: rgb(0x8f, 0x62, 0x00),
-                fail: rgb(0xbf, 0x21, 0x3a),
-                accent: rgb(0xb4, 0x4f, 0x26),
+                done: rgb(0x2e, 0x78, 0x36),
+                work: rgb(0x2e, 0x3f, 0x9c),
+                warn: rgb(0x87, 0x5a, 0x00),
+                fail: rgb(0xb5, 0x20, 0x2e),
+                accent: rgb(0x2e, 0x3f, 0x9c),
             },
         }
     }
 
-    /// the theme a terminal suits: clay and sage where it draws any color and its background is
-    /// known or assumed dark, deeper shades on a light one, and its own colors elsewhere.
+    /// the theme a terminal suits: the dark one where it draws any color and its background is
+    /// known or assumed dark, the light one on a light background, and its own colors elsewhere.
     pub(crate) fn detect(var: &dyn Fn(&str) -> Option<OsString>) -> Theme {
         if !full_color(var) {
             return Theme::Ansi;
@@ -549,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn full_color_terminals_get_the_warm_theme_and_others_their_own() {
+    fn full_color_terminals_get_a_full_color_theme_and_others_their_own() {
         assert_eq!(Theme::detect(&env(&[])), Theme::Ansi);
         assert_eq!(
             Theme::detect(&env(&[("COLORTERM", "truecolor")])),

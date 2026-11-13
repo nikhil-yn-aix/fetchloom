@@ -29,13 +29,13 @@ each color has one meaning, named by a `Tone` in `src/output/style.rs`:
 
 | tone | meaning | ansi theme | dark theme | light theme |
 |---|---|---|---|---|
-| `done` | finished work | green | `#8fc086` | `#3c7a37` |
-| `work` | work in progress and its bars | cyan | `#ee7a4c` | `#b44f26` |
-| `warn` | attention or a difference | yellow | `#e8b65a` | `#8f6200` |
-| `fail` | failure | red | `#f25c6a` | `#bf213a` |
-| `accent` | anything the user types, and choice numbers | cyan | `#ee7a4c` | `#b44f26` |
+| `done` | finished work | green | `#86c98b` | `#2e7836` |
+| `work` | work in progress and its bars | cyan | `#9ea9f2` | `#2e3f9c` |
+| `warn` | attention or a difference | yellow | `#e4b25a` | `#875a00` |
+| `fail` | failure | red | `#f2736d` | `#b5202e` |
+| `accent` | anything the user types, and choice numbers | cyan | `#9ea9f2` | `#2e3f9c` |
 
-the documentation site draws the transcripts its pages show with the same tones: `python/transcript.py` follows `verb_color`, `difference` and the setup, ticker, warning, error, hint and next lines here, so a verb or rule that changes here changes there too.
+the dark and light colors are also the documentation site's, in `docs-site/theme/assets/stylesheets/fetchloom.css`, and the benchmark charts', in `bench/render.py`, so a change to one belongs in all three. the site draws the transcripts its pages show with the same tones: `python/transcript.py` follows `verb_color`, `difference` and the setup, ticker, warning, error, hint and next lines here, so a verb or rule that changes here changes there too.
 
 `Theme::detect` picks the theme: full-color terminals (`COLORTERM=truecolor` or `24bit`, `WT_SESSION`, or `TERM_PROGRAM` of vscode, iTerm.app, WezTerm or ghostty) get dark, or light when `COLORFGBG` ends in 7 or 15; every other terminal gets ansi, its own sixteen colors. `theme=` in `FETCHLOOM_COLORS` overrides the choice.
 
