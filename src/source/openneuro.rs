@@ -1,8 +1,6 @@
-//! openneuro: datasets by accession or openneuro.org link, listed through openneuro's GraphQL
-//! API at one snapshot, the one named or the newest, a request for each folder. git-annex keeps a
-//! dataset's large files under keys that state their SHA-256, or their MD5 in older datasets,
-//! which the downloaded bytes are checked against; they come from openneuro's S3 bucket at the
-//! version the snapshot pins. no key goes to openneuro.
+//! openneuro: datasets by accession or link, listed through openneuro's GraphQL API at one
+//! snapshot, a request per folder. large files come from its S3 bucket at the snapshot's version,
+//! checked against the SHA-256 or MD5 their git-annex keys state; no key goes to openneuro.
 
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
@@ -79,9 +77,8 @@ impl Dataset {
         })
     }
 
-    /// lists the snapshot's files: its top folder, then each folder in it, a request each, or
-    /// only the folders that may hold a file the `select` patterns match, when each pattern says
-    /// where its files lie, as [`Glob::scope`] does, and a file was found for each.
+    /// lists the snapshot's files, a request per folder, or only the folders that may hold a file
+    /// the `select` patterns match, when each says where its files lie and a file was found for it.
     pub(super) async fn resolve(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
         let tag = match &self.tag {
             Some(tag) => tag.clone(),
@@ -337,9 +334,8 @@ fn tag_of(text: &str) -> Option<String> {
     usable.then(|| text.to_owned())
 }
 
-/// what a git-annex key states of its file: its size, and its SHA-256 or MD5 for the backends
-/// that name the bytes by one, as `SHA256E-s1757261330--7cfba0….nii.gz` does. a key of another
-/// backend states no digest.
+/// what a git-annex key, as `SHA256E-s1757261330--7cfba0….nii.gz`, states of its file: its size,
+/// and its SHA-256 or MD5 for backends that name bytes by one; other backends state no digest.
 #[derive(Debug, PartialEq, Eq)]
 struct Key {
     size: Option<u64>,

@@ -1,7 +1,5 @@
-//! dandi: dandisets by number or dandiarchive.org link, listed through dandi's versioned assets
-//! API at one published version, or the draft, with the SHA-256 dandi states for each asset. an
-//! embargoed dandiset, which dandi shows to no one without an account, is refused; no key goes to
-//! dandi.
+//! dandi: dandisets by number or link, listed at one published version, or the draft, with the
+//! SHA-256 dandi states for each asset. an embargoed dandiset is refused; no key goes to dandi.
 
 use std::collections::HashMap;
 use std::fmt;

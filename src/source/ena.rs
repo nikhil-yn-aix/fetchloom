@@ -1,9 +1,6 @@
-//! ENA, the european nucleotide archive: the read files of runs, by the accession of a run, an
-//! experiment, a sample or a study, as ENA's portal API reports them, with the MD5 and size it
-//! states for each file. ENA mirrors the INSDC archives, so a run from NCBI's SRA or DDBJ's DRA
-//! is listed too. a run accession names reads, not bytes: ENA's FASTQ, the files the submitter
-//! sent and the SRA object are different files, so the reference names which it means, FASTQ
-//! unless it says otherwise. runs under controlled access are left out, never downloaded.
+//! ENA, the european nucleotide archive: the read files of the runs an accession names, with the
+//! MD5 and size ENA states. an accession names reads, not bytes, so a reference names one kind of
+//! file, FASTQ unless it says otherwise; runs under controlled access are left out.
 
 use std::collections::BTreeSet;
 use std::fmt;

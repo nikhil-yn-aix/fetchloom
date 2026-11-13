@@ -41,9 +41,8 @@ fn index(entries: &[&str]) -> Vec<u8> {
         .into_bytes()
 }
 
-/// a series' files are listed from its folder down, each by its path below the series' folder,
-/// in the order of the folders' index. NCBI's indexes round sizes, as `1.3M`, so a file's size is
-/// left for its download to tell.
+/// each by its path below the series' folder, in index order. NCBI's indexes round sizes, as
+/// `1.3M`, so a file's size is left for its download to tell.
 #[test]
 fn lists_a_series_files_from_its_folders_without_rounded_sizes() {
     let recorded = series();
@@ -171,7 +170,6 @@ fn a_refusal_or_a_failing_server_is_told_as_such() {
     assert_eq!(error.kind, Kind::NetworkStatus);
 }
 
-/// an index fetchloom cannot trust is refused for its reason, with help.
 #[test]
 fn an_index_that_cannot_be_trusted_says_why() {
     for (row, entries, reason) in [
@@ -209,7 +207,7 @@ fn an_index_that_cannot_be_trusted_says_why() {
     );
 }
 
-/// links to the folder above and to other sites are no entries, so they are never followed.
+/// so they are never followed.
 #[test]
 fn links_away_from_the_folder_are_not_entries() {
     let html = r#"<a href="/geo/series/GSE1nnn/">Parent Directory</a>
@@ -236,9 +234,8 @@ fn more_folders_than_a_listing_reads_are_refused() {
     assert_eq!(recorded.asked().len(), MOST_FOLDERS);
 }
 
-/// GEO's accessions and its pages: an accession's page on GEO's site, and its folder on NCBI's
-/// file server, whose folder inside it the link selects. a file's own link stays an ordinary
-/// link, and so do NCBI's other pages.
+/// an accession's page on GEO's site, and its folder on NCBI's file server, whose folder inside it
+/// the link selects. a file's own link stays an ordinary link, as do NCBI's other pages.
 #[test]
 fn accessions_and_pages_name_one_accession_and_other_forms_are_refused() {
     for (text, expected, select) in [

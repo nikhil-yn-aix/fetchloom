@@ -47,9 +47,8 @@ fn listed(reference: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(Reference::parse(reference)?.reference.resolve(recorded))
 }
 
-/// a snapshot's files, folder by folder, each query with the header openneuro asks for: files
-/// git-annex keeps with the digest their key states and their S3 link at the snapshot's
-/// version, files git keeps by their object, and no `DataLad` folder.
+/// folder by folder, each query with the header openneuro asks for, with their S3 link at the
+/// snapshot's version; files git keeps go by their object, and no `DataLad` folder is listed.
 #[test]
 fn a_snapshot_lists_its_files_with_the_digests_their_annex_keys_state() {
     let recorded = ds000001();
@@ -108,7 +107,7 @@ fn a_snapshot_lists_its_files_with_the_digests_their_annex_keys_state() {
     );
 }
 
-/// without a tag, the dataset's newest snapshot is asked for first, and pinned.
+/// asked for first when a reference names no tag.
 #[test]
 fn the_newest_snapshot_is_found_and_pinned() {
     let recorded = ds000001().fixture(&latest("ds000001"), "openneuro/latest.json");
@@ -120,8 +119,7 @@ fn the_newest_snapshot_is_found_and_pinned() {
     );
 }
 
-/// a key states the SHA-256 or the MD5 of its file for the backends that name bytes by one,
-/// with or without the extension an `E` backend adds, and its size. a chunk's key and other
+/// with or without the extension an `E` backend adds, and the size. a chunk's key and other
 /// backends state no digest, and anything else is no key.
 #[test]
 fn annex_keys_state_the_digest_of_their_backend() {
@@ -193,9 +191,8 @@ fn annex_keys_state_the_digest_of_their_backend() {
     );
 }
 
-/// a dataset openneuro does not have, one it keeps private, a snapshot the dataset does not
-/// have, and any other error openneuro gives are told in their own words, without the stack
-/// trace openneuro sends with them.
+/// a missing dataset, a private one, a missing snapshot and any other error, in openneuro's own
+/// words, without the stack trace it sends with them.
 #[test]
 fn what_openneuro_says_went_wrong_is_told_as_such() {
     let missing = listed(
@@ -247,9 +244,8 @@ fn what_openneuro_says_went_wrong_is_told_as_such() {
     );
 }
 
-/// an answer that names another snapshot, a file kept under no key, a key whose size differs
-/// from the listing's, a folder without a usable id, one listed inside itself and a name with
-/// a `/` are refused with why.
+/// another snapshot, a file under no key, a key whose size differs from the listing's, a folder
+/// without a usable id, one listed inside itself, and a name with a `/`.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     let answer = |tag: &str, files: &str| {
@@ -370,9 +366,8 @@ fn live_openneuro() {
     assert!(scan.url.as_str().contains("versionId="), "{}", scan.url);
 }
 
-/// selected folders are listed alone, with the folders on the way to them, when they hold every
-/// file wanted, and the listing names them. a folder the snapshot lacks has the whole snapshot
-/// listed instead, so a pattern that matches nothing is told against all it holds.
+/// with the folders on the way to them, when they hold every file wanted. a folder the snapshot
+/// lacks has the whole snapshot listed, so a pattern that matches nothing is told against it all.
 #[test]
 fn selected_folders_are_listed_without_the_rest() {
     let anat = [crate::glob::Glob::new("sub-01/anat/**").unwrap()];
@@ -425,9 +420,8 @@ fn paths(listing: &Listing) -> Vec<&str> {
         .collect()
 }
 
-/// a pattern with no folder in it, as `*.json`, needs the top folder alone, and one whose
-/// folders hold wildcards, as `sub-*/anat/*`, only the folders they match: no other folder is
-/// asked for, and the listing names what it covers.
+/// `*.json` needs the top folder alone and `sub-*/anat/*` only the folders it matches; the listing
+/// names what it covers.
 #[test]
 fn a_selection_lists_only_the_folders_its_patterns_can_reach() {
     let preflight = " apollo-require-preflight: true";

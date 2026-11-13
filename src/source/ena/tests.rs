@@ -287,7 +287,6 @@ fn a_report_that_does_not_match_its_count_is_refused() {
     }
 }
 
-/// a report fetchloom cannot trust is refused for its reason, with help.
 #[test]
 fn a_report_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);

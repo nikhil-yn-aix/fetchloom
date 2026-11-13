@@ -87,8 +87,7 @@ fn a_pinned_version_follows_each_page_of_its_assets() {
     );
 }
 
-/// a dandiset dandi never published is read at its draft, which can change, and the listing
-/// says so.
+/// since a draft can change.
 #[test]
 fn a_dandiset_never_published_is_read_at_its_draft_and_says_so() {
     let draft = "https://api.dandiarchive.org/api/dandisets/000012/versions/draft";
@@ -113,8 +112,7 @@ fn a_dandiset_never_published_is_read_at_its_draft_and_says_so() {
     );
 }
 
-/// a zarr asset is a folder of chunks with no bytes of its own, so it is listed as unavailable
-/// with why.
+/// a zarr asset is a folder of chunks with no bytes of its own.
 #[test]
 fn a_zarr_asset_is_listed_without_bytes_and_says_why() {
     let version = "https://api.dandiarchive.org/api/dandisets/000108/versions/draft";
@@ -177,8 +175,7 @@ fn an_embargoed_dandiset_is_refused_as_such() {
     }
 }
 
-/// a dandiset that does not exist, or a version it does not have, is unresolved, and the help
-/// says where to check.
+/// and the help says where to check.
 #[test]
 fn a_missing_dandiset_or_version_is_unresolved() {
     let missing = listed(
@@ -215,9 +212,8 @@ fn a_missing_dandiset_or_version_is_unresolved() {
     );
 }
 
-/// an answer that names another version, a page that leads off this version's listing or back
-/// to itself, and an asset that is neither a blob nor a zarr, or whose SHA-256 is no hex, are
-/// refused with why.
+/// an answer naming another version, a page leading off this version's listing or back to
+/// itself, and an asset neither a blob nor a zarr, or whose SHA-256 is no hex.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     let info = format!("{VERSION}/info/");

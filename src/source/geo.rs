@@ -1,8 +1,6 @@
-//! GEO, NCBI's gene expression omnibus: the files GEO keeps for a series, a sample or a platform,
-//! as the indexes of NCBI's file server list them over https, where `GEOquery` finds them too. NCBI
-//! states no hashes for these files, and its indexes round their sizes, so the lock's SHA-256 is
-//! all that names a file's bytes, and the size comes from the download. GEO remakes a series'
-//! SOFT, `MINiML` and matrix files from time to time, so a pin can stop matching them.
+//! GEO, NCBI's gene expression omnibus: the files of a series, a sample or a platform, as NCBI's
+//! file server indexes list them. NCBI states no hashes and rounds sizes, so the lock's SHA-256
+//! names the bytes; GEO remakes a series' SOFT, `MINiML` and matrix files, so a pin can go stale.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -58,9 +56,8 @@ impl Accession {
         valid.then_some(Accession { id })
     }
 
-    /// a pasted link to an accession's page on GEO's site, or to its folder on NCBI's file
-    /// server, and the folder inside it the link named, as `suppl`. a link to one file stays a
-    /// plain link.
+    /// a pasted link to an accession's page on GEO's site or its folder on NCBI's file server, and
+    /// the folder inside it the link named, as `suppl`. a link to one file stays a plain link.
     pub(super) fn from_link(url: &Url) -> Option<(Accession, Option<String>)> {
         match url.host_str()? {
             "www.ncbi.nlm.nih.gov" | "ncbi.nlm.nih.gov" if url.path() == "/geo/query/acc.cgi" => {
