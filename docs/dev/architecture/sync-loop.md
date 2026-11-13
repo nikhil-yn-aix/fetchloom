@@ -100,7 +100,7 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 
 `add` runs its own sync, `sync_add`: it relocks and downloads into the cache before it writes either file, so an add killed while it downloads leaves both as they were.
 
-## pinned download admission
+### pinned download admission
 
 before preparing downloads, `Loop::ask_room` sums what placing lacks, the archives it lacks and each archive of unknown files once more, against `space::free` on the cache's disk, and asks once; a yes there approves every later download's size too. each download batch checks its own part in `confirm`, and a download of unknown size checks when its length arrives. one whose length never arrives keeps what the disk had free when it started in its `Watch`, and `Watch::room` stops it at the first chunk that would pass it, before that chunk goes to the writer. before any of that asks, `space::cache_holds` refuses a pinned file the cache's disk cannot hold, as FAT32 holds no file of 4 GiB or more; a size only the server states is checked when its headers arrive, before any byte is written. every pinned download is validated before approval or transfer. pending pins retain one parsed URL and a small batch description; the full fetch and recovery values are reconstructed only when one of the `jobs * 2` scheduler slots admits the file. initial-host ordering, original result indexes, unknown-size approval, expired-link recovery and final batch publication share the download scheduler. retaining less data while large projects wait for their first responses bounds the memory cost of pending jobs.
 
@@ -124,7 +124,7 @@ before preparing downloads, `Loop::ask_room` sums what placing lacks, the archiv
 | [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
 | [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 
-fixed placement models cover every combination of force, writable mode and shared ownership across missing, untracked, changed, vouched and damaged observations. a separate 32-case model checks which unwanted records are removed, retained or forgotten.
+fixed placement models cover every combination of force, writable mode and shared ownership across missing, untracked, changed, vouched and damaged observations. a separate model checks which unwanted records are removed, retained or forgotten, over 64 combinations of six observations in a run of every dataset, of the record's dataset and of another one.
 
 ## related
 
