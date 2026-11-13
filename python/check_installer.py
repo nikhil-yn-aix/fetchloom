@@ -19,6 +19,8 @@ from ci_journey import ROOT, Journey, Server, check_version, digest, environment
 
 @contextlib.contextmanager
 def user_path():
+    """on windows, the registry key holding the user's Path and FETCHLOOM_INSTALL with both
+    values, which it puts back afterwards; elsewhere None."""
     if sys.platform != 'win32':
         yield None
         return
@@ -44,6 +46,7 @@ def user_path():
 
 
 def invalid_archive(target, version):
+    """a release archive for ``target`` whose program is text, which an installer must refuse."""
     folder = f'fetchloom-{version}-{target}'
     data = io.BytesIO()
     if 'windows' in target:
@@ -59,6 +62,10 @@ def invalid_archive(target, version):
 
 
 def check(args):
+    """run the installer ``args.shell`` names against a loopback copy of the release and return
+    the journey's proof: it installs the checked bytes, a run again changes nothing, a wrong
+    checksum, an empty SHA256SUMS or a broken archive leaves the install and profiles as they
+    were, and it adds the folder to PATH once."""
     import hashlib
     archive = args.dist / archive_name(args.target, args.version)
     body = archive.read_bytes()

@@ -16,6 +16,8 @@ from ci_journey import ROOT, check_version, digest, environment, require, wheel_
 
 
 def inspect_wheel(wheel, version, binary):
+    """refuse ``wheel`` unless it is fetchloom ``version`` for python 3.10 or later, with the typed
+    helper, the third-party licenses and ``binary`` as its one program."""
     with zipfile.ZipFile(wheel) as packed:
         metadata = [name for name in packed.namelist() if name.endswith('.dist-info/METADATA')]
         require(len(metadata) == 1, "wheel has no unique metadata")
@@ -32,6 +34,7 @@ def inspect_wheel(wheel, version, binary):
 
 
 def copy_helper_tests(destination):
+    """copy the helper's tests and their one support module, not the helper, into ``destination``."""
     for name in ['test_helper.py', 'wheel_scripts.py']:
         shutil.copyfile(ROOT / 'python' / name, destination / name)
 

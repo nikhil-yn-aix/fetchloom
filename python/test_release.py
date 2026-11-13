@@ -74,6 +74,22 @@ class ReleaseChecks(unittest.TestCase):
     def test_malformed_checksum_rows_are_refused(self):
         self.check_all(lambda assets, names, lines: lines.append("not a checksum"), False)
 
+    @unittest.skipIf(sys.platform == "win32", "makes a symlink")
+    def test_a_package_that_is_a_link_is_refused(self):
+        def link(assets, names, lines):
+            # the same bytes, so only the link itself is wrong
+            target = assets.parent / f"{assets.name}-elsewhere"
+            target.write_bytes((assets / names[0]).read_bytes())
+            self.addCleanup(target.unlink)
+            (assets / names[0]).unlink()
+            (assets / names[0]).symlink_to(target)
+
+        for workflow, suffix, count in WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                result = self.run_check(workflow, suffix, count, link)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, f"release verification failed: fetchloom-0{suffix} is not a regular package file\n")
+
 
 class ReleaseChecksums(unittest.TestCase):
     def test_sha256sums_lists_every_kind_of_release_file(self):

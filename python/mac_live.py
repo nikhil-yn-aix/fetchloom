@@ -11,6 +11,7 @@ from ci_journey import environment, remove_tree, require
 
 
 def check(binary):
+    """add, restore and get a public dataset with ``binary``, and search every site."""
     with tempfile.TemporaryDirectory(prefix='fetchloom-live-', dir=os.environ.get('RUNNER_TEMP')) as folder:
         root = Path(folder)
         home, project = root / 'home', root / 'project'

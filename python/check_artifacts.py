@@ -24,6 +24,7 @@ def archive_name(target, version):
 
 
 def stages(target):
+    """the checks ``target``'s job runs, each leaving a proof of its own."""
     expected = {"archive", "wheel-current"}
     if target in {"x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"}:
         expected.add("wheel-minimum")
@@ -39,6 +40,9 @@ def stages(target):
 
 
 def inventory(folder, proofs, version, commit):
+    """each release asset in ``folder`` with its SHA-256, refused unless each target's proof lists
+    exactly its own packages, all its checks passed on one executable of ``version`` and
+    ``commit``, and the source package passed too."""
     documents = [json.loads(path.read_text(encoding="utf-8")) for path in proofs.rglob("verified.json")]
     names = [document["target"] for document in documents]
     require(len(names) == len(set(names)) and set(names) == set(TARGETS), f"target inventory differs: {sorted(names)}")
@@ -86,6 +90,7 @@ def inventory(folder, proofs, version, commit):
 
 
 def record(folder, proof_dir, target, version, commit):
+    """write ``proof_dir``/verified.json from each check's proof and the packages in ``folder``."""
     checks = {}
     for name in sorted(stages(target)):
         path = proof_dir / f"{name}.json"

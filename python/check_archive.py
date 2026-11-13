@@ -11,9 +11,13 @@ from ci_journey import ROOT, digest, require
 # the files every archive carries beside the executable, each with where the checkout has it
 SHIPPED = {"LICENSE": "LICENSE", "NOTICE": "NOTICE", "README.md": "README.md",
            "THIRD-PARTY-LICENSES": "THIRD-PARTY-LICENSES", "fetchloom.1": "docs/man/fetchloom.1"}
+# a release file this size or larger is refused unread
+LARGEST = 256 * 1024 * 1024
 
 
 def unpack(archive, target, version, destination):
+    """write ``archive``'s release files into ``destination`` and return its program, refused for
+    any other entry, a link, a file twice or of ``LARGEST`` bytes, or a file missing."""
     program = "fetchloom.exe" if "windows" in target else "fetchloom"
     folder = f"fetchloom-{version}-{target}"
     expected = {f"{folder}/{name}" for name in [program, *SHIPPED]}
@@ -26,7 +30,7 @@ def unpack(archive, target, version, destination):
                     require(member.filename.rstrip("/") == folder, "unexpected archive directory")
                     continue
                 require(member.filename in expected and member.filename not in files, "unexpected or duplicate archive entry")
-                require(member.file_size < 256 * 1024 * 1024, "oversized release file")
+                require(member.file_size < LARGEST, "oversized release file")
                 files[member.filename] = packed.read(member)
     else:
         with tarfile.open(archive, "r:gz") as packed:
@@ -35,7 +39,7 @@ def unpack(archive, target, version, destination):
                     require(member.name.rstrip("/") == folder, "unexpected archive directory")
                     continue
                 require(member.isfile() and member.name in expected and member.name not in files, "unexpected or duplicate archive entry")
-                require(member.size < 256 * 1024 * 1024, "oversized release file")
+                require(member.size < LARGEST, "oversized release file")
                 if member.name.endswith("/fetchloom"):
                     require(member.mode & 0o111 != 0, "archive lost executable permissions")
                 files[member.name] = packed.extractfile(member).read()
@@ -48,6 +52,7 @@ def unpack(archive, target, version, destination):
 
 
 def check_machine(binary, target):
+    """refuse ``binary`` unless its header is an executable for ``target``'s system and processor."""
     body = binary.read_bytes()
     arm = target.startswith("aarch64")
     if "linux" in target:

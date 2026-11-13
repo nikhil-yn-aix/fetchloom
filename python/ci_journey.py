@@ -48,6 +48,9 @@ def wheel_version(version):
 
 
 def environment(home, cache=None, origin=None):
+    """this environment without credentials, proxies, python paths or the user's caches and
+    settings, ``home`` as every home folder and loopback reached directly; ``cache`` is
+    fetchloom's cache and ``origin`` the one origin it may download from."""
     env = {name: value for name, value in os.environ.items()
            if not name.upper().startswith(("FETCHLOOM_", "AWS_", "HF_", "KAGGLE_", "DATAVERSE_", "ONEDRIVE"))
            and not name.upper().endswith(("_TOKEN", "_PROXY"))
@@ -62,6 +65,8 @@ def environment(home, cache=None, origin=None):
 
 
 def check_version(binary, version, env=None, commit=None, cwd=None):
+    """refuse ``binary`` unless ``--version`` says ``version``, and ``-v`` names ``commit`` when
+    given; ``binary`` may be a command, as ``python -I -m fetchloom``."""
     command = [str(part) for part in binary] if isinstance(binary, (list, tuple)) else [str(binary)]
     said = subprocess.check_output([*command, "--version", *(["-v"] if commit else [])], env=env, cwd=cwd,
                                    text=True, timeout=20)
@@ -72,6 +77,7 @@ def check_version(binary, version, env=None, commit=None, cwd=None):
 
 
 def remove_tree(path):
+    """delete ``path`` and all in it, read-only files too, which windows refuses to delete."""
     def writable(function, name, error):
         os.chmod(name, stat.S_IWRITE | stat.S_IREAD)
         function(name)
@@ -80,6 +86,9 @@ def remove_tree(path):
 
 
 class Server:
+    """a loopback http server answering HEAD and GET for the paths in ``bodies``, keeping each
+    request."""
+
     def __init__(self, bodies):
         self.bodies = dict(bodies)
         self.requests = []
@@ -120,7 +129,8 @@ class Server:
         # in every new process on the mac runners
         self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # shutdown waits out one poll, which is half a second by default
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def __enter__(self):
@@ -142,6 +152,8 @@ class Server:
 
 
 class Journey:
+    """fetchloom's main path, run with the installed ``binary`` in a home and cache of its own."""
+
     def __init__(self, binary, root, server):
         self.binary = Path(binary).resolve()
         self.root = root
@@ -157,6 +169,7 @@ class Journey:
         return path
 
     def run(self, project, *arguments, success=True, cache=None):
+        """fetchloom's JSON answer in ``project``, refused unless it ended as ``success`` says."""
         env = dict(self.env)
         if cache is not None:
             env["FETCHLOOM_CACHE"] = str(cache)
@@ -191,6 +204,9 @@ class Journey:
         return clone
 
     def check(self, version, commit=None, helper=False):
+        """add, restore offline from the shared cache, keep an edit, refuse corrupt bytes and
+        unpack an archive, then return the proof check_artifacts.py records; ``helper`` restores
+        through the installed python helper."""
         require(hashlib.sha256(DATA).hexdigest() == DIGEST, "the independent fixture hash is wrong")
         check_version(self.binary, version, self.env, commit)
         project = self.project("original")
@@ -255,6 +271,7 @@ class Journey:
 
 
 def fixtures():
+    """the files the loopback server holds: the csv and a zip of two files."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("bundle/train.txt", b"archive fixture\n")
@@ -263,6 +280,8 @@ def fixtures():
 
 
 def helper_worker(project, binary):
+    """inside the installed wheel: the helper must run ``binary`` and sync, find and refuse as its
+    documentation says."""
     import fetchloom
     require(Path(fetchloom.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), "source tree shadowed the installed helper")
     require(Path(fetchloom._program()).resolve() == binary.resolve(), "the helper selected another executable")

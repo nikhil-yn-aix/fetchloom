@@ -77,6 +77,34 @@ class WheelScripts(unittest.TestCase):
             self.assertEqual(wheel.namelist()[-1], f"{DIST_INFO}/RECORD")
         self.assertEqual([path.name for path in (self.root / "dist").iterdir()], [self.wheel.name])
 
+    def test_a_wheel_without_a_record_listing_itself_is_left_alone(self):
+        record = f"{DIST_INFO}/RECORD"
+        for case, said in [
+            ("no record", f"{self.wheel.name} has no single .dist-info/RECORD"),
+            ("unlisted record", f"{record} does not list itself"),
+            ("not a zip", "File is not a zip file"),
+        ]:
+            with self.subTest(case):
+                self.build()
+                if case == "not a zip":
+                    self.wheel.write_bytes(b"not a wheel")
+                else:
+                    with zipfile.ZipFile(self.wheel) as wheel:
+                        members = [(info, wheel.read(info)) for info in wheel.infolist()]
+                    with zipfile.ZipFile(self.wheel, "w") as wheel:
+                        for info, data in members:
+                            if info.filename == record and case == "unlisted record":
+                                wheel.writestr(info, data.replace(f"{record},,\n".encode(), b""))
+                            elif info.filename != record:
+                                wheel.writestr(info, data)
+                before = self.wheel.read_bytes()
+                result = self.run_step()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, f"adding scripts failed: {said}\n")
+                self.assertEqual(self.wheel.read_bytes(), before)
+                # the half-written copy is gone too
+                self.assertEqual([path.name for path in (self.root / "dist").iterdir()], [self.wheel.name])
+
     def test_a_wheel_that_already_has_entry_points_is_left_alone(self):
         self.build({f"{DIST_INFO}/entry_points.txt": (b"[console_scripts]\nother=other:main\n", 0o644)})
         before = self.wheel.read_bytes()

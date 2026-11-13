@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 def check_release(folder: Path, suffix: str, count: int) -> None:
+    """raise ValueError unless SHA256SUMS in ``folder`` lists ``count`` packages ending in
+    ``suffix``, each downloaded as a regular file with that SHA-256, and no other."""
     entries = {}
     for number, line in enumerate((folder / "SHA256SUMS").read_text(encoding="utf-8").splitlines(), 1):
         match = re.fullmatch(r"([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9._+-]*)", line)
