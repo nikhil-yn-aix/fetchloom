@@ -91,9 +91,8 @@ fn a_proxy_on_this_machine_carries_a_host_that_was_typed() -> Result {
     Ok(())
 }
 
-/// a link typed over http to a site that sends it on to https, as most sites do, is followed:
-/// the https origin is another origin, which nobody trusted, and so may reach any public
-/// address. a scripted proxy stands in for the site, which answers the tunnel with 502.
+/// most sites send http on to https, an origin nobody trusted and so free to reach any public
+/// address. a scripted proxy stands in for the site and answers the tunnel with 502.
 #[test]
 fn a_typed_http_link_follows_its_site_to_https() -> Result {
     let sandbox = Sandbox::new()?;
@@ -139,9 +138,8 @@ fn a_typed_http_link_follows_its_site_to_https() -> Result {
     Ok(())
 }
 
-/// a proxy that wants a login answers 407, to a tunnel for https and to a plain http request
-/// alike. fetchloom names the proxy rather than the site, and stops there: another try gets no
-/// further, and the help says what each kind of login needs.
+/// a 407 answers an https tunnel and a plain http request alike; the error names the proxy, not
+/// the site, a retry would get no further, and the help fits each kind of login.
 #[test]
 fn a_proxy_that_wants_a_login_is_named_and_asked_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -194,9 +192,8 @@ fn a_proxy_that_wants_a_login_is_named_and_asked_once() -> Result {
     Ok(())
 }
 
-/// a proxy setting fetchloom cannot read is refused before any request, naming the variable.
-/// passing over it, as the HTTP stack would, sends every request around the proxy, and a login
-/// in it is never shown.
+/// passing over the setting, as the HTTP stack would, sends every request around the proxy; the
+/// error names the variable and never shows a login in it.
 #[test]
 fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -241,9 +238,8 @@ fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
     Ok(())
 }
 
-/// a proxy nothing answers at, as when the variable names a closed port, is named with the
-/// variable it came from, and the run stops at the first try: no retry reaches a proxy that is
-/// down, and the site behind it is not blamed.
+/// the error names the variable it came from and blames no site, and no retry follows, since none
+/// reaches a proxy that is down.
 #[test]
 fn a_proxy_that_cannot_be_reached_is_named_and_not_tried_again() -> Result {
     let sandbox = Sandbox::new()?;

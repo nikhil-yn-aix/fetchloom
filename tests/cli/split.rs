@@ -43,7 +43,7 @@ fn a_slow_large_download_splits_across_streams() -> Result {
         }
         Ok(server.most() >= 2 && !server.parts().is_empty())
     });
-    // only the adaptive handover needs a slow stream; verify the remaining bytes at full speed.
+    // only the split needs a slow stream, so the rest of the bytes come at full speed
     server.pace(0);
     let output = child.wait_with_output()?;
     split?;
@@ -180,8 +180,7 @@ fn kept(sandbox: &Sandbox) -> Option<(u64, Vec<(u64, u64)>)> {
     (!joined.is_empty()).then_some((prefix, joined))
 }
 
-/// the bytes a request's `Range` asks for: where they start, and where they end unless they run
-/// to the end of the file.
+/// where a request's `Range` starts, and where it ends unless it runs to the end of the file.
 fn asked(head: &str) -> Option<(u64, Option<u64>)> {
     let range = head
         .lines()
@@ -202,9 +201,8 @@ fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
     )
 }
 
-/// a cut download whose tag cannot prove its version starts over whole through the binary.
-/// `net::headers::tests::malformed_entity_tags_cannot_prove_a_version` holds every malformed tag;
-/// an unquoted one and a weak one stand for them here.
+/// a cut download whose tag cannot prove its version starts over whole, here for an unquoted and
+/// a weak tag; `net::headers::tests::malformed_entity_tags_cannot_prove_a_version` holds the rest.
 #[test]
 fn malformed_tags_cannot_splice_versions() -> Result {
     for tag in ["v1", "w/\"v1\""] {
