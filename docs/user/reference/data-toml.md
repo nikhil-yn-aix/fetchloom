@@ -125,7 +125,7 @@ an edited file stays, with the warning a removed dataset's edit gets. `status` a
 
 ## recipes
 
-a recipe makes a dataset from others with a command of yours. [recipes](../recipes.md) explains how fetchloom keys and checks them; this section lists the rules data.toml follows.
+a recipe makes a dataset from others with a command of yours; [recipes](../recipes.md) says how fetchloom keys and checks them, and data.toml takes these rules.
 
 ```toml
 [datasets.clean]

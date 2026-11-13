@@ -1,6 +1,6 @@
 # clusters and shared machines
 
-this page is for a cluster or a shared server: a small home folder, a large scratch disk, and jobs that run on other machines.
+a cluster or a shared server has a small home folder, a large scratch disk and jobs that run on other machines, often without the internet. keep each project and its cache on one drive, and prepare data on a login node for the jobs.
 
 ## keep the project and the cache on one drive
 

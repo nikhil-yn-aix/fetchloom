@@ -109,7 +109,7 @@ each value comes from the first of these that sets it: its variable, the setting
 
 ## credentials
 
-fetchloom reads each source's key where the source's own tools keep it, so a key made for them works here too. [signing in](../signing-in.md) is the place to start; this section gives the order fetchloom looks in. the first match wins; empty values and blank files are skipped.
+fetchloom reads each source's key where the source's own tools keep it, so a key made for them works here too. [signing in](../signing-in.md) says how to sign in; the table gives the order fetchloom looks in. the first match wins; empty values and blank files are skipped.
 
 | account | where fetchloom looks, in order |
 |---|---|
