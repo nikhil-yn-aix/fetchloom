@@ -1,5 +1,7 @@
 # fetchloom
 
+[![ci](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nikhil-yn-aix/fetchloom/actions/workflows/ci.yml?query=branch%3Amain) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE)
+
 fetchloom is uv for research data. `fetchloom add` pins the files of a dataset by SHA-256 in your project, one shared cache keeps each file once, and `fetchloom sync` puts the same bytes in `data/` on every machine that clones the project. it runs on windows, linux and macos, on x86_64 and arm64.
 
 ```text
@@ -13,9 +15,9 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
-`data.toml` lists the datasets you want, and `data.lock` pins their exact files, each with its SHA-256 and size. commit both, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock. `fetchloom add iris` finds a dataset by name on hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro, and `fetchloom get <link>` downloads once, without a project.
+commit `data.toml`, the datasets you want, and `data.lock`, their exact files with each one's SHA-256 and size. leave `data/` out; in a git repository, `add` and `sync` put it in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
 
-it reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md) shows how to write each, and [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) covers private data.
+`fetchloom add iris` looks the name up on hugging face, kaggle, zenodo, GEO and openneuro, and `fetchloom get <link>` downloads once, without a project. fetchloom reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md) shows how to write each, and [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) covers private data.
 
 ## install
 
@@ -68,7 +70,7 @@ learn more: `fetchloom --help` lists the commands;
 `fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
 ```
 
-that is what bare `fetchloom` prints outside a project, after its version line. inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md#python-helper).
+bare `fetchloom` prints this outside a project, after its version line; inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md#python-helper).
 
 ## docs
 
@@ -80,6 +82,7 @@ that is what bare `fetchloom` prints outside a project, after its version line. 
 | use a supported site, or sign in for private data | [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md), [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) |
 | fix a failed download or a local conflict | [troubleshooting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/troubleshooting.md) |
 | every other topic: scripts, CI, clusters, agents, windows, macos | [user guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/README.md) |
+| see what changed in each release | [changelog](https://github.com/nikhil-yn-aix/fetchloom/blob/main/CHANGELOG.md) |
 | work on the code | [developer guide](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/dev/README.md) |
 
 ## license
