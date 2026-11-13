@@ -2,8 +2,9 @@
 
 each function runs ``fetchloom --json --progress`` and returns its answer, or raises
 :class:`Error` with the kind and message of the JSON error. the kinds and their exit codes are
-listed in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md. the
-progress lines a long download prints go to ``sys.stderr`` as they come.
+listed in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/exit-codes.md,
+and the helpers in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
+the progress lines a long download prints go to ``sys.stderr`` as they come.
 """
 
 import collections
