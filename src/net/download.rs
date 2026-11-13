@@ -999,6 +999,9 @@ impl Net {
                 .map(|next| Err(Instead::Divert(next)))
                 .map_err(Failure::Final);
         }
+        if let Some(error) = super::site::sign_in_page(&response, &fetch.url, fetch.page) {
+            return Err(Failure::Final(error));
+        }
         if let Some(expired) = fetch.expired
             && matches!(status, StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST)
             && headers::is_xml(response.headers())
@@ -1014,6 +1017,11 @@ impl Net {
                 )));
             }
             return Err(failure::refusal(from, status, &head));
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && let Some(error) = self.refused(from, response.url(), status, response.headers())
+        {
+            return Err(Failure::Final(error));
         }
         Ok(Ok(response))
     }

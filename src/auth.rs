@@ -69,6 +69,9 @@ pub(crate) struct Need {
     /// the page that shows the name asked, from a source that answers alike for a name that
     /// does not exist, so the name may be wrong rather than the account missing.
     pub(crate) maybe_missing: Option<String>,
+    /// a website whose refusal named no way in, so the person picks one: a browser's cookies,
+    /// a cookies.txt file, a token, a header or a username and password.
+    pub(crate) site: bool,
 }
 
 /// the kind of secret an account takes.
@@ -200,9 +203,11 @@ impl Account {
             },
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
-            other if other.contains('.') && one_word(other) && !other.contains(['/', '\\', ':', '@', '?', '#', '%'])
+            // a login for another port than 443 names it, as a website's own key does
+            other if (other.contains('.') || other.split(':').next() == Some("localhost"))
+                && one_word(other) && !other.contains(['/', '\\', '@', '?', '#', '%'])
                 && dataverse_host(other).is_some() => {
-                Account::Login(other.to_owned())
+                Account::Login(dataverse_host(other).unwrap_or_else(|| other.to_owned()))
             }
             _ => {
                 if let Some(cloud) = cloud_sign_in(&lowered) {

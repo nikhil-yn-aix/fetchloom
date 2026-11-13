@@ -47,6 +47,14 @@ a session is what a site keeps of your sign-in in your browser, so whatever the 
 
 `--header` takes a header a key can travel in, such as `X-API-Key` or `Authorization`. it refuses the headers that frame a request or belong to one connection, such as `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, and those fetchloom sets itself to resume and check downloads, such as `Range`.
 
+### what still cannot work
+
+- a site that hands out a file only through javascript, such as a button whose script builds the link: fetchloom runs no page's scripts, so it never sees the link. click it in your browser, copy the address the download came from, and give fetchloom that link, with the site's cookies saved when it wants them.
+- an oauth "allow" window, where a site asks whether an app may use your account: only a service that registered an app with that site can show one, as fetchloom has with none. sign in with what the site hands you instead, a token, a key or your browser's session.
+- a session the site ties to the browser it began in, by its address or a key the browser holds: its cookies are refused anywhere else, so use a token from the site's settings where it offers one.
+- chrome, edge and the other chromium browsers on windows seal their cookies so that only the browser itself can open them, which chrome calls app-bound encryption, since chrome 127. export the cookies with a browser extension and use `--cookies`, or sign in with firefox.
+- chromium browsers on linux whose key is kept only in kwallet, and safari, are not read. export the cookies with an extension and use `--cookies`.
+
 ## private buckets and folders
 
 a cloud store takes the keys its own tools keep, and fetchloom offers them only to the buckets, containers and folders you list in the [settings file](reference/environment.md#settings-file), so a project you clone cannot make fetchloom hand your keys to a bucket of its choosing:
@@ -71,12 +79,14 @@ each request goes without a key first, so a public bucket never sees one, and th
 
 at a terminal, a command refused for want of an account offers to sign in, then tries once more. a key that went with the request and was refused, as an old `HF_TOKEN`, is named by where it comes from, never by its value. [auth](commands/auth.md#when-a-download-is-refused) shows both.
 
+a website with nothing saved for it that answers 401 or 403 gets the same offer for its host and port. its help names `fetchloom auth login <host>` with the ways a site lets you in, and at a terminal you choose one: a browser's cookies, a cookies.txt file, a token, a header or a username and password. a site whose answer asks for a username and password, as a basic challenge does, is asked for those alone, and one that asks for a token, as a bearer challenge does, has its help name `--token`. once something is saved for the host, a 401 or 403 says what was refused and that it may have expired, and so does a web page where a file was expected, as a site sends its sign-in page once a session ends; both give the command that saves a new one. a page you asked for with `--web-page`, or one at a link ending in `.html`, is the data rather than a sign-in page.
+
 in a script or CI there is nobody to ask: set the source's variable from the CI system's secrets, as [CI](ci.md#keys) says, or pipe the key to `fetchloom auth login <account> --with-token`, as [auth](commands/auth.md#scripts-and-ci) shows.
 
 ## where a key goes
 
 a key goes over https, to its own host on port 443, and never after a redirect leaves that host. plain http would show it to every network on the way, so a key goes over plain http only to this machine, `localhost` or a loopback address, or to an origin the `allowed_origins` setting lists, such as a lab server on a network you trust; that holds for a `.netrc` login too, and a link to any other plain http host goes without one. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, which earthdata needs: its archives send you to `urs.earthdata.nasa.gov` to sign in. an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are. a semantic scholar key goes to `api.semanticscholar.org` only, never to the links on S3 it gives for dataset files.
 
-a website's token, header or cookies go to its own host and port alone, and only while a request stays on the origin it started on: once a redirect leaves it, no later hop gets it, not even one back on the same host. data.toml and data.lock can never add a host, a header, a token or a cookie, since a cloned project could point them anywhere: every key comes from you, through `auth login`, a variable or the settings file.
+a website's token, header or cookies go to its own host and port alone, and only while a request stays on the origin it started on: once a redirect leaves it, no later hop gets it, not even one back on the same host. a site that refuses a plain http link where no key may go is told so, `fetchloom sends a key over plain http only to this machine or to an origin allowed_origins lists`, rather than offered a sign-in that could not help. data.toml and data.lock can never add a host, a header, a token or a cookie, since a cloned project could point them anywhere: every key comes from you, through `auth login`, a variable or the settings file.
 
 no key appears in data.toml, data.lock, the cache, logs or `--json` output. wherever a link is shown, its query and fragment values are masked unless their names are known to be harmless, such as `dl` or `version`, and recognized secrets, such as `token=`, are refused in a project's references. a key holding a character no request can carry, such as a line break, is left out of every request, and [`fetchloom auth`](commands/auth.md#status) warns about it.

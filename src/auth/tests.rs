@@ -413,6 +413,18 @@ fn names_people_type_find_their_account() {
         Account::Login("data.example.edu".into())
     );
     assert_eq!(
+        parse("Lab.Example.edu:8443"),
+        Account::Login("lab.example.edu:8443".into())
+    );
+    assert_eq!(
+        parse("lab.example.edu:443"),
+        Account::Login("lab.example.edu".into())
+    );
+    assert_eq!(
+        parse("localhost:8080"),
+        Account::Login("localhost:8080".into())
+    );
+    assert_eq!(
         parse("dataverse"),
         Account::Dataverse("dataverse.harvard.edu".into())
     );

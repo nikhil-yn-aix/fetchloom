@@ -1152,7 +1152,7 @@ impl<'a> Loop<'a> {
             urls,
             |index, url| {
                 let (dataset, file) = &files[index];
-                make_job(lock, dataset, file, &url)
+                make_job(lock, dataset, file, &url, asks_page(manifest, dataset))
             },
         )
         .await
@@ -1830,7 +1830,22 @@ fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String
 /// at the version the lock pins.
 fn job(manifest: &Manifest, lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
     let url = source_link(manifest, dataset, file)?;
-    Ok(make_job(lock, dataset, file, &url))
+    Ok(make_job(
+        lock,
+        dataset,
+        file,
+        &url,
+        asks_page(manifest, dataset),
+    ))
+}
+
+/// whether data.toml asks for the web page the link of `dataset` answers with.
+fn asks_page(manifest: &Manifest, dataset: &str) -> bool {
+    manifest
+        .datasets
+        .get(dataset)
+        .and_then(|entry| entry.source())
+        .is_some_and(|source| source.web_page)
 }
 
 /// where to download `file` of `dataset` from: the link data.lock pins. an import pins none,
@@ -1846,7 +1861,7 @@ fn source_link(manifest: &Manifest, dataset: &str, file: &LockedFile) -> Result<
     draft::link(dataset, file)
 }
 
-fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url) -> Job {
+fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool) -> Job {
     let pinned = lock.get(dataset);
 
     Job {
@@ -1858,6 +1873,7 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url) -> Job {
             },
             revalidate: false,
             unpack: false,
+            page,
             ..source::fetch_plan(url)
         },
         label: format!("{dataset}/{}", file.path),
@@ -2103,7 +2119,7 @@ mod tests {
                 url: url.to_string(),
                 unpacks_to: None,
             };
-            let mut job = make_job(&Lock::default(), "a", &file, &url);
+            let mut job = make_job(&Lock::default(), "a", &file, &url, false);
             job.fetch.expect.size = size;
             job.fetch.unpack = unpack;
             job

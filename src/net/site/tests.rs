@@ -324,3 +324,170 @@ fn a_refusal_names_what_was_saved_and_how_to_save_it_again() {
     );
     assert!(mark("https://elsewhere.lab/file").is_none());
 }
+
+/// a web page where a file was expected, once a saved credential went, is the site's sign-in
+/// page, unless the person asked for a page or the link names one.
+#[test]
+fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
+    let net = net(vec![
+        token("data.lab", "t-1"),
+        Site::new(
+            "old.lab",
+            Vec::new(),
+            vec![cookie(
+                "session",
+                "/",
+                true,
+                Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+            )],
+            "the cookies".to_owned(),
+            "run `fetchloom auth login old.lab --browser firefox`".to_owned(),
+        )
+        .unwrap(),
+    ]);
+    let answer = |link: &str, kind: &str, asked: bool| {
+        let link = Url::parse(link).unwrap();
+        let mut response = reqwest::Response::from(
+            http::Response::builder()
+                .header(header::CONTENT_TYPE, kind)
+                .body(Vec::<u8>::new())
+                .unwrap(),
+        );
+        net.mark_site(&mut response, &link, true, &mut None);
+        sign_in_page(&response, &link, asked)
+    };
+    let error = answer(
+        "https://data.lab/files/1",
+        "text/html; charset=utf-8",
+        false,
+    )
+    .unwrap();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "data.lab sent a web page, such as its sign-in page, where a file was expected, so the token saved for it may have expired"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "sign in again with `fetchloom auth login data.lab --token`, then run the same command again. if the page itself is the data, ask for it with --web-page, or web_page = true in data.toml"
+        )
+    );
+    assert_eq!(
+        answer("https://old.lab/a.csv", "text/html", false)
+            .unwrap()
+            .message,
+        "old.lab sent a web page, such as its sign-in page, where a file was expected, and the cookies saved for it have expired"
+    );
+    for (link, kind, asked) in [
+        ("https://data.lab/files/1", "text/html", true),
+        ("https://data.lab/report.HTML", "text/html", false),
+        ("https://data.lab/files/1", "text/csv", false),
+        ("https://elsewhere.lab/files/1", "text/html", false),
+    ] {
+        assert!(answer(link, kind, asked).is_none(), "{link} {kind} {asked}");
+    }
+}
+
+/// a website's 401 or 403, with no key of its own sent, offers a sign-in for its host and port:
+/// the login a basic challenge asks for, a token for a bearer one, else the person's choice.
+/// over plain http, only where a key could go.
+#[test]
+fn a_websites_refusal_offers_a_sign_in_where_a_key_could_go() {
+    let allowed = Allowed {
+        origins: vec![Url::parse("http://lab.example:8080").unwrap().origin()],
+        ..Allowed::default()
+    };
+    let net = net(Vec::new()).with_allowed_origins(allowed);
+    let asking = |scheme: &str| {
+        let mut headers = HeaderMap::new();
+        if !scheme.is_empty() {
+            let value = format!("{scheme} realm=\"lab\"");
+            headers.insert(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_str(&value).unwrap(),
+            );
+        }
+        headers
+    };
+    let refused = |asked: &str, url: &str, scheme: &str| {
+        let (asked, url) = (Url::parse(asked).unwrap(), Url::parse(url).unwrap());
+        net.refused(&asked, &url, StatusCode::FORBIDDEN, &asking(scheme))
+    };
+    let choices = |host: &str| {
+        format!(
+            "if it needs a sign-in, save it with `fetchloom auth login {host}` and --browser <name> to take the cookies of a browser signed in there, --cookies <file>, --token or --header <name>, then run the same command again"
+        )
+    };
+    for (url, scheme, help, host, site) in [
+        (
+            "https://data.example.org/a.csv",
+            "",
+            choices("data.example.org"),
+            "data.example.org",
+            true,
+        ),
+        (
+            "https://api.example.org/a.csv",
+            "Bearer",
+            "if it needs a token, save it with `fetchloom auth login api.example.org --token`, then run the same command again".to_owned(),
+            "api.example.org",
+            true,
+        ),
+        (
+            "https://data.example.org:8443/a.csv",
+            "basic",
+            "if it needs a login, sign in with `fetchloom auth login data.example.org:8443`, then run the same command again".to_owned(),
+            "data.example.org:8443",
+            false,
+        ),
+        (
+            "http://127.0.0.1:8080/a.csv",
+            "",
+            choices("127.0.0.1:8080"),
+            "127.0.0.1:8080",
+            true,
+        ),
+        (
+            "http://lab.example:8080/a.csv",
+            "",
+            choices("lab.example:8080"),
+            "lab.example:8080",
+            true,
+        ),
+    ] {
+        let error = refused(url, url, scheme).unwrap();
+        assert_eq!(error.kind, Kind::AuthRequired, "{url}");
+        assert_eq!(error.help.as_deref(), Some(help.as_str()), "{url}");
+        let need = error.need.unwrap();
+        assert_eq!(need.account, Account::Login(host.to_owned()), "{url}");
+        assert_eq!(need.site, site, "{url}");
+    }
+    let plain = refused(
+        "http://data.example.org/a.csv",
+        "http://data.example.org/a.csv",
+        "Basic",
+    )
+    .unwrap();
+    assert_eq!(
+        plain.help.as_deref(),
+        Some(
+            "fetchloom sends a key over plain http only to this machine or to an origin allowed_origins lists, since anyone on the way could read it there: ask the site for an https link"
+        )
+    );
+    assert!(plain.need.is_none());
+    // a website's own key never follows a redirect, while a .netrc login answers wherever its
+    // host is reached
+    assert!(refused("https://a.example.org/x", "https://b.example.org/x", "").is_none());
+    let login = refused(
+        "https://a.example.org/x",
+        "https://b.example.org/x",
+        "Basic",
+    )
+    .unwrap();
+    assert_eq!(
+        login.need.unwrap().account,
+        Account::Login("b.example.org".to_owned())
+    );
+    assert!(refused("https://zenodo.org/x", "https://zenodo.org/x", "").is_none());
+}

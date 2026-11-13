@@ -202,6 +202,19 @@ impl Error {
             account,
             terms,
             maybe_missing: None,
+            site: false,
+        }));
+        self
+    }
+
+    /// marks the error as a refusal from the website `host`, with its port when that is not
+    /// 443, which a sign-in of the person's choosing could lift.
+    pub(crate) fn needs_site(mut self, host: String) -> Error {
+        self.need = Some(Box::new(crate::auth::Need {
+            account: crate::auth::Account::Login(host),
+            terms: None,
+            maybe_missing: None,
+            site: true,
         }));
         self
     }
@@ -213,6 +226,7 @@ impl Error {
             account,
             terms: None,
             maybe_missing: Some(page),
+            site: false,
         }));
         self.unseen()
     }

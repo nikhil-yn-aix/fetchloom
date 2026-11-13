@@ -132,6 +132,71 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
     })
 }
 
+/// the ways a website may let a person in, as a refusal's sign-in offers them: the word a
+/// picker shows first, then what it means.
+const WAYS: [(&str, &str); 5] = [
+    ("browser", "the cookies of a browser signed in there"),
+    ("cookies", "a cookies.txt file a browser extension saved"),
+    ("token", "a token the site gave you"),
+    ("header", "a key the site sends in a header of its own"),
+    ("login", "a username and password"),
+];
+
+/// asks a person at the terminal how they sign in to the website `account` names, after it
+/// refused a request without naming a way in, then signs them in that way. false when they
+/// would rather not, or nobody can be asked.
+pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result<bool, Error> {
+    let Account::Login(host) = account else {
+        return Ok(false);
+    };
+    let output = &context.output;
+    let ways = WAYS.map(|(word, meaning)| format!("{word:<7}  {meaning}"));
+    let chosen = match output.choose(&format!("sign in to {host} with"), &ways, "") {
+        Err(error) if error.kind == Kind::Interrupted => return Err(error),
+        Err(_) => None,
+        Ok(chosen) => chosen,
+    };
+    let mut login = Login {
+        account: host.clone(),
+        ..Login::default()
+    };
+    let typed = |prompt: &str, hint: &str| -> Result<Option<String>, Error> {
+        output.item(hint);
+        Ok(output
+            .ask_text(prompt, false)?
+            .filter(|text| !text.is_empty()))
+    };
+    match chosen {
+        None => return Ok(false),
+        Some(0) => {
+            login.browser = typed(
+                "browser",
+                &format!(
+                    "{}, with :<profile> for another profile than the newest",
+                    cookies::BROWSERS
+                ),
+            )?;
+        }
+        Some(1) => login.cookies = typed("file", "the cookies.txt file's path")?.map(Into::into),
+        Some(2) => login.token = true,
+        Some(3) => {
+            login.header = typed(
+                "header",
+                "the header's name, such as X-API-Key; its value is asked next",
+            )?;
+        }
+        Some(_) => {
+            super::sign_in(context, account, &login, true).await?;
+            return Ok(true);
+        }
+    }
+    if !wanted(&login) {
+        return Ok(false);
+    }
+    sign_in(context, &login)?;
+    Ok(true)
+}
+
 /// asks before a sign-in replaces what is saved for `host`, as a person at the terminal may
 /// not know it is there.
 fn replacing(context: &Context, host: &str) -> Result<(), Error> {

@@ -751,9 +751,11 @@ fn a_refusal_with_a_key_here_says_how_to_check_it() -> Result {
     Ok(())
 }
 
-/// fetchloom sends a key only over https, and the help says so.
+/// a server on this machine that asks for a username and password is offered a login for its
+/// host and port, as `.netrc` keeps it, which then goes with the request over plain http, since
+/// nothing leaves the machine.
 #[test]
-fn no_sign_in_is_offered_for_a_login_over_http() -> Result {
+fn a_login_this_machine_asks_for_is_offered_with_its_port() -> Result {
     let sandbox = Sandbox::new()?;
     let challenge = [
         ("WWW-Authenticate", "Basic realm=\"lab\""),
@@ -763,23 +765,42 @@ fn no_sign_in_is_offered_for_a_login_over_http() -> Result {
         "/files/x.csv".to_owned(),
         reply("401 Unauthorized", &challenge, b""),
     )])?;
+    let host = server.url.trim_start_matches("http://");
     let link = format!("{}/files/x.csv", server.url);
     let output = sandbox.run(&["--json", "add", &link])?;
     assert_eq!(output.status.code(), Some(40), "{}", text(&output.stdout)?);
     assert_eq!(
         json(&output)?["errors"][0]["help"],
-        "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one"
+        format!(
+            "if it needs a login, sign in with `fetchloom auth login {host}`, then run `fetchloom --json add {link}` again"
+        )
     );
     #[cfg(target_os = "linux")]
-    if let Some((code, screen)) = crate::support::typed(
-        &sandbox.work(),
-        &sandbox.command(&["add", &link]),
-        "",
-        "error:",
-        "",
-    )? {
-        assert_eq!(code, Some(40), "{screen}");
-        assert!(!screen.contains("now?"), "{screen}");
+    {
+        let gated = Server::start(
+            "/files/x.csv",
+            vec![
+                reply("401 Unauthorized", &challenge, b""),
+                crate::support::file(b"a,b\n", "\"v1\""),
+            ],
+        )?;
+        let host = gated.url.trim_start_matches("http://");
+        let host = host.split_once('/').map_or(host, |(host, _)| host);
+        let add = sandbox.command(&["add", &gated.url]);
+        if let Some((code, screen)) =
+            crate::support::typed(&sandbox.work(), &add, "", "now?", "y\rada\rpw\r\r")?
+        {
+            assert_eq!(code, Some(0), "{screen}");
+            let netrc = std::fs::read_to_string(home(&sandbox).join(".netrc"))?;
+            assert!(netrc.contains(&format!("machine {host} ")), "{netrc}");
+            let heads = gated.requests();
+            assert!(
+                heads.get(1).is_some_and(|head| head
+                    .to_ascii_lowercase()
+                    .contains("authorization: basic ywrhonb3")),
+                "{heads:?}\n{screen}"
+            );
+        }
     }
     Ok(())
 }

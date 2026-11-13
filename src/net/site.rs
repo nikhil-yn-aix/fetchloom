@@ -6,10 +6,11 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 
 use reqwest::StatusCode;
-use reqwest::header::{self, HeaderName, HeaderValue};
+use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use url::{Host, Url};
 
 use super::{Net, Shown};
+use crate::auth::Account;
 use crate::error::{Error, Kind};
 
 /// what one host's saved credential sends.
@@ -150,10 +151,60 @@ impl Sent {
             .help(format!("{}, then run the same command again", self.again))
     }
 
+    /// the error for a web page that came back from `url` where a file was expected, as a site
+    /// sends its sign-in page once a session ends.
+    fn signed_out(&self, url: &Url) -> Error {
+        let message = if self.expired {
+            format!(
+                "{} sent a web page, such as its sign-in page, where a file was expected, and {} saved for it have expired",
+                self.host, self.what
+            )
+        } else {
+            format!(
+                "{} sent a web page, such as its sign-in page, where a file was expected, so {} saved for it may have expired",
+                self.host, self.what
+            )
+        };
+        Error::new(Kind::AuthRequired, message)
+            .detail(format!("the page came from {}", Shown(url)))
+            .help(format!(
+                "{}, then run the same command again. if the page itself is the data, ask for it with --web-page, or web_page = true in data.toml",
+                self.again
+            ))
+    }
+
     /// whether the hop that answered carried the credential.
     pub(crate) fn answered(&self) -> bool {
         self.answered
     }
+}
+
+/// the refusal of `response`, a web page where a file was expected after a saved credential went
+/// for `link`, as a site sends its sign-in page once a session ends. none when the person `asked`
+/// for a page or the link's name says it is one.
+pub(super) fn sign_in_page(response: &reqwest::Response, link: &Url, asked: bool) -> Option<Error> {
+    let sent = response.extensions().get::<Sent>()?;
+    let page = response.status().is_success() && super::headers::is_html(response.headers());
+    (page && !asked && !names_a_page(link)).then(|| sent.signed_out(response.url()))
+}
+
+/// whether the last part of `link`'s path ends in a web page's extension.
+fn names_a_page(link: &Url) -> bool {
+    link.path_segments()
+        .and_then(Iterator::last)
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(_, extension)| {
+            ["htm", "html", "xhtml"]
+                .iter()
+                .any(|page| extension.eq_ignore_ascii_case(page))
+        })
+}
+
+/// the way in a refusal's `WWW-Authenticate` asks for, in lowercase, such as `basic`.
+fn challenge(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::WWW_AUTHENTICATE)?.to_str().ok()?;
+    let scheme = value.split_whitespace().next()?;
+    Some(scheme.trim_end_matches(',').to_ascii_lowercase())
 }
 
 /// whether `url` names this machine: a loopback address, or `localhost`.
@@ -297,6 +348,68 @@ impl Net {
             response.extensions_mut().insert(sent.clone());
             *carried = Some(sent);
         }
+    }
+
+    /// the refusal of a 401 or 403 from `url`, a website no source speaks for, when a request for
+    /// `asked` carried no credential there: it offers `auth login` for the host and the ways in it
+    /// takes, or says why no key goes over plain http there. none for a source's host, whose own
+    /// refusal says more, and for a host a redirect led to that a website's key cannot reach.
+    pub(super) fn refused(
+        &self,
+        asked: &Url,
+        url: &Url,
+        status: StatusCode,
+        headers: &HeaderMap,
+    ) -> Option<Error> {
+        let code = status.as_u16();
+        let host = url.host_str()?.to_ascii_lowercase();
+        if crate::source::refused_download(url, code).is_some()
+            || Account::from_host(&host).is_some()
+        {
+            return None;
+        }
+        let named = match url.port_or_known_default() {
+            Some(443) | None => host,
+            Some(port) => format!("{host}:{port}"),
+        };
+        let error = Error::new(
+            Kind::AuthRequired,
+            format!(
+                "{} refused access to {} ({code})",
+                super::host(url),
+                Shown(url)
+            ),
+        );
+        if !self.carries(url) {
+            return Some(error.help(
+                "fetchloom sends a key over plain http only to this machine or to an origin allowed_origins lists, since anyone on the way could read it there: ask the site for an https link",
+            ));
+        }
+        let way = challenge(headers);
+        let account = Account::Login(named.clone());
+        let command = account.command();
+        // a server that asks for a username and password takes the login a person saves for
+        // its host, as curl and wget would send from .netrc, on any hop that reaches it
+        if way.as_deref() == Some("basic") {
+            return Some(
+                error
+                    .help(format!("if it needs a login, sign in with `{command}`, then run the same command again"))
+                    .needs(account, None),
+            );
+        }
+        if asked.origin() != url.origin() {
+            return None;
+        }
+        let help = if way.as_deref() == Some("bearer") {
+            format!(
+                "if it needs a token, save it with `{command} --token`, then run the same command again"
+            )
+        } else {
+            format!(
+                "if it needs a sign-in, save it with `{command}` and --browser <name> to take the cookies of a browser signed in there, --cookies <file>, --token or --header <name>, then run the same command again"
+            )
+        };
+        Some(error.help(help).needs_site(named))
     }
 
     /// the hosts a website's credential goes to, for tests.

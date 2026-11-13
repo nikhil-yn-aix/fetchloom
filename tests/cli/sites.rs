@@ -121,6 +121,120 @@ fn a_refused_token_is_named_with_the_command_that_saves_a_new_one() -> Result {
     Ok(())
 }
 
+/// a sign-in page where a file was expected, once a saved token went, says the token may have
+/// expired and how to save a new one, unless the person asked for the page.
+#[test]
+fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><form action=/login>sign in</form></html>";
+    let length = page.len().to_string();
+    let site = Routes::start(vec![(
+        "/login".to_owned(),
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html"), ("Content-Length", &length)],
+            page,
+        ),
+    )])?;
+    site.change(vec![(
+        "/data".to_owned(),
+        reply(
+            "302 Found",
+            &[("Location", "/login"), ("Content-Length", "0")],
+            b"",
+        ),
+    )]);
+    let host = host_of(&site);
+    sign_in_with_token(&sandbox, &host, "t-old")?;
+    let link = format!("{}/data", site.url);
+    let output = sandbox.run(&["get", &link, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: {host} sent a web page, such as its sign-in page, where a file was expected, so the token saved for it may have expired"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "help: save a current one with `fetchloom auth login {host} --token`, then run `fetchloom get {link} -o data.csv` again"
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("t-old"), "{stderr}");
+    assert!(!sandbox.work().join("data.csv").exists());
+    let asked = sandbox.run(&["get", &link, "-o", "login.html", "--web-page"])?;
+    assert!(asked.status.success(), "{}", text(&asked.stderr)?);
+    assert_eq!(std::fs::read(sandbox.work().join("login.html"))?, page);
+    // a page data.toml asks for is the data when its pin is fetched again, as in a clone
+    let added = sandbox.run(&["add", &link, "--web-page", "--as", "notes"])?;
+    assert!(added.status.success(), "{}", text(&added.stderr)?);
+    crate::support::delete_folder(&sandbox.cache())?;
+    crate::support::delete_folder(&sandbox.work().join("data"))?;
+    sandbox.allow(&site.url);
+    let synced = sandbox.run(&["sync"])?;
+    assert!(synced.status.success(), "{}", text(&synced.stderr)?);
+    assert_eq!(std::fs::read(sandbox.work().join("data/notes/data"))?, page);
+    Ok(())
+}
+
+/// a website that refuses a link and names no way in is offered each way to sign in: in its
+/// help, and at a terminal as a choice that saves the key and runs the command again.
+#[test]
+fn a_website_that_refuses_is_offered_each_way_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![(
+        "/data.csv".to_owned(),
+        reply("403 Forbidden", &[("Content-Length", "0")], b""),
+    )])?;
+    let host = host_of(&site);
+    let link = format!("{}/data.csv", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["help"],
+        format!(
+            "if it needs a sign-in, save it with `fetchloom auth login {host}` and --browser <name> to take the cookies of a browser signed in there, --cookies <file>, --token or --header <name>, then run `fetchloom --json get {link}` again"
+        )
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    #[cfg(target_os = "linux")]
+    {
+        let gated = crate::support::Server::start(
+            "/data.csv",
+            vec![
+                reply("403 Forbidden", &[("Content-Length", "0")], b""),
+                file(b"a,b\n", "\"v1\""),
+            ],
+        )?;
+        let host = gated.url.trim_start_matches("http://");
+        let host = host.split_once('/').map_or(host, |(host, _)| host);
+        let get = sandbox.command(&["get", &gated.url, "-o", "data.csv"]);
+        let asked = format!("sign in to {host} with");
+        if let Some((code, screen)) =
+            crate::support::typed(&sandbox.work(), &get, "", &asked, "3t-new\ry\r")?
+        {
+            assert_eq!(code, Some(0), "{screen}");
+            assert!(
+                screen.contains(&format!("Signed in to {host} with a token")),
+                "{screen}"
+            );
+            assert!(!screen.contains("t-new"), "{screen}");
+            let heads = gated.requests();
+            assert!(
+                heads
+                    .get(1)
+                    .is_some_and(|head| head.contains("authorization: bearer t-new")),
+                "{heads:?}\n{screen}"
+            );
+            assert_eq!(std::fs::read(sandbox.work().join("data.csv"))?, b"a,b\n");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -162,7 +276,7 @@ fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let again = sandbox.run(&["auth", "logout", &host])?;
     assert!(again.status.success());
     assert!(
-        text(&again.stderr)?.contains(&format!("nothing was saved for {host}")),
+        text(&again.stderr)?.contains(&format!("no {host} key was saved")),
         "{}",
         text(&again.stderr)?
     );

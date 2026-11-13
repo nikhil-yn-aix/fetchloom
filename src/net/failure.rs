@@ -299,19 +299,12 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
         .help(MOVED_HELP),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
             let host = host(url).to_ascii_lowercase();
-            // a server that asks for a username and password takes the login a person saves
-            // for its host, as curl and wget would send from .netrc
-            let asks_login = headers
-                .get(reqwest::header::WWW_AUTHENTICATE)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.trim_start().to_ascii_lowercase().starts_with("basic"));
-            let account = crate::auth::Account::from_host(&host)
-                .or_else(|| asks_login.then(|| crate::auth::Account::Login(host.clone())));
             let error = Error::new(
                 Kind::AuthRequired,
                 format!("{host} refused access to {} ({code})", Shown(url)),
             );
-            match account {
+            // any other website is offered its own sign-in by `Net::refused` before this
+            match crate::auth::Account::from_host(&host) {
                 Some(_) if url.scheme() != "https" => error.help(
                     "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one",
                 ),

@@ -1004,6 +1004,12 @@ pub(super) async fn offer(
             output.link(terms)
         ));
     }
+    if need.site {
+        let signed = site::offered(context, account)
+            .await
+            .map_err(|error| error.cancelling(&signing))?;
+        return if signed { Ok(true) } else { declined(&signing) };
+    }
     if !agree(
         context,
         &format!("sign in to {} now?", title(account)),

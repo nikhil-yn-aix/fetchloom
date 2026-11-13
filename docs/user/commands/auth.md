@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. with `--token`, `--header`, `--cookies` or `--browser`, the host may carry its port, as `data.example.edu:8443` or `localhost:8080`. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. a host on another port than 443 carries it, as `data.example.edu:8443` or `localhost:8080`, and what is saved for it goes to that port alone. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 
@@ -82,7 +82,7 @@ a file with no cookie for the host fails with `usage` and names the domains it h
 
 the other names read a chromium browser's profile on linux and macos, the one it used last, as `Default`, or the folder `chrome:<profile>` names, as `chrome:"Profile 1"`. chromium encrypts each cookie with a key it keeps in the system's credential store, which fetchloom reads only to open the host's cookies: on linux from the secret service, which gnome keyring and KDE wallet 5.97 and later answer, or chromium's fixed key when the browser runs without a keyring; on macos from the keychain, which asks whether fetchloom may use "Chrome Safe Storage", or the browser's own entry, and a yes there is expected. `FETCHLOOM_KEYRING=false` keeps fetchloom out of the credential store, so on linux only cookies under chromium's fixed key open. a cookie no key opens is left out by name, and when none of the host's opens the run fails with `auth.required` and says how to let fetchloom read the key. on windows the chromium browsers are not read: chrome seals cookies with app-bound encryption since version 127, which only chrome's own program may open, and the others' would need windows' DPAPI, which fetchloom does not call; use `--browser firefox` or `--cookies` there.
 
-a key the host refuses with 401 or 403 ends the command with `auth.required`, exit 40, naming what was refused and the command that saves a new one, as `fetchloom auth login data.example.org --token`; saved cookies that expired are named so.
+a key the host refuses with 401 or 403 ends the command with `auth.required`, exit 40, naming what was refused and the command that saves a new one, as `fetchloom auth login data.example.org --token`; saved cookies that expired are named so. a web page where a file was expected, once a key went, ends it the same way, since a site sends its sign-in page once a session ends; `--web-page`, or `web_page = true` in data.toml, says the page is the data.
 
 ## scripts and CI
 
@@ -105,7 +105,7 @@ sign in to hugging face now? [y/N] n
   Cancelled signing in to hugging face
 ```
 
-a command that is refused again once you signed in ends with that refusal as an error, and so does any refusal while a key for the source is on this machine: signing in again is no remedy, so its help says the key was refused or has no access, and that `fetchloom auth` shows where the key comes from and whose it is; only terms to accept are still offered. a server that asks for a login over plain http gets no offer at all, since fetchloom sends a key only over https. `-q` prints the error above the question instead of the `Refused` line.
+a command that is refused again once you signed in ends with that refusal as an error, and so does any refusal while a key for the source is on this machine: signing in again is no remedy, so its help says the key was refused or has no access, and that `fetchloom auth` shows where the key comes from and whose it is; only terms to accept are still offered. a server that asks for a login over plain http gets no offer unless it is on this machine or at an origin `allowed_origins` lists, since a key goes over plain http only there; anywhere else the help says so and asks for an https link. `-q` prints the error above the question instead of the `Refused` line.
 
 `add` first asks the source, once, for the public datasets of the same owner, signed in or not. when one is a typo away, signing in could not help, so no sign-in is offered, the error is `reference.unresolved`, exit 10, rather than `auth.required`, and the help gives your command with the name fixed; signed in, the error above it reads `hf:datasets/scikit-learn/irsi does not exist, or is not public`. a source that is busy, or whose rate limit is used up, gets no second try, so the error comes at once with no suggestion. an offline run asks nothing more, so it keeps `auth.required`, exit 40. with `--json` the suggestion is in `help` and `fix` stays null, since a guess is never a command to run:
 
@@ -113,6 +113,30 @@ a command that is refused again once you signed in ends with that refusal as an 
 error: huggingface.co has no dataset scikit-learn/irsi, or it is private
   help: did you mean `fetchloom add hf:datasets/scikit-learn/iris`?
 ```
+
+a website fetchloom has no account for, with nothing saved for it, gets the offer when it answers 401 or 403 to the link itself: a picker asks how the site lets you in, then signs you in that way, as `auth login <host>` with `--browser`, `--cookies`, `--token`, `--header` or a username and password would, and runs the command once more. q or esc ends the run as a no. a site whose answer asks for a username and password, as a basic challenge does, gets the question above and the login's prompts instead. a host a redirect led to is offered nothing, since a website's key never follows a redirect, unless it asks for a `.netrc` login, which does. from a real run against a server on this machine, choosing 3:
+
+```text
+    Refused 127.0.0.1 refused access to http://127.0.0.1:19371/open.csv (403)
+  sign in to 127.0.0.1:19371 with  ↑↓ move · 1-9 or enter choose · q cancel
+  › 1 browser  the cookies of a browser signed in there
+    2 cookies  a cookies.txt file a browser extension saved
+    3 token    a token the site gave you
+    4 header   a key the site sends in a header of its own
+    5 login    a username and password
+    Sign in 127.0.0.1:19371
+         1. sign in at 127.0.0.1:19371 in your browser
+         2. make a token or an api key where its settings or profile offer one
+         3. paste it below; it is sent in Authorization: Bearer
+      token ******** · 8 characters
+no credential store here, so it would go in a file only you can read
+save it to ~/.config/fetchloom/credentials.json? [y/N] y
+  Signed in to 127.0.0.1:19371 with a token · saved to ~/.config/fetchloom/credentials.json
+ Downloaded open.csv · 8 B in 1 ms
+      Saved open.csv
+```
+
+the picker clears itself once you choose, so the screen keeps the lines from `Sign in` on. with `--json`, or in a script, the help names the command and each way instead, and `fix` stays null.
 
 a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page. without a key on this machine, the offer says that first, as `First accept the terms at https://huggingface.co/datasets/bigcode/the-stack while signed in there`, then asks whether to sign in; with a key, it shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.
 
