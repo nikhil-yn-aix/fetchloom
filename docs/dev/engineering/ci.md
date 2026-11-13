@@ -105,7 +105,7 @@ pages remains the only deploying workflow. it builds the default branch and adds
 | check | bound and result |
 |---|---|
 | linux coverage | cargo-llvm-cov 0.9.1, the pinned Rust with llvm-tools-preview, and nextest 0.9.151; 45-minute job cap |
-| all eight [Bolero targets](fuzzing.md#targets) | cargo-bolero 0.13.5, nightly-2026-11-03, five minutes per target with one fuzz worker, 10-second input timeout and 64 KiB maximum input; one job builds once and fuzzes the targets in turn, 18 minutes each at most, the first including the build, under a 75-minute job cap |
+| all eight [Bolero targets](fuzzing.md#targets) | cargo-bolero 0.13.5, nightly-2026-11-03, five minutes per target with one fuzz worker, 10-second input timeout and 64 KiB maximum input; one job builds once and fuzzes the targets in turn: the first may take 25 minutes, since it includes the build, about 14 minutes when no cache is warm, and each later one 7, under an 80-minute job cap |
 | external documentation links | lychee 0.24.2, four concurrent requests, 20-second request timeout and one retry; 15-minute job cap |
 | manual mutation pilot | cargo-mutants 27.1.0; one existing `src/**/*.rs` file, at most ten explicitly listed mutants, two workers; lib tests unless dispatched with `tests=all`; each mutant's tests stop at three times the baseline's measured test time, at least 20 seconds; 600-second build timeout, 28-minute command and 35-minute job caps, since a run of ten mutants measured 18 minutes |
 

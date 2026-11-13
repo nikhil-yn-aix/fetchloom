@@ -82,7 +82,7 @@ jobs:
   fuzz:
     if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'fuzz'
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,17 +112,19 @@ jobs:
         shell: bash
         run: |
           failed=""
+          # the first target's limit also covers the shared build, about 14 minutes when cold
+          limit=25m
           for entry in $TARGETS; do
             name=${entry%%=*}
             results="target/fuzz-results/$name"
             mkdir -p "target/fuzz-corpus/$name" "$results/crashes"
             echo "::group::$name"
-            # the first target's limit also covers the shared build
-            timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-03 \
+            timeout --signal=TERM --kill-after=30s "$limit" cargo bolero test --toolchain nightly-2026-11-03 \
               --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
               --corpus-dir "target/fuzz-corpus/$name" --crashes-dir "$results/crashes" \
               "${entry#*=}" 2>&1 | tee "$results/run.log" || failed="$failed $name"
             echo "::endgroup::"
+            limit=7m
           done
           git diff --exit-code -- Cargo.lock
           if [ -n "$failed" ]; then
