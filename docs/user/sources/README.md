@@ -7,7 +7,7 @@ fetchloom get zenodo:3608990
 fetchloom add zenodo:3608990 --select "*.csv"
 ```
 
-a dataset's page works as well as its id, so you can paste the link from your browser. words instead of a reference [search](../commands/search.md) hugging face, kaggle, zenodo, GEO and openneuro, and ENA and dandi when `--source` names them.
+a dataset's page works as well as its id, so you can paste the link from your browser. words instead of a reference [search](../commands/search.md) hugging face, kaggle, zenodo, GEO and openneuro; `fetchloom search --source` reaches ENA and dandi too.
 
 | source | what it holds | write it as | an account is needed for |
 |---|---|---|---|
@@ -34,7 +34,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 
 ## references and paths
 
-a reference is never a path on this machine. `add` given a path, such as `./flowers`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv`, imports the files there, [pinned by their bytes](../commands/add.md#files-on-this-machine) with `ref = "local"`, and sends nothing anywhere. `get` refuses a path with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, is not searched for either: it exits 2 with `usage`, `fetchloom add ./iris` imports it, and `fetchloom search iris` searches for it.
+a reference is never a path on this machine. `add` given a path, such as `./flowers`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv`, imports the files there, [pinned by their bytes](../commands/add.md#files-on-this-machine) with `ref = "local"`, and sends nothing anywhere. `get` refuses a path with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml; [choosing a dataset](../commands/search.md#choosing-a-dataset) says what a plain word that names a folder here does.
 
 a link to a folder or a site's page, which answers with a web page rather than a file, is refused with `source.invalid` before anything is cached or pinned; [URLs and DOIs](urls-and-dois.md) says when.
 
