@@ -1,5 +1,6 @@
 //! what the data folder holds, read once per command by listing its folders, and the objects
-//! behind hardlinks someone edited.
+//! behind hardlinks someone edited. every path here is a path in the project, with `/` between
+//! names, unless a doc says otherwise.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -27,7 +28,7 @@ pub(crate) struct Survey {
     /// the scan's start, so marks written while placing files still put them in doubt.
     pub(crate) started: u64,
     pub(crate) state: State,
-    /// every file under the data folder and how it looks, by its path in the project.
+    /// every file under the data folder and how it looks.
     pub(crate) disk: HashMap<String, Look>,
     /// the listing's spelling of an alias, within the current data folder, for removals.
     pub(crate) listed: HashMap<String, String>,
@@ -49,15 +50,15 @@ pub(crate) struct Survey {
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
-    /// files under the hidden names placement stages files in, by their paths in the project.
+    /// files under the hidden names placement stages files in.
     temporaries: Vec<String>,
-    /// what else the data folder holds, by path in the project: folders, and links and special
-    /// files, which the survey never follows or reads.
+    /// what else the data folder holds: folders, and links and special files, which the survey
+    /// never follows or reads.
     pub(crate) entries: HashMap<String, Entry>,
-    /// every folder the listing found something in, by path in the project, gathered the first
-    /// time a blocker asks and dropped when a path takes another spelling.
+    /// every folder the listing found something in, gathered the first time a blocker asks and
+    /// dropped when a path takes another spelling.
     holding: OnceLock<HashSet<String>>,
-    /// the data folder's path in the project, below which entries can stand in a file's way.
+    /// the data folder, below which entries can stand in a file's way.
     data_dir: String,
     /// the files the state records outside the data folder that are still there, in order, as
     /// fetchloom placed them before `data_dir` changed. a sync never deletes them.
@@ -69,7 +70,7 @@ pub(crate) struct Survey {
 pub(crate) struct LeftBehind {
     /// the folder they are in, when it can be named without naming the data folder too.
     pub(crate) folder: Option<String>,
-    /// their paths in the project, in order.
+    /// the files, in order.
     pub(crate) files: Vec<String>,
     /// what else `folder` holds, such as a person's notes, which deleting the folder takes too:
     /// files, links and special files fetchloom did not place, sorted.
@@ -99,7 +100,7 @@ pub(crate) enum Entry {
 /// the file needs a folder on its way, or one that is not a plain file at the file's own path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Blocker {
-    /// the entry's path in the project.
+    /// where the entry stands: the file's own path, or a folder on its way.
     pub(crate) path: String,
     pub(crate) found: Entry,
     /// whether data.lock needs a folder at that path, rather than a file.
@@ -787,7 +788,7 @@ fn aliases<'a>(
         .collect()
 }
 
-/// the names in each folder read so far, by folder.
+/// the names in each folder read so far, by the folder's path on disk.
 type Listings = HashMap<std::path::PathBuf, HashSet<std::ffi::OsString>>;
 
 fn same_entry(root: &Path, path: &str, listed: &str, look: Look, listings: &mut Listings) -> bool {
@@ -1101,8 +1102,7 @@ fn folder_order(left: &str, right: &str) -> std::cmp::Ordering {
         })
 }
 
-/// `folders`, paths in the project inside `data_dir`, without those inside another of them,
-/// which listing that other one covers.
+/// `folders` inside `data_dir` without those inside another, which listing that one covers.
 fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
     if folders.iter().any(|folder| folder == data_dir) {
         return vec![data_dir.to_owned()];
@@ -1126,14 +1126,14 @@ fn inside_any(path: &str, folders: &[String]) -> bool {
     }
 }
 
-/// whether `path` is `folder` or inside it, both paths in the project.
+/// whether `path` is `folder` or inside it.
 pub(crate) fn is_inside(path: &str, folder: &str) -> bool {
     path.strip_prefix(folder)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// lists `folders` and every folder below, handing each file to `visit` and keeping the other
-/// entries in `others`. false when `stopped` ended it early.
+/// lists `folders`, each by its path on disk and in the project, and every folder below, handing
+/// each file to `visit` and keeping the other entries in `others`. false when `stopped` ended it.
 fn visit_files(
     mut folders: Vec<(std::path::PathBuf, String)>,
     others: &mut HashMap<String, Entry>,
