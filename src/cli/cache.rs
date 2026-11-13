@@ -625,11 +625,12 @@ pub(super) fn remind(context: &Context) {
     let Some(root) = super::cache_folder() else {
         return;
     };
-    remind_at(&context.output, &root, &context.stop);
+    remind_at(&context.output, &root, context.threads, &context.stop);
 }
 
-/// the reminder for the cache at `root`, which [`open_cache`] opens too.
-fn remind_at(output: &Output, root: &Path, stop: &Stop) {
+/// the reminder for the cache at `root`, which [`open_cache`] opens too, on at most `threads`
+/// workers.
+fn remind_at(output: &Output, root: &Path, threads: Threads, stop: &Stop) {
     // its only output is a hint, so with hints hidden, as by `-q`, it reads nothing at all
     if !output.shows_hints() || !root.join("objects").is_dir() {
         return;
@@ -650,29 +651,28 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
         return;
     }
     let Ok(cache) = open_cache() else { return };
-    let Ok(found) = needed_with(&cache, None, stop, false, Uses::Untold) else {
+    let Some(freeable) = freeable(&cache, now, threads, stop) else {
         return;
     };
-    // gc would forget a project out of reach, so the number would mislead
-    if !found.complete {
-        return;
-    }
-    let needed = found.needed;
-    let Ok(scan) = cache.scan_objects(Threads::default(), stop) else {
-        return;
-    };
-    // what `fetchloom cache` says gc frees now, so the two never disagree. the reminder tells
-    // nothing of copies, so it reads no project's files
-    let Ok(usage) = Usage::measure(&scan, &needed, &[], now, Threads::default(), stop) else {
-        return;
-    };
-    let freeable = usage.freeable;
     if freeable >= REMIND_FROM {
         output.hint(&format!(
             "the cache holds {} no project needs; `fetchloom cache gc` frees it",
             units::size(freeable)
         ));
     }
+}
+
+/// the bytes gc would free at `now`, as `fetchloom cache` tells them, read on at most `threads`
+/// workers; none when a project is out of reach, which gc would forget, or the cache unreadable.
+fn freeable(cache: &Cache, now: SystemTime, threads: Threads, stop: &Stop) -> Option<u64> {
+    let found = needed_with(cache, None, stop, false, Uses::Untold).ok()?;
+    if !found.complete {
+        return None;
+    }
+    let scan = cache.scan_objects(threads, stop).ok()?;
+    // the reminder tells nothing of copies, so it reads no project's files
+    let usage = Usage::measure(&scan, &found.needed, &[], now, threads, stop).ok()?;
+    Some(usage.freeable)
 }
 
 /// sets the time itself, since writing an empty file again leaves its time alone on windows.
@@ -1136,12 +1136,31 @@ mod tests {
         for output in [quiet, unhinted] {
             let folder = tempfile::tempdir().unwrap();
             fs::create_dir(folder.path().join("objects")).unwrap();
-            remind_at(&output, folder.path(), &Stop::default());
+            remind_at(&output, folder.path(), Threads::default(), &Stop::default());
             assert!(
                 !folder.path().join("reminded").exists(),
                 "the reminder ran though its hint could not show"
             );
         }
+    }
+
+    /// the reminder reads the cache on the run's workers alone: under a cap of one it starts no
+    /// thread, where its fan folders would take several.
+    #[test]
+    fn a_reminder_under_one_worker_starts_no_thread() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        for n in 0..300 {
+            store(&cache, format!("object {n}").as_bytes());
+        }
+        let one = Threads::read(&|_| Some("1".into())).unwrap();
+        let _counting = crate::threads::refuse_after(usize::MAX);
+        assert_eq!(
+            freeable(&cache, SystemTime::now(), one, &Stop::default()),
+            Some(0),
+            "nothing is a day old"
+        );
+        assert_eq!(crate::threads::spawns_left(), Some(usize::MAX));
     }
 
     /// a lock pinning set.zip, cached and unpacked to a.txt and b.txt, and the three as stored.

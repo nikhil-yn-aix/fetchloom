@@ -146,6 +146,12 @@ pub(crate) fn refuse_after(successful: usize) -> Refusing {
     Refusing(REFUSE_AFTER.replace(Some(successful)))
 }
 
+/// the threads [`refuse_after`] still lets this thread start, which counts those it started.
+#[cfg(test)]
+pub(crate) fn spawns_left() -> Option<usize> {
+    REFUSE_AFTER.get()
+}
+
 /// probes thread creation before tokio can turn an immediate resource refusal into a panic.
 pub(crate) fn start_runtime<T>(start: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     probe_thread()?
