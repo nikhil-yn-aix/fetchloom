@@ -100,6 +100,10 @@ jobs:
       - name: five minutes of libFuzzer for each target
         env:
           CARGO_NET_OFFLINE: 'true'
+          # the tests build cookie databases with SQLite, whose one C file holds two tables named
+          # aiOff; gcc's address sanitizer, which cc turns on for C code too, takes them for one
+          # definition made twice, so only definitions of different sizes count
+          ASAN_OPTIONS: detect_odr_violation=1
           TARGETS: >-
             member-names=archive::names::tests::fuzz_member_names
             joined-input=archive::input::tests::joined_parts_read_and_seek_as_the_whole

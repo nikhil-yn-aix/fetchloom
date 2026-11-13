@@ -36,8 +36,10 @@ install the pinned nightly and cargo-bolero when preparing a longer run:
 rustup toolchain install nightly-2026-11-03 --profile minimal
 cargo install --locked cargo-bolero --version 0.13.5 --no-default-features --features libfuzzer
 mkdir -p .fuzz/manifest .fuzz/manifest-crashes
-cargo bolero test --toolchain nightly-2026-11-03 --target x86_64-unknown-linux-gnu -T 10min --corpus-dir .fuzz/manifest --crashes-dir .fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
+ASAN_OPTIONS=detect_odr_violation=1 cargo bolero test --toolchain nightly-2026-11-03 --target x86_64-unknown-linux-gnu -T 10min --corpus-dir .fuzz/manifest --crashes-dir .fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
 ```
+
+`ASAN_OPTIONS=detect_odr_violation=1` keeps the address sanitizer's check of one definition made twice to definitions of different sizes. the tests build cookie databases with SQLite, which `cc` compiles with the sanitizer as rustc instruments the Rust code; its one C file holds two equal tables named `aiOff`, which gcc's sanitizer otherwise reports as one definition made twice before any target starts.
 
 `Cargo.toml` defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source, which git ignores. the explicit `.fuzz` folder is local run data; do not stage it.
 
