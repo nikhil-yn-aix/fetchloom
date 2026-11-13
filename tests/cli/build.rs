@@ -1,6 +1,5 @@
-//! recipes declared in data.toml against servers on this machine: what each command does with
-//! them, that none but `fetchloom build` runs a step, and what a build runs, pins and places,
-//! with the step program `examples/recipe_step.rs`.
+//! recipes in data.toml: what each command does with them, that only `fetchloom build` runs a
+//! step, and what a build runs, pins and places, with the step program `examples/recipe_step.rs`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -33,10 +32,8 @@ pub(crate) fn with_recipe(sandbox: &Sandbox, server: &Server) -> Result {
 /// the bytes of clean.py that [`pin_clean`] pins by default.
 pub(crate) const CODE: &[u8] = b"import sys\nprint(sys.argv)\n";
 
-/// pins `clean` in data.lock as built from iris with clean.py holding `code` and the variables
-/// `env`, one file in its result. the key is made here as the recipe key scheme defines it, apart
-/// from fetchloom's own code: the JSON of the scheme, each input's content, the run, each code
-/// file's hash and the variables.
+/// pins `clean` as built from iris with clean.py holding `code` and the variables `env`, one file
+/// in its result. the key is made here from the recipe key scheme, not by fetchloom's own code.
 pub(crate) fn pin_clean(sandbox: &Sandbox, code: &[u8], env: &[(&str, &str)]) -> Result {
     let content =
         sha256_hex(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256_hex(IRIS)).as_bytes());
@@ -98,8 +95,6 @@ fn error(document: &Value) -> (&str, &str, Vec<&str>, &str, &Value) {
     )
 }
 
-/// a recipe data.lock does not pin as built now fails the checks a script runs, with exit 60
-/// and what moved, and never with a fix to run, since building runs the project's code.
 #[test]
 fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
     let sandbox = Sandbox::new()?;
@@ -162,8 +157,7 @@ fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
     Ok(())
 }
 
-/// status lists a recipe data.lock does not pin as built now with what moved, as it lists a
-/// fetched dataset data.toml changed, and points at the dry run rather than at sync.
+/// the hint points at the dry run, since sync never builds a recipe.
 #[test]
 fn status_names_what_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -198,7 +192,6 @@ fn status_names_what_changed() -> Result {
     Ok(())
 }
 
-/// a recipe's result is not placed in the data folder yet, so `path` names the build it needs.
 #[test]
 fn path_of_a_recipe_needs_a_build() -> Result {
     let sandbox = Sandbox::new()?;
@@ -218,8 +211,7 @@ fn path_of_a_recipe_needs_a_build() -> Result {
     Ok(())
 }
 
-/// sync fetches what data.toml's sources pin and asks nothing for a recipe, which only
-/// `fetchloom build` makes.
+/// only `fetchloom build` makes a recipe's result, so sync asks nothing for it.
 #[test]
 fn sync_leaves_a_recipe_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -273,8 +265,7 @@ fn list_names_what_a_recipe_is_made_from() -> Result {
     Ok(())
 }
 
-/// a recipe cannot read a dataset data.toml no longer has, so the dataset stays until every
-/// recipe that reads it goes, and the refusal names each of them.
+/// a recipe cannot read a dataset data.toml no longer has, and the refusal names every reader.
 #[test]
 fn a_dataset_a_recipe_reads_is_not_removed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -309,8 +300,6 @@ fn a_dataset_a_recipe_reads_is_not_removed() -> Result {
 /// a recipe that makes `tidy` from clean, which [`CLEAN`] makes from iris.
 const TIDY: &str = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"python3\", \"tidy.py\", \"{clean}\", \"--out={out}\"]\nenv = { SEED = \"1\" }\n";
 
-/// a dry run says, in the order steps would run, each step's command with its folders in place,
-/// what it reads and where its result goes, and runs nothing.
 #[test]
 fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -377,8 +366,7 @@ fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
     Ok(())
 }
 
-/// a step data.lock pins as built now, whose result the cache holds, does not run again, until
-/// something it is made from moves.
+/// a pinned step whose result the cache holds stays up to date until something it reads moves.
 #[test]
 fn a_dry_run_tells_up_to_date_steps_from_changed_ones() -> Result {
     let sandbox = Sandbox::new()?;
@@ -409,7 +397,6 @@ fn a_dry_run_tells_up_to_date_steps_from_changed_ones() -> Result {
     Ok(())
 }
 
-/// build runs only recipes, and names them right.
 #[test]
 fn build_names_only_recipes() -> Result {
     let sandbox = Sandbox::new()?;
@@ -436,8 +423,7 @@ fn build_names_only_recipes() -> Result {
     Ok(())
 }
 
-/// only `fetchloom build` may run a project's code: no other command runs a step, here one that
-/// would leave a file behind.
+/// only `fetchloom build` may run a project's code; the step here would leave a file behind.
 #[cfg(unix)]
 #[test]
 fn no_other_command_runs_a_step() -> Result {
@@ -534,8 +520,7 @@ pub(crate) fn runs(folder: &Path) -> Result<usize> {
     }
 }
 
-/// every file below `folder` with its bytes, by its path there, to compare a folder before and
-/// after a command.
+/// every file below `folder` with its bytes, by its path there.
 fn files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = BTreeMap::new();
     let mut todo = vec![folder.to_path_buf()];
@@ -560,8 +545,6 @@ fn files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(files)
 }
 
-/// a build runs the step in the project folder, pins what it wrote with its key and tree, keeps
-/// the list of its files beside data.lock and places them in the data folder.
 #[test]
 fn build_pins_and_places_a_result() -> Result {
     let sandbox = Sandbox::new()?;
@@ -610,8 +593,7 @@ fn build_pins_and_places_a_result() -> Result {
     Ok(())
 }
 
-/// a file a step writes enters the cache as one the build wrote, unless the cache held its
-/// bytes already, as it holds iris's for a step that copies iris.
+/// a step that copies iris adds nothing, since the cache holds iris's bytes already.
 #[test]
 fn a_build_counts_what_its_steps_add_to_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
@@ -632,8 +614,6 @@ fn a_build_counts_what_its_steps_add_to_the_cache() -> Result {
     Ok(())
 }
 
-/// a build of what data.lock pins as built now, with its files in the cache, runs nothing and
-/// leaves data.lock as it is.
 #[test]
 fn a_second_build_runs_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -676,14 +656,12 @@ fn object(sandbox: &Sandbox, bytes: &[u8]) -> PathBuf {
         .join(&hex[2..])
 }
 
-/// where sync places `file` of `dataset` in the work folder's data folder, which a run takes a
-/// file's bytes from when the cache lacks them.
+/// where sync places `file` of `dataset`; a run takes the bytes from there if the cache lacks them.
 fn placed(sandbox: &Sandbox, dataset: &str, file: &str) -> PathBuf {
     sandbox.work().join("data").join(dataset).join(file)
 }
 
-/// a result data.lock pins for the key building it now would make, whose files the cache and
-/// the data folder lost, comes from a mirror rather than from running its step again.
+/// the file leaves the data folder as well as the cache, since a build would take it from there.
 #[test]
 fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -739,8 +717,8 @@ fn foreseen_then_done(
     ))
 }
 
-/// a project whose `clean` writes the file `made` and whose `tidy` copies it, built, and a folder
-/// mirror that holds `made`.
+/// a project whose `clean` writes clean.csv holding `made` and whose `tidy` copies it, built, and
+/// a folder mirror that holds `made`.
 fn made_and_mirrored(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
     let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
     with(
@@ -766,10 +744,7 @@ fn lose_made(sandbox: &Sandbox, placed_too: bool) -> Result {
     Ok(())
 }
 
-/// a dry run takes each step as the build after it does: a pinned result the cache lacks comes
-/// from the data folder or a mirror that holds it, or its step runs, a result built before from
-/// the same inputs is reused, and a step that reads what a changed step makes may run. its action
-/// is the one the build then reports, as in a fresh clone, where every pinned result is missing.
+/// the first case is a fresh clone, where every pinned result is missing.
 #[test]
 fn a_dry_run_says_what_the_build_then_does() -> Result {
     let sandbox = Sandbox::new()?;
@@ -845,8 +820,7 @@ fn a_dry_run_says_what_the_build_then_does() -> Result {
     Ok(())
 }
 
-/// a dry run shows the command of a step whose pinned result is nowhere, and says where a result
-/// a mirror holds would come from, with no command, since nothing runs.
+/// a result a mirror holds shows no command, since its step would not run.
 #[test]
 fn a_dry_run_shows_what_runs_and_where_a_result_comes_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -876,9 +850,7 @@ fn a_dry_run_shows_what_runs_and_where_a_result_comes_from() -> Result {
     Ok(())
 }
 
-/// a step a build runs again for a pin whose files the cache and the data folder lost, which
-/// makes the same files, leaves data.lock as it is, and the build says the result matches it
-/// rather than that it pinned it.
+/// the step runs again because the cache and the data folder lost the pinned files.
 #[test]
 fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -901,9 +873,7 @@ fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     Ok(())
 }
 
-/// a step reads the bytes data.lock pins, never an edit in the data folder: a build that keeps an
-/// edit of a dataset a recipe reads says that the step reads the pinned bytes, naming the file
-/// and how to build from the fix, and never offers `sync --force`, which would undo the fix.
+/// the warning never offers `sync --force`, which would undo the fix.
 #[test]
 fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
     let sandbox = Sandbox::new()?;
@@ -934,9 +904,8 @@ fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
     Ok(())
 }
 
-/// an edit made in place through a hardlink changed the cache's copy a step reads, so the build
-/// must fetch its pinned bytes again. when it cannot, as offline, its error says why it needed
-/// them, as a sync's does, and the edit stays.
+/// an edit in place through a hardlink changes the cache's copy a step reads, so the build must
+/// fetch the pinned bytes again; offline, its error says why, as a sync's does.
 #[test]
 fn a_build_that_cannot_fetch_a_changed_cache_copy_again_says_why() -> Result {
     let sandbox = Sandbox::new()?;
@@ -967,9 +936,7 @@ fn a_build_that_cannot_fetch_a_changed_cache_copy_again_says_why() -> Result {
     Ok(())
 }
 
-/// a rebuild keeps an edit of the result it replaces, which `copy = true` allows, and says the
-/// file holds an earlier version than data.lock pins now. its help names only the recipe whose
-/// file stays, never iris, which has `place = false`.
+/// `copy = true` lets the edit stay; iris has `place = false`, so the help never names it.
 #[test]
 fn a_rebuild_that_keeps_an_edit_names_its_recipe_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1001,8 +968,6 @@ fn a_rebuild_that_keeps_an_edit_names_its_recipe_alone() -> Result {
     Ok(())
 }
 
-/// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
-/// its list and the data folder byte for byte as they were.
 #[test]
 fn a_failed_step_keeps_lock_and_data() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1044,8 +1009,7 @@ fn a_failed_step_keeps_lock_and_data() -> Result {
     Ok(())
 }
 
-/// a failed step's output reaches a person once: as the step runs, or, with `-q`, which hides it
-/// then, in the error.
+/// the output shows live as the step runs, or, with `-q`, in the error instead.
 #[test]
 fn a_failed_step_shows_its_output_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1069,7 +1033,6 @@ fn a_failed_step_shows_its_output_once() -> Result {
     Ok(())
 }
 
-/// a step that writes nothing into its result folder has made no result.
 #[test]
 fn an_empty_result_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1085,7 +1048,6 @@ fn an_empty_result_is_refused() -> Result {
     Ok(())
 }
 
-/// a result holds plain files only, so a link the step wrote is refused, never followed.
 #[cfg(unix)]
 #[test]
 fn a_link_in_the_result_is_refused() -> Result {
@@ -1102,8 +1064,7 @@ fn a_link_in_the_result_is_refused() -> Result {
     Ok(())
 }
 
-/// two names a disk that ignores case takes for one stop the build here, not on a teammate's
-/// machine.
+/// the build stops here rather than on a teammate's machine whose disk ignores case.
 #[cfg(target_os = "linux")]
 #[test]
 fn case_twins_are_refused() -> Result {
@@ -1124,8 +1085,7 @@ fn case_twins_are_refused() -> Result {
     Ok(())
 }
 
-/// a step reads the files data.lock pins, copied from the cache, never the data folder, where a
-/// person may have changed them.
+/// a person may have changed the data folder, so a step reads copies from the cache.
 #[test]
 fn inputs_come_from_pins_not_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1155,8 +1115,7 @@ fn names(folder: &Path) -> Result<Vec<String>> {
     Ok(files(folder)?.into_keys().collect())
 }
 
-/// a members table that leaves a file of an archive out leaves it out of the step too: the step
-/// never sees it, and its key differs from the one of the whole archive.
+/// with the file left out, the step's key differs from the whole archive's.
 #[test]
 fn a_members_table_keeps_a_file_from_the_step() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1198,8 +1157,7 @@ fn a_members_table_keeps_a_file_from_the_step() -> Result {
     Ok(())
 }
 
-/// a build on a machine whose cache lacks an imported input, and whose data folder lacks it
-/// too, says how to bring it there, since no link fetches it.
+/// an import has no link to fetch it from, and here the data folder lacks it too.
 #[test]
 fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1236,8 +1194,7 @@ fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
     Ok(())
 }
 
-/// the code of a recipe is in its key, so a build after an edit runs the step again and pins
-/// the new key.
+/// a recipe's code is in its key, so an edit moves the key even when the result is the same.
 #[test]
 fn editing_code_makes_build_pin_again() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1271,10 +1228,7 @@ fn code_warnings(value: &Value) -> Vec<String> {
         .collect()
 }
 
-/// a commit that leaves out a recipe's code leaves a clone unable to build it from the same
-/// code, so every build that succeeds warns of code git does not have: here a new file in a code
-/// folder, after which the step made the same files and no new list joined data.lock.d, and
-/// again in the build after it, which finds the result up to date.
+/// every build that succeeds warns, even one that finds the result up to date.
 #[test]
 fn a_build_warns_of_recipe_code_git_does_not_have() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1311,8 +1265,7 @@ fn a_build_warns_of_recipe_code_git_does_not_have() -> Result {
     Ok(())
 }
 
-/// code a recipe names that the project lacks, as in a clone of a commit that left it out, is
-/// to be brought back: taking it out of the recipe changes the recipe for everyone.
+/// taking the code out of the recipe instead would change the recipe for everyone.
 #[test]
 fn missing_code_is_brought_back_before_it_leaves_the_recipe() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1335,8 +1288,7 @@ fn missing_code_is_brought_back_before_it_leaves_the_recipe() -> Result {
     Ok(())
 }
 
-/// a recipe made from another takes that one's tree, so an upstream rebuild that makes the same
-/// files leaves the downstream pin, and its step, alone.
+/// tidy's key takes clean's tree, not clean's key, so tidy's step does not run again.
 #[test]
 fn an_upstream_rebuild_with_the_same_tree_keeps_the_downstream_pin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1385,8 +1337,6 @@ fn a_moved_project_keeps_its_keys() -> Result {
     Ok(())
 }
 
-/// a second build of a key another build is running waits for it and takes its result, so the
-/// step runs once.
 #[test]
 fn two_builds_of_one_key_run_it_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1472,7 +1422,6 @@ fn with_umask(command: &Fetchloom, mask: &str) -> Fetchloom {
     })
 }
 
-/// a step's log is for its owner alone, and keeps only the latest 16 MiB of its output.
 #[cfg(unix)]
 #[test]
 fn the_log_is_private_and_bounded() -> Result {
@@ -1491,9 +1440,8 @@ fn the_log_is_private_and_bounded() -> Result {
     Ok(())
 }
 
-/// a build says how much room the steps it runs may take on the disk holding the cache, and asks
-/// first when that disk has less free above `build_floor`: with no one to ask it stops with
-/// `unconfirmed`, exit 1, before anything runs, and `--yes` goes on.
+/// room is what the cache's disk has free above `build_floor`. with no one to ask, the build
+/// stops before anything runs.
 #[test]
 fn a_build_short_of_room_asks_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1534,9 +1482,8 @@ fn a_build_short_of_room_asks_first() -> Result {
     Ok(())
 }
 
-/// a disk holding the cache with less free than `build_floor` would stop a step at its first
-/// look, so a build refuses before any step runs, with `--yes` too. it names what frees room and
-/// the floor itself, never `--yes`, and data.lock and the data folder stay as they were.
+/// a step would stop at its first look at a disk below the floor, so the build refuses with
+/// `--yes` too, and its help never offers it.
 #[test]
 fn a_build_below_the_floor_stops_before_any_step() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1579,8 +1526,7 @@ fn signal(pid: u32, signal: &str) -> Result {
     }
 }
 
-/// the stops a test can send a build: ctrl-c, and on linux and macos the SIGTERM a scheduler
-/// sends a job it ends.
+/// ctrl-c, and on unix the SIGTERM a scheduler sends a job it ends.
 #[cfg(unix)]
 const STOPS: [&str; 2] = ["-INT", "-TERM"];
 #[cfg(windows)]
@@ -1601,9 +1547,8 @@ fn leaving_a_child(mode: &str) -> Result<(Sandbox, Server, PathBuf, PathBuf)> {
     Ok((sandbox, server, lock, marker))
 }
 
-/// a stop, by ctrl-c or by the SIGTERM a scheduler sends a job it ends, ends the step and what
-/// it started, on windows even a process that ignores ctrl-c, and leaves data.lock and the data
-/// folder as they were. its last line names a SIGTERM, which no person asked for.
+/// on windows even a child that ignores ctrl-c is ended. a SIGTERM's last line names it, since
+/// no person asked for it.
 #[test]
 fn a_stopped_step_leaves_no_process_behind() -> Result {
     for stop in STOPS {
@@ -1641,9 +1586,8 @@ fn a_stopped_step_leaves_no_process_behind() -> Result {
     Ok(())
 }
 
-/// a build that copies iris into `clean`, run with its first mark of finishing work held until
-/// the file `release` appears, once it wrote `<release>.held`, and what data.toml and data.lock
-/// held before it.
+/// a build copying iris into `clean`, held at its first mark of finishing work until `release`
+/// appears, returned once it wrote `<release>.held`, with what [`pins`] read before it.
 #[cfg(unix)]
 fn held_after_the_mark(
     sandbox: &Sandbox,
@@ -1663,10 +1607,7 @@ fn held_after_the_mark(
     Ok((running, pinned))
 }
 
-/// a SIGTERM once the build has run its steps and marked its work as finishing, right before it
-/// writes data.lock, no longer stops it: it says it finishes what it started, and what a second
-/// SIGTERM does, never that it is stopping, then pins and places the result and ends with its
-/// closing line.
+/// the build marks its work as finishing once its steps ran, right before it writes data.lock.
 #[cfg(unix)]
 #[test]
 fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
@@ -1697,7 +1638,7 @@ fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
     Ok(())
 }
 
-/// a second SIGTERM quits a build at once, even past its mark, says so in one line and exits 130.
+/// a second SIGTERM quits even past the mark, where the first lets the build finish.
 #[cfg(unix)]
 #[test]
 fn a_second_term_quits_a_build_at_once() -> Result {
@@ -1721,8 +1662,6 @@ fn a_second_term_quits_a_build_at_once() -> Result {
     Ok(())
 }
 
-/// a SIGTERM once `--accept` has marked its work as finishing, right before it writes data.lock,
-/// lets it pin and place the kept rebuild and end with its closing line, never saying it stops.
 #[cfg(unix)]
 #[test]
 fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
@@ -1759,9 +1698,7 @@ fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
     Ok(())
 }
 
-/// a SIGTERM while a step runs stops the build: it says so, and what a second SIGTERM does,
-/// before any line of the stopped build, ends the step, and leaves data.lock and the data folder
-/// as they were. `--json` keeps the kind of any stop, `interrupted`.
+/// under `--json` a SIGTERM's error has the kind every stop has, `interrupted`.
 #[cfg(unix)]
 #[test]
 fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
@@ -1813,8 +1750,7 @@ fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
     Ok(())
 }
 
-/// a step that ends ends what it started and left running too, so nothing writes while its
-/// result is taken in.
+/// a child left running could write while the result is taken in.
 #[test]
 fn a_finished_step_leaves_no_process_behind() -> Result {
     let (sandbox, _server, lock, _) = leaving_a_child("start-child")?;
@@ -1826,8 +1762,8 @@ fn a_finished_step_leaves_no_process_behind() -> Result {
     Ok(())
 }
 
-/// on windows a build killed outright, as task manager or a cancelled CI job ends one, takes its
-/// step and all the step started along, since the step's job closes with fetchloom.
+/// a kill, as task manager or a cancelled CI job does, takes the step and all it started along,
+/// since the step's job closes with fetchloom.
 #[cfg(windows)]
 #[test]
 fn a_killed_build_leaves_no_process_behind() -> Result {
@@ -1841,9 +1777,8 @@ fn a_killed_build_leaves_no_process_behind() -> Result {
     Ok(())
 }
 
-/// waits until the process the step program started in `lock` mode ends and frees `lock`. a
-/// test waits for this before it reads fetchloom's stderr to its end, since on windows that
-/// process inherits fetchloom's own handles, its stderr among them.
+/// waits until the step's child in `lock` mode ends and frees `lock`. read fetchloom's stderr to
+/// its end only after this, since on windows the child inherits fetchloom's handles, stderr too.
 fn lock_freed(lock: &Path) -> Result {
     wait_until("the step's child to end and free its lock", || {
         Ok(fs::OpenOptions::new()
@@ -1859,8 +1794,7 @@ fn word(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "\\\\")
 }
 
-/// the windows process creation flag that gives a console program a console of its own, without
-/// a window.
+/// the process creation flag that gives a console program a console of its own, without a window.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -1871,9 +1805,8 @@ fn own_console(command: &mut Fetchloom) {
     std::os::windows::process::CommandExt::creation_flags(command.command_mut(), CREATE_NO_WINDOW);
 }
 
-/// presses ctrl-c in the console of the process `pid`, which needs a console of its own, as
-/// [`own_console`] gives it. windows has no command for this and the crate forbids unsafe code,
-/// so powershell calls the console functions.
+/// presses ctrl-c in the console [`own_console`] gave the process `pid`. windows has no command
+/// for this and the crate forbids unsafe code, so powershell calls the console functions.
 #[cfg(windows)]
 fn ctrl_c(sandbox: &Sandbox, pid: u32) -> Result {
     let script = sandbox.folder("console")?.join("ctrl-c.ps1");
@@ -1898,9 +1831,8 @@ fn ctrl_c(sandbox: &Sandbox, pid: u32) -> Result {
     }
 }
 
-/// a powershell script that presses ctrl-c in the console of the process its argument names: it
-/// leaves its own console for that one, ignores ctrl-c itself, and sends it to every process
-/// there.
+/// a powershell script that attaches to the console of the process its argument names, ignores
+/// ctrl-c itself, and sends it to every process there.
 #[cfg(windows)]
 const CTRL_C: &str = r#"param([uint32] $Id)
 Add-Type -Name Console -Namespace FetchloomTests -MemberDefinition @'
@@ -1916,8 +1848,7 @@ if (-not [FetchloomTests.Console]::GenerateConsoleCtrlEvent(0, 0)) { exit 3 }
 exit 0
 "#;
 
-/// a step that runs fetchloom on its own project fails at once, rather than waiting for the
-/// build that runs it.
+/// a step that waited for the build running it would wait forever.
 #[test]
 fn a_step_calling_fetchloom_on_its_project_fails_fast() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1949,9 +1880,7 @@ fn objects(root: &Path) -> Result<std::collections::BTreeSet<String>> {
         .collect())
 }
 
-/// a rebuild of an unchanged recipe that makes other files is refused: data.lock keeps the pin
-/// it has, since only a person may choose the new files. the rebuild is kept for them: status
-/// lists it and cache gc keeps its files.
+/// only a person may choose the new files, so the rebuild is kept for them to see.
 #[test]
 fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2002,10 +1931,7 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     Ok(())
 }
 
-/// a step that reads a file outside its code, as a program or library of the machine it runs on,
-/// makes other files where that file differs, and the same ones each time. the build keeps the
-/// pin and the rebuild, and its help asks for a look at the versions and `status -v` before
-/// `--accept`, rather than calling the step random.
+/// the tool folder stands for a program or library of the machine, outside the recipe's code.
 #[test]
 fn a_rebuild_with_another_tool_version_is_compared_before_it_is_accepted() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2063,9 +1989,7 @@ fn kept_rebuild(sandbox: &Sandbox, server: &Server, recipe: &str) -> Result {
     Ok(())
 }
 
-/// `status -v` names each file of a kept rebuild that differs from data.lock with the cache file
-/// that holds the rebuild's bytes, and `--json` gives the same with the file data.lock pins, so a
-/// person can compare them before `--accept`, which pins those very bytes.
+/// a person compares the files status names before `--accept`, which pins those very bytes.
 #[test]
 fn status_names_where_the_files_of_a_kept_rebuild_are() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2106,9 +2030,7 @@ fn status_names_where_the_files_of_a_kept_rebuild_are() -> Result {
     Ok(())
 }
 
-/// a check runs a step again from the inputs data.lock pins and compares what it makes, file by
-/// file, with the result data.lock pins, which a step that copies its input matches. data.lock
-/// and the data folder stay as they were.
+/// a check reruns the step from the pinned inputs and compares its files with the pinned result.
 #[test]
 fn check_reproduces_a_deterministic_step() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2141,9 +2063,6 @@ fn check_reproduces_a_deterministic_step() -> Result {
     Ok(())
 }
 
-/// a check of a step that is not reproducible fails with what differs and keeps the rebuild,
-/// leaving data.lock and the data folder as they were, and `--accept` then pins those files,
-/// without running anything, places them, and has nothing left to accept after.
 #[test]
 fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2207,9 +2126,7 @@ fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
     Ok(())
 }
 
-/// a check runs every step from the inputs data.lock pins, so a step after one that differs is
-/// checked against the result data.lock pins for what it reads, not the rebuild, and every step
-/// is reported.
+/// a step after one that differs runs from the pinned result, not the rebuild, so tidy matches.
 #[test]
 fn checks_report_every_step() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2259,9 +2176,7 @@ fn checks_report_every_step() -> Result {
     Ok(())
 }
 
-/// a check runs a step from the result data.lock pins for each recipe it reads, never from a
-/// rebuild: where that result is in no cache, data folder or mirror, as on a fresh machine after
-/// the check of the recipe made other files, the step is skipped, and the error says so.
+/// a check never feeds a step a rebuild, even when the pinned result it reads is nowhere.
 #[test]
 fn a_check_skips_a_step_whose_pinned_input_is_nowhere() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2293,8 +2208,7 @@ fn a_check_skips_a_step_whose_pinned_input_is_nowhere() -> Result {
     Ok(())
 }
 
-/// a check compares with what data.lock pins, so a recipe never built, or changed since it was,
-/// is `lock.outdated`, exit 1, before any step runs.
+/// a check compares with what data.lock pins, so it needs a pin of the recipe as it is now.
 #[test]
 fn a_check_refuses_drift_before_running() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2324,9 +2238,7 @@ fn a_check_refuses_drift_before_running() -> Result {
     Ok(())
 }
 
-/// `--locked` never writes data.lock: a recipe never built or changed since, or a fetched
-/// dataset data.toml changed, is `lock.outdated` before anything is fetched or run, and so is a
-/// build that would change a pin anyway, as by dropping one of a recipe data.toml no longer has.
+/// a build that only drops the pin of a recipe data.toml no longer has still writes data.lock.
 #[test]
 fn locked_build_never_writes_data_lock() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2390,8 +2302,7 @@ fn locked_build_never_writes_data_lock() -> Result {
     Ok(())
 }
 
-/// `--prepare` puts in the cache everything a build of the recipes reads and runs nothing, as on
-/// a login node, so a build without the network afterwards, as in a job, makes no request.
+/// this is a cluster's flow: prepare on a login node, then build in a job without the network.
 #[test]
 fn prepare_fetches_inputs_so_an_offline_build_makes_no_requests() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2428,9 +2339,7 @@ fn prepare_fetches_inputs_so_an_offline_build_makes_no_requests() -> Result {
     Ok(())
 }
 
-/// a build of a step data.lock pins, whose result the cache holds, reads nothing, so `--prepare`
-/// fetches nothing for it, while a check runs every step, so `--prepare --check` fetches what it
-/// reads, and a check without the network then makes no request.
+/// a check runs every step, even one that is up to date, so it reads what a build would not.
 #[test]
 fn prepare_check_fetches_what_a_check_reads() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2472,9 +2381,7 @@ fn prepare_check_fetches_what_a_check_reads() -> Result {
     Ok(())
 }
 
-/// a build places the datasets it took once its steps are done, so `--prepare` fetches a placed
-/// dataset that no step reads, here since a mirror gives the result of the only step, and a
-/// build without the network then makes no request.
+/// a mirror gives the only step's result, so no step reads iris, but the build still places it.
 #[test]
 fn prepare_fetches_what_the_build_places() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2508,9 +2415,6 @@ fn prepare_fetches_what_the_build_places() -> Result {
     Ok(())
 }
 
-/// `--prepare` ends by naming the build it prepared for, with the recipes named and `--check`
-/// kept, and once data.lock pins every result as building it now would make, it names no step to
-/// run.
 #[cfg(target_os = "linux")]
 #[test]
 fn prepare_names_the_build_it_prepared_for() -> Result {
@@ -2548,8 +2452,7 @@ fn prepare_names_the_build_it_prepared_for() -> Result {
     Ok(())
 }
 
-/// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
-/// status says it is stale and `--accept` refuses it and changes nothing.
+/// a kept rebuild answers only the recipe and the pin it was kept beside.
 #[test]
 fn accept_refuses_after_the_recipe_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2591,8 +2494,6 @@ fn accept_refuses_after_the_recipe_changed() -> Result {
     Ok(())
 }
 
-/// a kept rebuild goes with its recipe: a sync after data.toml lost the recipe, or `remove` of
-/// it, drops the rebuild with the recipe's pin, so cache gc frees its files.
 #[test]
 fn a_kept_rebuild_goes_with_its_recipe() -> Result {
     for (edited, args) in [(true, &["sync"][..]), (false, &["remove", "clean"])] {
@@ -2630,8 +2531,7 @@ fn a_kept_rebuild_goes_with_its_recipe() -> Result {
     Ok(())
 }
 
-/// sync places a pinned result from the cache and never runs its step; with the result in no
-/// cache, it names the build that makes it, unless a download of the same sync brings its bytes.
+/// with the result in no cache, sync names the build, unless its own downloads bring the bytes.
 #[test]
 fn sync_places_a_result_and_never_builds_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2674,9 +2574,6 @@ fn sync_places_a_result_and_never_builds_it() -> Result {
     Ok(())
 }
 
-/// a sync of every dataset on a machine where neither the cache nor a mirror holds a pinned
-/// result places the rest and leaves the result out with a warning naming its build, as an add
-/// does, while `--locked` or naming the recipe stops.
 #[test]
 fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2768,8 +2665,7 @@ fn pin_again(work: &Path, held: &BTreeMap<String, Vec<u8>>) -> Result {
     Ok(())
 }
 
-/// a result left out takes along the file an older pin of it placed, so no script reads a
-/// result data.lock no longer pins.
+/// a file left behind would let a script read a result data.lock no longer pins.
 #[test]
 fn a_left_out_result_retires_its_older_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2809,8 +2705,6 @@ fn a_left_out_result_retires_its_older_files() -> Result {
     Ok(())
 }
 
-/// `path` answers a built recipe's folder and files, and `export` lists them, as for any
-/// dataset.
 #[test]
 fn path_and_export_answer_a_built_result() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2844,7 +2738,7 @@ fn path_and_export_answer_a_built_result() -> Result {
     Ok(())
 }
 
-/// a step that changes its own code leaves a result no recipe answers, so the build fails.
+/// the result of a step that edits its code answers no recipe, so nothing is pinned.
 #[test]
 fn a_step_that_edits_its_code_fails() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2863,9 +2757,8 @@ fn a_step_that_edits_its_code_fails() -> Result {
     Ok(())
 }
 
-/// a step whose program is not there cannot start, and the build says where it looked: on PATH
-/// for a bare name, and in the project folder for one with a folder in it, as a clone has none
-/// before its environment is set up. once the project folder holds it, the same recipe builds.
+/// the build says where it looked: on PATH for a bare name, in the project folder for a path,
+/// as in a clone before its environment is set up.
 #[test]
 fn a_missing_program_cannot_start() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2912,8 +2805,8 @@ fn a_missing_program_cannot_start() -> Result {
     Ok(())
 }
 
-/// on windows a step's program is found through PATHEXT as a shell finds it, so a `.cmd` shim on
-/// PATH, as npm and many installers leave, runs, and gets its arguments as written.
+/// a step's program is found through PATHEXT as a shell finds it, so a `.cmd` shim on PATH, as
+/// npm and many installers leave, runs and gets its arguments as written.
 #[cfg(windows)]
 #[test]
 fn a_batch_shim_on_path_runs_with_its_arguments() -> Result {
@@ -2932,7 +2825,7 @@ fn a_batch_shim_on_path_runs_with_its_arguments() -> Result {
     Ok(())
 }
 
-/// cache gc keeps the files of a result data.lock pins, which only a build could make again.
+/// only a build could make a pinned result's files again.
 #[test]
 fn gc_keeps_a_pinned_result() -> Result {
     let sandbox = Sandbox::new()?;
