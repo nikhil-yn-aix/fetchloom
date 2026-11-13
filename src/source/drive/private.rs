@@ -1,7 +1,5 @@
-//! drive items shared with an account rather than with anyone who has the link, read through
-//! drive's api once drive refused them without a token. the network decides whether a request
-//! carries the token, by the `drive_folders` setting and by what google's own listings say a
-//! listed folder holds; this reads what the api answers.
+//! drive items shared with an account rather than anyone with the link, read through drive's api
+//! once drive refused them without a token. the network decides which requests carry the token.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -98,10 +96,9 @@ pub(super) async fn opened(item: &Item, api: &impl Api, refused: Error) -> Resul
     }
 }
 
-/// what listed folder `root` holds, learned so drive's api may be asked for those items with the
-/// token: its page first, which a folder shared with anyone who has the link shows to anyone,
-/// then drive's api, once that page refused. a listed file, or a folder with nothing in it,
-/// holds nothing to learn.
+/// learns what listed folder `root` holds, so drive's api may be asked for those items with the
+/// token: from its page first, then from drive's api once that page refused. a listed file, or an
+/// empty folder, holds nothing to learn.
 ///
 /// # Errors
 ///

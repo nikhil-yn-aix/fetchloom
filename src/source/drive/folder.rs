@@ -239,9 +239,8 @@ mod tests {
     use super::super::{is_id, page};
     use super::*;
 
-    /// any page drive could send: nothing panics, undoing references never makes text longer,
-    /// every folder entry links a drive id, and a download page leads on only after a 200, and
-    /// only to an https link.
+    /// any page drive could send: nothing panics, undoing references never lengthens text, every
+    /// folder entry links a drive id, and a download page leads on only after a 200, to https.
     #[test]
     fn fuzz_drive_pages() {
         let asked = [

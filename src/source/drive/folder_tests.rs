@@ -149,8 +149,7 @@ fn a_deleted_folder_is_unresolved() {
     assert_eq!(err.kind, Kind::ReferenceUnresolved);
 }
 
-/// a status drive is not known to answer a folder page with is told with the status and the
-/// folder, rather than as a folder that is private or gone.
+/// rather than as a folder that is private or gone.
 #[test]
 fn a_folder_page_answered_with_another_status_names_it() {
     let recorded = Recorded::default().on(&page(DEEP), 418, Vec::new());

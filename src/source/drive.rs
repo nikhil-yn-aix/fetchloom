@@ -1,7 +1,6 @@
-//! google drive: shared files and folders, pasted as links. a file downloads from drive's
-//! download host, which may first send a page that confirms the download or refuses it. an item
-//! shared with an account rather than with anyone who has the link is read through drive's api,
-//! once drive refused it without a token, when the `drive_folders` setting names it.
+//! google drive: shared files and folders, pasted as links. a file comes from drive's download
+//! host, which may first send a page that confirms or refuses it; an item shared with an account
+//! goes through drive's api, once refused without a token, when `drive_folders` names it.
 
 mod folder;
 mod html;

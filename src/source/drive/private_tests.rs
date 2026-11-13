@@ -239,8 +239,7 @@ fn a_listing_fetchloom_cannot_trust_is_refused() {
     );
 }
 
-/// a folder drive refused to anyone with its link is listed through drive's api only when the
-/// network says a token may go; otherwise the refusal says what would let it.
+/// otherwise the refusal says what would let it.
 #[test]
 fn a_refused_folder_goes_to_drives_api_only_when_the_network_lets_it() {
     let ready = refused_page(lab(), ROOT).private(Private::Ready);
@@ -286,7 +285,6 @@ fn a_refused_folder_goes_to_drives_api_only_when_the_network_lets_it() {
     );
 }
 
-/// an open link drive refuses names a folder or a file: drive's api says which.
 #[test]
 fn an_open_link_drive_refuses_is_what_drives_api_says_it_is() {
     let open = |id: &str| format!("https://drive.google.com/open?id={id}");
@@ -356,11 +354,10 @@ fn drives_refusals_and_documents_say_what_to_do() {
     );
 }
 
-/// a private folder of the tester's, read for real: set `FETCHLOOM_TEST_LIVE_DRIVE_FOLDER` to
-/// its id, and `GOOGLE_APPLICATION_CREDENTIALS` to a service account's key it is shared with, or
-/// sign in with `gcloud auth application-default login --client-id-file=...` and the drive
-/// scope. it lists the folder through drive's api, which only a refused folder page leads to,
-/// and downloads its first file, checked against the checksums drive states.
+/// a private folder of the tester's, read for real: set `FETCHLOOM_TEST_LIVE_DRIVE_FOLDER` to its
+/// id, and `GOOGLE_APPLICATION_CREDENTIALS` to a key of a service account it is shared with, or
+/// sign in with `gcloud auth application-default login --client-id-file=...` and the drive scope.
+/// it lists the folder through drive's api and checks its first file against drive's checksums.
 #[test]
 #[ignore = "live: talks to google drive with application default credentials"]
 fn live_private_drive() {

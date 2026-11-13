@@ -1,7 +1,7 @@
 //! the little HTML drive's pages need read: the text between two markers, an attribute of a tag,
 //! and text with its tags and character references undone.
 
-// unicode scalars need at most six hex digits or seven decimal digits.
+// unicode scalars need at most six hex digits or seven decimal digits
 const LONGEST_REFERENCE: usize = 10;
 
 /// the text between `start` and the next `end` after it.
@@ -38,7 +38,7 @@ pub(super) fn unescape(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         plain.push_str(&rest[..at]);
         rest = &rest[at..];
-        // an ASCII semicolon is a character boundary even when the lookahead ends inside UTF-8.
+        // an ASCII semicolon is a character boundary even when the lookahead ends inside UTF-8
         let reference = rest
             .as_bytes()
             .iter()
