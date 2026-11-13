@@ -1,9 +1,6 @@
-//! which requests carry a google access token: those for a cloud storage bucket the
-//! `gcs_buckets` setting lists, once cloud storage refused one without a token this run, and only
-//! to storage.googleapis.com over https, before any redirect, and those to drive's api that
-//! [`drive`] lets through. the token comes from the application default credentials, asked of
-//! google's token endpoint when first needed and again shortly before it expires, by one request
-//! while the others wait.
+//! which requests carry a google access token: those to storage.googleapis.com over https for a
+//! bucket `gcs_buckets` lists, once it refused one without, and those to drive's api [`drive`]
+//! lets through, each before any redirect.
 
 mod drive;
 
@@ -129,10 +126,9 @@ impl Google {
         self
     }
 
-    /// the bucket `url` is for, when it is a cloud storage request over https to
-    /// storage.googleapis.com that carries no secret of its own: an object by its path, or the
-    /// JSON API's listing or download of one. else the drive item it is for, when it is a request
-    /// to drive's api that [`drive::locate`] takes.
+    /// the bucket `url` is for, when it is a request over https to storage.googleapis.com that
+    /// carries no secret of its own, for an object or the JSON API's listing or download of one;
+    /// else the drive item [`drive::locate`] takes it for.
     pub(crate) fn locate(&self, url: &Url) -> Option<Located> {
         if let Some(asked) = drive::locate(url) {
             return Some(Located {
@@ -167,9 +163,8 @@ impl Google {
         })
     }
 
-    /// the token a request for `located` carries: none until cloud storage refused its bucket
-    /// without one this run, for a drive item none unless [`drive`] lets it have one, and none
-    /// when no credentials were found.
+    /// the token a request for `located` carries: none until its bucket refused one without it
+    /// this run, none for a drive item [`drive`] keeps out, and none without credentials.
     ///
     /// # Errors
     ///
@@ -473,10 +468,9 @@ impl Net {
         Ok(Tokened { stored, bearer })
     }
 
-    /// whether the request goes again after `response` answered `hop`: once refused without a
-    /// token for a listed bucket with credentials, and once refused a token with 401, as an
-    /// expired or revoked one is, which is then forgotten. otherwise the response is told how
-    /// the request went.
+    /// whether the request goes again after `response` answered `hop`: once when a listed bucket
+    /// with credentials refused it without a token, and once when a 401 refused its token, which
+    /// is then forgotten. otherwise the response is told how the request went.
     ///
     /// # Errors
     ///
@@ -511,9 +505,8 @@ impl Net {
         Ok(false)
     }
 
-    /// a token of `scope` for `credentials` from google's token endpoint, and how long it lives:
-    /// one POST of the grant, never redirected and carrying no other credential, tried again only
-    /// for a failure another try may get past.
+    /// a token of `scope` for `credentials` from google's token endpoint, and how long it lives,
+    /// tried again only for a failure another try may get past.
     async fn google_token(
         &self,
         credentials: &Credentials,
@@ -647,7 +640,7 @@ impl Net {
 }
 
 /// the server on this machine that `FETCHLOOM_TEST_GOOGLE_TOKEN` names to stand in for google's
-/// token endpoint, read once when the network is made. release builds never read it.
+/// token endpoint, read once when the network is made.
 #[cfg(debug_assertions)]
 pub(crate) fn test_token_endpoint() -> Option<Url> {
     super::api::local_test_server("FETCHLOOM_TEST_GOOGLE_TOKEN")

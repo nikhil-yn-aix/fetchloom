@@ -124,8 +124,8 @@ fn google_net(listed: &[&str], credentials: Option<&Path>, endpoint: &Url) -> Ne
     .with_google(google)
 }
 
-/// a client that carries the requests `send` shapes to a server on this machine instead of
-/// their hosts. it is the test's own, so it installs the crypto provider itself.
+/// a client that carries the requests `send` shapes to a local server. it installs the crypto
+/// provider itself, since fetchloom installs it only when it first goes online.
 pub(super) fn transport() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
@@ -229,8 +229,7 @@ fn a_token_goes_to_cloud_storage_over_https_alone() {
     }
 }
 
-/// four downloads start together for a listed private bucket: each goes without a token, is
-/// refused, and goes again with the one token a single request to the token endpoint got. a
+/// four downloads at once, all with the one token a single request to the token endpoint got. a
 /// bucket nobody listed never gets it.
 #[test]
 fn a_listed_bucket_refused_without_a_token_is_asked_again_with_one() {
@@ -358,8 +357,7 @@ fn a_token_never_follows_a_redirect() {
     );
 }
 
-/// a token cloud storage refuses with a 401, as an expired or revoked one, is replaced once; a
-/// second refusal is the answer.
+/// as a 401 refuses an expired or revoked one; a second refusal is the answer.
 #[test]
 fn a_token_cloud_storage_refuses_is_replaced_once() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -393,9 +391,8 @@ fn a_token_cloud_storage_refuses_is_replaced_once() {
     assert_eq!(asked_for_tokens.lock().unwrap().len(), 3);
 }
 
-/// a token without the scope that reads cloud storage is refused with 403 and google's
-/// `insufficient_scope`: no new token would get further, and the refusal says how to sign in
-/// with the scope rather than to ask the owner.
+/// refused with 403 and google's `insufficient_scope`: no new token would get further, so the
+/// refusal says how to sign in with the scope rather than to ask the owner.
 #[test]
 fn a_token_without_the_storage_scope_says_how_to_get_one() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -478,8 +475,7 @@ fn a_listed_bucket_without_usable_credentials_asks_no_token_endpoint() {
     assert!(asked_for_tokens.lock().unwrap().is_empty());
 }
 
-/// a login google refuses, as a revoked one, stops the request with what google said, and the
-/// rest of the run hears the same without asking again.
+/// and the rest of the run hears the same without asking again.
 #[test]
 fn a_refused_login_stops_requests_with_what_google_said() {
     let (endpoint, asked_for_tokens) = server(|_, _| {

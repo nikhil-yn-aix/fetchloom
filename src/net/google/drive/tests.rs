@@ -130,9 +130,8 @@ fn drive_api_requests_are_located_strictly() {
     }
 }
 
-/// a token goes with a request about a listed item only once drive refused it without one, and
-/// with one about an item only once google's listing of a refused listed folder, asked with the
-/// token, put it there. what a lock names, or a listing of an unlisted folder, teaches nothing.
+/// what they hold being what google's listing, asked with the token, put there. what a lock
+/// names, or a listing of an unlisted folder, teaches nothing.
 #[test]
 fn a_drive_token_goes_only_to_listed_items_drive_refused_and_what_they_hold() {
     let drive = Drive::new(listed(&[ROOT, SUB]));
@@ -161,8 +160,7 @@ fn a_drive_token_goes_only_to_listed_items_drive_refused_and_what_they_hold() {
     assert!(!Drive::default().may_carry(ROOT));
 }
 
-/// a listing that went without the token teaches nothing, though its folder is listed and
-/// refused: only an answer to the token speaks for what the account may read.
+/// though its folder is listed and refused: only an answer to the token speaks for the account.
 #[test]
 fn a_listing_answered_without_the_token_proves_nothing() {
     let (endpoint, _) = tokens();
@@ -192,9 +190,8 @@ fn a_listing_answered_without_the_token_proves_nothing() {
     assert!(net.google.drive.may_carry(FILE));
 }
 
-/// the token goes to drive's api once drive refused the listed file, with one request to the
-/// token endpoint, and never to the hop a redirect leads to. an item nobody listed never gets
-/// it, though drive refused it too.
+/// once drive refused the listed file, after one request to the token endpoint. an item nobody
+/// listed never gets it, though drive refused it too.
 #[test]
 fn a_drive_token_goes_to_drives_api_alone_and_never_follows_a_redirect() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -234,7 +231,7 @@ fn a_drive_token_goes_to_drives_api_alone_and_never_follows_a_redirect() {
     );
 }
 
-/// a token drive's api refuses with a 401, as an expired or revoked one, is replaced once.
+/// as a 401 refuses an expired or revoked one.
 #[test]
 fn a_token_drive_refuses_is_replaced_once() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -293,9 +290,8 @@ fn link() -> String {
     format!("https://drive.google.com/open?id={ROOT}")
 }
 
-/// a refusal names the account that asked and what would let it read the item: the service
-/// account's email to share with, and the gcloud command for a login without the drive scope,
-/// which google says in a header or in its words alone.
+/// the service account's email to share with, or the gcloud command for a login without the
+/// drive scope, which google says in a header or in its words alone.
 #[test]
 fn a_refusal_names_the_account_and_what_would_let_it_read() {
     let link = link();

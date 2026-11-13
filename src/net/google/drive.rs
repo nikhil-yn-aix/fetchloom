@@ -1,10 +1,6 @@
-//! which requests to google drive's api carry a google access token: those about a file or folder
-//! the `drive_folders` setting lists, or about an item that google's own listing of such a
-//! folder, asked with the token, put inside it this run. the token goes only once drive refused
-//! the listed item without one this run, only to www.googleapis.com over https, and never after
-//! a redirect. a drive token reads every file its account can see, so nothing data.toml or
-//! data.lock says decides what gets it: a file a lock names is found inside a listed folder by
-//! google's word, never by the lock's.
+//! which requests to drive's api carry a google access token: those about an item `drive_folders`
+//! lists, or that google's own listing put inside one this run. a drive token reads every file its
+//! account can see, so nothing data.toml or data.lock says decides what gets one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -354,9 +350,8 @@ fn turned_off(identity: &str) -> Error {
     .help("turn on the google drive api for that project at https://console.cloud.google.com/apis/library/drive.googleapis.com, wait a minute, then run the same command again")
 }
 
-/// `refused`, google's refusal of `credentials` asked for a token of `scope`: a login asked for
-/// drive signs in again through an oauth client of one's own, since gcloud's own gets no drive
-/// scope.
+/// google's `refused` answer to `credentials` asking for `scope`: a drive login signs in again
+/// through an oauth client of one's own, since gcloud's own client gets no drive scope.
 pub(super) fn relogin(refused: Error, credentials: &Credentials, scope: &str) -> Error {
     if scope != DRIVE_READ
         || refused.kind != Kind::AuthRequired
@@ -426,10 +421,9 @@ impl Said {
 }
 
 impl Net {
-    /// learns that drive refused `id` without a token, as it refuses anyone with its link, and
-    /// says whether drive's api may be asked about it with one: when `drive_folders` lists it,
-    /// or a listed folder that drive also refused holds it. listing each listed folder with the
-    /// token, at most once a run, tells which do.
+    /// learns that drive refused `id` without a token, and says whether drive's api may be asked
+    /// about it with one: when `drive_folders` lists it, or a listed folder drive also refused
+    /// holds it, as listing each such folder with the token, at most once a run, tells.
     ///
     /// # Errors
     ///
@@ -479,10 +473,9 @@ impl Net {
         })
     }
 
-    /// downloads a drive file known by its `uc` link: from drive's download host, as anyone with
-    /// the link may, and once drive refused that without a token, from drive's api with one, when
-    /// `drive_folders` lists the file or a folder found to hold it. a file whose listed folder
-    /// drive refused this run goes to drive's api from the start.
+    /// downloads a drive file known by its `uc` link from drive's download host, and once that is
+    /// refused, from drive's api with a token, when `drive_folders` covers it. a file whose listed
+    /// folder drive refused this run goes to drive's api from the start.
     pub(in crate::net) async fn drive_download(
         &self,
         fetch: &Fetch,
