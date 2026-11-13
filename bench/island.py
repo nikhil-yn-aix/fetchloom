@@ -190,7 +190,7 @@ def check(args):
     disjoint(args.cpus, args.build_cpus)
     if args.rounds < 10 or args.jobs < 1 or args.jobs > len(args.build_cpus):
         raise ValueError("use at least 10 rounds and 1 to the build CPU count jobs")
-    if not math.isfinite(args.effect) or not 0 < args.effect < 1:
+    if not 0 < args.effect < 1:
         raise ValueError("effect must be a finite fraction between 0 and 1")
     if not math.isfinite(args.noise_multiple) or args.noise_multiple < 1:
         raise ValueError("noise-multiple must be finite and at least 1")

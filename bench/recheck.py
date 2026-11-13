@@ -215,8 +215,8 @@ def cases(root, arm, binary, folder, origin):
 
 class Files(native.Quiet):
     def copyfile(self, source, outputfile):
-        # the kernel copies the body, so the server is not what a 1 GiB get waits on
-        self.wfile.flush()
+        # the kernel copies the body, so the server is not what a 1 GiB get waits on; the headers
+        # are already out, as wfile holds no buffer
         self.connection.sendfile(source)
 
 
@@ -233,12 +233,10 @@ def turn(path):
     if path is None:
         yield
         return
+    # closing the file releases the lock, as the case ends or fails
     with open(path, "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+        yield
 
 
 def measure(name, specs, rounds, seed, out, cpus, timeout):
