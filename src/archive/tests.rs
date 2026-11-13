@@ -229,9 +229,9 @@ fn the_ratio_counts_every_part_once() {
         let unpacked = unpack(&input, format, &limits, &scratch.cache, &|_| false, None);
         assert!(unpacked.is_ok(), "{format:?}: {:?}", unpacked.err());
     }
-    let shared = super::zip::tests::overlapping(512);
+    let shared = super::zip::tests::overlapping(8, 1 << 20);
     let limits = Limits {
-        ratio: 200,
+        ratio: 4,
         ..Limits::default()
     };
     let scratch = Scratch::new();
@@ -246,7 +246,7 @@ fn the_ratio_counts_every_part_once() {
         Some(0),
     )
     .unwrap_err();
-    assert!(err.message.contains("200 times"), "{}", err.message);
+    assert!(err.message.contains("past 4 times"), "{}", err.message);
     scratch.assert_empty();
 }
 

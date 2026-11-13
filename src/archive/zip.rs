@@ -432,8 +432,8 @@ pub(super) mod tests {
         scratch.assert_stored(&unpacked.members[1], b"readme\n");
     }
 
-    /// a zip of `count` members that all share the bytes of one stored member of 64 KiB.
-    pub(in crate::archive) fn overlapping(count: usize) -> Vec<u8> {
+    /// a zip of `count` members that all share the bytes of one stored member of `size` bytes.
+    pub(in crate::archive) fn overlapping(count: usize, size: usize) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         writer
             .start_file(
@@ -441,7 +441,7 @@ pub(super) mod tests {
                 SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
             )
             .unwrap();
-        writer.write_all(&vec![b'x'; 64 << 10]).unwrap();
+        writer.write_all(&vec![b'x'; size]).unwrap();
         for index in 1..count {
             writer
                 .shallow_copy_file("member-0000.bin", &format!("member-{index:04}.bin"))
@@ -450,15 +450,18 @@ pub(super) mod tests {
         writer.finish().unwrap().into_inner()
     }
 
+    /// members that share one member's bytes count each time they unpack: 8 sharing 1 MiB pass 4
+    /// times the archive at the fifth, once past the 4 MiB the ratio waits for. few large members
+    /// keep this quick where each unpacked file is flushed on its own, as on windows.
     #[test]
     fn overlapping_members_cannot_expand_past_the_archive_ratio() {
-        let payload = vec![b'x'; 64 << 10];
-        let bytes = overlapping(512);
+        let payload = vec![b'x'; 1 << 20];
+        let bytes = overlapping(8, payload.len());
         let limits = crate::archive::Limits {
-            ratio: 200,
+            ratio: 4,
             ..crate::archive::Limits::default()
         };
-        assert!((payload.len() as u64) * 512 > bytes.len() as u64 * limits.ratio);
+        assert!((payload.len() as u64) * 8 > bytes.len() as u64 * limits.ratio);
         assert!(
             ::zip::ZipArchive::new(Cursor::new(&bytes))
                 .unwrap()
@@ -479,7 +482,7 @@ pub(super) mod tests {
             panic!("shared zip data bypassed the archive's physical expansion limit");
         };
         assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(error.message.contains("200 times"), "{}", error.message);
+        assert!(error.message.contains("past 4 times"), "{}", error.message);
         scratch.assert_empty();
     }
 
