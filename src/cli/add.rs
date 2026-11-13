@@ -1,6 +1,5 @@
-//! `fetchloom add`: a dataset into data.toml, pinned in data.lock and placed with the rest of the
-//! project. every byte goes into the cache before data.toml or data.lock is written, and a failure
-//! after that puts back what the add wrote.
+//! `fetchloom add`: a dataset into data.toml, pinned in data.lock and placed. every byte is cached
+//! before either file is written, and a failure after that puts back what the add wrote.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,7 +43,6 @@ struct AddProject {
     manifest: Manifest,
     /// data.lock as read, until the add takes it to lock again.
     old: Option<Lock>,
-    /// the text data.lock was read from.
     lock_text: Option<String>,
     /// a failed add could not put back what it changed in data.toml or data.lock, so its error
     /// holds the steps that do.
@@ -169,7 +167,6 @@ impl<'a> BeforeAdd<'a> {
         Ok(saved)
     }
 
-    /// notes that the add is about to write `bytes` to the project file `name`.
     fn writing(&mut self, name: &str, bytes: &[u8]) {
         if let Some(file) = self.files.iter_mut().find(|file| file.name == name) {
             file.writing = Some(digest::sha256(bytes));
@@ -210,8 +207,7 @@ struct List {
 }
 
 impl List {
-    /// how messages name `line`: as `line 2 of links.txt`, or none for a link typed on the
-    /// command line, which the message names itself.
+    /// how messages name `line`, as `line 2 of links.txt`; none for a typed link.
     fn at(&self, line: &Line) -> Option<String> {
         self.name.as_deref().map(|name| line.named(name))
     }
@@ -222,9 +218,8 @@ impl List {
             .unwrap_or_else(|| crate::net::mask_query(&line.link).into_owned())
     }
 
-    /// lets `net` reach the origin of each link typed on the command line, as it does a single
-    /// typed link's. a list is a file anyone could have written, as data.toml is, so no host it
-    /// names is trusted.
+    /// lets `net` reach the origin of each link typed on the command line, as for one typed link.
+    /// a list is a file anyone could have written, as data.toml is, so no host it names is trusted.
     fn trust_typed(&self, net: &Net) {
         if self.name.is_none() {
             for (_, parsed) in &self.lines {
@@ -312,9 +307,8 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     })
 }
 
-/// what `args` ask to add: a list of links, read and checked whole before any request, several
-/// links typed together, checked the same way, or one link or search words, refused when they
-/// name something on this machine.
+/// what `args` ask to add: a list of links read or typed, checked whole before any request, a path,
+/// or one link or search words, refused when they name something on this machine.
 async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     if let Some(path) = args.input_file.take() {
         let (name, text) = links::read(&path, &context.stop).await?;
@@ -377,9 +371,8 @@ fn several(args: &Add, links: Vec<String>) -> Result<List, Error> {
     })
 }
 
-/// what an add settles before it holds the project: whether to start a project in `root`, and
-/// which dataset search words name. a question answered no, q at the list or ctrl-c then leaves
-/// nothing behind.
+/// what an add settles before it holds the project: whether to start one in `root`, and which
+/// dataset search words name, so a no, q at the list or ctrl-c leaves nothing behind.
 async fn before_holding(
     context: &Context,
     request: &mut Request,
@@ -397,9 +390,8 @@ async fn before_holding(
     Ok(())
 }
 
-/// asks before starting a project in `root` when a project there takes in far more than one
-/// project's folders: `root` is the home folder or the root of a disk. with nobody to ask it
-/// refuses, unless `--yes` said yes.
+/// asks before starting a project in `root` when it is the home folder or a disk's root, which
+/// take in far more than one project's folders. with nobody to ask it refuses, unless `--yes`.
 fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(), Error> {
     let what = if root.parent().is_none() {
         "the root of a disk"
@@ -441,8 +433,6 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
     }
 }
 
-/// the question before a project starts in `root`, which is `what`: the home folder or the
-/// root of a disk.
 fn start_question(root: &Path, what: &str) -> String {
     format!(
         "{} is {what}.\na project there takes in every folder below it. start one anyway?",
@@ -450,9 +440,8 @@ fn start_question(root: &Path, what: &str) -> String {
     )
 }
 
-/// `error`, once it says what state the project is in when a stop ended the add, which the stop's
-/// own message does not. `restored` says whether the add left no change of its own in data.toml
-/// and data.lock, having made none or put back what it made.
+/// `error`, saying what state the project is in when a stop ended the add. `restored` says whether
+/// the add left data.toml and data.lock with no change of its own.
 fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     // a cancel the person chose says itself what it cancelled, and a stop asked once the add was
     // in place changed nothing about it
@@ -480,9 +469,8 @@ fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     stop
 }
 
-/// resolves `link`, typed for a new dataset, with the help its failure needs: one with nothing at
-/// it is fixed on the command line, and one a source may not show may be a typo. a link
-/// `manifest` has already is fixed there, so its help stays.
+/// resolves `link`, typed for a new dataset, with help to fix the command line when nothing is
+/// there and a guess when a source may not show it. a link `manifest` has already keeps its help.
 async fn resolve_typed(
     context: &Context,
     net: &Net,
@@ -503,12 +491,8 @@ async fn resolve_typed(
     }
 }
 
-/// `error`, a source's answer that it shows no dataset of the name asked, which hugging face and
-/// kaggle give alike, signed in or not, for one that does not exist and for a private one, with
-/// the help of a typo: the command the person meant, when the source lists a public dataset of
-/// the same owner one typo from the link. a sign-in could not help then, so none is offered. it
-/// asks once, with no second try, and never offline. under `--json` the guess is in the help
-/// alone, since a guess is never a fix.
+/// `error`, a source showing no dataset of that name, which hugging face and kaggle say of a
+/// private one too, with the command meant when the owner has a public dataset one typo away.
 async fn near_miss(
     context: &Context,
     net: &Net,
@@ -545,7 +529,6 @@ async fn near_miss(
     error.help(format!("did you mean `{meant}`?"))
 }
 
-/// the add once the project is held: everything but the steps before holding it.
 async fn add_held(
     context: &Context,
     adding: &mut AddProject,
@@ -655,9 +638,8 @@ async fn add_held(
     })
 }
 
-/// `add <path>`: the files of a folder, or one file, on this machine, pinned by their bytes. with
-/// `--as` naming a dataset data.toml has as an import, the files supply it instead: they must be
-/// the ones data.lock pins, and then only the data folder changes. the files are only read.
+/// `add <path>`: a folder's files, or one file, read and pinned by their bytes. with `--as` naming
+/// an import data.toml has, they must be the files data.lock pins, and only fill the data folder.
 async fn import_held(
     context: &Context,
     adding: &mut AddProject,
@@ -785,9 +767,8 @@ fn import_source<'e>(entry: &'e manifest::Entry, name: &str) -> Result<&'e Sourc
     })
 }
 
-/// the source an import is checked against: data.toml's for `supplied`, an import `--as` names,
-/// whose patterns and extract setting stay as data.toml has them, or else one made from `args`,
-/// once `--as` gives a usable name.
+/// the source an import is checked against: data.toml's for `supplied`, an import `--as` names, or
+/// else one made from `args`, once `--as` gives a usable name.
 fn import_entry(manifest: &Manifest, supplied: Option<&str>, args: &Add) -> Result<Source, Error> {
     if let Some(name) = supplied {
         return supplied_entry(manifest, name, args);
@@ -916,7 +897,7 @@ async fn import_new(
     })
 }
 
-/// the entry of `name`, an import in data.toml that `add <path> --as <name>` supplies. its
+/// the source of `name`, an import in data.toml that `add <path> --as <name>` supplies. its
 /// patterns and extract setting stay as data.toml has them.
 fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<Source, Error> {
     if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() || args.no_extract {
@@ -931,8 +912,7 @@ fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<Source,
     import_source(&manifest.datasets[name], name).cloned()
 }
 
-/// the error of a supply whose folder, `shown`, holds other files than data.lock pins for `name`,
-/// as `difference` says first.
+/// a supply whose folder, `shown`, holds other files than data.lock pins for `name`.
 fn other_files(shown: &str, name: &str, difference: String) -> Error {
     Error::new(
         Kind::LocalIo,
@@ -945,10 +925,8 @@ fn other_files(shown: &str, name: &str, difference: String) -> Error {
     ))
 }
 
-/// supplies an import from its files copied into the cache: when data.lock pins them, nothing
-/// but the data folder changes; when it holds no pin of them, they are pinned as data.toml's
-/// entry asks. other bytes than data.lock pins change nothing. `shown` names the folder, and
-/// `told` what was copied.
+/// supplies an import from its files copied into the cache: when data.lock pins them only the data
+/// folder changes, and with no pin they are pinned as data.toml asks. other bytes are refused.
 async fn supply(
     work: &Loop<'_>,
     adding: &AddProject,
@@ -999,9 +977,8 @@ async fn supply(
     })
 }
 
-/// `add <path> --dry-run`: what importing the files `walked` found in `shown` as `name` would
-/// change, or supplying them when `supplying`, found without reading a byte of them, told from
-/// `here`.
+/// `add <path> --dry-run`: what importing the files `walked` found in `shown` as `name`, or
+/// supplying them, would change, found without reading a byte of them.
 fn preview_import(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1055,10 +1032,8 @@ fn preview_import(
     }
 }
 
-/// what an import of the folder at `start`, typed as `shown`, takes: the dataset it supplies
-/// files for, when `--as` names an import data.toml has, the entry it makes, and the files a walk
-/// of the folder found. it says what the walk left out, and for a new dataset that unpacks, hints
-/// keeping numbered tar shards packed, as a bucket of them hints, before anything is copied.
+/// the import `--as` names that `start`'s files supply, if any, their source and the walk's files.
+/// before any copy it says what the walk left out, and may hint keeping numbered tar shards packed.
 fn walk_import(
     context: &Context,
     manifest: &Manifest,
@@ -1138,9 +1113,8 @@ fn tell_system(output: &Output, shown: &str, system: &[String]) {
     }
 }
 
-/// `add -i`, or several links typed together: a dataset for each link, resolved, downloaded and
-/// placed together, with data.toml and data.lock each written once. a link data.toml has already
-/// stays as it is.
+/// `add -i`, or several links typed: a dataset for each, resolved, downloaded and placed together,
+/// with data.toml and data.lock each written once. a link data.toml has stays as it is.
 async fn add_list_held(
     context: &Context,
     adding: &mut AddProject,
@@ -1256,10 +1230,8 @@ struct NewDatasets {
     already: Vec<String>,
 }
 
-/// the datasets the lines of `list` add to data.toml, `found` holding each line's listing and how
-/// data.toml records it. a line naming a dataset data.toml has already stays as it is; each other
-/// line becomes a dataset named apart from data.toml's datasets and from each other's, noted on
-/// its line of `lines`. data.toml's text is read and written once however long the list.
+/// the datasets the lines of `list` add: one data.toml has stays, and each other gets a name apart
+/// from every other, noted in `lines`. data.toml's text is written once however long the list.
 fn new_datasets(
     output: &Output,
     adding: &AddProject,
@@ -1337,10 +1309,8 @@ struct Listed {
     entry: manifest::Entry,
 }
 
-/// how data.toml records what `line` of a list, `at` in it, names, once the files its listing
-/// keeps are checked: a file or folder the link points at is selected, and a SHA-256 on the line
-/// must name the one file left, unless its source states another. a link typed on the command
-/// line is at no line, and its messages name it.
+/// how data.toml records what `line`, `at` in its list, names: the file or folder its link points
+/// at is selected, and a SHA-256 on the line needs one file left, whose stated hash must match.
 fn listed_entry(
     at: Option<&str>,
     line: &Line,
@@ -1487,9 +1457,8 @@ async fn resolve_lines(
     Ok(listings.into_iter().flatten().collect())
 }
 
-/// a line of a list as messages name it, such as `line 2 of links.txt`, or none for a link typed
-/// on the command line, which messages name by the link itself, the link as messages show it, and
-/// the dataset it became, so a failure met later says which line or link to fix.
+/// where a line of a list or a typed link came from, as messages name it, and the dataset it
+/// became, so a failure met later says which line or link to fix.
 struct FromLine {
     at: Option<String>,
     shown: String,
@@ -1510,9 +1479,8 @@ impl FromLine {
     }
 }
 
-/// `error`, about the link on `at`, saying so. a link with nothing at it is fixed on that line,
-/// since data.toml has no entry for it yet, or on the command line for a link typed there, which
-/// is `several` with others.
+/// `error`, about the link on `at`, saying so. a link with nothing at it is fixed on that line, as
+/// data.toml has no entry for it yet, or for a typed link on the command line, as [`typed`] says.
 fn on_line(error: Error, at: Option<&str>, several: bool) -> Error {
     let Some(at) = at else {
         return typed(error, several);
@@ -1537,9 +1505,8 @@ fn moved_in(list_name: &str) -> String {
     )
 }
 
-/// `error`, about a link or id typed on the command line for a new dataset, `several` with
-/// others, with the help for one that has nothing at it in the words of an add: data.toml has no
-/// entry to fix, so the add runs again with the right one.
+/// `error`, about a link or id typed for a new dataset, `several` with others, with help in the
+/// words of an add: data.toml has no entry to fix, so the add runs again with the right one.
 fn typed(mut error: Error, several: bool) -> Error {
     if let Some(help) = error
         .help
@@ -1560,9 +1527,8 @@ fn typed(mut error: Error, several: bool) -> Error {
     error
 }
 
-/// `help`, which a source or a server's answer gives a link or an id with nothing at it, for one
-/// typed on the command line of an add, `several` with others, which then go again with it. none
-/// for any other help.
+/// [`typed`]'s words for `help`, which a source or server gives a link or id with nothing at it.
+/// none for any other help.
 fn typed_help(help: &str, several: bool) -> Option<String> {
     let moved = help == crate::net::MOVED_HELP;
     if !moved && help != crate::source::UNKNOWN_HELP {
@@ -1588,11 +1554,8 @@ fn typed_help(help: &str, several: bool) -> Option<String> {
     })
 }
 
-/// `error` from downloading what the lines of the list `list_name` name, each failed file with
-/// the line it came from: the line whose link its message names, or whose dataset holds the file.
-/// a failure of a link typed on the command line, for which `list_name` is none, keeps its
-/// message and gets the help of [`typed`]; one of no line, as of a dataset data.toml has, stays as
-/// it is.
+/// `error` from downloading what the lines of `list_name` name, each failure with the line whose
+/// link or dataset it is about. a typed link's gets [`typed`]'s help; one of no line stays as is.
 fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Error {
     let from = |file: &str, message: &str| {
         lines.iter().find(|line| {
@@ -1711,9 +1674,8 @@ impl Promised {
     }
 }
 
-/// the last lines of `add -i`: each dataset of `added` and where its files are, from `here`, or
-/// that it has none, as the datasets the placement planned files of say, then each one
-/// data.toml had already, then the closing lines, which name the `private` origins.
+/// the last lines of `add -i`: each added dataset and where its files are, or that it has none,
+/// then each one data.toml had already, then the closing lines naming the `private` origins.
 fn tell_list(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1839,9 +1801,8 @@ fn added(
     Ok((updated, manifest))
 }
 
-/// `add --dry-run`: what adding the datasets `names` would change, with data.toml as it would
-/// be, told from `here`. `given` holds what their sources listed, and `nothing` what to say when
-/// there is nothing to add.
+/// `add --dry-run`: what adding `names` would change, `manifest` being data.toml as it would be and
+/// `given` what their sources listed. `nothing` is said when there is nothing to add.
 async fn preview_add(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1867,13 +1828,9 @@ async fn preview_add(
     Ok(Report::dry(work.project.root.clone(), names, outcome))
 }
 
-/// brings the project in line with `manifest`, an add's data.toml, whose text is `updated`
-/// when the add changes data.toml, with data.lock as read, `old`. `datasets` names the datasets
-/// added, with what the add already has of them. every byte the project needs goes into the cache
-/// first, and only then are data.toml and data.lock written and the files placed, so an add cut
-/// off while it downloads, even killed, has changed nothing. a hash the person `promised` for a
-/// dataset's one file is checked before anything is written. a failure or a stop once the project
-/// is changing puts data.toml and data.lock back.
+/// brings the project in line with `manifest`, the add's data.toml, `updated` its text when the add
+/// changes it. every byte goes into the cache before data.toml or data.lock is written, so an add
+/// cut off while it downloads has changed nothing; a later failure or stop puts both back.
 async fn sync_add(
     work: &Loop<'_>,
     adding: &AddProject,
@@ -1885,10 +1842,8 @@ async fn sync_add(
 ) -> Result<Outcome<Placement>, Error> {
     let (names, given) = datasets;
     let project = work.project;
-    // relocking, readying the placement and writing data.lock grow with the files the add pins,
-    // which a first add of many files otherwise sits through untold. downloads tell their own
-    // lines, so the line starts once every byte is in, but for an import, whose bytes are in the
-    // cache already
+    // pinning many files takes a while, which a first add sat through untold. downloads tell
+    // their own lines, so this one starts once every byte is in, or at once for an import
     let imported = !given.is_empty() && given.iter().all(|given| matches!(given, Given::Locked(_)));
     let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
     let stop = &work.context.stop;
@@ -1966,9 +1921,8 @@ async fn sync_add(
             lock: digest::sha256(text.as_bytes()),
             complete: false,
         });
-        // a stop while files are placed fails the placement, which takes back the files it
-        // placed for the new dataset, so the add is undone whole. once every file is in, the
-        // add is complete, and a later stop finds it so
+        // a stop while placing takes back the files placed for the new dataset, so the add is
+        // undone whole. once every file is in, the add is complete, and a later stop finds it so
         let placement = work.apply(manifest, &lock, placing, synced)?;
         work.context.stop.finish();
         Ok(Outcome {
@@ -2010,8 +1964,6 @@ fn pinning_line(work: &Loop<'_>, names: &[String]) -> Option<crate::output::Last
     Some(work.context.output.lasting("Pinning", what))
 }
 
-/// the error of an add that found data.toml or data.lock, as `changed` names them, changed once
-/// its downloads were done: it writes neither, so the change stays.
 fn changed_meanwhile(changed: &[&str]) -> Error {
     let files = changed.join(" and ");
     Error::new(
@@ -2023,8 +1975,6 @@ fn changed_meanwhile(changed: &[&str]) -> Error {
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
-/// the error of an add that found data.lock changed once it wrote data.toml: it leaves data.lock
-/// as it is, and puts data.toml back as it found it.
 fn lock_changed_meanwhile() -> Error {
     Error::new(
         Kind::ProjectChanged,
@@ -2048,7 +1998,6 @@ fn render_add(
     Ok(())
 }
 
-/// says that the add started its project, when it did.
 fn tell_started(work: &Loop<'_>, starting: bool) {
     if starting {
         work.context.output.step(
@@ -2073,9 +2022,8 @@ fn private_origins<'r>(
     private
 }
 
-/// the last lines of an add: a warning for each `private` origin this machine's settings do not
-/// list, since typing its link trusted it for this run alone, then what to commit, and what
-/// anyone who clones does, which for such an origin starts with listing it in their settings.
+/// the last lines of an add: a warning for each `private` origin the settings do not list, since
+/// typing its link trusted it for this run alone, then what to commit and what a clone runs.
 fn close(work: &Loop<'_>, private: &[url::Origin]) {
     let context = work.context;
     let unlisted: Vec<&url::Origin> = private
@@ -2123,10 +2071,9 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
     ));
 }
 
-/// restores both project files after a failed add of the datasets `names`, including their
-/// original absence. a file the add never wrote needs nothing restored, so a failure to write it
-/// again is no failure. a file someone changed after the add wrote it stays as they left it, with
-/// the steps that put it back by hand, since restoring it would lose their change.
+/// restores both project files after a failed add of `names`, absent ones included. a file the add
+/// never wrote needs nothing. one changed since the add wrote it stays, with the steps to put it
+/// back by hand, since restoring it would lose that change.
 fn restore(
     project: &Project,
     saved: &mut BeforeAdd<'_>,
@@ -2206,9 +2153,8 @@ fn restore(
     }
 }
 
-/// data.toml's datasets fetched from a source, by the reference data.toml gives each and by what
-/// data.lock resolved that reference to, so a link finds the dataset pinning it without a look
-/// at every other.
+/// data.toml's sourced datasets by their reference and by what data.lock resolved it to, so a link
+/// finds the dataset pinning it without a look at every other.
 struct Sources<'a> {
     by_reference: HashMap<&'a str, Vec<(&'a str, &'a Source)>>,
     by_resolved: HashMap<&'a str, Vec<(&'a str, &'a Source)>>,
@@ -2243,9 +2189,8 @@ impl<'a> Sources<'a> {
         sources
     }
 
-    /// the dataset in data.toml that already pins what was just resolved, under any spelling of
-    /// its reference: of those, one with the same settings, then one with the same reference,
-    /// then the first by name.
+    /// the dataset in data.toml that pins what was just resolved, under any spelling of its
+    /// reference: one with the same settings first, then the same reference, then the first name.
     fn present(&self, wanted: &manifest::Entry, listing: &Listing) -> Option<String> {
         let wanted = wanted.source()?;
         let resolved = listing.resolved.to_string();
@@ -2271,9 +2216,8 @@ impl<'a> Sources<'a> {
     }
 }
 
-/// `add` of a dataset data.toml already has, as [`Sources::present`] finds it. with the same settings nothing
-/// changes, so running the same `add` twice is safe; other settings need a choice only the person
-/// can make. paths are told from `here`.
+/// `add` of a dataset data.toml has already, as [`Sources::present`] finds it. with the same
+/// settings nothing changes, so adding twice is safe; other settings need the person's choice.
 async fn again(
     work: &Loop<'_>,
     adding: &AddProject,
@@ -2374,8 +2318,7 @@ fn from_here(project: &Project, here: &Path, path: &str) -> String {
     format!("{}{path}", super::up_to(&project.root, here))
 }
 
-/// downloads each lone file whose name only its server knows, so each dataset can be named after
-/// its file. they download together.
+/// downloads each lone file whose name only its server knows, so its dataset is named after it.
 async fn learn_names(
     context: &Context,
     net: &Arc<Net>,
@@ -2494,16 +2437,15 @@ fn choose_name(
     free_name(output, name, is_taken, rename)
 }
 
-/// `name`, a name fetchloom chose, made usable: the next number when `is_taken` says it is
-/// taken, told with `rename`. a chosen name never names a windows device, as
-/// [`name::dataset_name`] makes it.
+/// `name`, which fetchloom chose, with the next number when `is_taken` says it is taken, told with
+/// `rename`. it never names a windows device, as [`name::dataset_name`] made it.
 fn free_name(
     output: &Output,
     name: String,
     is_taken: &dyn Fn(&str) -> bool,
     rename: &str,
 ) -> Result<String, Error> {
-    // a clash with --as is refused, but a name fetchloom chose can simply take the next number
+    // a clash with --as is refused, but a name fetchloom chose takes the next number
     if !is_taken(&name) {
         return Ok(name);
     }
@@ -2521,7 +2463,6 @@ fn free_name(
     Ok(numbered)
 }
 
-/// refuses a name data.toml already has.
 fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Err(taken(name));
@@ -2586,8 +2527,7 @@ mod tests {
         }
     }
 
-    /// a rollback puts back only what the add changed. one that failed before changing anything
-    /// claims no rollback at all, and no recovery copy is kept.
+    /// one that failed before changing anything claims no rollback, and keeps no recovery copy.
     #[test]
     fn a_rollback_restores_only_what_the_add_changed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2625,9 +2565,8 @@ mod tests {
         assert_eq!(left, [std::ffi::OsString::from(".gitignore")]);
     }
 
-    /// a file someone changed after the add wrote it stays as they left it, since putting it back
-    /// would lose their change: the rollback says so and keeps the recovery copy, and still puts
-    /// back the other file, which only the add changed.
+    /// the rollback says so and keeps the recovery copy, and still puts back the other file, which
+    /// only the add changed.
     #[test]
     fn a_rollback_keeps_a_change_made_after_the_add_wrote_the_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -2670,9 +2609,7 @@ mod tests {
         assert_eq!(copies, 1);
     }
 
-    /// a rollback that cannot put a file back names the recovery copy, which holds the exact
-    /// bytes, readable by the owner only, and never shows what the file holds, which may be a
-    /// credential.
+    /// the copy holds the exact bytes, readable by its owner alone; the text may be a credential.
     #[cfg(unix)]
     #[test]
     fn a_rollback_that_cannot_finish_names_a_private_copy_without_its_text() {
@@ -2722,8 +2659,7 @@ mod tests {
         );
     }
 
-    /// a project in the home folder or at a disk's root takes in every folder below it, so
-    /// starting one there asks first, and with nobody to ask it needs --yes.
+    /// with nobody to ask it needs --yes.
     #[test]
     fn starting_a_project_at_a_disk_root_or_in_home_asks_first() {
         let style = Style {
@@ -2749,8 +2685,7 @@ mod tests {
         assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
     }
 
-    /// a count a person reads has its thousands apart: the files the system made that an import
-    /// skips, and the links one add with `--as` was given.
+    /// the files the system made that an import skips, and the links one add with `--as` was given.
     #[test]
     fn counts_in_add_lines_have_their_thousands_apart() {
         use clap::Parser as _;
@@ -2804,9 +2739,8 @@ mod tests {
         }
     }
 
-    /// an add of `count` links listed in links.txt, each to one file whose hash its source
-    /// states, as `add -i` has them once every line resolved: the list, each line's listing and
-    /// how data.toml records it.
+    /// `count` links in links.txt, each to one file whose hash its source states, as `add -i` has
+    /// them once every line resolved.
     fn resolved_list(count: usize) -> (List, Vec<(Listing, Listed)>) {
         let text = (0..count).fold(String::new(), |mut text, index| {
             let _ = writeln!(text, "https://example.org/f{index:05}.bin");
@@ -2834,8 +2768,7 @@ mod tests {
         (list, found)
     }
 
-    /// `add -i` reads data.toml's text as often for a long list as for a short one. reading it
-    /// again for each link made 4,000 links take a minute.
+    /// reading it again for each link made 4,000 links take a minute.
     #[test]
     fn a_list_reads_data_toml_as_often_however_many_links_it_holds() {
         let dir = tempfile::tempdir().unwrap();
@@ -2943,8 +2876,7 @@ mod tests {
         )
     }
 
-    /// an edit to data.toml made while the add saves its recovery copies, which it flushes to
-    /// disk, stays: the add looks again right before its first write, and writes neither file.
+    /// the add looks again right before its first write, and writes neither file.
     #[test]
     fn an_add_keeps_an_edit_made_while_it_saves_its_recovery_copies() {
         let dir = tempfile::tempdir().unwrap();
@@ -2964,8 +2896,7 @@ mod tests {
         assert!(!root.join("data").join("b").exists());
     }
 
-    /// an add whose recovery copies cannot be written stops before it writes data.toml or
-    /// data.lock, here because the metadata folder takes no new files.
+    /// here because the metadata folder takes no new files.
     #[cfg(unix)]
     #[test]
     fn an_add_that_cannot_save_its_recovery_copies_writes_neither_file() {
@@ -3001,8 +2932,7 @@ mod tests {
         assert!(!root.join("data").join("b").exists());
     }
 
-    /// an edit to data.lock made once the add wrote data.toml stays: the add does not write
-    /// data.lock, and its failure puts data.toml back as it found it.
+    /// the add does not write data.lock, and its failure puts data.toml back as it found it.
     #[test]
     fn an_add_keeps_an_edit_to_data_lock_made_after_it_wrote_data_toml() {
         let dir = tempfile::tempdir().unwrap();
@@ -3091,9 +3021,7 @@ mod tests {
         static SCREEN: std::cell::RefCell<Option<Screen>> = const { std::cell::RefCell::new(None) };
     }
 
-    /// relocking, planning and writing data.lock grow with the files an add pins, which a first
-    /// add of many files sat through untold after `Imported`, so a terminal shows what the add
-    /// pins meanwhile.
+    /// a first add of many files once sat through relocking and planning untold after `Imported`.
     #[test]
     fn an_add_tells_what_it_pins_before_it_places() {
         let dir = tempfile::tempdir().unwrap();
