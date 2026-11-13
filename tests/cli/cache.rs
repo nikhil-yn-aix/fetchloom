@@ -1151,3 +1151,54 @@ fn a_ctrl_c_past_the_caches_mark_lets_it_tell_what_it_did() -> Result {
     }
     Ok(())
 }
+
+/// a file imported from a folder comes back from no source once the cache frees it, so gc counts
+/// such bytes apart, and `--now` frees them only after a yes.
+#[test]
+fn gc_now_frees_imported_bytes_only_after_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let precious = sandbox.folder("precious")?;
+    fs::write(precious.join("notes.csv"), NOTES)?;
+    let added = sandbox.run(&["add", "../precious"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let removed = sandbox.run(&["remove", "precious", "--yes"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let object = |exists: bool| -> Result {
+        let hex = crate::support::sha256_hex(NOTES);
+        let path = sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]);
+        assert_eq!(path.exists(), exists);
+        Ok(())
+    };
+    let dry = json(&sandbox.run(&["--json", "cache", "gc", "--now", "--dry-run"])?)?;
+    assert_eq!(dry["result"]["removed_bytes"], NOTES.len(), "{dry}");
+    assert_eq!(dry["result"]["imported_objects"], 1, "{dry}");
+    assert_eq!(dry["result"]["imported_bytes"], NOTES.len(), "{dry}");
+    let told = text(&sandbox.run(&["cache", "gc", "--now", "--dry-run"])?.stderr)?;
+    assert!(
+        told.contains("Would remove 1 file · 32 B from the cache, 32 B of it imported from files no source can give back"),
+        "{told}"
+    );
+    let refused = sandbox.run(&["--json", "cache", "gc", "--now"])?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stdout)?);
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert_eq!(
+        error["message"],
+        "1 file · 32 B gc would free was imported from files, and no source can give it back, so freeing it needs a yes"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    object(true)?;
+    let freed = sandbox.run(&["--json", "cache", "gc", "--now", "--yes"])?;
+    let document = json(&freed)?;
+    assert_eq!(freed.status.code(), Some(0), "{document}");
+    assert_eq!(
+        document["result"]["imported_bytes"],
+        NOTES.len(),
+        "{document}"
+    );
+    object(false)
+}

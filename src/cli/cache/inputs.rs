@@ -137,49 +137,54 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         if dry_run {
             return Ok(super::tell_dry_gc(
                 context,
-                Freed::default(),
+                super::Swept::default(),
                 Vec::new(),
                 inputs,
             ));
         }
         output.done("Ok", "nothing to free");
-        return Ok(super::collected(Freed::default(), inputs));
+        return Ok(super::collected(super::Swept::default(), inputs));
     }
     if dry_run {
         let cache = peeked.pretending();
-        let (found, mut plan) = look(context, &cache, true)?;
+        let (mut found, mut plan) = look(context, &cache, true)?;
         let mut not_removed = Vec::new();
         free(&mut plan, &cache, &mut not_removed, &context.stop)?;
         tell(output, &plan, Told::Would);
-        let mut freed = super::sweep(context, &cache, &found, now)?;
-        merge(&mut freed, not_removed);
+        let mut swept = super::sweep(context, &cache, &mut found, now, None)?;
+        merge(&mut swept.freed, not_removed);
         let inputs = Some(report(&plan));
         return Ok(super::tell_dry_gc(
             context,
-            freed,
+            swept,
             cache.pretended(),
             inputs,
         ));
     }
+    let agreed = if now {
+        Some(super::ask_imported(context)?)
+    } else {
+        None
+    };
     let (_, mut plan) = look(context, &peeked, false)?;
     if !plan.frees() {
         tell(output, &plan, Told::Did);
         let cache = super::hold(context)?;
-        let found = super::needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
-        let freed = super::sweep(context, &cache, &found, now)?;
-        return super::tell_swept(context, freed, found.projects.len(), Some(report(&plan)));
+        let mut found = super::needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
+        let swept = super::sweep(context, &cache, &mut found, now, agreed.as_ref())?;
+        return super::tell_swept(context, swept, found.projects.len(), Some(report(&plan)));
     }
     let asked = ask(context, &plan)?;
     let cache = super::hold(context)?;
-    let found = super::needed_with(&cache, None, &context.stop, true, Uses::Grouped)?;
+    let mut found = super::needed_with(&cache, None, &context.stop, true, Uses::Grouped)?;
     let cached = cached_of(&cache, &found.groups, context.threads, &context.stop)?;
     recheck(&mut plan, &found.needed, &found.groups, &cached);
     let mut not_removed = Vec::new();
     free(&mut plan, &cache, &mut not_removed, &context.stop)?;
     tell(output, &plan, if asked { Told::After } else { Told::Did });
-    let mut freed = super::sweep(context, &cache, &found, now)?;
-    merge(&mut freed, not_removed);
-    super::tell_swept(context, freed, found.projects.len(), Some(report(&plan)))
+    let mut swept = super::sweep(context, &cache, &mut found, now, agreed.as_ref())?;
+    merge(&mut swept.freed, not_removed);
+    super::tell_swept(context, swept, found.projects.len(), Some(report(&plan)))
 }
 
 fn merge(freed: &mut Freed, not_removed: Vec<Failure>) {
@@ -778,13 +783,14 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
                 format!("freeing {what} from the cache needs a yes"),
             )
             .help("answer yes at a terminal, or add --yes, once you are sure the mirror named above keeps these files");
-            let result = serde_json::to_value(super::collected(Freed::default(), Some(inputs)))
-                .map_err(|err| {
-                    Error::new(
-                        Kind::LocalIo,
-                        format!("cannot format the cache result: {err}"),
-                    )
-                })?;
+            let result =
+                serde_json::to_value(super::collected(super::Swept::default(), Some(inputs)))
+                    .map_err(|err| {
+                        Error::new(
+                            Kind::LocalIo,
+                            format!("cannot format the cache result: {err}"),
+                        )
+                    })?;
             Err(error.with_result(result))
         }
     }

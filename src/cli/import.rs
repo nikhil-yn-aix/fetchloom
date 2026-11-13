@@ -1139,6 +1139,10 @@ pub(super) fn into_cache(
             unpacks_to: None,
         });
     }
+    let digests: Vec<_> = files.iter().map(|file| file.sha256).collect();
+    cache
+        .mark_imported(&digests)
+        .map_err(|err| Error::io("could not record the imported files in the cache", &err))?;
     Ok(Copied { files, cloned })
 }
 

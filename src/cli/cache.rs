@@ -237,6 +237,9 @@ fn copies_line(usage: &Usage) -> Option<String> {
 pub(super) struct Collected {
     #[serde(flatten)]
     freed: Freed,
+    /// of the objects removed, those imported from files, which no source can give back.
+    imported_objects: u64,
+    imported_bytes: u64,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     dry_run: bool,
     /// with `--dry-run`, every path gc would remove.
@@ -263,21 +266,77 @@ pub(super) fn gc(
     if inputs {
         return inputs::gc(context, now, dry_run);
     }
+    // what `--now` would free of imported files is asked about before gc holds the cache, as
+    // `--inputs` asks, and the sweep frees only what the answer covers
+    let agreed = if now && !dry_run {
+        Some(ask_imported(context)?)
+    } else {
+        None
+    };
     let cache = if dry_run {
         let cache = super::peek_cache()?;
         if !cache.root().exists() {
-            return Ok(tell_dry_gc(context, Freed::default(), Vec::new(), None));
+            return Ok(tell_dry_gc(context, Swept::default(), Vec::new(), None));
         }
         cache.pretending()
     } else {
         hold(context)?
     };
-    let found = needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
-    let freed = sweep(context, &cache, &found, now)?;
+    let mut found = needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
+    let swept = sweep(context, &cache, &mut found, now, agreed.as_ref())?;
     if dry_run {
-        return Ok(tell_dry_gc(context, freed, cache.pretended(), None));
+        return Ok(tell_dry_gc(context, swept, cache.pretended(), None));
     }
-    tell_swept(context, freed, found.projects.len(), None)
+    tell_swept(context, swept, found.projects.len(), None)
+}
+
+/// asks whether `gc --now` may free what was imported from files on this machine and no project
+/// needs, read without holding the cache. the imported objects a yes, or `--yes`, covers.
+fn ask_imported(context: &Context) -> Result<HashSet<Sha256>, Error> {
+    let cache = super::peek_cache()?;
+    let imported = cache.imported();
+    if imported.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let found = needed_with(&cache, None, &context.stop, false, Uses::Untold)?;
+    let freeing: Vec<(Sha256, u64)> = imported
+        .into_iter()
+        .filter(|(digest, _)| !found.needed.objects.contains(digest))
+        .collect();
+    let agreed = freeing.iter().map(|(digest, _)| *digest).collect();
+    if freeing.is_empty() || context.yes {
+        return Ok(agreed);
+    }
+    let what = format!(
+        "{} · {}",
+        units::count(freeing.len() as u64, "file", "files"),
+        units::size(freeing.iter().map(|(_, size)| size).sum())
+    );
+    let (was, it) = if freeing.len() == 1 {
+        ("was", "it")
+    } else {
+        ("were", "them")
+    };
+    let why =
+        format!("{what} gc would free {was} imported from files, and no source can give {it} back");
+    let cancel = format!("freeing {what} from the cache");
+    match context
+        .output
+        .confirm(&format!("{why}. free {it} anyway?"))
+        .map_err(|error| error.cancelling(&cancel))?
+    {
+        Some(true) => Ok(agreed),
+        Some(false) => Err(Error::new(Kind::Unconfirmed, format!("did not free {what}"))
+            .cancelled(cancel)
+            .unchanged()),
+        None => Err(
+            Error::new(Kind::Unconfirmed, format!("{why}, so freeing {it} needs a yes")).help(
+                format!(
+                    "answer yes at a terminal, or add --yes once you keep {it} elsewhere; a dry run lists {it}, as in `fetchloom cache gc --now --dry-run`"
+                ),
+            ),
+        ),
+    }
 }
 
 /// the cache, held alone for gc once no other run uses it.
@@ -295,12 +354,33 @@ fn hold(context: &Context) -> Result<Cache, Error> {
     )
 }
 
-fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<Freed, Error> {
+/// what a sweep freed, and the part of it imported from files, which no source can give back.
+#[derive(Default)]
+struct Swept {
+    freed: Freed,
+    imported_objects: u64,
+    imported_bytes: u64,
+}
+
+/// frees what `found` says no project needs. with `agreed`, the imported objects a person agreed
+/// to free, any other import stays, as one no project needed only once they were asked.
+fn sweep(
+    context: &Context,
+    cache: &Cache,
+    found: &mut Found,
+    now: bool,
+    agreed: Option<&HashSet<Sha256>>,
+) -> Result<Swept, Error> {
     let grace = if now {
         std::time::Duration::ZERO
     } else {
         crate::cache::GRACE
     };
+    let imported = cache.imported();
+    if let Some(agreed) = agreed {
+        let unasked = imported.keys().filter(|digest| !agreed.contains(*digest));
+        found.needed.objects.extend(unasked);
+    }
     let freed = cache.sweep_with_stop(
         &found.needed,
         &found.stale_projects,
@@ -311,21 +391,38 @@ fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<F
     )?;
     // the sweep looked for a stop last, so what it freed is told whatever is asked from here
     context.stop.finish();
-    Ok(freed)
+    // a pretending cache keeps what it would remove, and says so
+    let pretended: HashSet<PathBuf> = cache.pretended().into_iter().collect();
+    let mut swept = Swept {
+        freed,
+        ..Swept::default()
+    };
+    for (digest, size) in &imported {
+        let path = cache.object_path(digest);
+        if !found.needed.objects.contains(digest)
+            && (pretended.contains(&path) || fs::symlink_metadata(&path).is_err())
+        {
+            swept.imported_objects += 1;
+            swept.imported_bytes += size;
+        }
+    }
+    cache.forget_imported();
+    Ok(swept)
 }
 
 fn tell_swept(
     context: &Context,
-    freed: Freed,
+    swept: Swept,
     projects: usize,
     inputs: Option<inputs::Inputs>,
 ) -> Result<Collected, Error> {
     let output = &context.output;
+    let freed = &swept.freed;
     for failure in &freed.not_removed {
         warn_failure(output, "could not read or remove", failure);
     }
     tell_forgotten(output, &freed.forgotten);
-    let kept = kept(&freed);
+    let kept = kept(freed);
     let freed_inputs = inputs
         .as_ref()
         .is_some_and(|inputs| inputs.freed_objects > 0);
@@ -341,10 +438,10 @@ fn tell_swept(
             }
             None => output.done("Ok", "nothing to free"),
         }
-        hint_forgotten(output, &freed);
-        return Ok(collected(freed, inputs));
+        hint_forgotten(output, freed);
+        return Ok(collected(swept, inputs));
     }
-    tell_removed(output, "Removed", &freed);
+    tell_removed(output, "Removed", &swept);
     if !freed.not_removed.is_empty() {
         let error = with_failures(
             Error::new(
@@ -356,7 +453,7 @@ fn tell_swept(
             ),
             &freed.not_removed,
         );
-        let result = serde_json::to_value(collected(freed, inputs)).map_err(|err| {
+        let result = serde_json::to_value(collected(swept, inputs)).map_err(|err| {
             Error::new(
                 Kind::LocalIo,
                 format!("cannot format the cache result: {err}"),
@@ -380,16 +477,24 @@ fn tell_swept(
     if let Some(kept) = &kept {
         output.hint(kept);
     }
-    hint_forgotten(output, &freed);
-    Ok(collected(freed, inputs))
+    hint_forgotten(output, freed);
+    Ok(collected(swept, inputs))
 }
 
-fn tell_removed(output: &Output, verb: &str, freed: &Freed) {
+fn tell_removed(output: &Output, verb: &str, swept: &Swept) {
+    let freed = &swept.freed;
     if freed.removed_objects > 0 {
+        let imported = match swept.imported_bytes {
+            0 if swept.imported_objects == 0 => String::new(),
+            bytes => format!(
+                ", {} of it imported from files no source can give back",
+                units::size(bytes)
+            ),
+        };
         output.step(
             verb,
             &format!(
-                "{} · {} from the cache",
+                "{} · {} from the cache{imported}",
                 units::count(freed.removed_objects, "file", "files"),
                 units::size(freed.removed_bytes)
             ),
@@ -407,9 +512,11 @@ fn tell_removed(output: &Output, verb: &str, freed: &Freed) {
     }
 }
 
-fn collected(freed: Freed, inputs: Option<inputs::Inputs>) -> Collected {
+fn collected(swept: Swept, inputs: Option<inputs::Inputs>) -> Collected {
     Collected {
-        freed,
+        freed: swept.freed,
+        imported_objects: swept.imported_objects,
+        imported_bytes: swept.imported_bytes,
         dry_run: false,
         changes: None,
         inputs,
@@ -445,11 +552,12 @@ fn kept(freed: &Freed) -> Option<String> {
 
 fn tell_dry_gc(
     context: &Context,
-    freed: Freed,
+    swept: Swept,
     remove: Vec<PathBuf>,
     inputs: Option<inputs::Inputs>,
 ) -> Collected {
     let output = &context.output;
+    let freed = &swept.freed;
     for failure in &freed.not_removed {
         warn_failure(
             output,
@@ -463,7 +571,7 @@ fn tell_dry_gc(
             root.display()
         ));
     }
-    tell_removed(output, "Would remove", &freed);
+    tell_removed(output, "Would remove", &swept);
     for path in &remove {
         output.detail(&path.display().to_string());
     }
@@ -479,14 +587,13 @@ fn tell_dry_gc(
         (true, true) => Some("nothing to free yet"),
     };
     super::project::dry_run_done(output, nothing);
-    if let Some(kept) = kept(&freed) {
+    if let Some(kept) = kept(freed) {
         output.hint(&kept);
     }
     Collected {
-        freed,
         dry_run: true,
         changes: Some(Removals { remove }),
-        inputs,
+        ..collected(swept, inputs)
     }
 }
 

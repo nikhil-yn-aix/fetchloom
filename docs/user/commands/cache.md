@@ -88,6 +88,12 @@ fetchloom cache gc --now
 
 JSON reports those as `result.kept_objects` and `result.kept_bytes`.
 
+files [imported](add.md#files-on-this-machine) from a folder come back from no source, so gc counts them apart, as `result.imported_objects` and `result.imported_bytes` of what it removed, and its `Removed` line says how much of it they are. `--now` asks before it frees them, with what it would free, and a no changes nothing; with nobody to ask it stops with `unconfirmed`, exit 1, unless `--yes` answers. the question comes before gc holds the cache, and gc then frees only the imported files the answer covered. stderr from a dry run after `fetchloom remove precious --yes`:
+
+```text
+      Would remove 1 file · 32 B from the cache, 32 B of it imported from files no source can give back
+```
+
 every sync registers its project, also the sync inside `add` or `path`; `get` and `lock` register nothing. a registration warning means gc may not keep that project's bytes; check the cache's permissions and sync again.
 
 `cache gc` forgets a project whose `data.toml` is gone, as when its folder moved, and frees what only it needed, naming it on a `Forgot` line and in `result.forgotten`. run `fetchloom sync` in the project's new folder to register it again; that does not put back what gc freed, as [below](#old-pins-and-moved-projects). `fetchloom cache` skips such a project but keeps its registration, in case its drive is only disconnected. a path it may not read does not count as gone, and an unreadable registration, `data.toml` or `data.lock` stops gc with an error naming the path.

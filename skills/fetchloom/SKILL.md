@@ -46,7 +46,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed` | a question no one answered: a big download, too little disk, data to `push` that asked for an account or terms, what `cache gc --inputs` frees, an `auth logout` that signs other tools out too, or a side to keep after a git merge. ask the user; then `--yes`, or `fetchloom lock --ours <name>` or `--theirs <name>` |
+| 1 | `unconfirmed` | a question no one answered: a big download, too little disk, data to `push` that asked for an account or terms, the `remove` of an imported dataset, imported files `cache gc --now` would free, what `cache gc --inputs` frees, an `auth logout` that signs other tools out too, or a side to keep after a git merge. ask the user; then `--yes`, or `fetchloom lock --ours <name>` or `--theirs <name>` |
 | 1 | `lock.outdated` | data.lock is missing or does not pin what data.toml asks. review the change with the user before `fetchloom lock`, which pins what the sources serve today. a clone with no data.lock should get it from the project's owner |
 | 1 | `data.not_ready` | tell the user each line of `errors[0].details`: replacing an edit with `fetchloom sync --force`, or building a recipe, is their call. `fix` is `fetchloom sync` only when a plain sync puts everything in place |
 | 2 | `usage` | fix the command line as `help` says |
@@ -81,7 +81,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 - never delete or chmod placed files: they come back at the next sync, and one can be a hardlink shared with other projects. `fetchloom drop <path>` leaves files out for good; `copy = true` on a dataset in data.toml, then `fetchloom sync --json`, gives writable copies.
 - messages and `--json` show each query or fragment value of a link as `***` unless its name is known to be harmless, such as `dl` or `version`: take a link from the user or from data.toml, never from output.
 - write results outside `data/`. sync keeps files written inside it, but `status` lists them as extra.
-- `remove`, `drop` and `sync` delete only unchanged files fetchloom placed, inside the data folder. a warning names each folder they leave holding other files; tell the user rather than delete them.
+- `remove`, `drop` and `sync` delete only unchanged files fetchloom placed, inside the data folder. a warning names each folder they leave holding other files; tell the user rather than delete them. an imported dataset (`ref = "local"`) has no source to give its files back, so its `remove` needs `--yes`: ask the user whether a copy is kept elsewhere first.
 - to rename a dataset, rename its table in data.toml, and the `from` and `{name}` of every recipe that reads it; the next `fetchloom lock --json` keeps its pin. `remove` then `add --as` resolves it again and may pin newer data.
 - never delete data.lock to get past an error: relocking pins newer data and drops every recipe's pin.
 - an archive fetchloom cannot unpack, such as a `.rar`, stays packed with a warning whose help unpacks it: show that command rather than run it. parts such as `scans.zip.001` to `.003` unpack only when one dataset lists every part. add webdataset `.tar` shards with `--no-extract`, since loaders read them packed.

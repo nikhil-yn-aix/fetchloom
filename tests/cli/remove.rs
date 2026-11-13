@@ -162,3 +162,69 @@ fn remove_explains_how_to_finish_after_placement_fails() -> Result {
     assert!(!path.exists());
     Ok(())
 }
+
+/// files imported from a folder come back from no source, so removing their dataset needs a yes,
+/// which nobody gives under --json, a pipe or CI unless --yes does.
+#[test]
+fn removing_an_import_needs_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let precious = sandbox.folder("precious")?;
+    fs::write(precious.join("notes.csv"), b"id\n1\n")?;
+    let added = sandbox.run(&["add", "../precious"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    let before = fs::read(work.join("data.toml"))?;
+    let refused = sandbox.run(&["--json", "remove", "precious"])?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stdout)?);
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert_eq!(
+        error["message"],
+        "precious was imported from files, and no source can give them back, so removing it needs a yes"
+    );
+    assert_eq!(
+        error["help"],
+        "answer yes at a terminal, or run `fetchloom remove precious --yes` once you keep its files elsewhere"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    assert_eq!(fs::read(work.join("data.toml"))?, before);
+    assert!(work.join("data/precious/notes.csv").exists());
+    let removed = sandbox.run(&["remove", "precious", "--yes"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!work.join("data/precious").exists());
+    Ok(())
+}
+
+/// at a terminal the removal of an import asks first: a no changes nothing, and a yes removes it.
+#[cfg(target_os = "linux")]
+#[test]
+fn removing_an_import_asks_at_a_terminal() -> Result {
+    let sandbox = Sandbox::new()?;
+    let precious = sandbox.folder("precious")?;
+    fs::write(precious.join("notes.csv"), b"id\n1\n")?;
+    let added = sandbox.run(&["add", "../precious"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    let before = fs::read(work.join("data.toml"))?;
+    let asked = "remove it anyway?";
+    let remove = sandbox.command(&["remove", "precious"]);
+    let Some((code, screen)) = crate::support::typed(&work, &remove, "", asked, "n\r")? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("precious was imported from files, and no source can give them back once data/precious and the cache's copy are gone. remove it anyway? [y/N]"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("Cancelled the removal of precious, so nothing changed"),
+        "{screen}"
+    );
+    assert_eq!(code, Some(1), "{screen}");
+    assert_eq!(fs::read(work.join("data.toml"))?, before);
+    let Some((code, screen)) = crate::support::typed(&work, &remove, "", asked, "y\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!work.join("data/precious").exists(), "{screen}");
+    Ok(())
+}

@@ -26,6 +26,15 @@ fetchloom remove [options] <name>
 3. delete the unchanged files fetchloom placed for it. in a folder it shares with other datasets, or in the data folder itself for `path = "."`, only its own files go.
 4. leave edited files and files fetchloom did not place where they are, and warn about each edited file and each folder those keep.
 
+a dataset [imported](add.md#files-on-this-machine) from files on this machine has no source to give its files back: once its folder in the data folder and the cache's copy are gone, so are the bytes. so its removal asks first at a terminal, as `precious was imported from files, and no source can give them back once data/precious and the cache's copy are gone. remove it anyway? [y/N]`, and a no changes nothing. with nobody to ask, as under `--json`, in a pipe or in CI, it stops with `unconfirmed`, exit 1, unless `--yes` answers; `fix` stays null, since only a person decides that a copy is kept elsewhere:
+
+```text
+error: precious was imported from files, and no source can give them back, so removing it needs a yes
+  help: answer yes at a terminal, or run `fetchloom remove precious --yes` once you keep its files elsewhere
+```
+
+the removal records the import's files in the cache, so [cache gc](cache.md#gc) asks again before `--now` frees them. a dry run asks nothing.
+
 a dataset a [recipe](../recipes.md) is made from is not removed while any recipe reads it: `remove` exits 2, naming every recipe that reads it, as `clean and count are made from iris`, and changes nothing. removing a recipe drops its pin from `data.lock` too.
 
 nothing is downloaded. a file sync [adopted](sync.md#already-in-place) counts as placed, so `remove` deletes it if unchanged, and warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`. removal compares the saved size and modification time, so touching a file keeps it even when its bytes still match the pin.
@@ -55,7 +64,7 @@ the files a real removal would keep, and the folders they keep, are named in war
 
 ## exit codes
 
-0 means removal completed, even when edited files remain. invalid usage exits 2, as does a dataset a recipe reads; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove:
+0 means removal completed, even when edited files remain. an import's removal that no yes answered exits 1. invalid usage exits 2, as does a dataset a recipe reads; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove:
 
 ```text
 error: remove needs <name>

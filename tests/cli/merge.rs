@@ -529,7 +529,7 @@ fn removal_meets_a_new_pin(
     ok(sandbox, &["add", "."])?;
     ok(sandbox, &["commit", "-qm", "base"])?;
     ok(sandbox, &["checkout", "-qb", "removed"])?;
-    succeeded(&run(sandbox, &["remove", name])?)?;
+    succeeded(&run(sandbox, &["remove", name, "--yes"])?)?;
     ok(sandbox, &["commit", "-qam", "remove it"])?;
     ok(sandbox, &["checkout", "-qb", "kept", "main"])?;
     change()?;
@@ -642,7 +642,7 @@ fn lock_asks_before_a_removal_drops_a_reimported_pin() -> Result {
     add("base", "kappa")?;
     add("cats", "labels")?;
     let reimport = || -> Result {
-        succeeded(&run(&sandbox, &["remove", "labels"])?)?;
+        succeeded(&run(&sandbox, &["remove", "labels", "--yes"])?)?;
         add("wolves", "labels")
     };
     let zdiff3 = ["-c", "merge.conflictStyle=zdiff3", "merge", "-q", "kept"];

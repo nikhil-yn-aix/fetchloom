@@ -4,6 +4,7 @@ mod changed;
 mod deferred;
 mod failure;
 mod held;
+mod imported;
 mod object;
 mod partial;
 mod results;

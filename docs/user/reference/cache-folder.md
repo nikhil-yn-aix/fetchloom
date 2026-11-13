@@ -34,6 +34,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   unpacked/<archive sha256, or the key a split archive's parts give>
   projects/<sha256 of project root>.json
   changed/<object sha256>
+  imported/<sha256 of the list>
   builds/<key sha256>/<tree sha256>
   builds/<key sha256>/lock
   tmp/<random>.stage/lock
@@ -71,6 +72,7 @@ a link is named by a fingerprint, the SHA-256 of its text, so a secret in a sign
 - `unpacked/` holds what each archive unpacked to, in the [tree encoding](data-lock.md#the-tree-hash), checked against the `unpacks_to` data.lock pins.
 - `builds/<key>/<tree>` records what a recipe's step made, in the same encoding, under its key, so a later build can reuse it. on linux and macos a build reuses only records you wrote and no one else may change.
 - `projects/` registers each project a sync placed files for, as JSON naming its folder, so `cache gc` knows what it needs.
+- `imported/` lists the cached files an import or the removal of an import put or found there, one SHA-256 a line, one list a run. no source can give them back, so `cache gc` counts them apart and asks before `--now` frees them, as [gc](../commands/cache.md#gc) says. gc drops a list once none of its files is left.
 - `changed/` holds a mark for each cached file found changed, as by an edit through a hardlink, naming the copies found changed, so sync can put each project's link back. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains how they are used.
 
 an archive's own bytes leave the cache once its files are in, unless a registered project needs it packed. [cache commands](../commands/cache.md) explain retention and gc.
