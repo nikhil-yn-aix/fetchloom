@@ -1,31 +1,10 @@
 # recipes
 
-a recipe makes a dataset from other datasets with a command a person writes in `data.toml`. this page covers what the code reads, how a result is keyed, how a stale pin is found, and how `fetchloom build` runs a step, takes in what it wrote, pins it and places it, checks a step against its pin, keeps a rebuild that differs and prepares a build for a machine without the network.
+a recipe makes a dataset from other datasets with a command a person writes in `data.toml`, and only `fetchloom build` runs one: it runs each step, takes in what the step wrote, pins and places it, checks a step against its pin, keeps a rebuild that differs, and prepares a build for a machine without the network.
 
 ## where it lives
 
-| file | owns |
-|---|---|
-| [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | `Entry.origin`: `Origin::Source(Source)` with `ref`, `select`, `exclude` and `extract`, or `Origin::Derived(Recipe)` with `from`, `run`, `code` and `env`; every check of those keys; `Entry.place` of both kinds |
-| [recipe.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/recipe.rs) | `Template` parse and expand, `order` and `closure`, `content`, `key`, `Step` and `drift` |
-| [recipe/code.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/recipe/code.rs) | hashing a recipe's code: the CRLF rule, folder trees and the refusal of links |
-| [project/lock/derived.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/derived.rs) | `Derived`, a result as `data.lock` pins it, with `Input` and `Code` |
-| [cli/build.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build.rs) | the command: selection, the order of steps, `course`, what each does, the commit and the placing |
-| [cli/build/preview.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/preview.rs) | `build --dry-run`: each step decided by `course` against the cache as the build would find it, and the command of each that would or may run |
-| [build.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build.rs) | `Staging`, the folder a step runs in |
-| [build/step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/step.rs) | running a step: the process and its group, the log, the tail, a stop |
-| [build/inputs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/inputs.rs) | the private copy of each dataset a step reads |
-| [build/capture.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/capture.rs) | taking in what a step wrote: the walk, the names, the hashes, the publication |
-| [build/compare.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/compare.rs) | a rerun's files beside the ones data.lock pins: matching, changed, missing and extra |
-| [cli/build/accept.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/accept.rs) | `build --accept`: the checks a kept rebuild must pass, its pin and its placing |
-| [cli/build/room.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/room.rs) | the room the steps that run may take, said before the first one, and the question when the disk is short |
-| [space.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/space.rs) | `Needs` and `peak`, `floor`, and the free and total bytes of a disk |
-| [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | `State.candidates`, the rebuild of each recipe that differs from its pin |
-| [cache/results.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/results.rs) | `builds/<key>/<tree>` records, key locks, and moving a captured file into `objects/` |
-| [examples/recipe_step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/examples/recipe_step.rs) | the step program the cli tests put in recipes |
-| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | `tell_stale`, the warning sync and path give for a recipe not built yet or changed since its build, and `Loop::ready`, which fetches what a step reads |
-| [cli/status.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/status.rs) | `unbuilt_here`: pinned results nothing on this machine holds, with the inputs the cache lacks |
-| [cli/cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | `Readers`: which objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` |
+its own files are in the [code map](codemap.md#recipe-and-build). the rest of the code that knows recipes: `src/project/manifest.rs` reads them as `Origin::Derived(Recipe)`, beside `Origin::Source(Source)`; `src/project/lock/derived.rs` pins a result as `Derived`; `src/project/state.rs` keeps each differing rebuild in `State.candidates`; `src/cache/results.rs` stores results under `builds/<key>/<tree>`; `src/space.rs` sizes a build with `Needs`, `peak` and `floor`; `src/cli/sync.rs` warns of a stale pin through `tell_stale` and fetches what a step reads through `Loop::ready`; `src/cli/status.rs` finds results nothing here holds through `unbuilt_here`; `src/cli/cache.rs` tells which objects only builds read through `Readers`; and `examples/recipe_step.rs` is the step program the cli tests put in recipes.
 
 a dataset is fetched or made, so the manifest hands every caller an `Origin` to match on. code that only makes sense for a source, such as resolving a reference, drafting a pin or the spec hash, takes a `Source`, so the compiler finds each place a recipe must be left out. relocking asks nothing for a recipe, keeps its `Derived` pin while `data.toml` has the recipe and drops it with the recipe.
 

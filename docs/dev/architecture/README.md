@@ -2,6 +2,24 @@
 
 fetchloom separates source resolution, checked byte storage and placement so a project can recover without trusting an interrupted run.
 
+## components
+
+| page | question it answers |
+|---|---|
+| [CLI](cli.md) | where do flags, settings and commands enter? |
+| [sync loop](sync-loop.md) | when does a run resolve, hash, fetch or skip work? |
+| [project](project.md) | what persists, and who may change it? |
+| [recipes](recipes.md) | how is a recipe's result keyed, and when is its pin stale? |
+| [sources](sources.md) | how does a reference become a pinned listing? |
+| [network](network.md) | how do requests, retries, splits and hashing cooperate? |
+| [cache](cache.md) | when are bytes reusable, and when are they doubtful? |
+| [archives](archives.md) | how are members checked before publication? |
+| [placing](placing.md) | why does a file stay, move or get replaced? |
+| [output](output.md) | which stream carries each result, and how is it rendered? |
+| [primitives](primitives.md) | which small types and limits do the components share? |
+
+the [code map](codemap.md) lists every file, what it owns and the item to read first.
+
 ## module calls
 
 arrows follow calls between the modules, including calls from their child modules. an arrow into the box means calls into every module in it. shared value types also cross these boundaries, as `project` records a `place::Method` for each placed file.
@@ -79,43 +97,6 @@ sequenceDiagram
     C->>C: render result and work counts
 ```
 
-relocking can download and unpack before it writes `data.lock`, because unknown hashes and archive trees are part of the pin. the new lock is then planned before it is written, so a destination clash, or two files pinned on one path, leaves `data.lock` as it was; only a clash among files of an archive this machine never unpacked shows after the write. a completed placement records whether every requested file ended up in place; a run that preserves edits cannot take the settled shortcut next time.
-
-## types to recognize
-
-| type | home | meaning |
-|---|---|---|
-| `Context` | [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs) | command settings, output, counters and stop signal |
-| `Project`, `Held` | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs) | project root and mutation-lock lifetime |
-| `Manifest`, `Entry`, `Origin` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | requested datasets: a source with its selection rules, or a recipe |
-| `Template`, `Step`, `Change` | [recipe.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/recipe.rs) | a recipe's command, the recipe as it stands with its key, and what moved since its pin |
-| `Lock`, `Locked`, `LockedFile` | [project/lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | resolved datasets and immutable byte pins |
-| `State`, `Placed`, `Look`, `Synced` | [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | placed files, their size and time, and the last sync's input hashes |
-| `Loop`, `Draft`, `Survey`, `Placing` | [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs), [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | orchestration, learned pins, disk observations and placement decisions |
-| `Reference`, `Listing`, `Remote` | [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | source identity, resolved listing and downloadable file |
-| `Net`, `Fetch`, `Fetched` | [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs), [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | HTTP policy, transfer request and checked result |
-| `Mirrors`, `Location`, `Wanted`, `Mirrored` | [mirror.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/mirror.rs), [mirror/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/mirror/folder.rs), [cli/fetch/mirrors.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/mirrors.rs) | the mirrors a run asks, how a folder mirror gives a pinned file, and what each mirror answered this run |
-| `DataFolder` | [cli/fetch/data_folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/data_folder.rs) | the files of the data folder that may hold pinned objects the cache lacks, asked before any mirror |
-| `Target`, `Item`, `There` | [mirror/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/mirror/folder.rs), [cli/push.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/push.rs) | what `push` writes into a folder mirror, how each file is checked before it takes its name, and what a mirror holds already |
-| `Cache`, `PartialWriter`, `HashPipe` | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs), [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs), [hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | stored objects, unfinished writes and ordered prefix hashing |
-| `Packed`, `Limits`, `Unpacked` | [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, expansion bounds and member tree |
-| `Plan`, `Target`, `Placer`, `Method` | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs), [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | destinations and operations that fill them |
-| `Output`, `Work`, `Error`, `Stop` | [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs), [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs), [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | rendering, counters, classified errors and cancellation |
-
-## components
-
-| page | question it answers |
-|---|---|
-| [CLI](cli.md) | where do flags, settings and commands enter? |
-| [sync loop](sync-loop.md) | when does a run resolve, hash, fetch or skip work? |
-| [project](project.md) | what persists, and who may change it? |
-| [recipes](recipes.md) | how is a recipe's result keyed, and when is its pin stale? |
-| [sources](sources.md) | how does a reference become a pinned listing? |
-| [network](network.md) | how do requests, retries, splits and hashing cooperate? |
-| [cache](cache.md) | when are bytes reusable, and when are they doubtful? |
-| [archives](archives.md) | how are members checked before publication? |
-| [placing](placing.md) | why does a file stay, move or get replaced? |
-| [output](output.md) | which stream carries each result, and how is it rendered? |
-| [primitives](primitives.md) | which small types and limits do the components share? |
+relocking can download and unpack before it writes `data.lock`, because unknown hashes and archive trees are part of the pin. the new lock is planned before it is written; the [sync loop's traps](sync-loop.md#invariants-and-traps) say which clashes still leave `data.lock` as it was, and its [settled-sync shortcut](sync-loop.md#settled-sync-shortcut) which runs record incomplete state.
 
 related: [developer guide](../README.md), [engineering](../engineering/README.md), [user concepts](../../user/concepts.md).

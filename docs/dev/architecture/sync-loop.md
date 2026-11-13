@@ -1,23 +1,28 @@
 # sync loop
 
-`sync` reconciles requested datasets, pinned bytes and observed files before it decides what to download or replace.
+`sync` reconciles requested datasets, pinned bytes and observed files before it decides what to download or replace. `Loop` resolves changed entries, learns missing pins and fills only the cache objects placement needs. `Survey` records disk observations; `Placing` decides actions without hiding network work inside a filesystem operation. the [code map](codemap.md#clisync) lists its files, and `src/cli/project.rs`, which orders each command's steps, under [cli](codemap.md#cli).
 
-## ownership
+## invariants and traps
 
-`Loop` resolves changed entries, learns missing pins and fills only the cache objects placement needs. `Survey` records disk observations; `Placing` decides actions without hiding network work inside a filesystem operation.
+- `relock` refuses a clash the listings show before it downloads anything, and `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files, or between them and another dataset's files, can still follow a written lock, though it still comes before anything is placed. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
+- under `Scope::Only`, every create, replace or delete is on a path whose target or state record belongs to a named dataset, and data.lock changes only in named entries.
+- matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
+- a SHA-256 names bytes of one size, so a file data.lock pins at another size than such bytes have is a broken data.lock, never a file to fetch or replace. `decide`, `status::compare` and `lock --check` find it through a file the state records with that SHA-256 that still looks as placed, `Loop::prepare` and `push` through the cache's copy, and each hashes the file before it says so with `project.invalid` and no fix, since a damaged copy proves nothing. only a file whose recorded or cached size differs from its pin is read, so a run with sound pins reads nothing more.
+- use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
+- mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.
+- missing member records and missing member objects are different cases. the former blocks planning; the latter can require downloading the packed archive again.
 
-## files
+## tests
 
-| file | what it holds | types and functions |
-|---|---|---|
-| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering, settled-run entry and dry runs | `sync`, `Run`, `sync_all`, `preview_all`, `selected`, `register` |
-| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Scope`, `Upgrade`, `relock`, `relock_dry`, `preview`, `write_lock`, `place`, `pinned` |
-| [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `jobs`, `learn`, `unknown_archives`, `finish`, `filter` |
-| [rename.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/rename.rs) | unique source and recipe renames carried from existing pins | `Rename`, `forecast`, `carry`, `results`, `pairs_by_key` |
-| [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs) | scan, racy hashes, aliases, hardlink audit, and what a removal leaves | `Survey`, `read_within`, `hash_racy`, `check_doubted`, `audit`, `retarget`, `smudge_edited`, `retired`, `left_behind` |
-| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions, previews and state updates | `Placing`, `Placement`, `Preview`, `Changes`, `Action`, `Seen`, `untouched`, `decide`, `apply` |
-| [place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs), [place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement tallies and reporting | `Tally`, `put_all`, `tell`, `tell_preview` |
-| [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | archive scheduling and packed-object retention | `Unpack`, `unpack_all`, `unpack_drafts`, `unpack_locked`, `drop_archives` |
+| files | cargo filter |
+|---|---|
+| `src/cli/sync.rs`, `src/cli/sync/draft.rs`, `src/cli/sync/disk/tests.rs`, `src/cli/sync/unpack.rs` | `cargo test --locked --lib cli::sync::` |
+| `tests/cli/project.rs`, `tests/cli/add.rs`, `tests/cli/path.rs`, `tests/cli/remove.rs` | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli path::`; `cargo test --locked --test cli remove::` |
+| `tests/cli/dry_run.rs` | `cargo test --locked --test cli dry_run::` |
+| `tests/cli/placing.rs`, `tests/cli/recovery.rs` | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
+| `tests/cli/archives.rs` | `cargo test --locked --test cli archives::` |
+
+fixed placement models cover every combination of force, writable mode and shared ownership across missing, untracked, changed, vouched and damaged observations. a separate model checks which unwanted records are removed, retained or forgotten, over 64 combinations of six observations in a run of every dataset, of the record's dataset and of another one.
 
 ## how it works
 
@@ -103,28 +108,6 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 ### pinned download admission
 
 before preparing downloads, `Loop::ask_room` sums what placing lacks, the archives it lacks and each archive of unknown files once more, against `space::free` on the cache's disk, and asks once; a yes there approves every later download's size too. each download batch checks its own part in `confirm`, and a download of unknown size checks when its length arrives. one whose length never arrives keeps what the disk had free when it started in its `Watch`, and `Watch::room` stops it at the first chunk that would pass it, before that chunk goes to the writer. before any of that asks, `space::cache_holds` refuses a pinned file the cache's disk cannot hold, as FAT32 holds no file of 4 GiB or more; a size only the server states is checked when its headers arrive, before any byte is written. every pinned download is validated before approval or transfer. pending pins retain one parsed URL and a small batch description; the full fetch and recovery values are reconstructed only when one of the `jobs * 2` scheduler slots admits the file. initial-host ordering, original result indexes, unknown-size approval, expired-link recovery and final batch publication share the download scheduler. retaining less data while large projects wait for their first responses bounds the memory cost of pending jobs.
-
-## invariants and traps
-
-- `relock` refuses a clash the listings show before it downloads anything, and `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files, or between them and another dataset's files, can still follow a written lock, though it still comes before anything is placed. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
-- under `Scope::Only`, every create, replace or delete is on a path whose target or state record belongs to a named dataset, and data.lock changes only in named entries.
-- matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
-- a SHA-256 names bytes of one size, so a file data.lock pins at another size than such bytes have is a broken data.lock, never a file to fetch or replace. `decide`, `status::compare` and `lock --check` find it through a file the state records with that SHA-256 that still looks as placed, `Loop::prepare` and `push` through the cache's copy, and each hashes the file before it says so with `project.invalid` and no fix, since a damaged copy proves nothing. only a file whose recorded or cached size differs from its pin is read, so a run with sound pins reads nothing more.
-- use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
-- mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.
-- missing member records and missing member objects are different cases. the former blocks planning; the latter can require downloading the packed archive again.
-
-## tests
-
-| files | cargo filter |
-|---|---|
-| [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk/tests.rs), [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::` |
-| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs), [add.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/add.rs), [path.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/path.rs), [remove.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/remove.rs) | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli path::`; `cargo test --locked --test cli remove::` |
-| [dry_run.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/dry_run.rs) | `cargo test --locked --test cli dry_run::` |
-| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
-| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
-
-fixed placement models cover every combination of force, writable mode and shared ownership across missing, untracked, changed, vouched and damaged observations. a separate model checks which unwanted records are removed, retained or forgotten, over 64 combinations of six observations in a run of every dataset, of the record's dataset and of another one.
 
 ## related
 

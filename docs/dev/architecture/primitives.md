@@ -1,29 +1,26 @@
 # primitives
 
-shared primitives keep byte identity, path rules, failure handling and worker limits consistent across components.
+shared primitives keep byte identity, path rules, failure handling and worker limits consistent across components. these modules contain small value types and policies used by more than one component. they avoid command-specific decisions; their callers supply paths, settings and effects. the [code map](codemap.md#primitives) lists them, and `src/volume.rs` under [plan, place and volume](codemap.md#plan-place-and-volume).
 
-## ownership
+## invariants and traps
 
-these modules contain small value types and policies used by more than one component. they avoid command-specific decisions; their callers supply paths, settings and effects.
+- `Sha256::of_file` is a general path reader. cache integrity checks use `read_unfollowed` plus `of_reader` where following a final link is forbidden.
+- a cap of one must not deadlock an archive reader waiting for a writer that was never started.
+- cancellation must interrupt waits as well as work loops.
+- counters describe performed operations, not intended work or rendered lines.
+- display clipping must not split a unicode character.
 
-## files
+## tests
 
-| file | what it holds | types and functions |
-|---|---|---|
-| [digest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/digest.rs) | typed digests and incremental hashing | `Sha256`, `Md5`, `Hasher`, `from_hex`, `of_reader`, `sha256` |
-| [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs) | suggested names, path checks, alias folding and `folder/name` as listings write it | `sanitize`, `dataset_name`, `title_name`, `reference_name`, `escapes`, `metadata`, `unstorable`, `fold`, `closest`, `joined` |
-| [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs) | checked whole-path selection patterns | `Glob`, `new`, `matches`, `is_top_level_only` |
-| [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | human sizes, rates, durations, counts and clipping, lists of names cut to the first few, and sizes typed as `512M` | `size`, `rate`, `speed`, `duration`, `count`, `grouped`, `clip`, `listed`, `some_of`, `bytes` |
-| [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
-| [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs) | every setting with its origin: variable, settings file, resources level, machine or default | `Settings`, `File`, `Set`, `Origin`, `read`, `defaults`, `hash_batches` |
-| [settings/resources.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings/resources.rs) | resources levels: what lean, default and max give the knobs they derive from the machine, and what a run spends once every knob is set | `Level`, `Limits`, `limits`, `Spending`, `spending` |
-| [space.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/space.rs) | free space on the disk holding a folder: statvfs on unix, the volume list on windows; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file | `free`, `short`, `Filesystem`, `cache_holds` |
-| [machine.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/machine.rs) | what the machine allows: processors, available memory on linux inside cgroup limits and whether a cgroup holds it, open files, and the processors the system has online | `Machine`, `read`, `processors_online` |
-| [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
-| [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | stable failure kinds and explanations: details cut to the first few, a command's report so far, and the help for an answer only a newer fetchloom can read | `Kind`, `Error`, `FileFailure`, `name`, `exit_code`, `advice`, `details_up_to`, `with_report`, `report_answer`, `ISSUES` |
-| [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | shared cancellation, as an `Error` or, for work on files, an `io::Error` | `Stop`, `ask`, `asked`, `is_asked`, `check`, `check_io` |
-| [suggested.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/suggested.rs) | the fetchloom command a help or hint names, after `-C` and the folder the run works in when it was given `-C`, so it finds the same project from any folder | `command`, `set_directory` |
-| [work.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/work.rs) | atomic counters independent of output | `Work`, `Counts`, `add`, `counts` |
+hash-pipeline tests pause the actual worker with channel messages, check queue capacity with `try_send`, and observe claim lifetimes through weak handles while the worker is known to be draining. timeouts only bound failed tests; they are not evidence that an operation waited.
+
+CLI resource-cap tests check accepted settings, configuration errors and complete output bytes. they do not infer token accounting or worker counts from elapsed time, which also includes scheduling and filesystem waits.
+
+| files | cargo filter |
+|---|---|
+| `src/digest.rs`, `src/name.rs`, `src/glob.rs`, `src/units.rs` | `cargo test --locked --lib digest::`; `cargo test --locked --lib name::`; `cargo test --locked --lib glob::`; `cargo test --locked --lib units::` |
+| `src/volume.rs`, `src/threads.rs`, `src/error.rs` | `cargo test --locked --lib volume::`; `cargo test --locked --lib threads::`; `cargo test --locked --lib error::` |
+| `tests/cli/caps.rs`, `tests/cli/unattended.rs`, `tests/cli/placing.rs` | `cargo test --locked --test cli caps::`; `cargo test --locked --test cli unattended::`; `cargo test --locked --test cli placing::` |
 
 ## how it works
 
@@ -67,11 +64,11 @@ the memory a level gives sizes only the hash queues of downloads (`hash_batches`
 
 to add a setting:
 
-1. name its settings-file key and the variable that overrides it in `KEYS` in [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs), which the file reader, `variable` and the typo check `misnamed` read, and add the key to `LISTS`, `BOOLEANS` or `CLEARED` when it holds a list or true or false, or when an empty variable must clear it. a variable without a key goes in `OTHERS`.
+1. name its settings-file key and the variable that overrides it in `KEYS` in `src/settings.rs`, which the file reader, `variable` and the typo check `misnamed` read, and add the key to `LISTS`, `BOOLEANS` or `CLEARED` when it holds a list or true or false, or when an empty variable must clear it. a variable without a key goes in `OTHERS`.
 2. give `Settings` a `Set` field, its default in `Settings::defaults`, and read it in `Settings::read` with the reader of its kind, such as `count`, `size`, `seconds` or `boolean`, which records where the value came from.
-3. when a level derives it, add it to `Limits` in [settings/resources.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings/resources.rs), give each level its value in `Level::limits` and read it in `Settings::read` through `derived`, so a value set by name still wins; a setting no level derives joins the values `the_default_level_keeps_the_defaults_and_no_level_moves_what_it_does_not_derive` compares.
-4. add its row to `rows` in [cli/settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/settings.rs), so `fetchloom settings` shows its value and where it came from.
-5. describe the variable in `ENVIRONMENT` in [cli/help.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/help.rs), within 80 columns, and the key in the list of what a settings file keeps below it.
+3. when a level derives it, add it to `Limits` in `src/settings/resources.rs`, give each level its value in `Level::limits` and read it in `Settings::read` through `derived`, so a value set by name still wins; a setting no level derives joins the values `the_default_level_keeps_the_defaults_and_no_level_moves_what_it_does_not_derive` compares.
+4. add its row to `rows` in `src/cli/settings.rs`, so `fetchloom settings` shows its value and where it came from.
+5. describe the variable in `ENVIRONMENT` in `src/cli/help.rs`, within 80 columns, and the key in the list of what a settings file keeps below it.
 6. document the variable and the key in the [environment reference](../../user/reference/environment.md), and anything new about its origin in the [settings command](../../user/commands/settings.md) page. `every_setting_is_documented_and_every_documented_one_is_read` in `tests/cli/docs.rs` fails until the reference names a variable the code reads, and `the_environment_topic_names_every_variable_the_docs_do` in cli/help.rs until the help topic names the same ones.
 
 ### volume, errors and cancellation
@@ -79,26 +76,6 @@ to add a setting:
 `Volume` learns hardlink support only when an operation needs the answer. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
 
 `Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. a refusal a sign-in could lift carries `auth::Need`, the account to sign in to, set by `Error::needs`, so `error` names `auth`'s types while `auth` returns `Error`. `Stop` shares a `tokio::sync::watch` channel carrying a boolean, beside flags for a run that marked its work as finishing with `Stop::finish`. `ask` sets the boolean under the watch's lock with `send_if_modified`, unless the run is past that mark, which then finishes anyway; `is_asked` reads the current value synchronously, and `asked` subscribes and waits asynchronously for it to become true. what a first ctrl-c does, `Stop::hear`, is in [CLI](cli.md#invariants-and-traps).
-
-## invariants and traps
-
-- `Sha256::of_file` is a general path reader. cache integrity checks use `read_unfollowed` plus `of_reader` where following a final link is forbidden.
-- a cap of one must not deadlock an archive reader waiting for a writer that was never started.
-- cancellation must interrupt waits as well as work loops.
-- counters describe performed operations, not intended work or rendered lines.
-- display clipping must not split a unicode character.
-
-## tests
-
-hash-pipeline tests pause the actual worker with channel messages, check queue capacity with `try_send`, and observe claim lifetimes through weak handles while the worker is known to be draining. timeouts only bound failed tests; they are not evidence that an operation waited.
-
-CLI resource-cap tests check accepted settings, configuration errors and complete output bytes. they do not infer token accounting or worker counts from elapsed time, which also includes scheduling and filesystem waits.
-
-| files | cargo filter |
-|---|---|
-| [digest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/digest.rs), [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs), [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs), [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | `cargo test --locked --lib digest::`; `cargo test --locked --lib name::`; `cargo test --locked --lib glob::`; `cargo test --locked --lib units::` |
-| [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs), [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | `cargo test --locked --lib volume::`; `cargo test --locked --lib threads::`; `cargo test --locked --lib error::` |
-| [caps.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/caps.rs), [unattended.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/unattended.rs), [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs) | `cargo test --locked --test cli caps::`; `cargo test --locked --test cli unattended::`; `cargo test --locked --test cli placing::` |
 
 ## related
 

@@ -1,25 +1,27 @@
 # project
 
-`project` owns discovery, project records and the lock that serializes changes to one project's files.
+`project` owns discovery, project records and the lock that serializes changes to one project's files. `Project` finds the nearest ancestor containing `data.toml`, without crossing the top of the git repository the search starts in, and reads the manifest, lock and local state. it also writes metadata and checks the data-folder chain; command handlers decide when those operations happen. the [code map](codemap.md#project) lists its files.
 
-## ownership
+## invariants and traps
 
-`Project` finds the nearest ancestor containing `data.toml`, without crossing the top of the git repository the search starts in, and reads the manifest, lock and local state. it also writes metadata and checks the data-folder chain; command handlers decide when those operations happen.
+- commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.
+- do not treat a broken lock like missing state. recovery may require restoring the lock from git or explicitly resolving all entries again.
+- a tree hash pins archive contents without expanding the lock to one record per member.
+- root discovery uses the nearest manifest. nested projects are distinct roots. a folder holding `.git`, a folder or a file, ends the search once its own manifest is checked, so a manifest above a repository needs `-C`; `ignored_in_git` uses the same repository test.
+- path checks reject traversal and links in protected directory chains, but do not make a sandbox against another process swapping directories during a run.
 
-## files
+## tests
 
-| file | what it holds | types and functions |
-|---|---|---|
-| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs) | discovery, locking and metadata writes | `Project`, `Held`, `Hold`, `Owner`, `find`, `hold`, `write`, `write_state`, `data_dir` |
-| [manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | manifest parsing and edits that preserve comments, a new dataset in name order | `Manifest`, `Entry`, `Reader`, `parse`, `with_dataset`, `without_dataset`, `with_dataset_from`, `tables`, `outside` |
-| [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | pin validation and deterministic serialization | `Lock`, `Locked`, `LockedFile`, `Drift`, `parse`, `render`, `spec`, `timestamp` |
-| [lock/canonical.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/canonical.rs) | fast reader for fetchloom's own lock output | `read` |
-| [lock/derived.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/derived.rs) | the entries of datasets a recipe made: inputs, command, code, variables, key and tree | `Derived`, `Input`, `Code`, `check`, `check_files`, `write` |
-| [lock/lists.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/lists.rs) | the compressed file lists in `data.lock.d`, of sources past 50,000 files and of every recipe result, typed by their header line | `Listed`, `Row`, `texts`, `listed`, `read`, `compress`, `is_part`, `inline` |
-| [lock/merge.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/merge.rs) | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge`, `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
-| [lock/merge/markers.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/merge/markers.rs) | the two sides, and the base, git's conflict lines hold, read again without the tables a conflict cuts, with the sides whole from git beside them | `Sides`, `split`, `first` |
-| [state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | local observations and settled-sync evidence, one json document with an index of its records | `State`, `Placed`, `Look`, `Synced`, `nanos`, `render`, `read_within` |
-| [git.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/git.rs) | git found and run as a bounded reader: each side of a merge whole, with the base, from its index or the commits being merged, and the files it has | `find`, `Stages`, `stages`, `committed`, `tracked`, `Known`, `known` |
+| files | cargo filter |
+|---|---|
+| `src/project.rs`, `src/project/manifest/tests.rs`, `src/project/lock.rs`, `src/project/state.rs` | `cargo test --locked --lib project::` |
+| `src/project/lock/merge.rs`, `tests/cli/merge.rs` | `cargo test --locked --lib project::lock::merge`; `cargo test --locked --test cli merge::`; the git cases run against the git on `PATH`, of any version, and skip without one |
+| `tests/cli/concurrent.rs` | `cargo test --locked --test cli concurrent::` |
+| `tests/cli/project.rs`, `tests/cli/add.rs`, `tests/cli/moved.rs` | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli moved::` |
+
+the lock reader models use fixed generated inputs and mutations to compare canonical and general TOML decoding, including escaped strings, integer limits, line endings, path rejection and deterministic rendering.
+
+`path` and `status` reject portable case collisions in the plan before reporting locations or creating project metadata. Linux command tests cover this independently of the host filesystem’s case sensitivity.
 
 ## how it works
 
@@ -82,27 +84,6 @@ a recipe's key hashes its code, so a code file a commit leaves out leaves a clon
 ## ready path waiters
 
 a waiting `path` notices a changed state file and runs the normal read-only readiness check before trying the mutation hold again. waiters whose files are now ready can finish together instead of handing the owner record from reader to reader. the state stamp only triggers a recheck: fresh state alone never vouches for missing, changed or doubtful files. unchanged stamps and failed readiness checks keep the normal hold-and-reread path.
-
-## invariants and traps
-
-- commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.
-- do not treat a broken lock like missing state. recovery may require restoring the lock from git or explicitly resolving all entries again.
-- a tree hash pins archive contents without expanding the lock to one record per member.
-- root discovery uses the nearest manifest. nested projects are distinct roots. a folder holding `.git`, a folder or a file, ends the search once its own manifest is checked, so a manifest above a repository needs `-C`; `ignored_in_git` uses the same repository test.
-- path checks reject traversal and links in protected directory chains, but do not make a sandbox against another process swapping directories during a run.
-
-## tests
-
-| files | cargo filter |
-|---|---|
-| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs), [manifest/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest/tests.rs), [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs), [state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | `cargo test --locked --lib project::` |
-| [merge.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/merge.rs), [merge tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/merge.rs) | `cargo test --locked --lib project::lock::merge`; `cargo test --locked --test cli merge::`; the git cases run against the git on `PATH`, of any version, and skip without one |
-| [concurrent.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/concurrent.rs) | `cargo test --locked --test cli concurrent::` |
-| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs), [add.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/add.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli moved::` |
-
-the lock reader models use fixed generated inputs and mutations to compare canonical and general TOML decoding, including escaped strings, integer limits, line endings, path rejection and deterministic rendering.
-
-`path` and `status` reject portable case collisions in the plan before reporting locations or creating project metadata. Linux command tests cover this independently of the host filesystem’s case sensitivity.
 
 ## related
 

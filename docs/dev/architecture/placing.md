@@ -1,24 +1,29 @@
 # placing
 
-placement protects existing files while turning locked data and cached archive trees into checked filesystem operations.
+placement protects existing files while turning locked data and cached archive trees into checked filesystem operations. `plan` expands destinations and rejects clashes before placement. `cli/sync/place` chooses actions from a disk survey; `Placer` implements links, copies, directory checks and removal without deciding whether a user's edit may be replaced. the [code map](codemap.md#plan-place-and-volume) lists its files; the actions are in `src/cli/sync/place.rs` and its children under [cli/sync](codemap.md#clisync), and `get`'s own destinations in `src/cli/get/folder.rs` and `src/cli/get/file.rs` under [cli](codemap.md#cli).
 
-## ownership
+## invariants and traps
 
-`plan` expands destinations and rejects clashes before placement. `cli/sync/place` chooses actions from a disk survey; `Placer` implements links, copies, directory checks and removal without deciding whether a user's edit may be replaced.
+- never clear a known hardlink's read-only flag to remove it. that flag belongs to every name of the file.
+- reject traversal, metadata destinations and unsafe folder chains before writing; deletion rechecks its parents after downloads. the placer also rejects parent components below the chosen root before any filesystem work, even if an internal caller bypasses lock or manifest validation. an explicitly chosen root such as `../download` keeps its normal filesystem meaning. aliases above the root are resolved at root selection; this does not permit links below it.
+- a project's data root must be real. the folder explicitly supplied to `get` may itself be a link, but its child folders must be real. `get::finish` also rejects a linked generated root after the final output name is known, including generated children of a multi-link `--dir` parent. placement binds that generated root without following a link again, so a change during unpacking cannot bypass the earlier check. only a root explicitly named for one link may resolve through an alias.
+- placement and deletion resolve parents through a pinned root. linux uses `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, or component-wise `openat` with `O_NOFOLLOW`; macos uses component-wise `openat`. names, metadata and removals stay relative to those handles. windows holds each directory without delete sharing, so it cannot be replaced while an operation uses its path. a renamed original folder may retain unfinished copies, but a replacement link cannot redirect writes or cleanup.
+- adopting an untracked equal file makes it managed; a later removal can delete it if unchanged, and warns that it was already there. `status` lists such a file as `adoptable`, by the same `holds_target` test, size first, then the hash, and `tell` gives datasets that share a folder one `Adopted` line, as it gives them one `Placed` line.
+- a members table filters an archive's targets after `unpacked_paths` placed every member; filtering first would change the top folder a dataset strips and move the kept files.
+- read each placed file's size and time immediately after placement, not after the whole batch.
+- `get -o` makes the folders of its file through the placer, as a copy would, before it moves a one-off out of the cache. a rename into a folder that is not there fails, and the copy it would fall back to holds the bytes twice until the cache drops its own.
+- another run of the same link can write the `-o` file, or move the bytes out of the cache for its own file, between `settle`'s look at the path and its write. a write refused because the name is taken, or the cache's copy gone, makes it look again: a file holding the wanted bytes is kept as a rerun keeps it, and anything else stays and fails the run as before.
+- a run of `get -o` about to download takes the link's download claim first, waiting while another run holds it, and decides again once it waited. a run whose own download may leave the cache takes the claim again after downloading and holds it until its file has the bytes. a waiting run therefore finds them in the file or in the cache, never between the two; the claim is never held while calling the downloader, which takes it too.
 
-## files
+## tests
 
-| file | what it holds | types and functions |
-|---|---|---|
-| [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs) | destination expansion and collision checks | `Plan`, `Target`, `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
-| [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `unblock`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
-| [cli/sync/place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | batched placement and per-file observations | `Tally`, `put_all` |
-| [cli/sync/place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement summaries | `tell` |
-| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_hashes` |
-| [place/synced.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/synced.rs) | cloud-sync folder detection | `client` |
-| [cli/get/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/folder.rs) | one-off destination policy | `Outcome`, `check`, `put_all` |
-| [cli/get/file.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/file.rs) | the one file `get -o` writes: what to do about a file there, a one-off moved out of the cache, and publication without replacing | `Existing`, `Step`, `decide`, `one_off`, `take`, `publish`, `forget` |
-| [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | hardlink capability and read-only removal | `Volume`, `replace`, `remove`, `remove_hardlink` |
+placement-order tests pause at the first metadata observation before later names appear. interruption tests wait for a staged-copy acknowledgement before killing the child. neither depends on disk speed or a clock deadline.
+
+| files | cargo filter |
+|---|---|
+| `src/plan/tests.rs`, `src/place/tests.rs`, `src/volume.rs` | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
+| `src/cli/sync/place.rs`, `src/cli/sync/place/put.rs` | `cargo test --locked --lib cli::sync::place::` |
+| `tests/cli/placing.rs`, `tests/cli/layout.rs`, `tests/cli/recovery.rs`, `tests/cli/moved.rs` | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli layout::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
 
 ## how it works
 
@@ -111,7 +116,7 @@ a hardlink edit damages the cached object, since every name is one file. the sur
 
 when a recorded spelling is absent, scans consider exactly one folded alias and verify the recorded path resolves to the same plain file. unix also compares device and inode. ambiguous aliases and distinct case-sensitive files remain separate. retargeting carries edits and hardlink doubts to the wanted spelling.
 
-apfs and hfs+ see `café` written with one character and with an `e` and a combining accent as one name. apfs lists a name in the composition that made it, while hfs+ lists every name decomposed, so a file the lock names composed can be listed decomposed. retargeting carries such a listed file to the wanted spelling even without a placement record, when the two spellings differ only in composition and resolve to the same file, so status never reports it both missing and extra. a name differing in case is joined only through a record. `get` compares the names in its output folder composed on macos for the same reason. see `same_composed` and `as_disk_sees` in [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs).
+apfs and hfs+ see `café` written with one character and with an `e` and a combining accent as one name. apfs lists a name in the composition that made it, while hfs+ lists every name decomposed, so a file the lock names composed can be listed decomposed. retargeting carries such a listed file to the wanted spelling even without a placement record, when the two spellings differ only in composition and resolve to the same file, so status never reports it both missing and extra. a name differing in case is joined only through a record. `get` compares the names in its output folder composed on macos for the same reason. see `same_composed` and `as_disk_sees` in `src/name.rs`.
 
 ### verification workers
 
@@ -120,29 +125,6 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 `place::run_hashes` shares these reads by both count and bytes: the larger of one worker per 64 files and one per 4 MiB, bounded by the actual files, available CPUs, eight workers and `FETCHLOOM_THREADS`. a ceiling of one or two keeps the original count-based choice, so lean does not add read buffers to a short list. an empty or single-worker group stays on the caller. a few large files can therefore use spare CPUs without sending every small check to a worker.
 
 the shared runner returns results in file order and joins every worker before returning errors. a refused thread keeps its work for the caller. each active hash uses the existing size-aware read buffer, at most 1 MiB plus page alignment, and reads each file once; no whole file or extra file contents are retained. the hash, damage classification and progress accounting are unchanged.
-
-## invariants and traps
-
-- never clear a known hardlink's read-only flag to remove it. that flag belongs to every name of the file.
-- reject traversal, metadata destinations and unsafe folder chains before writing; deletion rechecks its parents after downloads. the placer also rejects parent components below the chosen root before any filesystem work, even if an internal caller bypasses lock or manifest validation. an explicitly chosen root such as `../download` keeps its normal filesystem meaning. aliases above the root are resolved at root selection; this does not permit links below it.
-- a project's data root must be real. the folder explicitly supplied to `get` may itself be a link, but its child folders must be real. `get::finish` also rejects a linked generated root after the final output name is known, including generated children of a multi-link `--dir` parent. placement binds that generated root without following a link again, so a change during unpacking cannot bypass the earlier check. only a root explicitly named for one link may resolve through an alias.
-- placement and deletion resolve parents through a pinned root. linux uses `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, or component-wise `openat` with `O_NOFOLLOW`; macos uses component-wise `openat`. names, metadata and removals stay relative to those handles. windows holds each directory without delete sharing, so it cannot be replaced while an operation uses its path. a renamed original folder may retain unfinished copies, but a replacement link cannot redirect writes or cleanup.
-- adopting an untracked equal file makes it managed; a later removal can delete it if unchanged, and warns that it was already there. `status` lists such a file as `adoptable`, by the same `holds_target` test, size first, then the hash, and `tell` gives datasets that share a folder one `Adopted` line, as it gives them one `Placed` line.
-- a members table filters an archive's targets after `unpacked_paths` placed every member; filtering first would change the top folder a dataset strips and move the kept files.
-- read each placed file's size and time immediately after placement, not after the whole batch.
-- `get -o` makes the folders of its file through the placer, as a copy would, before it moves a one-off out of the cache. a rename into a folder that is not there fails, and the copy it would fall back to holds the bytes twice until the cache drops its own.
-- another run of the same link can write the `-o` file, or move the bytes out of the cache for its own file, between `settle`'s look at the path and its write. a write refused because the name is taken, or the cache's copy gone, makes it look again: a file holding the wanted bytes is kept as a rerun keeps it, and anything else stays and fails the run as before.
-- a run of `get -o` about to download takes the link's download claim first, waiting while another run holds it, and decides again once it waited. a run whose own download may leave the cache takes the claim again after downloading and holds it until its file has the bytes. a waiting run therefore finds them in the file or in the cache, never between the two; the claim is never held while calling the downloader, which takes it too.
-
-## tests
-
-placement-order tests pause at the first metadata observation before later names appear. interruption tests wait for a staged-copy acknowledgement before killing the child. neither depends on disk speed or a clock deadline.
-
-| files | cargo filter |
-|---|---|
-| [plan/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan/tests.rs), [place/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/tests.rs), [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
-| [sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs), [put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | `cargo test --locked --lib cli::sync::place::` |
-| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [layout.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/layout.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli layout::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
 
 ## related
 

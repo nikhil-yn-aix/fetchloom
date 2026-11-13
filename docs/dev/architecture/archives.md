@@ -1,29 +1,23 @@
 # archives
 
-`archive` validates and decodes archive members into unpublished cache objects before making them reusable.
+`archive` validates and decodes archive members into unpublished cache objects before making them reusable. archive readers own format decoding; a shared guard owns name, entry and expansion checks. `Writers` stages and seals members, while `cli/sync/unpack` decides when a project needs extraction and whether the packed object can be dropped. the [code map](codemap.md#archive) lists its files, and `src/cli/sync/unpack.rs` and `src/project/lock/archives.rs`, the archives' scheduling and pins, under [cli/sync](codemap.md#clisync) and [project](codemap.md#project).
 
-## ownership
+## invariants and traps
 
-archive readers own format decoding; a shared guard owns name, entry and expansion checks. `Writers` stages and seals members, while `cli/sync/unpack` decides when a project needs extraction and whether the packed object can be dropped.
+- no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.
+- a refused archive may leave its downloaded packed object in the cache.
+- staging cleanup must respect held locks. age alone cannot identify a live writer when locking works. staging folders, lock-file changes, member creation and cleanup use the placement parent resolver under the cache root. a link swapped in for a staging parent cannot redirect those mutations. publication rechecks the member parent before delegating to the cache's object policy; that path-based cache policy remains a separate concurrency boundary. dry-run sweeps still record proposed removals without deleting files.
+- decoder opens still use archive paths after cache lookup. do not extend the cache's no-follow hashing guarantee into a claim of protection against all concurrent path swaps.
+- member-byte limits count actual output, not sizes declared by an untrusted header. exact byte and ratio ceilings are accepted; the next byte is refused. an interrupted member read is retried without counting or losing bytes, and every decoder counts compressed input through the guard's own meter.
 
-## files
+## tests
 
-| file | what it holds | types and functions |
-|---|---|---|
-| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits, entry points and the next step for an archive left packed | `Packed`, `Limits`, `Unpacked`, `Skipped`, `System`, `by_name`, `unsupported`, `stem`, `unpack`, `unpack_cached`, `unpack_cached_parts`, `unpack_elsewhere`, `unpack_inner`, `join_elsewhere` |
-| [detect.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
-| [guard.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
-| [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | an archive's bytes as every reader takes them: one file, or a split archive's parts read in order with one file open; buffered, seekable and metered for zip and 7z | `Input`, `Joined`, `Source` |
-| [parts.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/parts.rs) | split archives, rar volumes and spanned zips, found by their names | `Split`, `Volumes`, `split`, `whole` |
-| [names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | normalized paths and collision tracking | `Named`, `Names`, `add` |
-| [zip.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
-| [tar.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
-| [sevenz.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/sevenz.rs) | 7z header limits, encryption and link checks, block decoding | `unpack` |
-| [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs) | numbered tar shards in a listing, and the hint about them | `Shards`, `shards`, `hint` |
-| [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
-| [store/stream.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store/stream.rs) | bounded reusable buffers between a large member's decoder and writer | `Sending`, `Receiving`, `channel` |
-| [cli/sync/unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
-| [project/lock/archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/archives.rs) | the archives among a dataset's pinned files, a split one with its parts | `Archive`, `Pinned`, `pinned`, `archive`, `of` |
+| files | cargo filter |
+|---|---|
+| `src/archive/tests.rs`, `src/archive/shards.rs`, `src/archive/parts.rs`, `src/archive/input.rs`, `src/archive/samples.rs`, `src/archive/store.rs`, `tests/fixtures/archives/` | `cargo test --locked --lib archive::` |
+| `src/project/lock/archives.rs` | `cargo test --locked --lib project::lock::archives::` |
+| `src/cli/sync/unpack.rs` | `cargo test --locked --lib cli::sync::unpack::` |
+| `tests/cli/archives.rs` | `cargo test --locked --test cli archives::` |
 
 ## how it works
 
@@ -109,23 +103,6 @@ a dataset's `members` tables in data.toml choose which members a project places,
 `manifest::Members` holds a dataset's tables by key, and `Members::of` is the one lookup of the table for an archive: the key equal to its path in data.lock wins, else the one key with `*`, `?` or `[` that reads as a [pattern](../../user/reference/data-toml.md#patterns) and matches that path, so a shard pinned later takes the table its path matches. two such keys and no key of the archive's own are `project.invalid`, naming both. `plan::expand` asks for every archive before it checks whether the cache knows its files, so an overlap stops a sync before anything downloads, and `archives_named` refuses a key that names or matches no pinned archive. `Members::get` gives readers that cannot refuse the same table, or none for an overlap, so gc, the archive drop behind `needed_by_all` and status count every member of such an archive. an archive's own table keeps the checks `plan::selected` makes for that archive alone; a glob key's select patterns are checked across the archives it covers by `plan::Covered`, each needing a file in one of them once this machine knows them all, so shards may differ and one left no file places none, while a table that keeps no file of any of them is refused, as an own table that keeps none of its archive is. a key only chooses which archives a table applies to, and a table only which of their members are placed, never where, so a glob in a cloned data.toml cannot widen what an archive writes. `drop` writes under an archive's own path; for an archive a glob covers, `manifest::with_members_copied` first copies the glob's table there, less the select patterns that match no file of that archive, since the new table wins and would otherwise place what the glob left out, while a pattern added to the glob's table would reach same-named files in every archive it matches.
 
 `select` chooses among the files a source lists, so a pattern meant for members matches nothing, and `draft::inside` says where such a pattern belongs. one in data.toml moves to the dataset's members table, one under `Shards::key` when the listing holds a group of shards. one given to `--select` may be `get`'s, which keeps no project, so its help says to leave `--select` out and keep what is needed from the folder the archive unpacks to, and offers the members table and `drop` for a project.
-
-## invariants and traps
-
-- no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.
-- a refused archive may leave its downloaded packed object in the cache.
-- staging cleanup must respect held locks. age alone cannot identify a live writer when locking works. staging folders, lock-file changes, member creation and cleanup use the placement parent resolver under the cache root. a link swapped in for a staging parent cannot redirect those mutations. publication rechecks the member parent before delegating to the cache's object policy; that path-based cache policy remains a separate concurrency boundary. dry-run sweeps still record proposed removals without deleting files.
-- decoder opens still use archive paths after cache lookup. do not extend the cache's no-follow hashing guarantee into a claim of protection against all concurrent path swaps.
-- member-byte limits count actual output, not sizes declared by an untrusted header. exact byte and ratio ceilings are accepted; the next byte is refused. an interrupted member read is retried without counting or losing bytes, and every decoder counts compressed input through the guard's own meter.
-
-## tests
-
-| files | cargo filter |
-|---|---|
-| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs), [parts.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/parts.rs), [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
-| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/archives.rs) | `cargo test --locked --lib project::lock::archives::` |
-| [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::unpack::` |
-| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 
 ## related
 
