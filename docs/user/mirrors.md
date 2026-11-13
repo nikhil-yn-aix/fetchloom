@@ -157,11 +157,11 @@ the sources of iris and pets did not say who may read them. anyone who can read 
   next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file, here ~/.config/fetchloom/settings.toml; `fetchloom settings` shows where
 ```
 
-push copies the project's files alone, never the rest of a cache other projects share, and it asks first about data whose source wanted an account or accepted terms, or did not say who may read it. it writes folders only: a web mirror or a bucket gets a folder mirror through a copying tool such as rclone. a push replaces a copy of another size it finds; a copy of the right size with other bytes, which `sync` warns about, goes once someone deletes it and pushes again.
+push copies the project's files alone, never the rest of a cache other projects share. [push](commands/push.md) says what it asks first, how a web mirror or a bucket gets a folder mirror through a copying tool such as rclone, and how it replaces a damaged copy.
 
 ## freeing raw data a mirror holds
 
-with the raw data recipes read on a folder mirror, as `fetchloom push --inputs <recipe>` puts it there, [`fetchloom cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) frees this machine's copy of it and keeps the results. it counts a folder mirror from `--mirror` or the `mirrors` setting alone, never a web mirror, and only a copy it reads whole and finds to hash to its name in the same run. a build that reads that data again takes it from the mirror, or from its source.
+with the raw data recipes read on a folder mirror, as `fetchloom push --inputs <recipe>` puts it there, [`fetchloom cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) frees this machine's copy of it and keeps the results, relying only on a folder mirror whose copy it reads whole and hashes in that run. a build that reads that data again takes it from the mirror, or from its source.
 
 ## privacy
 
