@@ -881,7 +881,7 @@ async fn finish(
     check(&folder, Some(&placed))?;
     let named = (chosen.is_some(), last);
     let outcomes = put_all(context, cache, &folder, &planned.targets, named)?;
-    unpacking::drop_archives(cache, &unpacked.archives, None);
+    unpacking::drop_archives(cache, &unpacked.archives, None, context.threads);
     if let (Some(key), [remote], [fetched]) = (&key, files.as_slice(), fetched.as_slice()) {
         remembered::keep(cache, key, &remote.path, fetched.digest, fetched.size);
     }

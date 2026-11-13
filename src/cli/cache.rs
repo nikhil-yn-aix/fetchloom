@@ -3,7 +3,8 @@
 
 mod inputs;
 
-use std::collections::{BTreeMap, HashMap};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Supply, Usage, Use};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Supply, Usage, Use};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
@@ -689,6 +690,63 @@ pub(super) fn needed_by_all(
     Ok(needed_with(cache, current, stop, false, Uses::Untold)?.needed)
 }
 
+/// [`needed_by_all`] as far as `candidates`, archives a drop may remove, are concerned: only an
+/// archive with one of its files among them checks that the cache holds every member, and each
+/// member is looked at once, on `threads` workers, however many projects pin it.
+pub(in crate::cli) fn needed_for_drop(
+    cache: &Cache,
+    current: Option<&Lock>,
+    candidates: &[Sha256],
+    threads: Threads,
+    stop: &Stop,
+) -> Result<Needed, Error> {
+    let focus = Focus {
+        candidates: candidates.iter().copied().collect(),
+        present: RefCell::new(HashMap::new()),
+        threads,
+    };
+    Ok(needed_focused(cache, current, stop, false, Uses::Untold, Some(&focus))?.needed)
+}
+
+/// the archives a drop asks about, and which of their members the cache was found to hold.
+struct Focus {
+    candidates: HashSet<Sha256>,
+    present: RefCell<HashMap<Sha256, bool>>,
+    threads: Threads,
+}
+
+impl Focus {
+    /// whether one of the files of `archive` is among the candidates.
+    fn asks(&self, archive: &archives::Archive<'_>) -> bool {
+        archive
+            .files()
+            .iter()
+            .any(|file| self.candidates.contains(&file.sha256))
+    }
+
+    /// whether the cache holds every one of `members`.
+    fn whole(&self, cache: &Cache, members: &[&Member], stop: &Stop) -> Result<bool, Error> {
+        let unknown: Vec<&Member> = {
+            let present = self.present.borrow();
+            members
+                .iter()
+                .filter(|member| !present.contains_key(&member.sha256))
+                .copied()
+                .collect()
+        };
+        let found = crate::place::run_all(&unknown, self.threads, |member| {
+            cache.contains_for_gc(&member.sha256, member.size, stop)
+        });
+        let mut present = self.present.borrow_mut();
+        for (member, found) in unknown.iter().zip(found) {
+            present.insert(member.sha256, found?);
+        }
+        Ok(members
+            .iter()
+            .all(|member| present.get(&member.sha256).copied().unwrap_or(false)))
+    }
+}
+
 /// whether [`needed_with`] tells how each project uses each object it needs, which reads the
 /// code of the projects' recipes to find which are built.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -733,6 +791,18 @@ fn needed_with(
     stop: &Stop,
     collect_stale: bool,
     uses: Uses,
+) -> Result<Found, Error> {
+    needed_focused(cache, current, stop, collect_stale, uses, None)
+}
+
+/// [`needed_with`], narrowed to a drop's candidates by `focus`.
+fn needed_focused(
+    cache: &Cache,
+    current: Option<&Lock>,
+    stop: &Stop,
+    collect_stale: bool,
+    uses: Uses,
+    focus: Option<&Focus>,
 ) -> Result<Found, Error> {
     let told = uses != Uses::Untold;
     let mut needed = Needed {
@@ -795,10 +865,11 @@ fn needed_with(
                 root: told.then_some(project.root.as_path()),
             });
             let grouping = (uses == Uses::Grouped).then_some(&mut groups);
-            add_with_stop(&mut needed, cache, lock, read, grouping, stop)?;
+            add_with_stop(&mut needed, cache, lock, read, grouping, focus, stop)?;
         }
-        // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state
-        let (state, _) = project.state();
+        // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state, and
+        // reading none of its records skips nearly all of it
+        let (state, _) = project.state_within(&[], &|_| false);
         for file in state.candidates.values().flat_map(|kept| &kept.files) {
             stop.check()?;
             needed.add(file.sha256, Use::Output);
@@ -806,7 +877,7 @@ fn needed_with(
         projects.push(project.root);
     }
     if let Some(lock) = current {
-        add_with_stop(&mut needed, cache, lock, None, None, stop)?;
+        add_with_stop(&mut needed, cache, lock, None, None, focus, stop)?;
     }
     Ok(Found {
         needed,
@@ -833,6 +904,7 @@ fn add_with_stop(
     lock: &Lock,
     read: Option<Read<'_>>,
     mut groups: Option<&mut Vec<Group>>,
+    focus: Option<&Focus>,
     stop: &Stop,
 ) -> Result<(), Error> {
     let mut readers = read.and_then(|read| {
@@ -885,15 +957,27 @@ fn add_with_stop(
             };
             needed.unpacked.insert(archive.key());
             let filter = filters.and_then(|filters| filters.get(&archive.file.path));
-            let mut whole = true;
-            for member in members
+            let kept: Vec<&Member> = members
                 .iter()
                 .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
-            {
+                .collect();
+            for member in &kept {
                 stop.check()?;
                 note(needed, &mut group, member.sha256, used);
-                whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
             }
+            // a drop asks only whether its candidates stay; any other archive keeps its own bytes
+            // as they are
+            let whole = match focus {
+                Some(focus) if !focus.asks(&archive) => true,
+                Some(focus) => focus.whole(cache, &kept, stop)?,
+                None => {
+                    let mut whole = true;
+                    for member in &kept {
+                        whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
+                    }
+                    whole
+                }
+            };
             if !whole {
                 for file in archive.files() {
                     note(needed, &mut group, file.sha256, used);
@@ -1097,6 +1181,59 @@ mod tests {
         (lock, [archive, first, second])
     }
 
+    /// a drop asks only about the archives it may remove, and one of them stays while the cache
+    /// lacks a file it unpacked to, however many members it has to look at.
+    #[test]
+    fn a_drop_keeps_a_candidate_archive_while_a_file_it_unpacked_to_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let (mut lock, [archive, _, second]) = unpacked_archive(&cache);
+        let large = store(&cache, b"an archive of many files");
+        let members: Vec<Member> = (0..130)
+            .map(|n| {
+                let stored = store(&cache, format!("file {n}\n").as_bytes());
+                Member {
+                    path: format!("{n}.txt"),
+                    size: stored.size,
+                    sha256: stored.digest,
+                }
+            })
+            .collect();
+        let tree = cache.record_unpacked(&large.digest, &members).unwrap();
+        let mut many = lock.datasets[0].clone();
+        many.name = "many".to_owned();
+        many.files[0] = LockedFile {
+            path: "many.zip".to_owned(),
+            size: large.size,
+            sha256: large.digest,
+            md5: None,
+            url: "https://example.org/many.zip".to_owned(),
+            unpacks_to: Some(tree),
+        };
+        lock.datasets.push(many);
+        let needed = |candidates: &[Sha256]| {
+            needed_for_drop(
+                &cache,
+                Some(&lock),
+                candidates,
+                Threads::default(),
+                &Stop::default(),
+            )
+            .unwrap()
+            .objects
+        };
+        let both = [archive.digest, large.digest];
+        assert!(both.iter().all(|digest| !needed(&both).contains(digest)));
+        cache.drop_object(&second.digest).unwrap();
+        cache.drop_object(&members[77].sha256).unwrap();
+        assert!(both.iter().all(|digest| needed(&both).contains(digest)));
+        assert!(needed(&[large.digest]).contains(&large.digest));
+        assert!(
+            !needed(&[large.digest]).contains(&archive.digest),
+            "not asked about"
+        );
+    }
+
     /// a split archive's record goes by its parts.
     #[test]
     fn a_split_archive_needs_its_parts_only_while_a_file_it_unpacked_to_is_missing() {
@@ -1126,7 +1263,16 @@ mod tests {
             part("scans.zip.002", &second, None),
         ];
         let mut whole = Needed::default();
-        add_with_stop(&mut whole, &cache, &lock, None, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut whole,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         assert!(whole.objects.contains(&inside.digest));
         assert!(whole.unpacked.contains(&key), "its record");
         for part in [&first, &second] {
@@ -1137,7 +1283,16 @@ mod tests {
         }
         cache.drop_object(&inside.digest).unwrap();
         let mut missing = Needed::default();
-        add_with_stop(&mut missing, &cache, &lock, None, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut missing,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         for part in [&first, &second] {
             assert!(
                 missing.objects.contains(&part.digest),
@@ -1152,7 +1307,16 @@ mod tests {
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let (lock, [archive, _, second]) = unpacked_archive(&cache);
         let mut whole = Needed::default();
-        add_with_stop(&mut whole, &cache, &lock, None, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut whole,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         assert!(whole.objects.contains(&second.digest));
         assert!(
             !whole.objects.contains(&archive.digest),
@@ -1161,7 +1325,16 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut missing = Needed::default();
-        add_with_stop(&mut missing, &cache, &lock, None, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut missing,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         assert!(
             missing.objects.contains(&archive.digest),
             "unpacking it again is the only way back to b.txt"
@@ -1183,7 +1356,7 @@ mod tests {
             manifest: &manifest,
             root: None,
         });
-        add_with_stop(&mut kept, &cache, &lock, read, None, &Stop::default()).unwrap();
+        add_with_stop(&mut kept, &cache, &lock, read, None, None, &Stop::default()).unwrap();
         assert!(kept.objects.contains(&first.digest));
         assert!(
             !kept.objects.contains(&second.digest),
@@ -1192,13 +1365,31 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut freed = Needed::default();
-        add_with_stop(&mut freed, &cache, &lock, read, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut freed,
+            &cache,
+            &lock,
+            read,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         assert!(
             !freed.objects.contains(&archive.digest),
             "a.txt, the only file the project places, is cached"
         );
         let mut unread = Needed::default();
-        add_with_stop(&mut unread, &cache, &lock, None, None, &Stop::default()).unwrap();
+        add_with_stop(
+            &mut unread,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
         assert!(unread.objects.contains(&archive.digest));
     }
 
@@ -1278,7 +1469,7 @@ mod tests {
             manifest,
             root: Some(root),
         });
-        add_with_stop(&mut needed, cache, lock, read, None, &Stop::default()).unwrap();
+        add_with_stop(&mut needed, cache, lock, read, None, None, &Stop::default()).unwrap();
         needed
     }
 

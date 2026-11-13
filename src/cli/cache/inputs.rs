@@ -861,6 +861,7 @@ mod tests {
             lock,
             read,
             Some(&mut groups),
+            None,
             &Stop::default(),
         )
         .unwrap();

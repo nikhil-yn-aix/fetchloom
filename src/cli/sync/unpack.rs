@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
 
 use super::super::Context;
-use super::super::cache::needed_by_all;
+use super::super::cache::needed_for_drop;
 use super::draft::{self, Draft, Unit, Why};
 use super::place::Placing;
 use super::{Loop, job};
@@ -24,6 +24,7 @@ use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::source::local;
+use crate::threads::Threads;
 use crate::units;
 
 /// an archive the cache holds, to unpack on this machine.
@@ -254,11 +255,17 @@ fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
 
 /// drops each archive's own bytes now that its files are in, unless a project here or `current`
 /// needs them; a project whose data.toml is gone needs none, and an unreadable one keeps them all.
-pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current: Option<&Lock>) {
+pub(in crate::cli) fn drop_archives(
+    cache: &Cache,
+    archives: &[Sha256],
+    current: Option<&Lock>,
+    threads: Threads,
+) {
     if archives.is_empty() {
         return;
     }
-    let needed = match needed_by_all(cache, current, &crate::stop::Stop::default()) {
+    let stop = crate::stop::Stop::default();
+    let needed = match needed_for_drop(cache, current, archives, threads, &stop) {
         Ok(needed) => needed,
         Err(err) => {
             tracing::debug!(err = %err.message, "kept unpacked archives, since a lock could not be read");
@@ -696,7 +703,7 @@ impl Loop<'_> {
         }
         unpacked.sort_unstable();
         unpacked.dedup();
-        drop_archives(&self.cache, &unpacked, Some(lock));
+        drop_archives(&self.cache, &unpacked, Some(lock), self.context.threads);
     }
 }
 
@@ -935,7 +942,12 @@ mod tests {
         // are in, while this run waited for the download
         let theirs = block_on(unpack_all(&context(), &cache, vec![unpack()])).unwrap();
         let theirs = theirs[0].as_ref().unwrap();
-        drop_archives(&cache, &[stored.digest], Some(&Lock::default()));
+        drop_archives(
+            &cache,
+            &[stored.digest],
+            Some(&Lock::default()),
+            Threads::default(),
+        );
         assert!(cache.find(&stored.digest, None).is_none());
         let context = context();
         let ours = block_on(unpack_all(&context, &cache, vec![unpack()])).unwrap();
@@ -1015,13 +1027,23 @@ mod tests {
             url: "https://example.org/set.tar".to_owned(),
             unpacks_to: None,
         });
-        drop_archives(&cache, &[kept.digest, removed.digest], Some(&lock));
+        drop_archives(
+            &cache,
+            &[kept.digest, removed.digest],
+            Some(&lock),
+            Threads::default(),
+        );
         assert_eq!(
             std::fs::read(cache.object_path(&kept.digest)).unwrap(),
             b"still needed as a file"
         );
         assert!(cache.find(&removed.digest, None).is_none());
-        drop_archives(&cache, &[kept.digest], Some(&Lock::default()));
+        drop_archives(
+            &cache,
+            &[kept.digest],
+            Some(&Lock::default()),
+            Threads::default(),
+        );
         assert!(cache.find(&kept.digest, None).is_none());
     }
 
@@ -1035,7 +1057,7 @@ mod tests {
         std::fs::write(root.join("data.lock"), b"not a lock").unwrap();
         cache.register(&root).unwrap();
         let archive = store(&cache, b"keep me until the lock can be read");
-        drop_archives(&cache, &[archive.digest], None);
+        drop_archives(&cache, &[archive.digest], None, Threads::default());
         assert_eq!(
             std::fs::read(cache.object_path(&archive.digest)).unwrap(),
             b"keep me until the lock can be read"
@@ -1044,7 +1066,7 @@ mod tests {
         std::fs::remove_file(root.join("data.lock")).unwrap();
         std::fs::remove_file(root.join("data.toml")).unwrap();
         std::fs::create_dir(root.join("data.toml")).unwrap();
-        drop_archives(&cache, &[archive.digest], None);
+        drop_archives(&cache, &[archive.digest], None, Threads::default());
         assert!(cache.find(&archive.digest, None).is_some());
     }
 
@@ -1058,7 +1080,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         cache.register(&root).unwrap();
         let archive = store(&cache, b"nobody needs me packed");
-        drop_archives(&cache, &[archive.digest], None);
+        drop_archives(&cache, &[archive.digest], None, Threads::default());
         assert!(cache.find(&archive.digest, None).is_none());
         let registered = cache.registered_projects(&crate::stop::Stop::default());
         assert_eq!(registered.unwrap().len(), 1);

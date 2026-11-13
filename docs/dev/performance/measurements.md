@@ -50,6 +50,7 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | stream declared large members with spare writer budget | large gzip 0.754 glibc, 0.759 musl; 4.0625 MiB-member control 0.856 and 0.885; highest musl RSS 88.6 MiB | kept | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
 | archives | lean against default: 2 local workers | sync of a zip of 10,000 files: time 2.095 glibc, 2.031 musl; peak memory 0.934 glibc, 0.870 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | archives | max against default: default's workers and memory | the same zip: time 1.018 glibc, 0.992 musl; peak memory 0.934 glibc, 1.000 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| archives | a sync's drop of unpacked archives looks only at the archives it may drop, each member once across projects, on the workers, and reads only the kept rebuilds of each project's state | sync of a zip of 10,000 files that 20 projects share 2.09 to 0.18 s, 0.086 [0.085, 0.086]; one project's zip 0.802, tar.gz 0.822; the cache report beside 100,000 files 0.834; peak memory up to 5.6 MiB more | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -1539,3 +1540,16 @@ every command that walks the cache, `cache verify`, the cache report, gc and `ca
 | `--json cache` beside 100,000 placed files | 12 | 0.644 [0.641, 0.647] | 1.000 [0.991, 1.005] | 1.005 | 0.960 [0.959, 0.961] | 1.165 [1.163, 1.169] |
 
 the base medians were 0.473 s and 55.5 MiB, 0.051 s and 25.5 MiB, 0.813 s and 146.9 MiB. the first build gave `cache verify` of 1,000 objects 0.763 [0.749, 0.775]; a cache of fewer than 64 fan folders is still read on one thread. kept, and `FETCHLOOM_THREADS` caps the workers as it does elsewhere.
+
+### dropping unpacked archives
+
+once a sync has placed an archive's files, it drops the archive's own bytes unless some registered project still needs them, and it asks about every archive its lock pins. the question read every registered project's data.toml, lock and whole state, and checked that the cache held every member of every unpacked archive of every project, two `lstat`s each, one after another. with 20 projects sharing a zip of 10,000 files, a sync placing them from the cache took 2.1 s, nearly all of it this question: 400,000 system calls and 20 whole states. the drop needs to know only about its candidates: an archive whose files are not among them keeps its bytes whatever its members say. so only a candidate archive's members are checked now, each digest once however many projects pin it, on the workers; and the state is read only for its kept rebuilds, which its index places after the records.
+
+| case | pairs | wall | a/a wall | cpu | peak memory |
+|---|---:|---|---|---|---|
+| sync of a zip of 10,000 files 20 projects share | 12 | 0.086 [0.085, 0.086] | 1.004 [0.991, 1.030] | 0.190 | 1.051 [0.927, 1.061] |
+| sync of a zip of 10,000 files | 12 | 0.802 [0.781, 0.817] | 0.997 [0.972, 1.025] | 1.024 | 1.042 [1.007, 1.096] |
+| sync of a tar.gz of 10,000 files | 12 | 0.822 [0.809, 0.834] | 0.997 [0.977, 1.014] | 1.031 | 1.025 [0.975, 1.092] |
+| `--json cache` beside 100,000 placed files | 12 | 0.834 [0.830, 0.839] | 1.000 [0.992, 1.013] | 0.867 | 1.000 [0.999, 1.000] |
+
+the base medians were 2.094 s and 102.5 MiB, 0.297 s and 132.8 MiB, 0.356 s and 125.1 MiB, 0.811 s and 146.9 MiB; the cache report's row comes from an earlier build of the same switch. the members' checks on the workers cost the memory: checked on one thread the three syncs gave 0.115, 1.015 and 1.019 at 0.98 to 1.01 of the peak, on two workers 0.098, 0.876 and 0.898 at 0.99 to 1.01. kept on the run's workers, `FETCHLOOM_THREADS` capping them, for at most 5.6 MiB more at a peak of 133 MiB.

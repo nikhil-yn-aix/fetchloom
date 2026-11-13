@@ -50,7 +50,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/get/preview.rs` | `get --dry-run`: what a get would fetch and where it would land, planned from the listings and the cache, writing nothing, not even the cache folder | `run` |  |
 | `src/cli/get/remembered.rs` | what an earlier `get` kept of a link only its source can list, which stands in for the listing offline | `keep`, `listing` |  |
 | `src/cli/search.rs` | `search`, its candidate rows, and the choice among candidates that `add` and `get` offer | `run`, `pick` | `Report`, `find` |
-| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache, the weekly size reminder, and `Readers`, the objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `Readers` |
+| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache, the weekly size reminder, and `Readers`, the objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop`, `Readers` |
 | `src/cli/cache/inputs.rs` | `cache gc --inputs`: raw data only built recipes read, freed where a folder mirror holds a copy | `gc` |  |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
 | `src/cli/settings.rs` | `settings`: each value a run would use and where it came from, the `-v` line of what a run spends, and warnings for misnamed or unread variables | `run` | `Report`, `tell_spending`, `warn_misnamed`, `warn_unread` |
