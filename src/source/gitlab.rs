@@ -1,8 +1,6 @@
-//! gitlab releases: the links a release of a gitlab.com project holds, at a tag or the newest
-//! release, each downloaded from its own address. gitlab states no size or hash for them, and a
-//! release's links can change under the same tag, so the lock's SHA-256 is all that names the
-//! bytes. the archives gitlab makes of the source on request are left out. a key goes to
-//! gitlab.com only, never to another host a link points to.
+//! gitlab releases: a gitlab.com release's links, at a tag or the newest, each downloaded from its
+//! own address. gitlab states no size or hash, so the lock's SHA-256 names the bytes; source
+//! archives are left out, and a key goes to gitlab.com only.
 
 use std::fmt;
 
@@ -256,10 +254,9 @@ impl Release {
     }
 }
 
-/// where a link's file is downloaded from: the link's own address. its address on gitlab.com
-/// answers a program with a page that warns of leaving gitlab, rather than sending it on, when
-/// the link points to another host. an address that is not https, or that holds a secret, is
-/// not kept.
+/// where a link's file is downloaded from: the link's own address, since its gitlab.com address
+/// answers a program with a warning page for a link to another host. an address that is not
+/// https, or that holds a secret, is not kept.
 fn address(link: &str) -> Result<Url, &'static str> {
     let url = Url::parse(link).map_err(|_| "its address is not a link")?;
     if url.scheme() != "https" {

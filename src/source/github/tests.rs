@@ -163,8 +163,7 @@ fn a_repository_github_does_not_show_may_be_private() {
     assert!(error.need.is_none(), "a key went already");
 }
 
-/// without a key github allows 60 requests an hour; once they are used up, the error says so
-/// and how a key lifts it, whether github answers 403 or 429.
+/// whether github answers 403 or 429 once its 60 requests an hour without a key are used up.
 #[test]
 fn the_rate_limit_says_what_a_key_allows() {
     for status in [403, 429] {
@@ -198,7 +197,6 @@ fn a_refusal_that_is_no_rate_limit_offers_the_github_account() {
     assert_eq!(error.need.unwrap().account, Account::GitHub);
 }
 
-/// an answer fetchloom cannot trust is refused for its reason, with help.
 #[test]
 fn an_answer_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);
@@ -255,9 +253,8 @@ fn an_answer_that_cannot_be_trusted_says_why() {
     }
 }
 
-/// a release's page and the latest release's are read as releases. every other github.com link
-/// keeps what it did: a release file's own link and a source archive download as they are, and
-/// a file's page goes to its raw bytes.
+/// a release file's own link and a source archive download as they are, and a file's page goes
+/// to its raw bytes.
 #[test]
 fn release_pages_name_releases_and_other_links_stay_as_they_were() {
     for (text, expected) in [

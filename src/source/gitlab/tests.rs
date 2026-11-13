@@ -193,7 +193,6 @@ fn a_refused_key_offers_the_gitlab_account() {
     assert_eq!(error.need.unwrap().account, Account::GitLab);
 }
 
-/// an answer fetchloom cannot trust is refused for its reason, with help.
 #[test]
 fn an_answer_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);
@@ -262,8 +261,7 @@ fn an_answer_that_cannot_be_trusted_says_why() {
     }
 }
 
-/// a release's page and the newest release's permalink are read as releases. every other
-/// gitlab.com link keeps what it did, as a file's page going to its raw bytes.
+/// as a file's page, which goes to its raw bytes.
 #[test]
 fn release_pages_name_releases_and_other_links_stay_as_they_were() {
     for (text, expected) in [

@@ -1,8 +1,6 @@
-//! github releases: the files a release of a repository holds, at a tag or the newest release,
-//! with the SHA-256 github states for each. a tag can move and a release's files can change, so
-//! the lock's SHA-256 is what names the bytes. a key goes to api.github.com only, never to
-//! github.com or the storage a download is sent on to, so a private repository's files are not
-//! downloaded.
+//! github releases: a release's files, at a tag or the newest, with the SHA-256 github states. a
+//! tag can move, so the lock's SHA-256 names the bytes. a key goes to api.github.com only, so a
+//! private repository's files are not downloaded.
 
 use std::fmt;
 
@@ -144,9 +142,8 @@ impl Release {
         Ok(response)
     }
 
-    /// the error for a release github does not show, which it says alike of a release that is
-    /// missing and of a repository that is private or missing. the repository's own answer tells
-    /// them apart.
+    /// the error for a release github does not show, as it says alike of a missing release and a
+    /// private or missing repository, which the repository's own answer tells apart.
     async fn missing(&self, api: &impl Api, signed_in: bool) -> Error {
         let repository = match self.url(&[]) {
             Ok(url) => self.get(api, &url, signed_in).await,
