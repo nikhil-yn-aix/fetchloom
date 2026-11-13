@@ -71,16 +71,16 @@ pub(super) fn run(context: &Context) -> Report {
     if let Some(open) = machine.open_files {
         about.push(format!("{} open files at most", units::grouped(open)));
     }
-    output.step("Machine", &about.join(" \u{b7} "));
+    output.label("Machine", &about.join(" \u{b7} "));
     let file = &context.settings.file;
     match &file.path {
-        Some(path) if let Some(by) = file.bypassed => output.step(
+        Some(path) if let Some(by) = file.bypassed => output.label(
             "Settings",
             &format!("{} (bypassed by {by})", units::path(path)),
         ),
-        Some(path) if file.found => output.step("Settings", &units::path(path)),
-        Some(path) => output.step("Settings", &format!("{} (no file yet)", units::path(path))),
-        None => output.step("Settings", "no folder for a settings file"),
+        Some(path) if file.found => output.label("Settings", &units::path(path)),
+        Some(path) => output.label("Settings", &format!("{} (no file yet)", units::path(path))),
+        None => output.label("Settings", "no folder for a settings file"),
     }
     output.hint("a FETCHLOOM_* variable changes a setting where it is set; the settings file keeps it for every run");
     Report {
@@ -108,7 +108,7 @@ pub(super) fn tell_spending(context: &Context) {
     let spending = context
         .settings
         .spending(context.threads, crate::machine::processors_online());
-    output.step(
+    output.label(
         "Resources",
         &format!(
             "{}: {} at once, {} to one host, {}, {} for buffers, {}",

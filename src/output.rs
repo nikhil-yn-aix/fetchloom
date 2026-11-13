@@ -22,7 +22,7 @@ use serde::Serialize;
 
 pub(crate) use picker::lead as picker_lead;
 pub(crate) use progress::{Bar, Setup, Ticker, Wait};
-use style::Tone;
+pub(crate) use style::Tone;
 pub(crate) use style::{ColorChoice, Style};
 pub(crate) use warning::Warning;
 
@@ -382,6 +382,24 @@ impl Output {
     pub(crate) fn step(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {
             self.line(&verb_line(verb, text, verb_color(verb), self.style.color));
+        }
+    }
+
+    /// a step in `tone`, which its caller chooses where the verb alone would read wrong: a step
+    /// still running is work, and one that discards a person's own bytes asks for attention.
+    pub(crate) fn step_in(&self, verb: &str, text: &str, tone: Tone) {
+        if self.tells(Level::Normal) {
+            self.line(&verb_line(verb, text, tone, self.style.color));
+        }
+    }
+
+    /// a fact a report states, as `Cache` or `Machine` start: its label bold in the verb column,
+    /// in no tone, since it is neither work nor its end.
+    pub(crate) fn label(&self, label: &str, text: &str) {
+        if self.tells(Level::Normal) {
+            let bold = paint(self.style.color, Paint::new().bold());
+            let shown = subject(&plain(text), self.style.color);
+            self.line(&format!("{bold}{label:>11}{bold:#} {shown}"));
         }
     }
 

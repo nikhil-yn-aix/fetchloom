@@ -19,13 +19,17 @@ DIFFERENCES = {"Differs", "Forgot", "Not placed", "Refused", "Restarting", "Unbu
 STOPS = {"Cancelled", "Stopped", "Stopping"}
 # say() writes these in the verb column with no tone
 SAID = {"Access", "Check", "Sign in"}
+# label() writes a report's facts under these, bold in no tone
+LABELS = {"Cache", "Copies", "Machine", "Needed", "Resources", "Settings", "Unfinished", "Unneeded", "Used by"}
+# step_in tells these in the tone their caller chooses
+CHOSEN = {"Running": "work"}
 # status's report rows, whose -v rows under them are report rows too, not dim details
 REPORTS = WARN | FAIL | {"Not placed", "Removed", "Unbuilt", "Unchecked"}
 
 # the verbs a function other than step tells with the same words, known by what follows them
 CONTEXT = [
     ("Found", re.compile(r"[\d,]+ differences? from data\.lock$"), "warn"),
-    ("Replaced", re.compile(r" on the mirror$"), "warn"),
+    ("Replaced", re.compile(r" on the mirror$| · discarding "), "warn"),
     ("Removed", re.compile(r" · not in data\.toml, so "), "warn"),
     ("Skipped", re.compile(r" · it reads "), "warn"),
     ("Finishing", re.compile(r"\(press ctrl-c|complete; "), "warn"),
@@ -70,6 +74,10 @@ def tone_of(verb, text):
             return tone
     if verb in SAID:
         return None
+    if verb in LABELS:
+        return "bold"
+    if verb in CHOSEN:
+        return CHOSEN[verb]
     if verb in WORK or verb in LIVE or verb.startswith("Would"):
         return "work"
     if verb in FAIL:

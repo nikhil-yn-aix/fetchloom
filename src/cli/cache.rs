@@ -56,7 +56,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         &context.stop,
     )?;
     let output = &context.output;
-    output.step(
+    output.label(
         "Cache",
         &format!(
             "{} · {} · {}",
@@ -68,7 +68,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     tell_projects(output, &projects);
     let unfinished = cache.unfinished();
     if unfinished.downloads > 0 {
-        output.step(
+        output.label(
             "Unfinished",
             &format!(
                 "{} · {}, kept so a later run can continue",
@@ -95,18 +95,18 @@ fn tell_projects(output: &Output, projects: &[PathBuf]) {
     const LISTED: usize = 3;
     if projects.len() <= LISTED {
         for project in projects {
-            output.step("Used by", &units::path(project));
+            output.label("Used by", &units::path(project));
         }
         return;
     }
     let count = units::count(projects.len() as u64, "project", "projects");
     if output.shows_details() {
-        output.step("Used by", &count);
+        output.label("Used by", &count);
         for project in projects {
             output.detail(&units::path(project));
         }
     } else {
-        output.step(
+        output.label(
             "Used by",
             &format!("{count} · `fetchloom cache -v` lists them"),
         );
@@ -119,14 +119,14 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
         return;
     }
     if projects > 0 {
-        output.step("Needed", &needed_line(usage, projects));
+        output.label("Needed", &needed_line(usage, projects));
     }
     let unneeded = unneeded_line(usage);
     if let Some(line) = &unneeded {
-        output.step("Unneeded", line);
+        output.label("Unneeded", line);
     }
     if let Some(line) = copies_line(usage) {
-        output.step("Copies", &line);
+        output.label("Copies", &line);
     }
     if unneeded.is_none() {
         output.done("Ok", "every cached file is needed by a project");

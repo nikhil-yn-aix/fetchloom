@@ -40,7 +40,7 @@ README.md         1.6 KiB
 database.sqlite  10.0 KiB
 ```
 
-a dataset without a lock entry prints no files and says to run `fetchloom sync`.
+a dataset without a lock entry prints no files. it shows as `Unlocked`, in the warning color, with `fetchloom sync` to pin it, or as `Unbuilt` for a recipe, with `fetchloom build <name>` to make it, as [status](status.md) shows them.
 
 JSON returns `result.datasets`, with each dataset's `name`, `ref`, `from`, `resolved`, `files`, `bytes`, `folder`, `placed`, `title`, `license`, which keeps a creative commons license's link as data.lock records it, `doi`, `access` and `locked_files`, each locked file's `path`, `size`, `sha256` and `url`; [JSON output](../reference/json-output.md#command-results) gives each field. `access` says who may read the data, as its source said when it was pinned: `public`, `login` for an account, `terms` for accepted terms, or `unknown`. it is a hint before sharing the files, not a license check. `url` is null for a recipe's result and for a link holding a space or a control character, which is never shown.
 

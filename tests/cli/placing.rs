@@ -458,13 +458,15 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     );
     let status = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
-    let forced = sandbox.run(&["sync", "--force"])?;
+    let forced = sandbox.run(&["--color", "always", "sync", "--force"])?;
     let told = text(&forced.stderr)?;
     assert_eq!(forced.status.code(), Some(0), "{told}");
+    // it throws away the person's own bytes, so it asks for attention, never a finished step's green
     assert!(
-        told.starts_with("   Replaced data/iris/iris.csv · discarding your edit\n"),
-        "{told}"
+        told.starts_with("\u{1b}[1m\u{1b}[33m   Replaced\u{1b}[0m \u{1b}[1mdata/iris/iris.csv"),
+        "{told:?}"
     );
+    assert!(told.contains(" · discarding your edit"), "{told:?}");
     assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
     assert_eq!(server.requests().len(), 1, "the cache still holds iris");
     Ok(())

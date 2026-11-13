@@ -28,14 +28,16 @@ pub(super) fn tell(
             &format!("{path} · {} that was in the way", entry_name(*found)),
         );
     }
+    // what is discarded was the person's, so the line asks for attention, not a finished step
     for overwritten in &placement.overwritten {
-        output.step(
+        output.step_in(
             "Replaced",
             &format!(
                 "{} · discarding {}",
                 overwritten.path,
                 overwritten_what(overwritten.reason)
             ),
+            crate::output::Tone::Warn,
         );
     }
     // datasets that share a folder share its line, where the first of them comes

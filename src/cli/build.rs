@@ -402,7 +402,11 @@ impl<'a> Building<'a> {
             .map(|read| read.name.as_str())
             .collect();
         self.ready(&sources).await?;
-        output.step("Running", &format!("{name} · {}", self.command(name)));
+        output.step_in(
+            "Running",
+            &format!("{name} · {}", self.command(name)),
+            crate::output::Tone::Work,
+        );
         let made = tokio::task::block_in_place(|| self.make(&step, key, Some(tree)))?;
         let compared = compare(files, &made.members);
         let mut done = done(Did::Ran, name, key, tree, files);
@@ -613,7 +617,11 @@ impl<'a> Building<'a> {
             .map(|read| read.name.as_str())
             .collect();
         self.ready(&sources).await?;
-        output.step("Running", &format!("{name} · {}", self.command(name)));
+        output.step_in(
+            "Running",
+            &format!("{name} · {}", self.command(name)),
+            crate::output::Tone::Work,
+        );
         let made = tokio::task::block_in_place(|| self.make(&step, key, expected))?;
         if let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key)
             && pinned.tree != made.tree

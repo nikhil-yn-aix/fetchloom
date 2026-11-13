@@ -59,6 +59,14 @@ class Lines(unittest.TestCase):
             ("Resolved s3://wds/shards/ · 1,024 files", "done"),
             ("Placed data/clean · 1 file linked to the cache", "done"),
             ("Synced small into data", "done"),
+            # step_in: a tone its caller chooses where the verb alone would read wrong
+            ("Running clean · python3 clean.py", "work"),
+            ("Replaced data/flowers/part1.csv · discarding your edit", "warn"),
+            # label: a report's fact, bold in no tone
+            ("Cache ~/.cache/fetchloom · 3 files, 1.2 MiB", "bold"),
+            ("Unneeded 1 file · 32 B no project uses", "bold"),
+            ("Used by 2 projects", "bold"),
+            ("Machine linux x86_64 · 16 threads", "bold"),
             # setup lines, bars and tickers draw their verb as work under way
             ("Locking the project · 3 s", "work"),
             ("Placing 20,000 files", "work"),
@@ -80,7 +88,7 @@ class Lines(unittest.TestCase):
             ("Finishing set/set.tar · 10 s", "work"),
         ]
         for line, tone in cases:
-            verb = line.split(" ")[0] if not line.startswith(("Not ", "Up ", "Signed ")) else " ".join(line.split(" ")[:2])
+            verb = line.split(" ")[0] if not line.startswith(("Not ", "Up ", "Signed ", "Used ")) else " ".join(line.split(" ")[:2])
             with self.subTest(line=line):
                 self.assertIn(f'<span class="fl-{tone}">{verb}</span>', render(f"{verb:>11}{line[len(verb):]}\n"))
 
@@ -117,7 +125,7 @@ class Lines(unittest.TestCase):
 
     def test_html_in_a_line_is_escaped(self):
         self.assertEqual(render("    Running clean · python3 clean.py <build>/in & <build>/out\n"),
-                         '    <span class="fl-done">Running</span> <span class="fl-bold">clean</span>'
+                         '    <span class="fl-work">Running</span> <span class="fl-bold">clean</span>'
                          '<span class="fl-dim"> · python3 clean.py &lt;build&gt;/in &amp; &lt;build&gt;/out</span>\n')
 
     def test_an_unclosed_backtick_keeps_the_rest_in_the_lines_own_style(self):

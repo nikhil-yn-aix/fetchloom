@@ -108,11 +108,26 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
 /// person, since data.lock and `--json` keep what it says.
 fn one(output: &crate::output::Output, dataset: &Listed) {
     let Some(files) = &dataset.held else {
-        output.done("Ok", &format!("{} is not locked yet", dataset.name));
-        output.hint(&format!(
-            "run `{}` to lock it and fetch its files",
-            super::project::command("sync")
-        ));
+        // a state not reached yet is a difference, as status shows it, never an `Ok`
+        if dataset.from.is_some() {
+            output.mark(
+                "Unbuilt",
+                &format!("{} · data.lock pins no result of it yet", dataset.name),
+            );
+            output.hint(&format!(
+                "run `{}` to make it and pin its result",
+                super::project::command(&format!("build {}", dataset.name))
+            ));
+        } else {
+            output.mark(
+                "Unlocked",
+                &format!("{} · data.lock has no pin of it yet", dataset.name),
+            );
+            output.hint(&format!(
+                "run `{}` to lock it and fetch its files",
+                super::project::command("sync")
+            ));
+        }
         return;
     };
     output.aside(&heading(dataset));

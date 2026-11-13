@@ -545,6 +545,48 @@ fn files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(files)
 }
 
+/// each tone keeps its one meaning: a step still running is work, a state not reached yet is no
+/// `Ok`, and a report's label has no tone.
+#[test]
+fn colors_say_what_each_line_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let unbuilt = text(&sandbox.run(&["--color", "always", "list", "clean"])?.stderr)?;
+    assert!(
+        unbuilt.contains("\u{1b}[1m\u{1b}[33m    Unbuilt\u{1b}[0m"),
+        "{unbuilt}"
+    );
+    assert!(unbuilt.contains("fetchloom build clean"), "{unbuilt}");
+    let built = build(&sandbox, &["--color", "always", "build"])?;
+    let stderr = text(&built.stderr)?;
+    assert_eq!(built.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("\u{1b}[1m\u{1b}[36m    Running\u{1b}[0m"),
+        "{stderr}"
+    );
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{text_now}\n[datasets.later]\nref = \"zenodo:3\"\n"),
+    )?;
+    let later = text(&sandbox.run(&["--color", "always", "list", "later"])?.stderr)?;
+    assert!(
+        later.contains("\u{1b}[1m\u{1b}[33m   Unlocked\u{1b}[0m"),
+        "{later}"
+    );
+    assert!(!later.contains("Ok"), "{later}");
+    for (command, label) in [("settings", "    Machine"), ("cache", "      Cache")] {
+        let told = text(&sandbox.run(&["--color", "always", command])?.stderr)?;
+        assert!(
+            told.contains(&format!("\u{1b}[1m{label}\u{1b}[0m")),
+            "{command}: {told}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn build_pins_and_places_a_result() -> Result {
     let sandbox = Sandbox::new()?;
