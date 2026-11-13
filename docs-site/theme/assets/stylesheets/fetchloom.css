@@ -563,7 +563,7 @@ body {
     font-size: .85rem;
   }
   .md-content__inner > pre,
-  .md-content__inner > .highlight > pre {
+  .md-content__inner > .highlight {
     margin-left: 0;
     margin-right: 0;
   }
