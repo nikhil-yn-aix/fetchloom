@@ -32,7 +32,7 @@ fn fixture(name: &str) -> Result<Vec<u8>> {
     Ok(fs::read(path)?)
 }
 
-/// the folder holds exactly the archive's files, and nothing else.
+/// checks the folder holds exactly the archive's files.
 fn holds_the_archive(folder: &Path) -> Result {
     for (path, bytes) in FILES {
         assert_eq!(fs::read(folder.join(path))?, bytes, "{path}");
@@ -177,10 +177,8 @@ fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
     Ok(())
 }
 
-/// select chooses among the files a link lists, so a pattern meant for the files inside a zip
-/// matches nothing. the help works for get as for add, which both take --select: leave it out and
-/// keep what is needed from the folder the zip unpacks to, or, in a project, use the members table
-/// or drop, which reach inside. it named the project's remedies alone, which a get cannot use.
+/// `--select` chooses among the files a link lists, so a pattern for files inside the zip matches
+/// nothing, and the help must serve get as well as add.
 #[test]
 fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result {
     let sandbox = Sandbox::new()?;
@@ -206,8 +204,7 @@ fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result 
     Ok(())
 }
 
-/// a file beside a zip that holds one of the same name cannot land with it. the add is undone,
-/// so the help names the add's own options rather than a table of a dataset data.toml lacks.
+/// the add is undone, so the help names its options, not a table of a dataset data.toml lacks.
 #[test]
 fn a_clash_beside_a_zip_names_the_options_of_the_add() -> Result {
     let sandbox = Sandbox::new()?;
@@ -476,8 +473,7 @@ fn an_archive_another_project_places_as_a_file_stays_in_the_cache() -> Result {
     Ok(())
 }
 
-/// gc forgets a registered project whose data.toml is gone, as when its folder was deleted, so
-/// an unpack elsewhere keeps no packed bytes for it either.
+/// gc forgets a registered project whose data.toml is gone, as when its folder was deleted.
 #[test]
 fn an_unpack_drops_the_archive_though_a_registered_project_is_gone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -634,9 +630,8 @@ fn path_of_an_empty_archive_explains_why_it_has_no_folder() -> Result {
 const V7_SHA256: &str = "9a2f3adae7925e1f1db798d92b4c394d2883f42aeb04ee00363e6e851ab56fdd";
 const V7_TREE: &str = "aac41d8ac40805957f5260c833a02f89a62665783d5a02ef907b532a205ff4fd";
 
-/// a tar holds no checksum over its files, so a byte changed in its cached copy unpacks to other
-/// files without any error. that copy is fetched again, and what it unpacked to is never
-/// recorded, so neither this sync nor an upgrade pins the damage.
+/// a tar holds no checksum, so a changed byte in its cached copy unpacks without error; what that
+/// copy unpacked to is never recorded, so neither sync nor an upgrade pins the damage.
 #[test]
 fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
     let sandbox = Sandbox::new()?;
@@ -793,7 +788,6 @@ fn sync_drops_an_archive_extracted_by_a_failed_get() -> Result {
     Ok(())
 }
 
-/// an archive past a limit says which setting lifts it, for a person who trusts the archive.
 #[test]
 fn an_archive_past_a_limit_names_the_setting_that_lifts_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -844,8 +838,7 @@ fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
     }
 }
 
-/// a rar stays packed, and its warning names a command for this system that unpacks it beside
-/// the archive, inside the data folder git ignores, where sync keeps what it unpacked.
+/// the command unpacks beside the rar, inside the data folder git ignores, where sync keeps it.
 #[test]
 fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
     let sandbox = Sandbox::new()?;
@@ -879,8 +872,7 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
     Ok(())
 }
 
-/// a teammate's clone gets the rar packed too, so its first sync says how to unpack it, and a
-/// later sync, with the rar in place, says nothing more.
+/// a later sync, with the rar already in place, says nothing more.
 #[test]
 fn a_sync_that_places_a_rar_says_once_how_to_unpack_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -919,8 +911,7 @@ fn a_sync_that_places_a_rar_says_once_how_to_unpack_it() -> Result {
     Ok(())
 }
 
-/// the bytes choose the decoder, so a rar under a `.zip` name stays packed as a rar does, with
-/// the same next step, from the add and from a clone's first sync.
+/// the bytes choose the decoder, so the add and a clone's first sync give a rar's next step.
 #[test]
 fn a_rar_under_a_zip_name_says_how_to_unpack_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -970,8 +961,6 @@ fn inner_step(path: &str, folder: &str) -> String {
     }
 }
 
-/// fetchloom unpacks no archive inside another, so a zip in a zip lands packed, told once with
-/// how to unpack it beside itself.
 #[test]
 fn a_zip_inside_a_zip_says_once_how_to_unpack_it() -> Result {
     let bytes = zip_of(&[
@@ -1230,8 +1219,7 @@ mod shards {
         Ok(())
     }
 
-    /// a dataset whose shards a members table covers, under a glob key or a shard's own path,
-    /// chose to unpack them, which extract = false would refuse, so its sync gives no shard hint.
+    /// a members table chose to unpack the shards, which extract = false would refuse.
     #[test]
     fn no_hint_when_a_members_table_covers_the_shards() -> Result {
         let routes = bucket()?;
@@ -1251,8 +1239,7 @@ mod shards {
         Ok(())
     }
 
-    /// a select over the files inside shards matches none the bucket lists, and its help moves
-    /// the pattern to one members table for every shard, not a table for the first.
+    /// the help moves the pattern to one table for every shard, not to a table for the first.
     #[test]
     fn a_select_over_shard_members_points_at_one_glob_table() -> Result {
         let sandbox = Sandbox::new()?;
@@ -1273,8 +1260,6 @@ mod shards {
         Ok(())
     }
 
-    /// one members table under a glob key keeps the same kind of file in every shard, and a
-    /// shard that arrives later follows it.
     #[test]
     fn a_glob_members_table_keeps_one_kind_in_every_shard_and_a_later_one() -> Result {
         let sandbox = Sandbox::new()?;
@@ -1306,9 +1291,8 @@ mod shards {
     }
 }
 
-/// a members table changes which files of an archive land, not what data.lock pins: editing it
-/// asks no server, `sync --locked` takes it, and taking it out brings the file back from the
-/// cache.
+/// a members table changes which files land, not what data.lock pins, so `sync --locked` takes
+/// the edit, and taking it out brings the file back from the cache.
 #[test]
 fn a_member_filter_edit_makes_no_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1348,8 +1332,6 @@ fn a_member_filter_edit_makes_no_request() -> Result {
     Ok(())
 }
 
-/// gc frees a file inside an archive that only a members table leaves out, under the archive's
-/// own path or a glob key, and keeps every file the project places.
 #[test]
 fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
     for key in ["dataset.zip", "*.zip"] {
@@ -1388,10 +1370,8 @@ fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
     Ok(())
 }
 
-/// the walkthrough: an exclude written against a file inside the zip, as the data folder shows
-/// it, matches no file the source lists, so the file stays. the sync that lists the source again
-/// warns, naming the drop that leaves it out; status reads data.lock alone, which keeps no file
-/// an exclude left out, so it cannot tell and says nothing.
+/// an exclude naming a file inside the zip matches nothing the source lists, so the file stays.
+/// status reads only data.lock, which keeps no excluded file, so it cannot tell and says nothing.
 #[test]
 fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1460,8 +1440,7 @@ mod split {
         cache.join("objects").join(&digest[..2]).join(&digest[2..])
     }
 
-    /// d4's acceptance on a folder: two halves of a zip of five files place those five files,
-    /// pinned at the first part, and the halves leave the cache once the files are in.
+    /// only the first part pins what the archive unpacks to, and no part stays in the cache.
     #[test]
     fn a_folder_of_parts_unpacks_as_one_archive() -> Result {
         let sandbox = Sandbox::new()?;
@@ -1557,8 +1536,7 @@ mod split {
         }
     }
 
-    /// rar volumes and a zip spanned over `.z01` files stay packed, each told once, with what
-    /// reads all of its volumes.
+    /// each next step names a tool that reads all of the archive's volumes.
     #[test]
     fn rar_volumes_and_a_spanned_zip_stay_packed_with_one_next_step_each() -> Result {
         let sandbox = Sandbox::new()?;
@@ -1636,8 +1614,7 @@ mod split {
                 .output()?)
         }
 
-        /// d4's acceptance on a bucket prefix: the five files land and no part does, and a
-        /// clone with an empty cache downloads both parts once to place them.
+        /// no part lands, and a clone with an empty cache downloads each part once.
         #[test]
         fn a_bucket_prefix_of_parts_unpacks_as_one_archive_here_and_in_a_clone() -> Result {
             let sandbox = Sandbox::new()?;
@@ -1669,8 +1646,6 @@ mod split {
             Ok(())
         }
 
-        /// export names each file by the first part it came from, and lists every part as a
-        /// download.
         #[test]
         fn export_names_files_by_the_first_part_and_lists_every_part() -> Result {
             let sandbox = Sandbox::new()?;
@@ -1696,8 +1671,6 @@ mod split {
             Ok(())
         }
 
-        /// a file inside a split archive is dropped through the members table of its first
-        /// part, and leaving every file out leaves out every part.
         #[test]
         fn drop_names_a_split_archive_by_its_first_part() -> Result {
             let sandbox = Sandbox::new()?;
@@ -1714,8 +1687,6 @@ mod split {
             Ok(())
         }
 
-        /// with extract = false the parts are files like any other, and switching back unpacks
-        /// them from the cache without asking the bucket again.
         #[test]
         fn kept_packed_the_parts_are_files_and_switching_back_asks_nothing() -> Result {
             let sandbox = Sandbox::new()?;
@@ -1743,9 +1714,8 @@ mod split {
         }
     }
 
-    /// parts added each as a dataset of its own never join: a part that could start a split
-    /// archive stays packed, with a warning that says where parts join, as `split -d` numbers
-    /// them from `00`, or from `01` with `--numeric-suffixes=1`.
+    /// both `.00` and `.01` could start an archive, as `split -d` numbers parts from `00`, or
+    /// from `01` with `--numeric-suffixes=1`.
     #[test]
     fn parts_added_one_link_each_say_they_join_only_inside_one_dataset() -> Result {
         let sandbox = Sandbox::new()?;
