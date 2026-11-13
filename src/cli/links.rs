@@ -274,13 +274,18 @@ fn same_data(parsed: &Parsed) -> (String, Option<String>, Option<String>) {
 
 fn not_a_link(name: &str, number: usize, line: &str) -> Error {
     let line = net::mask_query(line);
+    let words: Vec<String> = line
+        .split_whitespace()
+        .map(|word| super::shell_word(word).into_owned())
+        .collect();
     Error::new(
         Kind::Usage,
         format!("line {number} of {name} is not a link, a DOI or an id"),
     )
     .detail(line.clone().into_owned())
     .help(format!(
-        "find its id with `fetchloom search {line}`, then list that instead"
+        "find its id with `fetchloom search {}`, then list that instead",
+        words.join(" ")
     ))
 }
 
@@ -369,6 +374,27 @@ mod tests {
             assert_eq!(error.kind, Kind::Usage, "{text}");
             assert_eq!(error.message, message, "{text}");
         }
+    }
+
+    /// anyone could have written the list, so the search its help names keeps each word of the
+    /// line one literal word for a shell.
+    #[test]
+    fn a_line_of_search_words_names_a_search_a_shell_reads_as_written() {
+        let error = parse("links.txt", "iris $(id) a;b&c it's\n").unwrap_err();
+        let help = error.help.unwrap_or_default();
+        let search = help
+            .strip_prefix("find its id with `")
+            .and_then(|rest| rest.strip_suffix("`, then list that instead"))
+            .unwrap_or_default();
+        assert_eq!(
+            crate::suggested::command_words(search, cfg!(windows)),
+            Some(
+                ["fetchloom", "search", "iris", "$(id)", "a;b&c", "it's"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            "{help}"
+        );
     }
 
     /// a secret is refused only in a list for a project, whose data.toml would keep it, so a
