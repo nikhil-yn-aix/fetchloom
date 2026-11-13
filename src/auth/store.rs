@@ -388,13 +388,16 @@ mod tests {
                 0o600
             );
         }
-        // a damaged index is refused rather than written over, which would lose the other keys
+        // a damaged index, not JSON or not even UTF-8, is refused rather than written over, which
+        // would lose the other keys
         let index = folder(&var).unwrap().join("accounts.json");
-        fs::write(&index, "{ not json").unwrap();
-        let error = save(&var, "osf", "o-key", Place::File).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(forget(&var, "dataverse:demo.dataverse.org").is_err());
-        assert_eq!(fs::read_to_string(&index).unwrap(), "{ not json");
+        for damaged in [b"{ not json".as_slice(), b"\xff\xfe{\0}\0"] {
+            fs::write(&index, damaged).unwrap();
+            let error = save(&var, "osf", "o-key", Place::File).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(forget(&var, "dataverse:demo.dataverse.org").is_err());
+            assert_eq!(fs::read(&index).unwrap(), damaged);
+        }
         let keys = fs::read_to_string(folder(&var).unwrap().join("credentials.json")).unwrap();
         assert!(keys.contains("d-key"));
     }
