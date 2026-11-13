@@ -97,6 +97,7 @@ every change measured with the current harness, one row each: what it gained whe
 | process | mimalloc for libc's own allocations on musl | no-op sync 0.833 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
 | process | a mimalloc purge delay of 10 ms for lean on musl | lean with `MIMALLOC_PURGE_DELAY=10` set before start: peak memory 0.703 to 0.922, time 1.013 to 1.068 | not built: nothing sets it for lean alone without unsafe code | [purge delay](#a-shorter-purge-delay-for-lean-on-musl-2026-11-12) |
 | process | `panic = unwind` for a clean thread error | no faster anywhere; binary 14.5% larger | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| process | profile-guided optimization, its training rebalanced toward manifests | musl, 10,000 datasets: `lock --check` 0.901 [0.895, 0.910], `list` 0.910, status 0.934; 100,000 files: status 0.937, settled sync 0.954; nothing slower, binary 14.8% smaller; two trainings of one corpus gave binaries 13.7 million bytes apart | dropped: below the bar, and a reproducible release would need a committed profile for each target | [pgo](#profile-guided-optimization-2026-11-13) |
 | process | the runtime's threads joined, at most 25 ms, before exit | fixes a rare windows hang under `-vv`; wall within noise; a stopped run waits up to the bound | kept on windows, for correctness | [end of a run](#the-end-of-a-run-2026-11-12) |
 | process | linux and macos runs end without waiting for the runtime's threads; keys looked for at the first request that needs one, their index read once | settled sync of 3 files 0.929 to 0.981 glibc and musl, back within 1.02 of a8f9dad7; `path` beside 100,000 0.981 to 1.004, still 1.019 to 1.025 of a8f9dad7 on glibc | kept | [tiny commands](#tiny-commands-2026-11-12) |
 
@@ -620,6 +621,31 @@ one experiment build chose the run size below which files flush alone at run tim
 the slow device is a 2 GiB ext4 image of mine on dm-delay, 2 ms a read, 2 ms a write and 8 ms a flush, behind a loop device with direct I/O on the nvme disk, with nothing else on it. the os disk is the network disk the earlier busy case came from, which the kernel reports as rotational, with other users writing to it. glibc, interleaved rounds after a warmup under the measure lock on cores 12-23, the sources and the link server on tmpfs. other users' load flagged a quarter of the rounds; these ratios keep them, and the clean rounds alone give the same picture.
 
 so one `syncfs` saves up to two thirds where nothing else waits to be written, and on the busy disk it made the links twice as slow. the `quiet` rule never chose it on the slow device, where none of its 15 imports came near 210 ms: the two runs whose record survives saw 111 and 125 MiB of other users' unwritten data, and sampled every 5 s over a minute that ranged from 5 to 1,294 MiB. a higher bar would choose one `syncfs` on the busy disk too, since nothing unprivileged says which filesystem holds the data: the per-device writeback counts are in debugfs, and ext4's count of delayed blocks covers ext4 alone. dropped; runs of up to 64 files still flush alone.
+
+## profile-guided optimization, 2026-11-13
+
+the cpu map's first pgo corpus sped up reading the state but regressed parsing a 10,000-dataset manifest, 1.079. this trained again with a corpus rebalanced toward manifests and measured what linux ships, the static musl build.
+
+an instrumented build ran 54 commands once each, outside the clock: sync, status, list, export and `lock --check` of 40,000 and of 1,000 datasets; sync, status, `status --verify`, `cache verify`, list and export of 10,000 files; `path` and `sync` of one dataset beside 10,000; `add -i` of 2,000 tiny links; a zip of 2,000 members and a tar.gz, tar.xz and tar.zst of 300; a folder of 2,000 files; a 64 MiB `get -o`; and usage, missing-file and no-project errors. the a/b's cases are other instances of the same work. the merged profile held 9.8 MB for 29,838 functions, and the optimized build found a profile for every function.
+
+| case | pairs | time [95%] | peak memory [95%] |
+|---|---:|---|---|
+| `lock --check` of 10,000 datasets | 20 | 0.901 [0.895, 0.910] | 0.969 [0.969, 0.971] |
+| `--json list` of 10,000 datasets | 20 | 0.910 [0.906, 0.914] | 0.971 [0.970, 0.973] |
+| `--json status` of 10,000 datasets | 20 | 0.934 [0.932, 0.938] | 0.967 [0.967, 0.968] |
+| sync of 10,000 datasets into an empty folder | 12 | 0.949 [0.946, 0.954] | 0.972 [0.964, 0.974] |
+| `--json status` of 100,000 files | 20 | 0.937 [0.928, 0.965] | 0.984 [0.979, 0.987] |
+| settled sync of 100,000 files | 20 | 0.954 [0.947, 0.961] | 0.980 [0.980, 0.981] |
+| `cache verify` of 100,000 objects | 20 | 1.002 [0.985, 1.009] | 0.991 [0.991, 0.995] |
+| `add -i` of 1,000 links from a local server | 13 | 0.945 [0.907, 0.967] | 0.948 [0.913, 1.019] |
+| sync of a zip of 10,000 files | 15 | 0.959 [0.928, 0.974] | 0.961 [0.946, 1.010] |
+| settled sync of 3 files | 40 | 0.973 [0.959, 0.997] | 0.836 [0.836, 0.848] |
+
+so the rebalanced corpus turned the manifest's regression into the largest gain, and nothing slowed. the binary is 14,879,664 bytes against 17,472,432, 14.8% or 2.5 MiB smaller, about what a tiny command's peak memory fell. but no case clears the 10% bar: `lock --check` comes closest, with an interval reaching 0.910.
+
+the release builds each binary so that rebuilding the commit gives the same bytes, and a profile trained in the release job would break that. a second training of the same corpus, by the same binary on the same inputs, merged to another profile, 99.957% of its edge counts overlapping the first, since threads and randomly seeded maps move the counts; the binary built from it differed from the first in 13,666,826 bytes. a committed profile for each of the six release targets, trained on each and redone as the code moves, would be the only way to keep the release reproducible. that was not built: dropped, below the bar, with that cost on top.
+
+three musl release builds of df4d2a5b from one source tree, control, instrumented and optimized, the flags passed through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS` as the release workflow passes its own; rustc 1.99.1 with llvm 23.1.1. interleaved rounds after a warmup under the measure lock on cores 12-23, projects and caches on tmpfs, the copied projects synced once by the control build first, so both builds read the indexed state. `lock --check` and `list` lost most rounds to other users' load; their rows keep all 20, and the clean rounds alone give 0.910 for both.
 
 ## pending archive reader budgets, 2026-11-12
 
