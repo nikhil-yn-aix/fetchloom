@@ -1304,10 +1304,7 @@ fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
     fs::write(sandbox.work().join("links.txt"), links)?;
     let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    let mut warnings = warned(&json(&output)?);
-    warnings.retain(|warning| {
-        warning != "the drive holding data cannot link files, so files were copied"
-    });
+    let warnings = warned(&json(&output)?);
     assert_eq!(
         warnings,
         [

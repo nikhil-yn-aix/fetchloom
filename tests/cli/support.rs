@@ -464,12 +464,14 @@ pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-/// each warning of a `--json` document as one sentence, its help after a semicolon.
+/// each warning of a `--json` document as one sentence, its help after a semicolon. the copy note
+/// a drive that cannot link adds, as ci's fat32 and exfat passes have, is left out.
 pub(crate) fn warned(document: &serde_json::Value) -> Vec<String> {
     document["warnings"]
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|warning| warning["kind"] != "place.copied")
         .map(|warning| {
             let message = warning["message"].as_str().unwrap_or_default();
             match warning["help"].as_str() {
@@ -1273,6 +1275,20 @@ pub(crate) fn finished_anyway(running: Running, release: &Path) -> Result<String
         "{stderr}"
     );
     Ok(stderr)
+}
+
+/// the copy note a drive that cannot link adds depends on the disk a test runs on, so `warned`
+/// leaves it out and keeps every other warning, in order.
+#[test]
+fn warned_leaves_out_only_the_copy_note() {
+    let document = serde_json::json!({ "warnings": [
+        { "kind": "place.copied", "message": "the drive holding data cannot link files, so files were copied" },
+        { "kind": "git.import_in_tree", "message": "./flowers is still in the project", "help": "delete it" },
+    ]});
+    assert_eq!(
+        warned(&document),
+        ["./flowers is still in the project; delete it"]
+    );
 }
 
 /// each server and the proxy runs in a `ServerTask`. the check uses the worker's own handle,
