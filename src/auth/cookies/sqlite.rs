@@ -4,7 +4,7 @@
 //! that holds its files open is never disturbed, and it refuses what it cannot read rather than
 //! guess.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// the most of a browser's cookie file read, with its log: a profile of years takes a few MiB.
@@ -69,6 +69,26 @@ pub(crate) struct Broken(pub(crate) String);
 /// what a walk of a table's tree does with each row: its rowid and its record.
 type Each<'a> = dyn FnMut(i64, &[u8]) -> Result<(), Broken> + 'a;
 
+/// what one read of the file has gone through: each page it reached, which no tree SQLite
+/// writes reaches twice, and the bytes of the rows it took, so a crafted file can make it do no
+/// more work than its own size.
+#[derive(Default)]
+struct Walk {
+    seen: HashSet<u32>,
+    read: u64,
+}
+
+impl Walk {
+    /// marks page `number` reached, or refuses it reached a second time.
+    fn reach(&mut self, number: u32) -> Result<(), Broken> {
+        if self.seen.insert(number) {
+            Ok(())
+        } else {
+            Err(broken(format!("it reaches page {number} twice")))
+        }
+    }
+}
+
 fn broken(why: impl Into<String>) -> Broken {
     Broken(why.into())
 }
@@ -85,6 +105,8 @@ pub(crate) struct Database {
     pages: u32,
     /// what `PRAGMA user_version` says: firefox numbers its cookie schema with it.
     pub(crate) user_version: u32,
+    /// the most bytes of rows one read takes.
+    budget: u64,
 }
 
 impl Database {
@@ -131,10 +153,20 @@ impl Database {
             usable,
             logged: HashMap::new(),
             user_version,
+            budget: LARGEST,
         };
         if let Some(log) = log {
             database.replay(log);
         }
+        // a commit may claim more pages than the file and the log hold
+        let held = database
+            .logged
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .max(u32::try_from(database.file.len() / page_size).unwrap_or(u32::MAX));
+        database.pages = database.pages.min(held);
         if let Some(first) = database.logged.get(&1) {
             database.user_version = be32(first, 60);
         }
@@ -210,8 +242,9 @@ impl Database {
     ///
     /// when the table is not there or its pages cannot be read.
     pub(crate) fn rows(&self, table: &str, wanted: &[&str]) -> Result<Vec<Vec<Value>>, Broken> {
+        let mut walk = Walk::default();
         let mut found = None;
-        self.walk(1, 0, &mut |rowid, record| {
+        self.walk(1, 0, &mut walk, &mut |rowid, record| {
             let _ = rowid;
             let fields = decode(record)?;
             let field = |at: usize| fields.get(at).cloned().unwrap_or(Value::Null);
@@ -248,7 +281,7 @@ impl Database {
             .map(|column| column.and_then(|column| columns.iter().position(|each| each == column)))
             .collect();
         let mut rows = Vec::new();
-        self.walk(root, 0, &mut |rowid, record| {
+        self.walk(root, 0, &mut walk, &mut |rowid, record| {
             let fields = decode(record)?;
             let mut row = Vec::with_capacity(at.len());
             for (column, position) in at.iter().zip(&positions) {
@@ -273,11 +306,18 @@ impl Database {
     }
 
     /// calls `each` with the rowid and record of every row in the table tree whose root is page
-    /// `number`, `depth` pages below the root.
-    fn walk(&self, number: u32, depth: usize, each: &mut Each<'_>) -> Result<(), Broken> {
+    /// `number`, `depth` pages below the root, as long as `walk` reaches no page twice.
+    fn walk(
+        &self,
+        number: u32,
+        depth: usize,
+        walk: &mut Walk,
+        each: &mut Each<'_>,
+    ) -> Result<(), Broken> {
         if depth > DEEPEST {
             return Err(broken("its table tree goes deeper than any SQLite writes"));
         }
+        walk.reach(number)?;
         let page = self.page(number)?;
         let head = if number == 1 { 100 } else { 0 };
         let kind = *page
@@ -289,29 +329,37 @@ impl Database {
             0x0d => (false, head + 8),
             _ => return Err(broken(format!("page {number} is not part of a table"))),
         };
+        let mut offsets = HashSet::new();
         for cell in 0..cells {
             let offset = usize::from(be16(page, pointers + 2 * cell));
             if offset >= page.len() {
                 return Err(broken(format!("page {number} points past its end")));
             }
+            if !offsets.insert(offset) {
+                return Err(broken(format!("page {number} lists a cell twice")));
+            }
             if interior {
-                self.walk(be32(page, offset), depth + 1, each)?;
+                self.walk(be32(page, offset), depth + 1, walk, each)?;
             } else {
-                let (rowid, record) = self.cell(page, offset)?;
+                let (rowid, record) = self.cell(page, offset, walk)?;
                 each(rowid, &record)?;
             }
         }
         if interior {
-            self.walk(be32(page, head + 8), depth + 1, each)?;
+            self.walk(be32(page, head + 8), depth + 1, walk, each)?;
         }
         Ok(())
     }
 
     /// the rowid and whole record of the table leaf cell at `offset` of `page`, its payload
-    /// joined from the overflow pages it spills onto.
-    fn cell(&self, page: &[u8], offset: usize) -> Result<(i64, Vec<u8>), Broken> {
+    /// joined from the overflow pages it spills onto, which `walk` must not have reached.
+    fn cell(&self, page: &[u8], offset: usize, walk: &mut Walk) -> Result<(i64, Vec<u8>), Broken> {
         let (size, read) = varint(page, offset)?;
         let (rowid, read_id) = varint(page, offset + read)?;
+        walk.read = walk.read.saturating_add(size);
+        if walk.read > self.budget {
+            return Err(broken("its rows are larger than any browser's cookie file"));
+        }
         let size = usize::try_from(size).map_err(|_| broken("a row is larger than memory"))?;
         let start = offset + read + read_id;
         let local = self.local(size);
@@ -321,12 +369,8 @@ impl Database {
             .to_vec();
         if local < size {
             let mut next = be32(page, start + local);
-            let mut hops = 0;
             while payload.len() < size {
-                hops += 1;
-                if hops > self.pages {
-                    return Err(broken("a row's overflow pages run in a circle"));
-                }
+                walk.reach(next)?;
                 let overflow = self.page(next)?;
                 let take = (size - payload.len()).min(self.usable - 4);
                 payload.extend_from_slice(&overflow[4..4 + take]);

@@ -294,6 +294,211 @@ fn a_broken_statement_or_row_is_refused_without_a_panic() {
     assert!(decode(&record).is_err());
 }
 
+/// SQLite's variable-length integer for `value`, as `varint` reads it.
+fn put_varint(value: u64) -> Vec<u8> {
+    if value > 0x00ff_ffff_ffff_ffff {
+        let mut bytes: Vec<u8> = (0..8)
+            .rev()
+            .map(|at| 0x80 | u8::try_from((value >> (8 + 7 * at)) & 0x7f).unwrap())
+            .collect();
+        bytes.push(u8::try_from(value & 0xff).unwrap());
+        return bytes;
+    }
+    let mut groups = vec![u8::try_from(value & 0x7f).unwrap()];
+    let mut rest = value >> 7;
+    while rest > 0 {
+        groups.push(0x80 | u8::try_from(rest & 0x7f).unwrap());
+        rest >>= 7;
+    }
+    groups.reverse();
+    groups
+}
+
+/// a record of text values, as a table's row holds them.
+fn texts(values: &[&str]) -> Vec<u8> {
+    let kinds: Vec<u8> = values
+        .iter()
+        .flat_map(|value| put_varint(13 + 2 * value.len() as u64))
+        .collect();
+    let mut record = put_varint(1 + kinds.len() as u64);
+    record.extend(kinds);
+    for value in values {
+        record.extend_from_slice(value.as_bytes());
+    }
+    record
+}
+
+/// a table leaf page of `page_size` bytes holding `cells`, each a rowid and its record, with
+/// the cell pointers `order` gives, by index, or each once in turn.
+fn leaf(
+    page_size: usize,
+    head: usize,
+    cells: &[(i64, Vec<u8>)],
+    order: Option<&[usize]>,
+) -> Vec<u8> {
+    let mut page = vec![0; page_size];
+    let mut end = page_size;
+    let mut offsets = Vec::new();
+    for (rowid, record) in cells {
+        let mut cell = put_varint(record.len() as u64);
+        cell.extend(put_varint(rowid.cast_unsigned()));
+        cell.extend_from_slice(record);
+        end -= cell.len();
+        page[end..end + cell.len()].copy_from_slice(&cell);
+        offsets.push(u16::try_from(end).unwrap());
+    }
+    let order: Vec<usize> = order.map_or_else(|| (0..cells.len()).collect(), <[usize]>::to_vec);
+    page[head] = 0x0d;
+    page[head + 3..head + 5].copy_from_slice(&u16::try_from(order.len()).unwrap().to_be_bytes());
+    page[head + 5..head + 7].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    for (at, index) in order.iter().enumerate() {
+        let pointer = head + 8 + 2 * at;
+        page[pointer..pointer + 2].copy_from_slice(&offsets[*index].to_be_bytes());
+    }
+    page
+}
+
+/// a table interior page whose cells point at `children`, then at `right`.
+fn interior(page_size: usize, children: &[u32], right: u32) -> Vec<u8> {
+    let mut page = vec![0; page_size];
+    let mut end = page_size;
+    page[0] = 0x05;
+    page[3..5].copy_from_slice(&u16::try_from(children.len()).unwrap().to_be_bytes());
+    page[8..12].copy_from_slice(&right.to_be_bytes());
+    for (at, child) in children.iter().enumerate() {
+        let mut cell = child.to_be_bytes().to_vec();
+        cell.extend(put_varint(at as u64 + 1));
+        end -= cell.len();
+        page[end..end + cell.len()].copy_from_slice(&cell);
+        page[12 + 2 * at..14 + 2 * at].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    }
+    page[5..7].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    page
+}
+
+/// a database laid out page by page: page 1 holds the schema, whose one table `t` has one
+/// text column and its tree at page 2, then `pages` from page 2 on.
+fn laid_out(page_size: usize, pages: &[Vec<u8>]) -> Vec<u8> {
+    let schema = [(1, {
+        let mut record = texts(&["table", "t", "t"]);
+        // the root page, an integer of one byte, then the statement
+        let sql = "CREATE TABLE t(a)";
+        let header = record[0];
+        record.insert(usize::from(header), 1);
+        record.insert(
+            usize::from(header) + 1,
+            u8::try_from(13 + 2 * sql.len()).unwrap(),
+        );
+        record[0] = header + 2;
+        record.push(2);
+        record.extend_from_slice(sql.as_bytes());
+        record
+    })];
+    let mut first = leaf(page_size, 100, &schema, None);
+    first[..16].copy_from_slice(b"SQLite format 3\0");
+    let size = if page_size == 65_536 {
+        1
+    } else {
+        u16::try_from(page_size).unwrap()
+    };
+    first[16..18].copy_from_slice(&size.to_be_bytes());
+    first[18] = 1;
+    first[19] = 1;
+    first[21..24].copy_from_slice(&[64, 32, 32]);
+    first[28..32].copy_from_slice(&u32::try_from(pages.len() + 1).unwrap().to_be_bytes());
+    first[44..48].copy_from_slice(&4_u32.to_be_bytes());
+    first[56..60].copy_from_slice(&1_u32.to_be_bytes());
+    [vec![first], pages.to_vec()].concat().concat()
+}
+
+/// a table whose tree reaches a page more than once, by two cells, a cell and the last
+/// pointer, or a cell pointer listed twice, is refused rather than walked once a path: a tree of
+/// a dozen such pages would otherwise give 3 to the 12th power rows.
+#[test]
+fn a_page_reached_twice_is_refused() {
+    let size = 512;
+    let row = |rowid| (rowid, texts(&["a cookie"]));
+    let one = leaf(size, 0, &[row(1)], None);
+    let shared = laid_out(size, &[interior(size, &[3, 3], 3), one.clone()]);
+    let mut levels: Vec<Vec<u8>> = (0..12)
+        .map(|level| interior(size, &[3 + level, 3 + level], 3 + level))
+        .collect();
+    levels.push(one);
+    let deep = laid_out(size, &levels);
+    let listed_twice = laid_out(size, &[leaf(size, 0, &[row(1), row(2)], Some(&[0, 1, 0]))]);
+    for (case, bytes) in [
+        ("shared", shared),
+        ("deep", deep),
+        ("listed twice", listed_twice),
+    ] {
+        let read = Database::parse(bytes, None).unwrap().rows("t", &["a"]);
+        assert!(
+            read.as_ref()
+                .is_err_and(|Broken(why)| why.contains("twice")),
+            "{case}: {:?}",
+            read.map(|rows| rows.len())
+        );
+    }
+    // a row longer than its page, whose overflow chain runs back into the page that holds it
+    let record = texts(&["x".repeat(2_000).as_str()]);
+    let local = Database::parse(laid_out(size, &[leaf(size, 0, &[row(1)], None)]), None)
+        .unwrap()
+        .local(record.len());
+    let mut cell = put_varint(record.len() as u64);
+    cell.extend(put_varint(1));
+    cell.extend_from_slice(&record[..local]);
+    cell.extend_from_slice(&2_u32.to_be_bytes());
+    let mut spilled = vec![0; size];
+    let start = size - cell.len();
+    spilled[0] = 0x0d;
+    spilled[3..5].copy_from_slice(&1_u16.to_be_bytes());
+    spilled[5..7].copy_from_slice(&u16::try_from(start).unwrap().to_be_bytes());
+    spilled[8..10].copy_from_slice(&u16::try_from(start).unwrap().to_be_bytes());
+    spilled[start..].copy_from_slice(&cell);
+    let read = Database::parse(laid_out(size, &[spilled]), None)
+        .unwrap()
+        .rows("t", &["a"]);
+    assert!(
+        read.as_ref()
+            .is_err_and(|Broken(why)| why.contains("twice")),
+        "{read:?}"
+    );
+}
+
+/// a log's commit may claim more pages than the file and the log hold, as a crafted one does
+/// to make a loop of overflow pages run for ever; the reader counts only those it holds. and a
+/// table of more bytes than the reader's budget is refused.
+#[test]
+fn pages_and_bytes_are_kept_to_what_the_files_hold() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("cookies.sqlite");
+    let db = written(&path, 1024, "WAL");
+    insert(&db, 0..30);
+    let file = std::fs::read(&path).unwrap();
+    let mut log = std::fs::read(folder.path().join("cookies.sqlite-wal")).unwrap();
+    // the last frame commits; claim the most pages there are, and sum the frames again
+    let frame = 24 + 1024;
+    let last = 32 + (log.len() - 32) / frame * frame - frame;
+    log[last + 4..last + 8].copy_from_slice(&u32::MAX.to_be_bytes());
+    let mut sums = checksum((0, 0), &log[..24], false);
+    for at in (32..log.len()).step_by(frame) {
+        sums = checksum(
+            checksum(sums, &log[at..at + 8], false),
+            &log[at + 24..at + frame],
+            false,
+        );
+        log[at + 16..at + 20].copy_from_slice(&sums.0.to_be_bytes());
+        log[at + 20..at + 24].copy_from_slice(&sums.1.to_be_bytes());
+    }
+    let held = u32::try_from(file.len() / 1024 + (log.len() - 32) / frame).unwrap();
+    let database = Database::parse(file.clone(), Some(&log)).unwrap();
+    assert!(database.pages <= held, "{} pages", database.pages);
+    let mut database = Database::parse(file, Some(&log)).unwrap();
+    database.budget = 1_000;
+    let read = database.rows("cookies", &["name", "value"]);
+    assert!(read.is_err_and(|Broken(why)| why.contains("larger than")));
+}
+
 /// a database with any of its bytes changed, and any log beside it, never panics the reader:
 /// it reads, or refuses.
 #[test]
