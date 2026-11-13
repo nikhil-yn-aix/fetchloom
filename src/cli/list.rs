@@ -372,7 +372,8 @@ struct Marks {
 }
 
 /// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
-/// the source gives way, then the license, since `--json` and `list <name>` keep them.
+/// the source gives way, then the license, since `--json` and `list <name>` keep them, and then a
+/// row still too wide goes on below, as [`folded`] lays it out.
 fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
     let full = columns(datasets, true, true, marks);
@@ -383,7 +384,88 @@ fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     if widest(&licensed) <= width {
         return licensed;
     }
-    columns(datasets, false, false, marks)
+    let plain = columns(datasets, false, false, marks);
+    if widest(&plain) <= width {
+        return plain;
+    }
+    folded(datasets, width, marks)
+}
+
+/// the datasets for a terminal `width` columns wide, as search puts facts that do not fit below:
+/// each name beside its contents, aligned, and its folder beside them where the row fits, else
+/// on an indented line of its own. a name too wide to stand beside the contents takes a line of
+/// its own, whole, with the rest below it.
+fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
+    let rows: Vec<(&str, String, String)> = datasets
+        .iter()
+        .map(|dataset| {
+            (
+                dataset.name.as_str(),
+                contents(dataset, marks),
+                folder(dataset),
+            )
+        })
+        .collect();
+    let contents_width = rows
+        .iter()
+        .map(|(_, contents, _)| units::columns(contents))
+        .max()
+        .unwrap_or_default();
+    let beside = |name: &str| units::columns(name) + 2 + contents_width <= width;
+    let named = rows
+        .iter()
+        .filter(|(name, ..)| beside(name))
+        .map(|(name, ..)| units::columns(name))
+        .max()
+        .unwrap_or_default();
+    let spaces = |count: usize| " ".repeat(count);
+    let mut lines = Vec::new();
+    for (name, contents, folder) in &rows {
+        if beside(name) {
+            let head = format!("{name}{}  {contents}", spaces(named - units::columns(name)));
+            let line = format!(
+                "{head}{}  {folder}",
+                spaces(contents_width - units::columns(contents))
+            );
+            if units::columns(&line) <= width {
+                lines.push(line);
+            } else {
+                lines.extend([head, format!("  {folder}")]);
+            }
+        } else {
+            lines.push((*name).to_owned());
+            let rest = format!("  {contents}  {folder}");
+            if units::columns(&rest) <= width {
+                lines.push(rest);
+            } else {
+                lines.extend([format!("  {contents}"), format!("  {folder}")]);
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+/// what a dataset holds, as its row says it: its files and bytes, or why it has none yet.
+fn contents(dataset: &Listed, marks: Marks) -> String {
+    match (dataset.files, dataset.bytes) {
+        (Some(files), Some(bytes)) => format!(
+            "{} {} {}",
+            units::count(files, "file", "files"),
+            marks.dot,
+            units::size(bytes)
+        ),
+        _ if dataset.from.is_some() => "not built yet".to_owned(),
+        _ => "not locked yet".to_owned(),
+    }
+}
+
+/// where a dataset's files are, as its row says it.
+fn folder(dataset: &Listed) -> String {
+    if dataset.placed {
+        dataset.folder.clone()
+    } else {
+        "not placed".to_owned()
+    }
 }
 
 fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Marks) -> String {
@@ -391,16 +473,6 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Ma
     let rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
-            let contents = match (dataset.files, dataset.bytes) {
-                (Some(files), Some(bytes)) => format!(
-                    "{} {} {}",
-                    units::count(files, "file", "files"),
-                    marks.dot,
-                    units::size(bytes)
-                ),
-                _ if dataset.from.is_some() => "not built yet".to_owned(),
-                _ => "not locked yet".to_owned(),
-            };
             let mut row = vec![dataset.name.clone()];
             if with_source {
                 row.push(match (&dataset.reference, &dataset.from) {
@@ -409,12 +481,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Ma
                     (None, None) => String::new(),
                 });
             }
-            let folder = if dataset.placed {
-                dataset.folder.clone()
-            } else {
-                "not placed".to_owned()
-            };
-            row.extend([contents, folder]);
+            row.extend([contents(dataset, marks), folder(dataset)]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
                 row.push(units::clip(license, LICENSE, marks.more));
@@ -615,6 +682,48 @@ mod tests {
             starts[0], starts[1],
             "a wide character takes two columns:\n{shown}"
         );
+    }
+
+    /// a row still wider than the terminal once the source and the license gave way puts its
+    /// folder on an indented line of its own, as search puts facts below. a name too wide to stand
+    /// beside its size takes a line of its own, whole, with the rest below it. a row that fits
+    /// stays as it is.
+    #[test]
+    fn a_row_too_wide_for_the_terminal_puts_its_folder_below() {
+        let listed = |name: &str| Listed {
+            name: name.to_owned(),
+            reference: Some(format!("zenodo:{}", name.len())),
+            from: None,
+            resolved: Some(format!("zenodo:{}@1", name.len())),
+            files: Some(1),
+            bytes: Some(4551),
+            folder: format!("data/{name}"),
+            placed: true,
+            title: None,
+            license: None,
+            doi: None,
+            access: Some(Access::Unknown),
+            locked_files: Some(Vec::new()),
+            held: Some(Vec::new()),
+        };
+        let datasets = [listed("field-station-measurements"), listed("iris")];
+        assert_eq!(
+            table(&datasets, Some(60), UNICODE),
+            "field-station-measurements  1 file · 4.4 KiB\n  data/field-station-measurements\n\
+             iris                        1 file · 4.4 KiB  data/iris"
+        );
+        assert_eq!(
+            table(&datasets, Some(40), UNICODE),
+            "field-station-measurements\n  1 file · 4.4 KiB\n  data/field-station-measurements\n\
+             iris  1 file · 4.4 KiB  data/iris"
+        );
+        for width in [40, 60] {
+            let shown = table(&datasets, Some(width), UNICODE);
+            assert!(
+                shown.lines().all(|line| units::columns(line) <= width),
+                "{shown}"
+            );
+        }
     }
 
     /// files a members table leaves out do not count, `list <name>` names the rest by their paths
