@@ -132,7 +132,7 @@ pub(super) async fn pick(
         &context.output,
         &report.candidates,
         context.output.width(),
-        PICKER_LEAD,
+        crate::output::picker_lead(report.candidates.len()),
     );
     let footer = if report.left_out > 0 || more(&report.candidates, search::LIMIT) {
         // words a shell would read differently are not offered as something to paste
@@ -202,8 +202,6 @@ pub(super) async fn pick(
 
 /// the columns before a reference in the list `search` prints.
 const LIST_LEAD: usize = 12;
-/// the columns before a reference in the picker, its cursor and number among them.
-const PICKER_LEAD: usize = 6;
 
 /// whether a catalog filled its share, so it may hold more matches than were shown.
 fn more(candidates: &[Candidate], limit: usize) -> bool {
@@ -496,7 +494,7 @@ fn rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::{Level, Style};
+    use crate::output::{Level, Style, picker_lead};
     use crate::source::Reference;
 
     #[test]
@@ -564,7 +562,7 @@ mod tests {
                 note: None,
             },
         ];
-        let rows = rows(&output, &candidates, None, PICKER_LEAD);
+        let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));
         assert_eq!(
             rows,
             [
@@ -644,7 +642,7 @@ mod tests {
         ];
         let output = quiet_output();
         for width in [60, 80, 100] {
-            for lead in [LIST_LEAD, PICKER_LEAD] {
+            for lead in [LIST_LEAD, picker_lead(candidates.len())] {
                 let parts = parts(&output, &candidates, Some(width), lead);
                 let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
                 for (shown, candidate) in parts.iter().zip(&candidates) {
@@ -789,7 +787,7 @@ mod tests {
                 note: None,
             },
         ];
-        let rows = rows(&output, &candidates, None, PICKER_LEAD);
+        let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));
         assert_eq!(rows[0].find("Iris Species"), Some(50), "{}", rows[0]);
         assert!(rows[1].starts_with(&format!("{long}  ")), "{}", rows[1]);
     }

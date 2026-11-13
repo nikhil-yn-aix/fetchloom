@@ -17,6 +17,7 @@ use anstyle::Style as Paint;
 use indicatif::{MultiProgress, ProgressDrawTarget};
 use serde::Serialize;
 
+pub(crate) use picker::lead as picker_lead;
 pub(crate) use progress::{Bar, Setup, Ticker, Wait};
 use style::Tone;
 pub(crate) use style::{ColorChoice, Style};

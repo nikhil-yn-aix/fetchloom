@@ -68,9 +68,9 @@ with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same ro
 ```text
   Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
   which one?
-    1 hf:datasets/scikit-learn/iris                                       18.1 KiB   11k downloads
-    2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  964k downloads
-    3 zenodo:23233774                      IRIS: ICESat-2 River Surface…   1.1 GiB  2.4k downloads
+     1 hf:datasets/scikit-learn/iris                                         18.1 KiB
+     2 kaggle:uciml/iris                            Iris Species              3.6 KiB
+     3 zenodo:23233774                              IRIS: ICESat-2 River…     1.1 GiB
     more matches: fetchloom search iris --limit 20
   type a number from 1 to 12 and press enter, or q to cancel: 2
       Chose kaggle:uciml/iris

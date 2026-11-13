@@ -60,9 +60,8 @@ pub(super) fn numbered(
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
     let _ = terminal.write_line(&format!("  {bold}{}{bold:#}", plain(question)));
-    let column = column(options);
-    for (index, option) in options.iter().enumerate() {
-        let _ = terminal.write_line(&row(option, index, usize::MAX, style, width, column));
+    for line in listed(options, usize::MAX, style, width) {
+        let _ = terminal.write_line(&line);
     }
     if !footer.is_empty() {
         let _ = terminal.write_line(&format!("    {dim}{}{dim:#}", plain(footer)));
@@ -212,16 +211,29 @@ fn frame(
         .copied()
         .unwrap_or("");
     let mut lines = vec![format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}")];
-    let column = column(options);
-    for (index, option) in options.iter().enumerate() {
-        lines.push(row(option, index, cursor, style, width, column));
-    }
+    lines.extend(listed(options, cursor, style, width));
     if !footer.is_empty() {
         let more = if style.unicode { "\u{2026}" } else { "..." };
         let footer = console::truncate_str(footer, width.saturating_sub(5), more);
         lines.push(format!("    {dim}{}{dim:#}", plain(&footer)));
     }
     lines
+}
+
+/// a row for each option, the one at `cursor` marked.
+fn listed(options: &[String], cursor: usize, style: Style, width: usize) -> Vec<String> {
+    let column = column(options);
+    options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| row(option, (index, options.len()), cursor, style, width, column))
+        .collect()
+}
+
+/// the columns before a reference in a picker of `count` options: the cursor's mark, then the
+/// option's number, padded to the widest so every row lines up.
+pub(crate) fn lead(count: usize) -> usize {
+    5 + count.to_string().len()
 }
 
 /// where the titles start: after the widest reference, so a row with a blank title keeps its
@@ -269,12 +281,12 @@ fn cancelled() -> Error {
         .help("run it again to choose, or give a link or an id instead")
 }
 
-/// one option: the reference, then from `column` its title and facts, dim unless the cursor is on
-/// it. the reference is never cut; the rest gives way on a narrow terminal, or goes on the line
-/// under it when it fits only there.
+/// one option: its number of `count`, its reference, then from `column` its title and facts, dim
+/// unless the cursor is on it. the reference is never cut; the rest gives way on a narrow
+/// terminal, or goes on the line under it when it fits only there.
 fn row(
     option: &str,
-    index: usize,
+    (index, count): (usize, usize),
     cursor: usize,
     style: Style,
     width: usize,
@@ -290,17 +302,18 @@ fn row(
     let rest = if long { rest.trim() } else { rest.trim_end() };
     // the padding that lines the titles up, kept apart from the bold reference
     let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
-    let room = width.saturating_sub(column.max(reference.chars().count() + 2) + 7);
+    let lead = lead(count);
+    let room = width.saturating_sub(column.max(reference.chars().count() + 2) + lead + 1);
     let more = if style.unicode { "\u{2026}" } else { "..." };
     let wide = console::measure_text_width(rest);
-    let below = !rest.is_empty() && wide > room && wide <= width.saturating_sub(7);
+    let below = !rest.is_empty() && wide > room && wide <= width.saturating_sub(lead + 1);
     let beside = if below || room < 8 {
         String::new()
     } else {
         console::truncate_str(rest, room, more).into_owned()
     };
     let beside = super::shown(&beside, style.unicode);
-    let number = index + 1;
+    let number = format!("{:>1$}", index + 1, count.to_string().len());
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
     let line = if index == cursor {
@@ -316,7 +329,7 @@ fn row(
     };
     if below {
         let rest = super::shown(rest, style.unicode);
-        format!("{line}\n      {dim}{rest}{dim:#}")
+        format!("{line}\n{:lead$}{dim}{rest}{dim:#}", "")
     } else {
         line
     }
@@ -455,19 +468,22 @@ mod tests {
 
     #[test]
     fn rows_highlight_the_cursor_and_escape_untrusted_titles() {
-        let selected = row("iris", 0, 0, style(false, false), 80, 6);
+        let selected = row("iris", (0, 2), 0, style(false, false), 80, 6);
         assert_eq!(selected, "  > 1 iris");
-        assert_eq!(row("other", 1, 0, style(false, true), 80, 7), "    2 other");
-        let colored = row("iris", 0, 0, style(true, true), 80, 6);
+        assert_eq!(
+            row("other", (1, 2), 0, style(false, true), 80, 7),
+            "    2 other"
+        );
+        let colored = row("iris", (0, 2), 0, style(true, true), 80, 6);
         assert!(colored.contains('\u{203a}'));
         assert!(colored.contains("\x1b["));
         assert!(colored.contains("iris"));
-        let unsafe_text = row("iris\x1b[2J\nnext", 0, 0, style(false, false), 80, 6);
+        let unsafe_text = row("iris\x1b[2J\nnext", (0, 2), 0, style(false, false), 80, 6);
         assert!(!unsafe_text.contains(char::is_control));
         assert!(unsafe_text.contains("\\u{1b}"));
         let narrow = row(
             "zenodo:1  a long title for a narrow terminal",
-            0,
+            (0, 2),
             0,
             style(false, false),
             30,
@@ -477,7 +493,7 @@ mod tests {
         assert!(narrow.contains("zenodo:1"), "the reference is never cut");
         let tight = row(
             "kaggle:owner/a-very-long-dataset-name  title",
-            1,
+            (1, 2),
             0,
             style(false, false),
             30,
@@ -513,11 +529,42 @@ mod tests {
         );
     }
 
+    /// rows 10 to 12 pad no wider than rows 1 to 9: every number ends in one column, so every
+    /// reference and title starts in one, and a cut title still leaves the last column spare.
+    #[test]
+    fn numbers_pad_to_the_widest_so_every_row_lines_up() {
+        let options: Vec<String> = (1..=12)
+            .map(|n| format!("{:9}  Iris {n}", format!("zenodo:{n}")))
+            .collect();
+        for cursor in [0, 11] {
+            let lines = frame("which one?", &options, "", cursor, style(false, false), 80);
+            let rows = &lines[1..];
+            let starts = |text: &str| -> Vec<Option<usize>> {
+                rows.iter().map(|line| line.find(text)).collect()
+            };
+            assert_eq!(starts("zenodo:"), [Some(lead(12)); 12], "{rows:#?}");
+            assert_eq!(starts("Iris"), [Some(18); 12], "{rows:#?}");
+            assert_eq!(rows[1], "     2 zenodo:2   Iris 2");
+            assert_eq!(rows[9], "    10 zenodo:10  Iris 10");
+        }
+        let long: Vec<String> = (1..=12)
+            .map(|n| {
+                format!(
+                    "{:9}  a title long enough to be cut at forty columns",
+                    format!("zenodo:{n}")
+                )
+            })
+            .collect();
+        for line in frame("which one?", &long, "", 0, style(false, false), 40) {
+            assert!(console::measure_text_width(&line) < 40, "{line:?}");
+        }
+    }
+
     #[test]
     fn a_blank_title_keeps_the_facts_in_their_column() {
         let titled = row(
             "zenodo:1   Iris  3.6 KiB",
-            0,
+            (0, 2),
             1,
             style(false, false),
             80,
@@ -525,7 +572,7 @@ mod tests {
         );
         let blank = row(
             "zenodo:22        5.0 KiB",
-            1,
+            (1, 2),
             0,
             style(false, false),
             80,
