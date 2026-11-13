@@ -658,7 +658,7 @@ fn save(
         }
         Home::Store => {
             let id = account.id();
-            if store::keyring_usable(var) {
+            if store::KEYRING.usable(var) {
                 if !agrees(format!("save it in {}?", auth::keyring_name()), true)? {
                     return Ok(None);
                 }

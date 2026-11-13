@@ -41,18 +41,51 @@ pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
         .map(|config| config.join("fetchloom"))
 }
 
-/// whether the system's credential store can be used. a linux session without a message bus has
-/// none, checked first so a server never waits on a bus that is not there.
-pub(crate) fn keyring_usable(var: Var<'_>) -> bool {
-    if !keyring_allowed(var) {
-        return false;
+/// a credential store: whether it can be used, and the calls that reach its keys.
+pub(crate) struct Keyring {
+    /// whether the store is reached over the session's message bus, as the linux secret service is.
+    needs_bus: bool,
+    /// asks the store whether it works.
+    answers: fn() -> bool,
+    get: fn(&str) -> keyring::Result<String>,
+    set: fn(&str, &str) -> keyring::Result<()>,
+    /// removes an id's key: none when the store cannot make an entry for it, as with no store.
+    remove: fn(&str) -> Option<keyring::Result<()>>,
+}
+
+/// the system's own credential store.
+pub(crate) const KEYRING: Keyring = Keyring {
+    needs_bus: cfg!(all(unix, not(target_os = "macos"))),
+    answers: || keyring::Entry::store_status().is_ok(),
+    get: |id| keyring::Entry::new(SERVICE, id)?.get_password(),
+    set: |id, secret| keyring::Entry::new(SERVICE, id)?.set_password(secret),
+    remove: |id| {
+        keyring::Entry::new(SERVICE, id)
+            .ok()
+            .map(|entry| entry.delete_credential())
+    },
+};
+
+impl Keyring {
+    /// whether the store can be used. a linux session without a message bus has none, checked
+    /// first so a server never waits on a bus that is not there.
+    pub(crate) fn usable(&self, var: Var<'_>) -> bool {
+        if !keyring_allowed(var) {
+            return false;
+        }
+        if self.needs_bus && var("DBUS_SESSION_BUS_ADDRESS").is_none_or(|value| value.is_empty()) {
+            return false;
+        }
+        (self.answers)()
     }
-    if cfg!(all(unix, not(target_os = "macos")))
-        && var("DBUS_SESSION_BUS_ADDRESS").is_none_or(|value| value.is_empty())
-    {
-        return false;
+
+    /// removes the key saved for `id`. no key there, or no store at all, leaves nothing to remove.
+    fn delete(&self, id: &str) -> io::Result<()> {
+        match (self.remove)(id) {
+            None | Some(Ok(()) | Err(keyring::Error::NoEntry)) => Ok(()),
+            Some(Err(err)) => Err(io::Error::other(err)),
+        }
     }
-    keyring::Entry::store_status().is_ok()
 }
 
 /// whether `FETCHLOOM_KEYRING` leaves the system's credential store in use: unless it is false,
@@ -76,7 +109,7 @@ pub(crate) fn saved(var: Var<'_>) -> BTreeMap<String, Place> {
 /// the key saved for `id` in `place`, as the index lists it, or none.
 pub(crate) fn read(var: Var<'_>, id: &str, place: Place) -> Option<String> {
     match place {
-        Place::Keyring => keyring::Entry::new(SERVICE, id).ok()?.get_password().ok(),
+        Place::Keyring => (KEYRING.get)(id).ok(),
         Place::File => file(var).remove(id),
     }
 }
@@ -84,21 +117,30 @@ pub(crate) fn read(var: Var<'_>, id: &str, place: Place) -> Option<String> {
 /// saves `secret` for `id` in `place`, replacing what was saved for it before. the new key is
 /// stored before the old one goes, so a store that refuses it leaves the old key working.
 pub(crate) fn save(var: Var<'_>, id: &str, secret: &str, place: Place) -> io::Result<()> {
+    save_with(&KEYRING, var, id, secret, place)
+}
+
+/// [`save`], with `keyring` as the credential store.
+fn save_with(
+    keyring: &Keyring,
+    var: Var<'_>,
+    id: &str,
+    secret: &str,
+    place: Place,
+) -> io::Result<()> {
     let folder =
         folder(var).ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
     let index_path = folder.join("accounts.json");
     let mut index: BTreeMap<String, Place> = load(&index_path)?;
     let before = index.get(id).copied();
     match place {
-        Place::Keyring => keyring::Entry::new(SERVICE, id)
-            .and_then(|entry| entry.set_password(secret))
-            .map_err(io::Error::other)?,
+        Place::Keyring => (keyring.set)(id, secret).map_err(io::Error::other)?,
         Place::File => edit_file(&folder, |keys| {
             keys.insert(id.to_owned(), secret.to_owned());
         })?,
     }
     match before {
-        Some(Place::Keyring) if place != Place::Keyring => delete_from_keyring(id)?,
+        Some(Place::Keyring) if place != Place::Keyring => keyring.delete(id)?,
         Some(Place::File) if place != Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
         })?,
@@ -116,16 +158,6 @@ fn edit_file(folder: &Path, change: impl FnOnce(&mut BTreeMap<String, String>)) 
     write_private(&path, &json(&keys)?)
 }
 
-fn delete_from_keyring(id: &str) -> io::Result<()> {
-    if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(err) => return Err(io::Error::other(err)),
-        }
-    }
-    Ok(())
-}
-
 /// removes what was saved for `id`. returns whether anything was.
 pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
     let Some(folder) = folder(var) else {
@@ -136,7 +168,7 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
         return Ok(false);
     };
     match place {
-        Place::Keyring => delete_from_keyring(id)?,
+        Place::Keyring => KEYRING.delete(id)?,
         Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
         })?,
@@ -197,6 +229,7 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::ffi::OsString;
 
     use super::*;
@@ -276,6 +309,46 @@ mod tests {
         }
     }
 
+    /// the store is asked only once `FETCHLOOM_KEYRING` allows it and, for a store on the message
+    /// bus, a bus is set. its answer then decides.
+    #[test]
+    fn the_keyring_is_asked_only_when_allowed_and_reachable() {
+        let bus = Some("unix:path=/run/user/1000/bus");
+        for (allowed, needs_bus, address, asked) in [
+            (None, false, None, true),
+            (Some("1"), true, bus, true),
+            (Some("0"), false, None, false),
+            (None, true, None, false),
+            (None, true, Some(""), false),
+        ] {
+            let var = |name: &str| match name {
+                "FETCHLOOM_KEYRING" => allowed.map(OsString::from),
+                "DBUS_SESSION_BUS_ADDRESS" => address.map(OsString::from),
+                _ => None,
+            };
+            let case =
+                format!("FETCHLOOM_KEYRING {allowed:?}, needs a bus {needs_bus}, bus {address:?}");
+            if asked {
+                for answer in [true, false] {
+                    let answers: fn() -> bool = if answer { || true } else { || false };
+                    let store = Keyring {
+                        needs_bus,
+                        answers,
+                        ..KEYRING
+                    };
+                    assert_eq!(store.usable(&var), answer, "{case}");
+                }
+            } else {
+                let store = Keyring {
+                    needs_bus,
+                    answers: || panic!("the store was asked"),
+                    ..KEYRING
+                };
+                assert!(!store.usable(&var), "{case}");
+            }
+        }
+    }
+
     #[test]
     fn a_file_store_saves_lists_and_forgets_one_key_at_a_time() {
         let home = tempfile::tempdir().unwrap();
@@ -287,7 +360,7 @@ mod tests {
                 _ => None,
             }
         };
-        assert!(!keyring_usable(&var));
+        assert!(!KEYRING.usable(&var));
         let saved_key = |id: &str| saved(&var).get(id).and_then(|&place| read(&var, id, place));
         save(&var, "zenodo", "z-key", Place::File).unwrap();
         save(&var, "dataverse:demo.dataverse.org", "d-key", Place::File).unwrap();
@@ -324,5 +397,46 @@ mod tests {
         assert_eq!(fs::read_to_string(&index).unwrap(), "{ not json");
         let keys = fs::read_to_string(folder(&var).unwrap().join("credentials.json")).unwrap();
         assert!(keys.contains("d-key"));
+    }
+
+    thread_local! {
+        static HELD: RefCell<BTreeMap<String, String>> = RefCell::default();
+    }
+
+    /// a credential store that keeps its keys in memory, apart for each test's thread.
+    const MEMORY: Keyring = Keyring {
+        set: |id, secret| {
+            HELD.with_borrow_mut(|held| held.insert(id.to_owned(), secret.to_owned()));
+            Ok(())
+        },
+        remove: |id| {
+            let removed = HELD.with_borrow_mut(|held| held.remove(id));
+            Some(removed.map(drop).ok_or(keyring::Error::NoEntry))
+        },
+        ..KEYRING
+    };
+
+    /// saved again where it is, a key replaces itself; saved somewhere new, it leaves no copy
+    /// where it was.
+    #[test]
+    fn a_key_saved_again_stays_in_one_place() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().as_os_str().to_owned();
+        let var = |name: &str| match name {
+            "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => Some(root.clone()),
+            _ => None,
+        };
+        let save = |secret: &str, place| save_with(&MEMORY, &var, "zenodo", secret, place).unwrap();
+        let places = || {
+            let held = HELD.with_borrow(|held| held.get("zenodo").cloned());
+            (held, file(&var).remove("zenodo"))
+        };
+        save("one", Place::Keyring);
+        save("two", Place::Keyring);
+        assert_eq!(places(), (Some("two".to_owned()), None));
+        save("three", Place::File);
+        assert_eq!(places(), (None, Some("three".to_owned())));
+        save("four", Place::Keyring);
+        assert_eq!(places(), (Some("four".to_owned()), None));
     }
 }
