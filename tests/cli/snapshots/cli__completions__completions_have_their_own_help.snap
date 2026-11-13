@@ -16,7 +16,7 @@ arguments:
   <shell>  the shell that loads the script [possible values: bash, elvish, fish,
            powershell, zsh]
 
-options:
+global options:
   [global options]
 
 on disk: nothing. it prints the script on stdout, for a file your shell loads

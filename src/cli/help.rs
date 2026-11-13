@@ -472,8 +472,7 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
         for name in &rare {
             root = root.mut_subcommand(name, |command| command.hide(true));
         }
-        let about = args::INTRO.lines().next().unwrap_or_default().to_owned();
-        root = root.about(about).after_help("");
+        root = root.after_help(args::TOP_EXAMPLES);
         "`fetchloom --help` shows every command and option".to_owned()
     } else {
         // the examples, without what the command leaves on disk or its page
@@ -490,7 +489,7 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
             command.after_help(examples)
         });
         format!(
-            "`fetchloom {} --help` also lists the options every command takes",
+            "`fetchloom {} --help` also lists the global options",
             topic.join(" ")
         )
     };
@@ -519,18 +518,23 @@ fn mut_command(
 }
 
 /// a command's help with its examples right below its usage, before the long list of options,
-/// so a person reads the commands to copy first.
+/// so a person reads the commands to copy first, and its arguments named as its usage names them.
 pub(super) fn examples_first(text: &str) -> String {
+    let text = agreed(text);
     let lines: Vec<&str> = text.split('\n').collect();
     let Some(start) = lines.iter().position(|line| *line == "examples:") else {
-        return text.to_owned();
+        return text;
     };
     let end = lines[start..]
         .iter()
-        .position(|line| line.starts_with("on disk:") || line.starts_with("docs:"))
+        .position(|line| {
+            ["on disk:", "help topics:", "docs:"]
+                .iter()
+                .any(|heading| line.starts_with(heading))
+        })
         .map_or(lines.len(), |at| start + at);
     let Some(usage) = lines.iter().position(|line| line.starts_with("usage:")) else {
-        return text.to_owned();
+        return text;
     };
     let Some(below) = lines[usage..]
         .iter()
@@ -538,7 +542,7 @@ pub(super) fn examples_first(text: &str) -> String {
         .map(|at| usage + at)
         .filter(|below| *below < start)
     else {
-        return text.to_owned();
+        return text;
     };
     let mut examples = lines[start..end].to_vec();
     while examples.last().is_some_and(|line| line.is_empty()) {
@@ -553,6 +557,30 @@ pub(super) fn examples_first(text: &str) -> String {
         .copied()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `text` with each argument listed as the usage above it writes it: clap brackets an argument
+/// it is not told is required, as `[link]...`, though the command reports it missing itself.
+fn agreed(text: &str) -> String {
+    let Some((usage, listed)) = text.split_once("\narguments:\n") else {
+        return text.to_owned();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut entries = true;
+    for line in listed.split('\n') {
+        entries &= !line.is_empty();
+        let name = line
+            .strip_prefix("  [")
+            .and_then(|rest| rest.split_once(']'))
+            .map(|(name, _)| name);
+        match name {
+            Some(name) if entries && usage.contains(&format!("<{name}>")) => {
+                lines.push(line.replacen(&format!("[{name}]"), &format!("<{name}>"), 1));
+            }
+            _ => lines.push(line.to_owned()),
+        }
+    }
+    format!("{usage}\narguments:\n{}", lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -676,7 +704,7 @@ mod tests {
         }
     }
 
-    /// topics are listed in `help --help`'s argument, an unknown topic's help and the welcome.
+    /// topics are listed in `help --help`'s argument, an unknown topic's help and `--help`.
     #[test]
     fn every_topic_is_named_where_topics_are_listed() {
         let command = args::Args::command();
@@ -691,10 +719,19 @@ mod tests {
             .unwrap_or_default();
         let unknown = super::unknown(&["nothing".to_owned()]);
         let details = unknown.details.join(" ");
+        let full = args::command()
+            .try_get_matches_from(["fetchloom", "--help"])
+            .unwrap_err()
+            .render()
+            .to_string();
+        let listed = full
+            .lines()
+            .find(|line| line.starts_with("help topics: "))
+            .unwrap_or_default();
         for (name, _) in TOPICS {
             assert!(argument.contains(name), "{argument} lacks {name}");
             assert!(details.contains(name), "{details} lacks {name}");
-            assert!(args::INTRO.contains(name), "the welcome lacks {name}");
+            assert!(listed.contains(name), "--help lacks {name}");
         }
         let lines = unknown.details.iter().map(AsRef::as_ref);
         for line in lines.chain(unknown.help.as_deref()) {
@@ -702,7 +739,8 @@ mod tests {
         }
     }
 
-    /// moving the examples up keeps every line the help had.
+    /// moving the examples up keeps every line the help had, its arguments named as its usage
+    /// names them.
     #[test]
     fn a_command_help_shows_its_examples_before_its_options() {
         let rendered = args::command()
@@ -721,11 +759,53 @@ mod tests {
         assert_eq!(at("examples:"), usage + 4, "{shown}");
         assert!(at("examples:") < at("arguments:") && at("arguments:") < at("options:"));
         assert!(lines.last().unwrap().starts_with("docs: "), "{shown}");
-        let mut before: Vec<&str> = rendered.lines().filter(|line| !line.is_empty()).collect();
+        let agreed = super::agreed(&rendered);
+        let mut before: Vec<&str> = agreed.lines().filter(|line| !line.is_empty()).collect();
         let mut after: Vec<&str> = lines.into_iter().filter(|line| !line.is_empty()).collect();
         before.sort_unstable();
         after.sort_unstable();
         assert_eq!(before, after);
+    }
+
+    /// `command --help` as a person reads it.
+    fn full_help(command: &str) -> String {
+        let rendered = args::command()
+            .try_get_matches_from(["fetchloom", command, "--help"])
+            .unwrap_err()
+            .render()
+            .to_string();
+        super::examples_first(&rendered)
+    }
+
+    /// a command's own options come first, and those every command takes follow under a heading
+    /// of their own.
+    #[test]
+    fn the_global_options_follow_a_command_own() {
+        let help = full_help("add");
+        let own = help.find("\noptions:\n").unwrap();
+        let global = help.find("\nglobal options:\n").unwrap();
+        assert!(own < global, "{help}");
+        assert!(help[own..global].contains("--select <glob>"), "{help}");
+        for option in ["-q, --quiet", "--json", "-h, --help"] {
+            assert!(help[global..].contains(option), "{option}: {help}");
+            assert!(!help[own..global].contains(option), "{option}: {help}");
+        }
+    }
+
+    /// the arguments are listed as the usage writes them, though clap brackets an argument the
+    /// command reports missing itself.
+    #[test]
+    fn the_arguments_are_named_as_the_usage_names_them() {
+        for (command, name) in [
+            ("add", "<link>..."),
+            ("get", "<link>..."),
+            ("remove", "<name>"),
+        ] {
+            let help = full_help(command);
+            let (usage, listed) = help.split_once("\narguments:\n").unwrap();
+            assert!(usage.contains(name), "{usage}");
+            assert!(listed.trim_start().starts_with(name), "{help}");
+        }
     }
 
     #[test]

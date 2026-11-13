@@ -24,10 +24,9 @@ BLOB = "https://github.com/nikhil-yn-aix/fetchloom/blob/main/"
 # loads it from unpkg on any page with a diagram unless the page brings it first
 MERMAID = ("https://registry.npmjs.org/@mermaid-js/tiny/-/tiny-12.3.0.tgz",
            "sha512-90BO2kQvmQWj9YjBX2IsLHCw61rN69dPTn5wFfDu+b9aT7qtzfzTA3wpKWeaRAKK85refSo9How5EOeY39DWfA==")
-# where the home page's mark goes, which docs-site/theme/main.html leaves empty
-WORDMARK = '<div class="fl-wordmark"></div>'
-# the twill of src/output.rs, one repeat of it, a row a string, `#` where the warp crosses the weft
-TWILL = re.compile(r"const TWILL: \[&str; \d+\] = \[([^\]]*)\];")
+# the pin of src/output.rs: a line each for its head, its shaft and its point, as a terminal draws
+# them, each beside its ascii
+PIN = re.compile(r"const PIN: \[\(&str, &str\); \d+\] = \[(.*?)\];", re.S)
 STYLESHEET = "docs-site/theme/assets/stylesheets/fetchloom.css"
 MOVED = """<!doctype html>
 <html lang="en">
@@ -142,23 +141,45 @@ def add_mermaid(site, cache):
     (folder / "mermaid.LICENSE.txt").write_bytes(licence)
 
 
-def twill(root):
-    """the rows of the twill fetchloom draws as its mark, from src/output.rs; ValueError when it has
-    none, or rows of different lengths."""
-    found = TWILL.search((root / "src/output.rs").read_text(encoding="utf-8"))
-    rows = re.findall(r'"([#.]+)"', found[1]) if found else []
-    if not rows or len({len(row) for row in rows}) != 1:
-        raise ValueError("src/output.rs has no TWILL")
-    return rows
+def pin(root):
+    """the lines of the pin fetchloom draws as its mark, from src/output.rs: its head, its shaft and
+    its point. ValueError when it has none, or a line the site has no shape for."""
+    found = PIN.search((root / "src/output.rs").read_text(encoding="utf-8"))
+    lines = re.findall(r'\("([^"]+)", "[^"]*"\)', found[1]) if found else []
+    if not lines or lines[0] != "\u25cf" or any(line not in ("\u25cf", "\u2502", "\u2575") for line in lines):
+        raise ValueError("src/output.rs has no PIN")
+    return lines
 
 
-def woven(rows, repeats, attributes="", inside=""):
-    """an svg of ``repeats`` repeats of the twill ``rows`` each way, one unit a cell."""
-    width, height = len(rows[0]) * repeats, len(rows) * repeats
-    cells = "".join(f"M{x} {y}h1v1h-1z" for y in range(height) for x in range(width)
-                    if rows[y % len(rows)][x % len(rows[0])] == "#")
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
-            f'shape-rendering="crispEdges"{attributes}>{inside}<path d="{cells}"/></svg>')
+def number(value):
+    """``value`` as an svg writes it, with no more digits than it needs."""
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def drawn(lines, head, shaft, square=False, inside=""):
+    """an svg of the pin a terminal draws as ``lines``, a cell 10 units wide and 20 tall: a head
+    ``head`` units across, on a shaft ``shaft`` wide that ends in a point. ``square`` centers it in
+    a square, as a favicon."""
+    radius, half = number(head / 2), shaft / 2
+    left, width = number(5 - half), number(shaft)
+    parts = []
+    for row, line in enumerate(lines):
+        top, middle = 20 * row, 20 * row + 10
+        if line == "\u25cf":
+            # drawn clockwise, as the shaft is, so where they cross is filled rather than cut out
+            parts.append(f"M{number(5 - head / 2)} {middle}a{radius} {radius} 0 1 1 {number(head)} 0"
+                         f"a{radius} {radius} 0 1 1 {number(-head)} 0z")
+            parts.append(f"M{left} {middle}h{width}v10h-{width}z")
+        elif line == "\u2502":
+            parts.append(f"M{left} {top}h{width}v20h-{width}z")
+        else:
+            parts.append(f"M{left} {top}h{width}L5 {middle}z")
+    top = 10 - head / 2
+    height = 20 * len(lines) - 10 - top
+    across = height if square else max(head, 10)
+    box = " ".join(number(value) for value in (5 - across / 2, top, across, height))
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{box}">{inside}'
+            f'<path d="{"".join(parts)}"/></svg>')
 
 
 def accents(root):
@@ -171,22 +192,17 @@ def accents(root):
     return [match[1] for match in found]
 
 
-def add_twill(root, site):
-    """the twill src/output.rs draws on the welcome, drawn from the same rows on the site: beside the
-    name at the top of the home page, as the favicon, and as the mark each section heading hangs."""
-    rows = twill(root)
-    home = site / "index.html"
-    page = home.read_text(encoding="utf-8")
-    if WORDMARK not in page:
-        raise ValueError("the home page has no place for the wordmark")
-    mark = woven(rows, 2, ' fill="currentColor" aria-hidden="true"')
-    home.write_text(page.replace(WORDMARK, WORDMARK.replace("></div>", f">{mark}fetchloom</div>")), encoding="utf-8")
+def add_pin(root, site):
+    """the pin src/output.rs hangs beside the welcome's title, drawn from the same lines for the site:
+    pin.svg, which the stylesheet sets beside the name, and the favicon, drawn heavier, as a small
+    size of a typeface is, in the accent of the reader's colors."""
+    lines = pin(root)
     light, dark = accents(root)
     colors = f"<style>path{{fill:{light}}}@media (prefers-color-scheme:dark){{path{{fill:{dark}}}}}</style>"
     images = site / "assets/images"
     images.mkdir(parents=True, exist_ok=True)
-    (images / "favicon.svg").write_text(woven(rows, 2, inside=colors) + "\n", encoding="utf-8")
-    (images / "twill.svg").write_text(woven(rows, 1) + "\n", encoding="utf-8")
+    (images / "pin.svg").write_text(drawn(lines, 9, 1.6) + "\n", encoding="utf-8")
+    (images / "favicon.svg").write_text(drawn(lines, 18, 4.4, square=True, inside=colors) + "\n", encoding="utf-8")
 
 
 def color_transcripts(site):
@@ -202,7 +218,7 @@ def main():
     shutil.rmtree(SITE, ignore_errors=True)
     subprocess.run([sys.executable, "-m", "zensical", "build", "--clean", "--strict"], cwd=ROOT, check=True)
     color_transcripts(SITE)
-    add_twill(ROOT, SITE)
+    add_pin(ROOT, SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")
     write_redirects(SITE, redirects(ROOT))
     export_agents(ROOT, SITE)

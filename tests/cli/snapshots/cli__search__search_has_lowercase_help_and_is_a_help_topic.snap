@@ -23,6 +23,8 @@ options:
                          kaggle, zenodo, ena, geo, dandi, openneuro, arxiv, s2]
       --limit <n>        keep up to this many matches from each site, 1 to 20.
                          without it, 12 in all, each site's best among them
+
+global options:
   [global options]
 
 on disk: nothing. prints the exact reference of each match, such as

@@ -1542,54 +1542,39 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     out.join("\n")
 }
 
-/// one repeat of the 2/2 twill fetchloom draws as its mark, a row a string, `#` where the warp
-/// crosses over the weft. `python/build_site.py` draws the site's marks from the same rows.
-const TWILL: [&str; 4] = ["##..", "#..#", "..##", ".##."];
+/// fetchloom's mark: a pin, a line each for its head, its shaft and its point, beside what a
+/// terminal that shows only ascii draws instead. `python/build_site.py` draws the site's pins and
+/// its favicon from the same lines.
+const PIN: [(&str, &str); 3] = [("●", "o"), ("│", "|"), ("╵", "'")];
 
-/// the welcome's mark: the twill three repeats across, beside the name. a terminal cell holds two
-/// rows of the twill in half blocks, or one in `#` where the terminal shows only ascii.
-fn welcome_mark(unicode: bool) -> [String; 3] {
-    let woven = |row: usize, column: usize| {
-        TWILL[row % TWILL.len()].as_bytes()[column % TWILL[0].len()] == b'#'
-    };
-    let mut lines: [String; 3] = Default::default();
-    for (index, line) in lines.iter_mut().enumerate() {
-        for column in 0..3 * TWILL[0].len() {
-            let cell = if unicode {
-                match (woven(2 * index, column), woven(2 * index + 1, column)) {
-                    (true, true) => '\u{2588}',
-                    (true, false) => '\u{2580}',
-                    (false, true) => '\u{2584}',
-                    (false, false) => ' ',
-                }
-            } else if woven(index, column) {
-                '#'
-            } else {
-                ' '
-            };
-            line.push(cell);
-        }
-        line.truncate(line.trim_end().len());
-    }
-    lines[1].push_str("   fetchloom");
-    lines
-}
-
-/// the mark and a blank line, the twill in the accent and the name in bold, when `width` columns
-/// can hold it.
-pub(crate) fn wordmark(width: usize, color: bool, unicode: bool) -> String {
-    let lines = welcome_mark(unicode);
-    if lines.iter().any(|line| units::columns(line) >= width) {
+/// the welcome's first lines and a blank line: the pin in the accent, hung beside the name in bold,
+/// the version and `purpose`. none when they need `width` columns or more.
+pub(crate) fn pinned_title(
+    version: &str,
+    purpose: &str,
+    width: usize,
+    color: bool,
+    unicode: bool,
+) -> String {
+    let beside = [format!("fetchloom {version}"), purpose.to_owned()];
+    if beside.iter().any(|line| 5 + units::columns(line) >= width) {
         return String::new();
     }
     let tint = paint(color, accent());
     let bold = paint(color, Paint::new().bold());
+    let dim = paint(color, Paint::new().dimmed());
     let mut drawn = String::new();
-    for line in &lines {
-        let (twill, name) = line.split_at(line.find("fetchloom").unwrap_or(line.len()));
-        let _ = write!(drawn, "{tint}{twill}{tint:#}");
-        if !name.is_empty() {
-            let _ = write!(drawn, "{bold}{name}{bold:#}");
+    for (index, (glyph, ascii)) in PIN.iter().enumerate() {
+        let glyph = if unicode { glyph } else { ascii };
+        let _ = write!(drawn, " {tint}{glyph}{tint:#}");
+        match index {
+            0 => {
+                let _ = write!(drawn, "   {bold}fetchloom{bold:#} {dim}{version}{dim:#}");
+            }
+            1 => {
+                let _ = write!(drawn, "   {purpose}");
+            }
+            _ => {}
         }
         drawn.push('\n');
     }
@@ -1620,8 +1605,12 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                 "commands:",
                 "arguments:",
                 "options:",
+                "global options:",
                 "examples:",
                 "on disk:",
+                "start in a folder for your project:",
+                "in a project you cloned:",
+                "what fetchloom writes:",
             ] {
                 if let Some(rest) = line.strip_prefix(heading) {
                     let rest = if heading == "usage:" {
@@ -1659,6 +1648,14 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                 {
                     let style = if name == "sync" { accent } else { bold };
                     return format!("  {style}{name}{style:#}, {analogy}");
+                }
+                // what the welcome says each file fetchloom writes holds
+                for name in ["data.toml", "data.lock", "the cache"] {
+                    if let Some(what) = command.strip_prefix(name)
+                        && what.starts_with("  ")
+                    {
+                        return format!("  {bold}{name}{bold:#}{what}");
+                    }
                 }
             }
             for heading in ["fetchloom", "try it", "learn more"] {

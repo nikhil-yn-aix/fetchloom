@@ -4,6 +4,11 @@ expression: "format!(\"usage: {listed}\")"
 ---
 usage: fetchloom [options] <command>
 
+examples:
+  fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add ../measurements    # files on this machine, no network needed
+  fetchloom sync    # in a clone, put the files data.lock lists in data/
+
 commands:
   add          add a dataset to the project and download it into the data folder
   remove       remove a dataset and the unchanged files fetchloom placed for it
@@ -24,7 +29,7 @@ commands:
   completions  print a script that completes fetchloom's commands in a shell
   help         explain the ideas behind fetchloom, or one command
 
-options:
+global options:
   -q, --quiet         print only the answer, warnings and errors
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
       --json          print one JSON document on stdout, not the usual output
@@ -39,5 +44,6 @@ options:
   -h, --help          print help: -h the common part, --help all of it
   -V, --version       print the version
 
+help topics: `fetchloom help concepts`, `recipes`, `environment` or `exit-codes`
 docs: https://nikhil-yn-aix.github.io/fetchloom
 report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues

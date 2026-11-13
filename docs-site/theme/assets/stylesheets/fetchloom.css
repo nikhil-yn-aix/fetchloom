@@ -176,6 +176,18 @@ body {
   font-size: .8rem;
   letter-spacing: 0;
 }
+/* the pin the cli hangs beside its welcome, which python/build_site.py draws from src/output.rs */
+.md-header__topic:first-child .md-ellipsis::before {
+  content: "";
+  display: inline-block;
+  width: .5em;
+  height: 1.1em;
+  margin-right: .45em;
+  vertical-align: -.2em;
+  background-color: var(--fl-accent);
+  -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
+  mask: url("../images/pin.svg") center / contain no-repeat;
+}
 .md-header__button.md-logo,
 .md-nav__title .md-nav__button.md-logo {
   display: none;
@@ -514,41 +526,6 @@ body {
   margin: 1.4em 0;
   hyphens: manual;
   -webkit-hyphens: manual;
-}
-
-/* the mark the cli prints on its welcome: the twill of src/output.rs, which python/build_site.py
-   draws here, beside the name */
-.md-typeset .fl-wordmark {
-  display: flex;
-  align-items: center;
-  gap: .42em;
-  margin: .1em 0 .9em;
-  font-family: var(--fl-display);
-  font-size: 2.1rem;
-  line-height: 1;
-  color: var(--fl-ink);
-}
-.md-typeset .fl-wordmark svg {
-  flex: none;
-  width: .74em;
-  height: .74em;
-  color: var(--fl-accent);
-}
-
-/* each section heading hangs one repeat of the twill in the margin, or before it on a phone */
-.md-typeset h2 {
-  position: relative;
-}
-.md-typeset h2::before {
-  content: "";
-  position: absolute;
-  left: -1.15em;
-  top: .92em;
-  width: .52em;
-  height: .52em;
-  background-color: var(--fl-accent);
-  -webkit-mask: url("../images/twill.svg") center / 100% 100% no-repeat;
-  mask: url("../images/twill.svg") center / 100% 100% no-repeat;
 }
 
 .md-footer {

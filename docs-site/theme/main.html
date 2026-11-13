@@ -2,12 +2,6 @@
 {% block extrahead %}
   <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-wght-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
 {% endblock %}
-{% block content %}
-  {% if page and page.url == "" %}
-    <div class="fl-wordmark"></div>
-  {% endif %}
-  {{ super() }}
-{% endblock %}
 {% block scripts %}
   <script>
     // the search dialog draws in a shadow root of its own, out of the stylesheet's reach

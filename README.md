@@ -52,25 +52,24 @@ the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_P
 ## quick start
 
 ```text
-fetchloom puts the exact research data a project needs into its data/ folder.
+start in a folder for your project:
+  mkdir iris-study && cd iris-study
+  fetchloom add iris              pick an iris dataset online and pin its files
+  fetchloom add ../measurements   copy files from this machine, no network needed
 
-  data.toml  the datasets you want
-  pinning    recording a dataset's exact files and their SHA-256 in data.lock
-  data.lock  the list of pinned files, so every machine gets the same bytes
-  the cache  one folder that keeps each file once, for all your projects
+in a project you cloned:
+  fetchloom sync                  put the pinned files in data/
 
-  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
-  fetchloom get iris    download it once, without a project
-  fetchloom sync        fill data/ in a project you cloned
+what fetchloom writes:
+  data.toml   the datasets you asked for
+  data.lock   each file's size and SHA-256, so every machine gets the same bytes
+  the cache   one copy of each file, shared by all your projects
 
-a name is looked up on hugging face, kaggle, zenodo and more. a link works too:
-  fetchloom add https://zenodo.org/records/3608990
-
-learn more: `fetchloom --help` lists the commands;
-`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
+more: `fetchloom --help` lists every command
+docs: https://nikhil-yn-aix.github.io/fetchloom
 ```
 
-bare `fetchloom` prints this outside a project, after its version line; inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md#python-helper).
+bare `fetchloom` prints this outside a project, below its name and version; inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md#python-helper).
 
 ## docs
 

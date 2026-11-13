@@ -37,8 +37,7 @@ fn the_version_names_the_commit_it_was_built_from() -> Result {
     Ok(())
 }
 
-/// the welcome's tests hold the introduction above the usage line:
-/// `a_bare_run_prints_a_short_welcome_with_a_first_command` and `help_opens_like_the_first_run`.
+/// `help_opens_with_examples_not_the_welcome` holds what comes above the usage line.
 #[test]
 fn help_lists_every_command() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
@@ -58,8 +57,17 @@ fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     let sandbox = Sandbox::new()?;
     let short = text(&sandbox.run(&["-h"])?.stdout)?;
     let long = text(&sandbox.run(&["--help"])?.stdout)?;
-    assert!(short.lines().count() * 2 < long.lines().count(), "{short}");
-    for shown in ["\n  add ", "\n  sync ", "--offline", "-C <dir>"] {
+    assert!(
+        short.lines().count() < long.lines().count() * 2 / 3,
+        "{short}"
+    );
+    for shown in [
+        "\nexamples:\n  fetchloom add iris ",
+        "\n  add ",
+        "\n  sync ",
+        "--offline",
+        "-C <dir>",
+    ] {
         assert!(short.contains(shown), "{shown}: {short}");
     }
     for left in ["\n  completions ", "--mirror", "--no-config"] {
@@ -89,7 +97,7 @@ fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     }
     assert!(
         add.trim_end()
-            .ends_with("`fetchloom add --help` also lists the options every command takes"),
+            .ends_with("`fetchloom add --help` also lists the global options"),
         "{add}"
     );
     assert_eq!(text(&sandbox.run(&["add", "--help", "-h"])?.stdout)?, full);
@@ -390,15 +398,15 @@ pub(crate) const ANALOGY: [&str; 4] = [
     "sync, restocking: fill data/ from the receipt",
 ];
 
-/// what a beginner meets on the first run and at the top of `--help`: each thing by its own name,
-/// and `pin` explained where it first appears.
-const NAMED: [&str; 4] = [
-    "data.toml  the datasets you want",
-    "pinning    recording a dataset's exact files and their SHA-256 in data.lock",
-    "data.lock  the list of pinned files, so every machine gets the same bytes",
-    "the cache  one folder that keeps each file once, for all your projects",
+/// what a beginner meets on the first run: each file fetchloom writes by its own name.
+const NAMED: [&str; 3] = [
+    "data.toml   the datasets you asked for",
+    "data.lock   each file's size and SHA-256, so every machine gets the same bytes",
+    "the cache   one copy of each file, shared by all your projects",
 ];
 
+/// the welcome says where to start, with a first command that needs the network and one that
+/// does not, and that a clone needs only sync.
 #[test]
 fn a_bare_run_prints_a_short_welcome_with_a_first_command() -> Result {
     let output = Sandbox::new()?.run(&[])?;
@@ -406,21 +414,31 @@ fn a_bare_run_prints_a_short_welcome_with_a_first_command() -> Result {
     let stdout = text(&output.stdout)?;
     assert!(stdout.lines().count() <= 18, "{stdout}");
     assert!(
+        stdout.starts_with(&format!(
+            "fetchloom {}\nexact research data for every project, on every machine\n\n",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains(&format!("\n  {}\n", NAMED.join("\n  "))),
         "{stdout}"
     );
     for line in ANALOGY {
         assert!(!stdout.contains(line), "{line}");
     }
-    assert!(
-        stdout.contains("\n  fetchloom add iris "),
-        "the welcome has a first command to copy"
-    );
+    for first in [
+        "start in a folder for your project:\n  mkdir iris-study && cd iris-study\n  fetchloom add iris ",
+        "\n  fetchloom add ../measurements ",
+        "in a project you cloned:\n  fetchloom sync ",
+    ] {
+        assert!(stdout.contains(first), "{first}: {stdout}");
+    }
     assert!(
         stdout.ends_with(
-            "learn more: `fetchloom --help` lists the commands;\n`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes\n"
+            "more: `fetchloom --help` lists every command\ndocs: https://nikhil-yn-aix.github.io/fetchloom\n"
         ),
-        "the welcome ends with where to learn more, naming every topic: {stdout}"
+        "the welcome ends with where to read more: {stdout}"
     );
     let mut settings = insta::Settings::clone_current();
     settings.add_filter(r"^fetchloom \d+\.\d+\.\d+\S*", "fetchloom [version]");
@@ -448,19 +466,25 @@ fn the_readme_quick_start_is_the_first_run() -> Result {
     Ok(())
 }
 
+/// `--help`, `help` and `-h` open with what fetchloom does in one line and commands to copy, and
+/// leave the welcome to a bare run.
 #[test]
-fn help_opens_like_the_first_run() -> Result {
+fn help_opens_with_examples_not_the_welcome() -> Result {
     let sandbox = Sandbox::new()?;
-    let welcome = text(&sandbox.run(&[])?.stdout)?;
-    let (version, intro) = welcome
-        .split_once("\n\n")
-        .ok_or("the welcome has no version line")?;
-    assert_eq!(version, format!("fetchloom {}", env!("CARGO_PKG_VERSION")));
-    let help = text(&sandbox.run(&["--help"])?.stdout)?;
-    assert!(
-        help.starts_with(&format!("{}\n\nusage: ", intro.trim_end())),
-        "{help}"
-    );
+    for arguments in [&["--help"][..], &["help"], &["-h"]] {
+        let help = text(&sandbox.run(arguments)?.stdout)?;
+        assert!(
+            help.starts_with(
+                "fetchloom gives every copy of a project the exact research data it needs\n\n\
+                 usage: fetchloom [options] <command>\n\n\
+                 examples:\n  fetchloom add iris    # in a project folder, "
+            ),
+            "{arguments:?}: {help}"
+        );
+        for line in NAMED {
+            assert!(!help.contains(line), "{arguments:?}: {line}");
+        }
+    }
     Ok(())
 }
 
@@ -859,34 +883,43 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
     Ok(())
 }
 
-/// the wordmark leads the welcome only where the whole welcome still fits below it.
+/// the pin hangs beside the name only where its lines fit and the whole welcome still fits below
+/// it, and a narrow terminal gets the welcome wrapped between words.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Result {
-    let mark = " ▄█▀ ▄█▀ ▄█▀   fetchloom\n";
+fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
+    let pin = " \u{25cf}   fetchloom ";
     let sandbox = Sandbox::new()?;
-    let wide = text(&sandbox.run(&[])?.stdout)?;
+    let piped = text(&sandbox.run(&[])?.stdout)?;
+    let words = |text: &str| -> Vec<String> {
+        text.split_whitespace()
+            .filter(|word| !["\u{25cf}", "\u{2502}", "\u{2575}"].contains(word))
+            .map(str::to_owned)
+            .collect()
+    };
     let welcome = sandbox.command(&[]);
     let at = |stty: &str| crate::support::typed(&sandbox.work(), &welcome, stty, "", "");
-    let Some((code, narrow)) = at("rows 40 cols 60")? else {
+    let Some((code, wide)) = at("rows 40 cols 100")? else {
         return Ok(());
     };
-    assert_eq!(code, Some(0), "{narrow}");
+    assert_eq!(code, Some(0), "{wide}");
+    assert!(wide.contains(pin), "{wide}");
+    assert_eq!(words(&wide), words(&piped), "{wide}");
+    let (_, narrow) = at("rows 40 cols 60")?.unwrap_or_default();
+    assert!(!narrow.contains(pin), "{narrow}");
     assert!(
         narrow.lines().all(|line| line.chars().count() <= 60),
         "{narrow}"
     );
-    let (drawn, below) = narrow.split_once("\n\n").unwrap_or_default();
-    assert!(drawn.contains(mark), "{narrow}");
     assert_eq!(
-        below.split_whitespace().collect::<Vec<_>>(),
-        wide.split_whitespace().collect::<Vec<_>>(),
+        words(&narrow),
+        words(&piped),
         "no word is split or lost\n{narrow}"
     );
-    let (_, short) = at("rows 20 cols 120")?.unwrap_or_default();
-    assert!(!short.contains(mark), "{short}");
-    let (_, tall) = at("rows 30 cols 120")?.unwrap_or_default();
-    assert!(tall.contains(mark), "{tall}");
+    let (_, short) = at("rows 19 cols 120")?.unwrap_or_default();
+    assert!(!short.contains(pin), "{short}");
+    let (_, tall) = at("rows 20 cols 120")?.unwrap_or_default();
+    assert!(tall.contains(pin), "{tall}");
     Ok(())
 }
 

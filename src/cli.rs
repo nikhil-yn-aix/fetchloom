@@ -762,6 +762,12 @@ pub(crate) fn definition() -> clap::Command {
     <args::Args as clap::CommandFactory>::command()
 }
 
+/// what fetchloom does and the welcome, which the manual page describes it with.
+#[cfg(test)]
+pub(crate) fn description() -> String {
+    format!("{}\n\n{}", args::ABOUT, args::WELCOME)
+}
+
 /// commands after which the cache may remind a person what no project needs: they change what
 /// projects need, and a dry run changes nothing at all.
 fn reminds(command: &args::Command) -> bool {
@@ -931,19 +937,33 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
         });
         return finish(context, Some("status"), outcome, started);
     }
-    let welcome = format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO);
+    let version = env!("CARGO_PKG_VERSION");
+    let plain = format!(
+        "fetchloom {version}\n{}\n\n{}",
+        args::PURPOSE,
+        args::WELCOME
+    );
     let Some(width) = context.output.answer_width() else {
-        return about(context, "", &welcome, started);
+        return about(context, "", &plain, started);
     };
-    let welcome = crate::output::wrap_help(&welcome, width, true);
-    let rows = usize::from(console::Term::stdout().size().0);
-    let banner = crate::output::wordmark(
+    let pinned = crate::output::pinned_title(
+        version,
+        args::PURPOSE,
         width,
         Style::stdout_color(args::color()),
         context.output.draws_unicode(),
     );
-    let fits = banner.lines().count() + welcome.lines().count() < rows;
-    about(context, if fits { &banner } else { "" }, &welcome, started)
+    let below = crate::output::wrap_help(args::WELCOME, width, true);
+    let rows = usize::from(console::Term::stdout().size().0);
+    if pinned.is_empty() || pinned.lines().count() + below.lines().count() >= rows {
+        return about(
+            context,
+            "",
+            &crate::output::wrap_help(&plain, width, true),
+            started,
+        );
+    }
+    about(context, &pinned, &below, started)
 }
 /// asks before a large download, or one the cache's disk may lack room for, `room` being the cache
 /// folder and the bytes needed on its disk. `yes` answers it; with no terminal it stops and names

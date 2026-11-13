@@ -49,7 +49,7 @@ every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | `--mirror <url>` | ask the [mirror](../mirrors.md) at this web address or folder for pinned files before their sources; repeat it for more. these come before the mirrors the settings name |
 | `--no-config` | leave the [settings file](../reference/environment.md#settings-file) unread for this run, also one that would stop it, so its values give way to the variables and defaults; `settings` says the file was bypassed. `FETCHLOOM_NO_CONFIG=1` does the same. data.toml, data.lock and keys are read as always |
 | `-n`, `--dry-run` | with `add`, `remove`, `drop`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `get`, tell what would be fetched and where it would land, and write nothing. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
-| `-h` | print the short help, including after a command: the commands and options used most, or a command's usage, examples and own options, then where the rest is |
+| `-h` | print the short help, including after a command: examples and the commands and options used most, or a command's usage, examples and own options, then where the rest is |
 | `--help` | print the whole help, including after a command. the first of `-h` and `--help` on a line decides |
 | `-V`, `--version` | print the version; with `-v`, also the OS, the architecture, the git commit the build came from and the cache folder; root-level option |
 

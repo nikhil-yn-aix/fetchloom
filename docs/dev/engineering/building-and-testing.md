@@ -179,7 +179,7 @@ uv run --locked --project docs-site python python/build_site.py
 python3 python/check_site.py
 ```
 
-the first build downloads mermaid from npm into `docs-site/.cache`. `uv run --locked --project docs-site zensical serve` previews the pages as you edit them, without what the builder adds after zensical: transcript colors, the twill marks and the favicon, mermaid and the pages at old addresses. [CI](ci.md#documentation-site) runs the same build and checks.
+the first build downloads mermaid from npm into `docs-site/.cache`. `uv run --locked --project docs-site zensical serve` previews the pages as you edit them, without what the builder adds after zensical: transcript colors, the pin and the favicon, mermaid and the pages at old addresses. [CI](ci.md#documentation-site) runs the same build and checks.
 
 ### installed package checks
 

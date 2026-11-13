@@ -829,21 +829,23 @@ fn hashes_on_a_line_read_apart_however_late_they_differ() {
 }
 
 #[test]
-fn the_wordmark_shows_only_where_it_fits() {
-    assert_eq!(super::wordmark(24, false, true), "");
+fn the_pin_hangs_beside_the_name_only_where_it_fits() {
+    let purpose = "exact research data for every project";
+    let title = |width, color| super::pinned_title("0.1.0", purpose, width, color, true);
+    assert_eq!(title(42, false), "");
     assert_eq!(
-        super::wordmark(25, false, true),
-        "█▀ ▄█▀ ▄█▀ ▄\n ▄█▀ ▄█▀ ▄█▀   fetchloom\n█▀ ▄█▀ ▄█▀ ▄\n\n"
+        title(43, false),
+        format!(" \u{25cf}   fetchloom 0.1.0\n \u{2502}   {purpose}\n \u{2575}\n\n")
     );
-    assert!(super::wordmark(25, true, true).contains('\u{1b}'));
+    assert!(title(43, true).contains('\u{1b}'));
 }
 
-/// a terminal that shows only ascii gets the twill one row a line, in `#`.
+/// a terminal that shows only ascii gets the pin in ascii.
 #[test]
-fn the_wordmark_falls_back_to_ascii() {
+fn the_pin_falls_back_to_ascii() {
     assert_eq!(
-        super::wordmark(25, false, false),
-        "##  ##  ##\n#  ##  ##  #   fetchloom\n  ##  ##  ##\n\n"
+        super::pinned_title("0.1.0", "exact data", 80, false, false),
+        " o   fetchloom 0.1.0\n |   exact data\n '\n\n"
     );
 }
 
@@ -956,14 +958,27 @@ fn help_styles_headings_and_commands_without_changing_plain_text() {
         "usage: fetchloom get [options] <link>\n\ncommands:\n",
         "  get  fetch once\n\nexamples:\n  fetchloom get zenodo:1\n",
         "\n  data.toml, the shopping list: which datasets you want\n",
+        "\nglobal options:\n  -q, --quiet  print less\n",
+        "\nin a project you cloned:\n  fetchloom sync    put the pinned files in data/\n",
+        "\n  data.lock   each file's size and SHA-256\n",
     );
     assert_eq!(super::help_text(text, false), text);
     let shown = super::help_text(text, true);
-    assert!(shown.contains("\u{1b}[1musage:\u{1b}[0m"));
-    assert!(shown.contains("\u{1b}[1mcommands:\u{1b}[0m"));
+    for heading in [
+        "usage:",
+        "commands:",
+        "global options:",
+        "in a project you cloned:",
+    ] {
+        assert!(
+            shown.contains(&format!("\u{1b}[1m{heading}\u{1b}[0m")),
+            "{heading}"
+        );
+    }
     assert!(shown.contains("\u{1b}[36mfetchloom get zenodo:1\u{1b}[0m"));
     assert!(shown.contains("  \u{1b}[36mget\u{1b}[0m  fetch once"));
     assert!(shown.contains("data.toml\u{1b}[0m, the shopping list: which datasets you want"));
+    assert!(shown.contains("  \u{1b}[1mdata.lock\u{1b}[0m   each file's size and SHA-256"));
 }
 
 #[test]

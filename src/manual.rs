@@ -16,15 +16,12 @@ fn rendered() -> String {
             (command.get_name().to_owned(), about.unwrap_or_default())
         })
         .collect();
-    let intro = definition
-        .get_about()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    // the name line takes the one-line summary and the description the help's opening. clap_mangen
-    // would point each command at a page of its own, which the release does not ship
+    // the name line takes the one-line summary and the description what fetchloom does and the
+    // welcome. clap_mangen would point each command at a page of its own, which the release does
+    // not ship
     let mut top = definition
         .about(env!("CARGO_PKG_DESCRIPTION"))
-        .long_about(intro)
+        .long_about(crate::cli::description())
         .version(None::<&str>);
     for (name, _) in &commands {
         top = top.mut_subcommand(name, |command| command.hide(true));

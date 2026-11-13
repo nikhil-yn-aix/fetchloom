@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import build_site
-from build_site import add_mermaid, add_twill, export_agents, page_url, redirects, write_redirects
+from build_site import add_mermaid, add_pin, export_agents, page_url, redirects, write_redirects
 import check_site
 
 PAGES = "https://nikhil-yn-aix.github.io/fetchloom/"
@@ -165,46 +165,41 @@ class Mermaid(Folder):
         self.assertFalse((site / "assets/javascripts/mermaid.tiny.js").exists())
 
 
-class Twill(Folder):
-    def source(self):
-        """a repository with a twill three cells wide and two tall, and the site's two accents."""
+class Pin(Folder):
+    def source(self, lines='("\u25cf", "o"), ("\u2502", "|"), ("\u2575", "\'")'):
+        """a repository whose src/output.rs draws a pin of ``lines``, with the site's two accents."""
         root = self.folder()
-        self.write(root / "src/output.rs", 'const TWILL: [&str; 2] = ["#..", ".#."];\n')
+        self.write(root / "src/output.rs", f"const PIN: [(&str, &str); 3] = [{lines}];\n")
         self.write(root / "docs-site/theme/assets/stylesheets/fetchloom.css",
-                   '[data-md-color-scheme="default"] {\n  --fl-accent: #2e3f9c;\n}\n'
-                   '[data-md-color-scheme="slate"] {\n  --fl-accent: #9ea9f2;\n}\n')
+                   '[data-md-color-scheme="default"] {\n  --fl-accent: #1b6a54;\n}\n'
+                   '[data-md-color-scheme="slate"] {\n  --fl-accent: #79c9ae;\n}\n')
         return root
 
-    def test_the_home_page_favicon_and_headings_draw_the_twill_the_cli_draws(self):
+    def test_the_site_and_its_favicon_draw_the_pin_the_cli_draws(self):
         root, site = self.source(), self.folder()
-        self.write(site / "index.html", f"<article>{build_site.WORDMARK}<h1>docs</h1></article>")
-        add_twill(root, site)
-        twice = ("M0 0h1v1h-1zM3 0h1v1h-1zM1 1h1v1h-1zM4 1h1v1h-1z"
-                 "M0 2h1v1h-1zM3 2h1v1h-1zM1 3h1v1h-1zM4 3h1v1h-1z")
-        self.assertEqual((site / "index.html").read_text(encoding="utf-8"),
-                         '<article><div class="fl-wordmark"><svg xmlns="http://www.w3.org/2000/svg" '
-                         'viewBox="0 0 6 4" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true">'
-                         f'<path d="{twice}"/></svg>fetchloom</div><h1>docs</h1></article>')
+        add_pin(root, site)
+        shaft = "M4.2 10h1.6v10h-1.6zM4.2 20h1.6v20h-1.6zM4.2 40h1.6L5 50z"
+        self.assertEqual((site / "assets/images/pin.svg").read_text(encoding="utf-8"),
+                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 5.5 10 44.5">'
+                         f'<path d="M0.5 10a4.5 4.5 0 1 1 9 0a4.5 4.5 0 1 1 -9 0z{shaft}"/></svg>\n')
         self.assertEqual((site / "assets/images/favicon.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 4" shape-rendering="crispEdges">'
-                         '<style>path{fill:#2e3f9c}@media (prefers-color-scheme:dark){path{fill:#9ea9f2}}</style>'
-                         f'<path d="{twice}"/></svg>\n')
-        self.assertEqual((site / "assets/images/twill.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 2" shape-rendering="crispEdges">'
-                         '<path d="M0 0h1v1h-1zM1 1h1v1h-1z"/></svg>\n')
+                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-19.5 1 49 49">'
+                         '<style>path{fill:#1b6a54}@media (prefers-color-scheme:dark){path{fill:#79c9ae}}</style>'
+                         '<path d="M-4 10a9 9 0 1 1 18 0a9 9 0 1 1 -18 0zM2.8 10h4.4v10h-4.4z'
+                         'M2.8 20h4.4v20h-4.4zM2.8 40h4.4L5 50z"/></svg>\n')
 
-    def test_a_home_page_without_its_place_is_refused(self):
-        root, site = self.source(), self.folder()
-        self.write(site / "index.html", "<h1>docs</h1>")
-        with self.assertRaisesRegex(ValueError, "no place for the wordmark"):
-            add_twill(root, site)
+    def test_a_longer_shaft_in_the_terminal_is_a_longer_pin_on_the_site(self):
+        root, site = self.source('("\u25cf", "o"), ("\u2502", "|"), ("\u2502", "|"), ("\u2575", "\'")'), self.folder()
+        add_pin(root, site)
+        self.assertIn('viewBox="0 5.5 10 64.5"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
 
-    def test_a_source_without_a_twill_is_refused(self):
-        root, site = self.source(), self.folder()
-        self.write(root / "src/output.rs", 'const TWILL: [&str; 2] = ["#..", ".#"];\n')
-        self.write(site / "index.html", build_site.WORDMARK)
-        with self.assertRaisesRegex(ValueError, "src/output.rs has no TWILL"):
-            add_twill(root, site)
+    def test_a_source_without_a_pin_is_refused(self):
+        for lines in ('("\u2502", "|"), ("\u25cf", "o")', '("\u25cf", "o"), ("#", "#")'):
+            with self.subTest(lines=lines), self.assertRaisesRegex(ValueError, "src/output.rs has no PIN"):
+                add_pin(self.source(lines), self.folder())
+
+    def test_the_repository_draws_a_pin_the_site_can_draw(self):
+        self.assertEqual(build_site.pin(build_site.ROOT)[0], "\u25cf")
 
 
 def luminance(color):
@@ -231,7 +226,7 @@ class Colors(unittest.TestCase):
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
-        names = ("color_transcripts", "add_twill", "add_mermaid", "write_redirects", "export_agents")
+        names = ("color_transcripts", "add_pin", "add_mermaid", "write_redirects", "export_agents")
         with patch.object(build_site.subprocess, "run", side_effect=lambda *a, **k: steps.append("zensical")) as run, \
              patch.object(build_site.shutil, "rmtree", side_effect=lambda *a, **k: steps.append("clean")), \
              patch.object(build_site, "redirects", return_value=[]), \

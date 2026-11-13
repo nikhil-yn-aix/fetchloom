@@ -15,7 +15,7 @@ on:
       - 'python/build_site.py'
       - 'python/check_site.py'
       - 'python/transcript.py'
-      # the twill the home page, the favicon and the section headings draw
+      # the pin the header and the favicon draw
       - 'src/output.rs'
   release:
     types: [published]

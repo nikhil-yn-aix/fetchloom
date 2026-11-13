@@ -13,7 +13,7 @@ examples:
   fetchloom get -i links.txt
 
 arguments:
-  [link]...  what to download: a link, a DOI, an id such as zenodo:3608990, or
+  <link>...  what to download: a link, a DOI, an id such as zenodo:3608990, or
              search words. several links download together, but search words go
              alone, in quotes
 
@@ -40,6 +40,8 @@ options:
                            unpacking them
   -n, --dry-run            show what would change on disk without changing it.
                            sources may still be asked what a link holds
+
+global options:
   [global options]
 
 on disk: writes one folder for each link, or with -o the one file it names,

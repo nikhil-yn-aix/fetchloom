@@ -35,26 +35,26 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
 on disk: edits data.toml, and data.lock for files a source lists, and deletes the unchanged files it names from data/. --dry-run writes nothing";
 
     pub(super) const SYNC: &str = "examples:
-  fetchloom sync
-  fetchloom sync iris
-  fetchloom sync --locked --verify
-  fetchloom sync --force iris --dry-run
+  fetchloom sync    # put every file data.lock lists in the data folder
+  fetchloom sync iris    # only iris
+  fetchloom sync --locked --verify    # for ci, checking every file's SHA-256
+  fetchloom sync --force iris --dry-run    # what --force would replace in iris
 
 on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and adds data/ to a git project's .gitignore. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
-  fetchloom lock
-  fetchloom lock --check
-  fetchloom lock --upgrade iris
-  fetchloom lock --theirs iris
+  fetchloom lock    # write data.lock from data.toml, leaving data/ alone
+  fetchloom lock --check    # fail if data.lock is out of date, as ci does
+  fetchloom lock --upgrade iris    # record the newest data iris's source has
+  fetchloom lock --theirs iris    # after a git merge, keep their side of iris
 
 on disk: writes data.lock and may add files to the cache. after a git merge, it merges data.toml and data.lock without downloading. --check and --dry-run write nothing";
 
     pub(super) const BUILD: &str = "examples:
-  fetchloom build --dry-run
-  fetchloom build
-  fetchloom build --check --json
-  fetchloom build --accept clean
+  fetchloom build --dry-run    # which steps would run
+  fetchloom build    # run them and record the results in data.lock
+  fetchloom build --check --json    # run every step again and compare
+  fetchloom build --accept clean    # record the rebuild of clean a check kept
 
 to write a recipe in data.toml, see `fetchloom help recipes`
 
@@ -75,9 +75,9 @@ on disk: nothing. it reads data.toml, data.lock and data/";
 on disk: nothing. it reads data.toml, data.lock and what the cache recorded of each archive";
 
     pub(super) const EXPORT: &str = "examples:
-  fetchloom export > data.sha256
-  fetchloom export --format links iris
-  fetchloom export --format aria2 -o sources.aria2
+  fetchloom export > data.sha256    # for sha256sum -c
+  fetchloom export --format links iris    # each file's link and SHA-256
+  fetchloom export --format aria2 -o sources.aria2    # for aria2c -i
 
 on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive";
 
@@ -179,32 +179,45 @@ on disk: nothing";
 on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
 
-/// what a beginner meets first, on the first run and atop `fetchloom --help`: each thing by its
-/// own name, `pin` explained where it first appears. the analogy belongs to `help concepts`.
-pub(crate) const INTRO: &str =
-    "fetchloom puts the exact research data a project needs into its data/ folder.
+/// what fetchloom does, in the one line `--help` and `help` open with.
+pub(crate) const ABOUT: &str =
+    "fetchloom gives every copy of a project the exact research data it needs";
 
-  data.toml  the datasets you want
-  pinning    recording a dataset's exact files and their SHA-256 in data.lock
-  data.lock  the list of pinned files, so every machine gets the same bytes
-  the cache  one folder that keeps each file once, for all your projects
+/// the commands a newcomer starts with, which `-h` and `--help` show first.
+pub(super) const TOP_EXAMPLES: &str = "examples:
+  fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add ../measurements    # files on this machine, no network needed
+  fetchloom sync    # in a clone, put the files data.lock lists in data/";
 
-  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
-  fetchloom get iris    download it once, without a project
-  fetchloom sync        fill data/ in a project you cloned
+/// what the welcome says fetchloom is for, below its name.
+pub(crate) const PURPOSE: &str = "exact research data for every project, on every machine";
 
-a name is looked up on hugging face, kaggle, zenodo and more. a link works too:
-  fetchloom add https://zenodo.org/records/3608990
+/// what a bare `fetchloom` shows outside a project, below its name: where to start, what fetchloom
+/// writes, and where to read more. each thing goes by its own name; the analogy belongs to `help
+/// concepts`.
+pub(crate) const WELCOME: &str = "start in a folder for your project:
+  mkdir iris-study && cd iris-study
+  fetchloom add iris              pick an iris dataset online and pin its files
+  fetchloom add ../measurements   copy files from this machine, no network needed
 
-learn more: `fetchloom --help` lists the commands;
-`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes";
+in a project you cloned:
+  fetchloom sync                  put the pinned files in data/
+
+what fetchloom writes:
+  data.toml   the datasets you asked for
+  data.lock   each file's size and SHA-256, so every machine gets the same bytes
+  the cache   one copy of each file, shared by all your projects
+
+more: `fetchloom --help` lists every command
+docs: https://nikhil-yn-aix.github.io/fetchloom";
 
 /// put the exact data a project needs onto any machine with one command
 #[derive(Debug, Parser)]
 #[command(
     name = "fetchloom",
-    about = INTRO,
+    about = ABOUT,
     long_about = None,
+    after_help = TOP_EXAMPLES,
     version,
     disable_help_flag = true,
     disable_version_flag = true,
@@ -222,11 +235,11 @@ pub(crate) struct Args {
     pub(crate) global: Global,
 
     /// print help: -h the common part, --help all of it
-    #[arg(short, long, action = ArgAction::Help, global = true, help_heading = "options")]
+    #[arg(short, long, action = ArgAction::Help, global = true, help_heading = GLOBAL)]
     help: Option<bool>,
 
     /// print the version
-    #[arg(short = 'V', long, help_heading = "options")]
+    #[arg(short = 'V', long, help_heading = GLOBAL)]
     pub(crate) version: bool,
 }
 
@@ -410,7 +423,11 @@ fn linked(root: clap::Command) -> clap::Command {
         .collect();
     let mut root = append(
         root,
-        format!("docs: {SITE}\nreport a bug: {}", crate::error::ISSUES),
+        format!(
+            "help topics: `fetchloom help concepts`, `recipes`, `environment` or `exit-codes`\n\
+             docs: {SITE}\nreport a bug: {}",
+            crate::error::ISSUES
+        ),
     );
     for (name, inner) in names {
         root = root.mut_subcommand(&name, |mut command| {
@@ -441,6 +458,9 @@ pub(super) fn color() -> ColorChoice {
     choice
 }
 
+/// the heading of the options every command takes, apart from a command's own `options`.
+const GLOBAL: &str = "global options";
+
 /// options every command takes.
 #[derive(Clone, Debug, clap::Args)]
 #[expect(
@@ -454,32 +474,32 @@ pub(crate) struct Global {
         long,
         global = true,
         conflicts_with = "verbose",
-        help_heading = "options"
+        help_heading = GLOBAL
     )]
     pub(crate) quiet: bool,
 
     /// say more: -v adds detail and counters, -vv adds debug logs
-    #[arg(short, long, action = ArgAction::Count, global = true, help_heading = "options")]
+    #[arg(short, long, action = ArgAction::Count, global = true, help_heading = GLOBAL)]
     pub(crate) verbose: u8,
 
     /// print one JSON document on stdout, not the usual output
-    #[arg(long, global = true, help_heading = "options")]
+    #[arg(long, global = true, help_heading = GLOBAL)]
     pub(crate) json: bool,
 
     /// with --json, keep plain progress lines on stderr
-    #[arg(long, global = true, help_heading = "options")]
+    #[arg(long, global = true, help_heading = GLOBAL)]
     pub(crate) progress: bool,
 
     /// use only what is already on this machine
-    #[arg(long, global = true, help_heading = "options")]
+    #[arg(long, global = true, help_heading = GLOBAL)]
     pub(crate) offline: bool,
 
     /// answer yes to questions, but never pick a dataset for you
-    #[arg(short, long, global = true, help_heading = "options")]
+    #[arg(short, long, global = true, help_heading = GLOBAL)]
     pub(crate) yes: bool,
 
     /// when to use color: auto, the default, always or never
-    #[arg(long, value_enum, value_name = "when", default_value_t = ColorChoice::Auto, hide_default_value = true, hide_possible_values = true, global = true, help_heading = "options")]
+    #[arg(long, value_enum, value_name = "when", default_value_t = ColorChoice::Auto, hide_default_value = true, hide_possible_values = true, global = true, help_heading = GLOBAL)]
     pub(crate) color: ColorChoice,
 
     /// run as if fetchloom started in <dir>
@@ -487,17 +507,17 @@ pub(crate) struct Global {
         short = 'C',
         value_name = "dir",
         global = true,
-        help_heading = "options"
+        help_heading = GLOBAL
     )]
     pub(crate) directory: Option<PathBuf>,
 
     /// ask the mirror at this web address or folder for files before their sources. repeat it
     /// for more
-    #[arg(long, value_name = "url", global = true, help_heading = "options")]
+    #[arg(long, value_name = "url", global = true, help_heading = GLOBAL)]
     pub(crate) mirror: Vec<String>,
 
     /// leave the settings file unread for this run
-    #[arg(long, global = true, help_heading = "options")]
+    #[arg(long, global = true, help_heading = GLOBAL)]
     pub(crate) no_config: bool,
 }
 
