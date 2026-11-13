@@ -1,4 +1,4 @@
-//! what a run says while it waits when stderr is no terminal, as in a log or a pipe.
+//! what a run says while it waits, on a terminal and in a log or a pipe.
 
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
@@ -40,8 +40,7 @@ fn slow_iris() -> Vec<Part> {
     slow
 }
 
-/// the sandbox turns off the lines a batch tells as time passes, so a run prints the same
-/// lines on a busy machine as on an idle one, and a snapshot of it holds.
+/// the sandbox turns them off, so a busy machine prints what an idle one does and snapshots hold.
 #[test]
 fn tests_see_no_line_that_time_decides() -> Result {
     let sandbox = Sandbox::new()?;
@@ -76,9 +75,8 @@ fn a_long_download_says_what_it_is_doing_once() -> Result {
     Ok(())
 }
 
-/// `--json` alone keeps stderr empty, and `--progress` beside it keeps the plain lines a long
-/// download tells there, while stdout holds the one JSON document either way. the run without
-/// the flag starts its download first, so it has run longer when the other tells its first line.
+/// `--json` alone keeps stderr empty, and stdout holds one document either way; the run without
+/// `--progress` starts first, so it has run longer when the other tells its first line.
 #[test]
 fn progress_tells_its_lines_beside_json() -> Result {
     let (quiet_reply, release_quiet) = held_iris();
@@ -196,9 +194,8 @@ fn shown_on(text: &str, columns: usize) -> Vec<String> {
         .collect()
 }
 
-/// a stop leaves no frame of a download's bar behind on a terminal that echoes the ctrl-c, as
-/// most do: a bar drawn to the last column once left the cursor waiting to wrap, the echoed ^C
-/// wrapped onto a line of its own, and clearing the bar cleared that line instead.
+/// most terminals echo the ctrl-c, and after a bar drawn to the last column the cursor waits to
+/// wrap, so the ^C takes a line of its own, which clearing the bar must not clear instead.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_stop_leaves_no_bar_behind() -> Result {
@@ -246,8 +243,7 @@ fn add_held_in_flush(
     Ok(running)
 }
 
-/// a ctrl-c once every byte of a download is in, while the disk keeps the file, lets the add
-/// finish rather than stop and download it all again next time, and says so first.
+/// stopping would mean downloading it all again next time, and the add says it finishes first.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_while_the_disk_keeps_a_finished_download_lets_the_add_finish() -> Result {
@@ -280,8 +276,7 @@ fn a_ctrl_c_while_the_disk_keeps_a_finished_download_lets_the_add_finish() -> Re
     Ok(())
 }
 
-/// a second ctrl-c quits at once, while a thread still waits for the disk to keep a download,
-/// says so in one line, and a first add quit this way leaves its folder as it was.
+/// the quit comes while a thread still waits for the disk to keep the download, told in one line.
 #[cfg(unix)]
 #[test]
 fn a_second_ctrl_c_quits_at_once_and_leaves_a_fresh_folder_as_it_was() -> Result {
@@ -313,9 +308,8 @@ fn a_second_ctrl_c_quits_at_once_and_leaves_a_fresh_folder_as_it_was() -> Result
     Ok(())
 }
 
-/// a download a server rate limits says on its bar which try comes next and when, as it waits
-/// for the limit to reset, in one line that changes in place rather than a line per wait, and
-/// never that no data came, since the server answered each try at once.
+/// the bar says which try comes next and when, in one line that changes in place, and never that
+/// no data came, since the server answered each try at once.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_rate_limited_download_counts_its_tries_on_its_bar() -> Result {

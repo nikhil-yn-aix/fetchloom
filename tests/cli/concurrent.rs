@@ -62,10 +62,8 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
     Ok(())
 }
 
-/// eight syncs of different projects run at once against one cache, as cluster jobs do. each
-/// project needs files the others need too: every file (`overlapping` false) or its own and its
-/// neighbour's (`overlapping` true). cold, each URL is downloaded once; warm, the cache already
-/// holds every file and nothing is downloaded.
+/// eight syncs at once share one cache, as cluster jobs do, each project needing every file or,
+/// `overlapping`, its own and a neighbour's; cold, each URL downloads once, and `warm`, none.
 #[expect(
     clippy::too_many_lines,
     reason = "one fixture owns the gated servers, children, and byte checks"
@@ -167,7 +165,7 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
         projects.push((project, order));
     }
     if !warm {
-        // every run owns a disjoint URL before any run can finish its shared set.
+        // every run owns a disjoint URL before any run can finish its shared set
         let mut owned = std::collections::BTreeSet::new();
         for _ in 0..processes {
             owned.insert(claims.recv_timeout(std::time::Duration::from_secs(30))?);
@@ -236,10 +234,8 @@ fn processes_place_from_a_full_cache_without_downloading() -> Result {
     shared_cache_syncs(false, true)
 }
 
-/// a push stopped with ctrl-c waits for its copies to see the stop and remove the unfinished ones
-/// from the mirror's tmp/, where the run used to end first and leave them there for good, while a
-/// file another push is writing there stays. the push holds each copy once its part is in tmp/,
-/// as a debug build lets a test ask, so the stop lands mid-copy even on a disk that clones files.
+/// the stop waits for the copies to remove their parts from the mirror's tmp/, but not another
+/// push's; a debug build holds each copy there, so the stop lands mid-copy even when cloning.
 #[cfg(unix)]
 #[test]
 fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
@@ -285,8 +281,7 @@ fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     Ok(())
 }
 
-/// two first adds in one empty folder: the second waits while the first holds the project, then
-/// adds its dataset to the project the first started, so only the first says it started one.
+/// the second waits while the first holds the project, then adds its dataset to it.
 #[test]
 fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -328,9 +323,8 @@ fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
     Ok(())
 }
 
-/// j6-m4: a run that waits on no other names its finished downloads within a second, so a second
-/// run that wants them does not wait for the first run's longest download. here the first run's
-/// large file stays unfinished until the second run is done.
+/// a run that waits on no other names its finished downloads within a second, so another run
+/// needing them never waits for its longest, which here lasts until the second run is done.
 #[cfg(debug_assertions)]
 #[test]
 fn a_run_names_its_finished_downloads_while_its_largest_still_downloads() -> Result {
