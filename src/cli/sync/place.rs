@@ -1283,31 +1283,18 @@ fn settle<'t, 'a>(
             Action::Unselected => {}
             Action::Keep => placement.unchanged += 1,
             Action::Unblock(blocker) => {
-                let gone = if let Some(gone) = cleared.get(&blocker.path) {
-                    *gone
-                } else {
-                    let gone = clear(project, placer, survey, &blocker, placement)?;
-                    cleared.insert(blocker.path.clone(), gone);
-                    if gone {
-                        placement
-                            .cleared
-                            .push((blocker.path.clone(), blocker.found));
-                    }
-                    gone
-                };
-                if gone {
-                    if let Some(at) = aside.find(&placement.set_aside, &blocker.path) {
-                        placement.set_aside[at]
-                            .stead
-                            .push((target.path.clone(), target.sha256));
-                    }
-                    placement.replaced += 1;
+                let unblocked = unblock(
+                    project,
+                    placer,
+                    survey,
+                    &mut cleared,
+                    &mut aside,
+                    placement,
+                    target,
+                    blocker,
+                )?;
+                if unblocked {
                     todo.push(target);
-                } else {
-                    placement.kept.push(Kept {
-                        blocker: Some(blocker),
-                        ..Kept::of(target, Reason::Blocked, survey)
-                    });
                 }
             }
             // removal ran first and cleared the way, unless what stood there had changed
@@ -1366,6 +1353,50 @@ fn settle<'t, 'a>(
         }
     }
     Ok((todo, adopted))
+}
+
+/// clears `blocker` from `target`'s way, once a path as `cleared` remembers, and says whether
+/// `target` can be placed: then it is a replacement, in the stead of what `--force` set aside.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a part of the settling that clears this target's way"
+)]
+fn unblock(
+    project: &Project,
+    placer: &mut Placer,
+    survey: &Survey,
+    cleared: &mut BTreeMap<String, bool>,
+    aside: &mut AsideAt,
+    placement: &mut Placement,
+    target: &Target,
+    blocker: Blocker,
+) -> Result<bool, Error> {
+    let gone = if let Some(gone) = cleared.get(&blocker.path) {
+        *gone
+    } else {
+        let gone = clear(project, placer, survey, &blocker, placement)?;
+        cleared.insert(blocker.path.clone(), gone);
+        if gone {
+            placement
+                .cleared
+                .push((blocker.path.clone(), blocker.found));
+        }
+        gone
+    };
+    if gone {
+        if let Some(at) = aside.find(&placement.set_aside, &blocker.path) {
+            placement.set_aside[at]
+                .stead
+                .push((target.path.clone(), target.sha256));
+        }
+        placement.replaced += 1;
+    } else {
+        placement.kept.push(Kept {
+            blocker: Some(blocker),
+            ..Kept::of(target, Reason::Blocked, survey)
+        });
+    }
+    Ok(gone)
 }
 
 /// records the file at `target`'s place, which holds its bytes, as placed; one nothing recorded is
