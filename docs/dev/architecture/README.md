@@ -4,32 +4,41 @@ fetchloom separates source resolution, checked byte storage and placement so a p
 
 ## module calls
 
-arrows follow calls between the modules, including calls from their child modules. shared value types also cross these boundaries.
+arrows follow calls between the modules, including calls from their child modules. an arrow into the box means calls into every module in it. shared value types also cross these boundaries, as `project` records a `place::Method` for each placed file.
 
 ```mermaid
 flowchart TD
     entry["main.rs and lib.rs"] --> cli["cli: dispatch and commands"]
-    cli --> sync["cli/sync"]
-    cli --> project["project"]
-    cli --> output["output"]
-    sync --> project
-    sync --> source["source"]
-    source --> net["net"]
-    sync --> net
-    net --> cache["cache"]
-    sync --> archive["archive"]
-    archive --> cache
-    sync --> plan["plan"]
-    plan --> cache
-    sync --> place["place"]
-    place --> cache
-    cache --> place
-    place --> volume["volume"]
-    cache --> volume
-    sync --> output
+    cli <--> sync["cli/sync"]
+    subgraph lower ["modules the commands call"]
+        output["output"]
+        project["project"]
+        source["source"]
+        net["net"]
+        archive["archive"]
+        plan["plan"]
+        cache["cache"]
+        place["place"]
+        volume["volume"]
+        project <--> net
+        project <--> cache
+        project --> source
+        project --> archive
+        source <--> net
+        net --> cache
+        archive --> cache
+        plan --> project
+        plan --> archive
+        plan --> cache
+        place <--> cache
+        place <--> volume
+        cache --> volume
+    end
+    cli --> lower
+    sync --> lower
 ```
 
-`cli/project.rs` orders project mutations for `sync` and `lock`, and `cli/add.rs`, `cli/remove.rs` and `cli/path.rs` for their own commands. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. the [primitives](primitives.md) page covers shared types omitted from the call graph.
+`cli/project.rs` orders project mutations for `sync` and `lock`, and `cli/add.rs`, `cli/remove.rs` and `cli/path.rs` for their own commands. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. `net` calls back into `source` for what a source decides about a request, such as which S3 requests go signed, and `project` uses `net`'s rules for which link keys are secret, masking them in messages. the drawing leaves out `auth`, which `net` and `source` call for keys, `mirror`, which the commands ask for pinned files, `recipe` and `build`, which [recipes](recipes.md) covers, and the shared modules [primitives](primitives.md) covers, which every layer calls.
 
 ## the life of sync
 
