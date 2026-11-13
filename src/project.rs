@@ -375,12 +375,13 @@ impl Project {
 
     /// writes the parts of `lock`'s file lists not yet beside data.lock, returning their paths
     /// below the project. a part's name changes with its list, so one there already holds the same.
+    /// refused, even with nothing to write, when data.lock.d is a link or a file.
     pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
+        let folder = lock::lists::folder(&self.root)?;
         let parts = lock.lists();
         if parts.is_empty() {
             return Ok(Vec::new());
         }
-        let folder = self.root.join(lock::lists::FOLDER);
         fs::create_dir_all(&folder).map_err(|err| {
             self.refused(format_args!("could not make {}", lock::lists::FOLDER), &err)
         })?;
@@ -401,9 +402,12 @@ impl Project {
     }
 
     /// removes the parts of file lists `lock` no longer names, and their folder once it is
-    /// empty. other files there stay. a part that cannot be removed is left for the next write.
+    /// empty. other files there stay. a part that cannot be removed is left for the next write,
+    /// and a data.lock.d that is a link or a file is left alone.
     pub(crate) fn sweep_lists(&self, lock: &Lock) {
-        let folder = self.root.join(lock::lists::FOLDER);
+        let Ok(folder) = lock::lists::folder(&self.root) else {
+            return;
+        };
         let Ok(entries) = fs::read_dir(&folder) else {
             return;
         };
@@ -534,6 +538,9 @@ impl Project {
         named: impl Fn(&Path, &File) -> io::Result<bool>,
     ) -> Result<Hold, Error> {
         const TRIES: usize = 8;
+        // every command that holds the project may write or sweep the lists, so a linked
+        // data.lock.d stops it before anything changes
+        lock::lists::folder(&self.root)?;
         let opening = |err: io::Error| Error::io("could not lock the project", &err);
         for _ in 0..TRIES {
             let folder = self.inner()?;
@@ -1376,6 +1383,43 @@ mod tests {
             return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
         assert_eq!(project.state().1, 0);
+    }
+
+    /// a cloned project's data.lock.d may link anywhere, so it is refused before fetchloom writes
+    /// a list there or removes one, and a sweep leaves it alone.
+    #[test]
+    fn a_linked_lists_folder_is_refused_and_never_swept() {
+        let (_dir, project) = project(&[("data.toml", "")]);
+        let outside = tempfile::tempdir().unwrap();
+        let old = outside.path().join("old.0123456789ab.tsv.zst");
+        fs::write(&old, "x").unwrap();
+        let link = project.root.join(lock::lists::FOLDER);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+        // making a symlink on windows needs developer mode or admin
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(outside.path(), &link).is_ok();
+        if !made {
+            return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
+        }
+        project.sweep_lists(&Lock::default());
+        assert!(old.is_file(), "a sweep went through the link");
+        let held = project.hold("sync").err();
+        let written = project.write_lists(&Lock::default()).err();
+        for error in [held, written] {
+            let error = error.expect("a linked data.lock.d was accepted");
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert!(
+                error.message.contains(&link.display().to_string()),
+                "{}",
+                error.message
+            );
+            assert!(error.help.is_some());
+        }
+        assert!(
+            !project.own_folder().exists(),
+            "the refused hold made .fetchloom"
+        );
     }
 
     #[test]

@@ -256,7 +256,10 @@ fn warn_unnamed(output: &Output, project: &Project) {
     let Ok(text) = std::fs::read_to_string(project.root.join(lock::FILE)) else {
         return;
     };
-    let Ok(entries) = std::fs::read_dir(project.root.join(lists::FOLDER)) else {
+    let Some(entries) = lists::folder(&project.root)
+        .ok()
+        .and_then(|folder| std::fs::read_dir(folder).ok())
+    else {
         return;
     };
     let named: HashSet<String> = lock::parts(&text).into_iter().collect();

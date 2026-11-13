@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::LockedFile;
 use crate::cache::Member;
@@ -231,8 +231,43 @@ pub(crate) fn compress(text: &str) -> std::io::Result<Vec<u8>> {
     zstd::encode_all(text.as_bytes(), LEVEL)
 }
 
+/// [`FOLDER`] below the project at `root`, there or not yet, refused when it is a link or a
+/// file: a cloned project's link would take reading, writing and removing lists outside it.
+pub(crate) fn folder(root: &Path) -> Result<PathBuf, Error> {
+    let folder = root.join(FOLDER);
+    let found = match fs::symlink_metadata(&folder) {
+        Ok(found) => found.file_type(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(folder),
+        Err(err) => {
+            return Err(Error::io(
+                format_args!("could not read {}", folder.display()),
+                &err,
+            ));
+        }
+    };
+    if found.is_symlink() || !found.is_dir() {
+        let what = if found.is_symlink() {
+            "a link"
+        } else {
+            "a file"
+        };
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "{} is {what}, and fetchloom keeps data.lock's file lists only in a real folder",
+                folder.display()
+            ),
+        )
+        .help(format!(
+            "replace {FOLDER} with a real folder of the lists data.lock names before running this command"
+        )));
+    }
+    Ok(folder)
+}
+
 /// the rows of `name`'s list from the parts `listed` names below `root`, checked against what
-/// data.lock records; refused unread when it holds more files than a run may list.
+/// data.lock records; refused unread when it holds more files than a run may list, or when
+/// [`FOLDER`] is no real folder.
 pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
     if listed.parts.is_empty() || listed.parts != names(name, &listed.sha256, listed.parts.len()) {
         return Err(broken(format!(
@@ -252,6 +287,7 @@ pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<V
         )
         .help("raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"));
     }
+    folder(root)?;
     let mut rows: Vec<R> = Vec::with_capacity(count.min(1 << 20));
     let mut hasher = Hasher::default();
     let mut bytes: u64 = 0;
@@ -434,6 +470,32 @@ mod tests {
         }
         assert!(!is_part("notes.txt"));
         assert!(!is_part("big.tsv.zst"));
+    }
+
+    /// lists a data.lock.d that is a link holds are never read, wherever it points, nor are
+    /// those of one that is a file.
+    #[test]
+    fn a_list_is_read_only_from_a_real_folder() {
+        let outside = tempfile::tempdir().unwrap();
+        let listed = write(outside.path(), "set", &files(2));
+        let filed = tempfile::tempdir().unwrap();
+        fs::write(filed.path().join(FOLDER), "").unwrap();
+        let file = read::<LockedFile>(filed.path(), "set", &listed).unwrap_err();
+        assert_eq!(file.kind, Kind::ProjectInvalid);
+        assert!(file.message.contains("is a file"), "{}", file.message);
+        let root = tempfile::tempdir().unwrap();
+        let link = root.path().join(FOLDER);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(outside.path().join(FOLDER), &link).is_ok();
+        // making a symlink on windows needs developer mode or admin
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(outside.path().join(FOLDER), &link).is_ok();
+        if !made {
+            return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
+        }
+        let linked = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
+        assert_eq!(linked.kind, Kind::ProjectInvalid);
+        assert!(linked.message.contains("is a link"), "{}", linked.message);
     }
 
     #[test]
