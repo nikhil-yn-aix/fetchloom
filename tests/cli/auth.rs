@@ -363,6 +363,33 @@ fn an_accessible_terminal_shows_the_masked_key_without_drawing_over_the_prompt()
     Ok(())
 }
 
+/// a question at a narrow terminal wraps between words, as the story's own lines there do.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_question_wraps_between_words_at_a_narrow_terminal() -> Result {
+    let sandbox = Sandbox::new()?;
+    let token = home(&sandbox).join(".cache/huggingface/token");
+    std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
+    std::fs::write(&token, "hf_old\n")?;
+    let logout = sandbox.command(&["auth", "logout", "hf"]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &logout, "rows 30 cols 40", "[y/N] ", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(
+        screen.contains("remove it from\n~/.cache/huggingface/token? [y/N] n\n"),
+        "{screen}"
+    );
+    assert!(
+        screen.lines().all(|line| line.chars().count() <= 40),
+        "{screen}"
+    );
+    assert_eq!(std::fs::read_to_string(&token)?, "hf_old\n");
+    Ok(())
+}
+
 /// the questions are saving the key, replacing one and removing a key other tools read; one line
 /// says what was cancelled, and the exit code is 1, as for any no.
 #[cfg(target_os = "linux")]

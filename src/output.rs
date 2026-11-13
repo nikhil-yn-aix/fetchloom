@@ -869,8 +869,14 @@ impl Output {
         let ask = || {
             let terminal = console::Term::stderr();
             let choices = if default { "[Y/n]" } else { "[y/N]" };
+            // wrapped between words at the terminal's width, as the story's lines are
+            let asked = format!("{question} {choices}");
+            let asked = match self.columns {
+                Some(columns) => fit::fit(&asked, columns),
+                None => asked,
+            };
             loop {
-                let _ = terminal.write_str(&format!("{question} {choices} "));
+                let _ = terminal.write_str(&format!("{asked} "));
                 let mut shown = 0_usize;
                 // read ctrl-c as a key on both platforms instead of leaving a blocking read
                 // waiting after the signal handler asks network tasks to stop
