@@ -225,8 +225,8 @@ fn besides(unknown: &[&str]) -> String {
 mod tests {
     use super::{Fits, besides, fits};
 
-    /// a question a person may answer, since the room errs on more and the floor still stops a
-    /// step; below the floor already, none, and a disk that does not say is never short.
+    /// short of room above the floor, a person is asked, since the room errs on more and the floor
+    /// still stops a step; below it nobody is asked, and a disk that does not say is never short.
     #[test]
     fn no_answer_lets_a_step_run_below_the_floor() {
         for (peak, free, fit) in [

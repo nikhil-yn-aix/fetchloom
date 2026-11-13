@@ -1317,7 +1317,8 @@ mod tests {
         assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
     }
 
-    /// a recipe another one is made from builds with it; those made from other datasets stay out.
+    /// a recipe another rebuilt recipe is made from builds along with it, and recipes made from
+    /// other datasets stay out.
     #[test]
     fn a_drop_names_the_builds_that_make_every_result_again() {
         let manifest = Manifest::parse(concat!(
@@ -1339,7 +1340,7 @@ mod tests {
         assert_eq!(built_again(&alone, &["lab"]), Vec::<&str>::new());
     }
 
-    /// whichever name is off; the suggestion keeps the path as typed up to that name.
+    /// any one name of the path may be off, and the suggestion keeps the path as typed up to it.
     #[test]
     fn a_typo_is_found_one_name_away_and_kept_as_typed() {
         let (manifest, lock, _folder, cache) = tiny(3, 2);
@@ -1385,7 +1386,7 @@ mod tests {
         }
     }
 
-    /// planning looks every chunk of its work, and the look that finds a stop is the last.
+    /// planning looks for a stop every chunk of work, and the look that finds one is the last.
     #[test]
     fn planning_ends_at_the_first_look_after_a_stop() {
         let (manifest, lock, _folder, cache) = tiny(4, 1_000);
@@ -1636,7 +1637,8 @@ mod tests {
         );
     }
 
-    /// in name order; a dataset whose archive was never unpacked here is not counted out.
+    /// names come in name order, and a dataset whose archive was never unpacked here is not
+    /// counted out.
     #[test]
     fn a_drop_across_datasets_refuses_the_first_left_with_no_file() {
         let manifest = Manifest::parse(concat!(

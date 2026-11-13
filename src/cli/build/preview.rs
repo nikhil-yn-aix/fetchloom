@@ -663,8 +663,8 @@ mod tests {
             .collect()
     }
 
-    /// it runs again where no mirror can give it, as offline, and may run with a web mirror, which
-    /// only asking tells; a copy in the data folder comes first, as the build takes it there.
+    /// a step runs again where no mirror can give its result, as offline, and may run with a web
+    /// mirror, which only asking tells; a copy in the data folder comes first, as a build takes it.
     #[test]
     fn a_result_only_a_web_mirror_could_give_may_run() {
         let (_root, project, manifest, lock) = project();
@@ -697,8 +697,8 @@ mod tests {
         }
     }
 
-    /// it has no key until then and says it runs again only if that changes while its pinned
-    /// result is here, else what keeps it stale; so does one reading a dataset moved past its pin.
+    /// with no key until its input is known, a step says it runs again if that input changes while
+    /// its result is here, else what keeps it stale, like one reading a dataset moved past its pin.
     #[test]
     fn a_step_reading_what_the_build_learns_first_may_run() {
         let (_root, project, _, lock) = project();

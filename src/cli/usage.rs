@@ -496,7 +496,7 @@ mod tests {
         Ok(())
     }
 
-    /// in one shape for every command: the command, what its usage says it needs, then the usage.
+    /// the error has one shape everywhere: the command, what its usage says it needs, the usage.
     #[test]
     fn a_missing_argument_is_named_as_what_the_command_needs()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -740,7 +740,7 @@ mod tests {
         Ok(())
     }
 
-    /// in either order, rather than only that the two cannot go together.
+    /// --force with --dir in either order says what --force replaces, not just that they clash.
     #[test]
     fn force_with_a_folder_says_what_force_replaces() -> Result<(), Box<dyn std::error::Error>> {
         for arguments in [

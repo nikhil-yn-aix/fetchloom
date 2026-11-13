@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
     }
 
-    /// so a result made on one system places on all of them.
+    /// a name refused on one system is refused on all, so a result made on one places on all.
     #[test]
     fn unportable_names_are_refused_everywhere() {
         assert_eq!(unportable("data/train.csv"), None);

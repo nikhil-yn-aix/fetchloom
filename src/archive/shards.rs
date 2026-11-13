@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(seen(&tens), Some(("", 8, "*.tar".to_owned())));
     }
 
-    /// a listing as large as a big webdataset's, counted in its one pass.
+    /// a listing as large as a big webdataset's is counted in its one pass.
     #[test]
     fn a_hundred_thousand_shards_are_counted() {
         let paths = numbered("train/", "", ".tar", 100_000);

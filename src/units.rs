@@ -345,7 +345,7 @@ mod tests {
         }
     }
 
-    /// with thousands apart, and a short one is listed whole.
+    /// the rest's count groups thousands, as 1,201, and a short list is listed whole.
     #[test]
     fn long_lists_name_a_few_and_count_the_rest() {
         let words: Vec<String> = (1..=1_204).map(|n| n.to_string()).collect();
@@ -419,7 +419,7 @@ mod tests {
         );
     }
 
-    /// beside the whole time a person waited, while the rate stays the link's.
+    /// the disk's share of the time comes beside the whole wait, and the rate stays the link's.
     #[test]
     fn a_download_names_the_time_its_disk_took() {
         const MIB: u64 = 1024 * 1024;

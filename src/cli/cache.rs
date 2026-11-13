@@ -1162,7 +1162,7 @@ mod tests {
         );
     }
 
-    /// data.toml that cannot be read keeps both.
+    /// data.toml that cannot be read keeps both the member and its archive.
     #[test]
     fn an_excluded_member_neither_counts_as_needed_nor_holds_back_its_archive() {
         let folder = tempfile::tempdir().unwrap();
@@ -1276,7 +1276,7 @@ mod tests {
         needed
     }
 
-    /// placed, or read by no recipe, the same dataset is placed data.
+    /// a dataset that is placed, or that no recipe reads, counts as placed data.
     #[test]
     fn an_unplaced_source_read_only_by_built_recipes_is_input() {
         let folder = tempfile::tempdir().unwrap();
@@ -1298,7 +1298,7 @@ mod tests {
         assert_eq!(needed.uses[&stored["raw"].digest], Use::Placed);
     }
 
-    /// unbuilt: not pinned, changed since built, or its result missing from the cache.
+    /// a recipe is unbuilt while unpinned, changed since its build, or missing its cached result.
     #[test]
     fn an_input_of_an_unbuilt_recipe_is_pending() {
         let folder = tempfile::tempdir().unwrap();
@@ -1357,7 +1357,7 @@ mod tests {
         assert_eq!(needed.uses[&stored["tidy"].digest], Use::Output);
     }
 
-    /// bytes it shares with an input are then no longer read only by builds.
+    /// the bytes a kept rebuild shares with an input are no longer read only by builds.
     #[test]
     fn a_kept_rebuild_needs_its_files_as_a_result_does() {
         let folder = tempfile::tempdir().unwrap();

@@ -556,7 +556,8 @@ pub(crate) use group::end_running;
 mod tests {
     use super::*;
 
-    /// at once, then every two seconds; a disk that does not say what is free never stops one.
+    /// the floor is checked at once, then every two seconds, and a disk that does not say what is
+    /// free never stops a step.
     #[test]
     fn the_floor_check_stops_below_its_bytes() {
         let breached = |free: Option<u64>| {
@@ -576,7 +577,7 @@ mod tests {
         assert!(due(Some(start), start + FLOOR_EVERY));
     }
 
-    /// exit 0 keeps its result, and a failure with no stop asked stays a failure.
+    /// a step that exits 0 after a stop keeps its result; a failure with no stop stays a failure.
     #[test]
     fn a_step_that_fails_after_a_stop_is_stopped() {
         assert_eq!(Ended::Exited(1).or_stopped(true), Ended::Stopped);
@@ -624,7 +625,7 @@ mod tests {
         }
     }
 
-    /// once a step writes more than the log holds; the tail keeps the last lines.
+    /// once a step writes more than the log holds, the tail keeps the last lines.
     #[test]
     fn the_log_keeps_the_latest_output() {
         let dir = tempfile::tempdir().unwrap();

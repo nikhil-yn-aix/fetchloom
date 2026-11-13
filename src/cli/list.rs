@@ -507,7 +507,7 @@ mod tests {
         );
     }
 
-    /// its JSON keeps where its folder would be, beside `placed`.
+    /// the JSON still says where the dataset's folder would be, beside `placed`.
     #[test]
     fn an_unplaced_dataset_lists_as_not_placed() {
         let manifest = Manifest::parse(
@@ -574,8 +574,8 @@ mod tests {
         );
     }
 
-    /// less what a members table leaves out, named by their paths in `list <name>`; one never
-    /// unpacked here counts as itself until then.
+    /// files a members table leaves out do not count, `list <name>` names the rest by their paths
+    /// there, and an archive not yet unpacked here counts as itself.
     #[test]
     fn an_archive_counts_as_the_files_it_places() {
         use crate::cache::Member;
@@ -756,7 +756,7 @@ mod tests {
         (manifest, lock, folder, cache)
     }
 
-    /// the views: every dataset or one, for a person or as `--json`.
+    /// the views are every dataset or one, each for a person or as `--json`.
     #[test]
     fn each_view_lists_what_the_whole_list_has() {
         let (manifest, lock, _folder, cache) = every_kind();

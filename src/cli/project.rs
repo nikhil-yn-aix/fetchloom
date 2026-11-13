@@ -1952,7 +1952,7 @@ pub(crate) mod tests {
         assert!(kept, "data.lock changed though nothing could be placed");
     }
 
-    /// until then the name is only a guess from the link.
+    /// before the download, the name is only a guess from the link.
     #[test]
     fn a_name_the_server_gives_is_checked_once_downloaded() {
         let mut guessed = stated("README", "https://example.org/a/README", b"a");
@@ -2027,7 +2027,7 @@ pub(crate) mod tests {
         assert!(Lock::parse(&old.render()).is_ok());
     }
 
-    /// as when a link is given where a dataset's name belongs.
+    /// an unknown name may be a link given where a dataset's name belongs.
     #[test]
     fn an_unknown_name_never_shows_a_secret() {
         let manifest =
@@ -2045,7 +2045,7 @@ pub(crate) mod tests {
         assert!(shown.contains("token=***"), "{shown}");
     }
 
-    /// as by ctrl-c while it prints its last lines; a stop asked before ends it as stopped.
+    /// ctrl-c while the last lines print leaves the sync done; a stop before ends it as stopped.
     #[test]
     fn a_stop_once_a_settled_sync_found_nothing_to_do_leaves_it_done() {
         let dir = tempfile::tempdir().unwrap();
@@ -2110,7 +2110,7 @@ pub(crate) mod tests {
         assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
     }
 
-    /// it counts only datasets it placed, not those with `place = false` or waiting for a build.
+    /// a sync of every dataset counts only those it placed, not `place = false` or unbuilt ones.
     #[test]
     fn a_sync_that_places_no_dataset_says_so() {
         let raw = "[datasets.raw]\nplace = false\nref = \"zenodo:1\"\n";

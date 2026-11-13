@@ -868,7 +868,7 @@ mod tests {
         assert_eq!(walked.skipped, ["more", "queue", "secret.txt"]);
     }
 
-    /// they are named, and a folder of them, as `__MACOSX`, is not read.
+    /// the files left out are named, and a folder of them, as `__MACOSX`, is not read.
     #[test]
     fn files_the_system_makes_are_left_out() {
         let dir = tempfile::tempdir().unwrap();

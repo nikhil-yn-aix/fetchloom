@@ -1412,7 +1412,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// one look tells them apart.
+    /// one look tells a wrong object from a good one.
     #[test]
     fn a_wrong_object_on_the_target_is_replaced_and_a_good_one_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1443,7 +1443,7 @@ pub(crate) mod tests {
         assert_eq!(names, [wrong_name.file_name().unwrap()]);
     }
 
-    /// two pushes of one file at once: the second to finish keeps the first one's copy.
+    /// when two pushes of one file run at once, the second to finish keeps the first one's copy.
     #[test]
     fn a_name_another_push_gave_first_keeps_its_file() {
         let folder = tempfile::tempdir().unwrap();
@@ -1590,8 +1590,8 @@ pub(crate) mod tests {
         (value, text)
     }
 
-    /// same account, same size: it is made read-only, flushed on its own handle and read back.
-    /// windows never renumbers a file, so there any new file in its place is someone else's.
+    /// a renumbered file of the same account and size is made read-only, flushed on its own handle
+    /// and read back. on windows, which never renumbers, a new file in its place is someone else's.
     #[test]
     fn a_file_renumbered_before_its_read_back_still_takes_its_name() {
         let (put, named) = one_put(Between::Renumber);
@@ -1610,7 +1610,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// its bytes are checked anyway, and the refusal shows with `-vv`.
+    /// the file's bytes are checked anyway, and the disk's refusal shows with `-vv`.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_renumbered_file_the_disk_will_not_make_read_only_is_named_anyway() {
@@ -1643,7 +1643,8 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// even with the same bytes, since that account could change them once named.
+    /// another account's file is refused even with the same bytes, since that account could change
+    /// them once named.
     #[cfg(unix)]
     #[test]
     fn a_file_another_account_put_in_its_place_never_takes_a_name() {
@@ -1655,7 +1656,7 @@ pub(crate) mod tests {
         assert_eq!(named, None);
     }
 
-    /// on linux the test makes that flush fail, so a refusal shows it was never tried.
+    /// on linux the test makes the flush fail, so a refusal shows it was never tried.
     #[test]
     fn a_file_of_another_size_in_its_place_is_refused_unflushed() {
         #[cfg(target_os = "linux")]
@@ -1747,7 +1748,7 @@ pub(crate) mod tests {
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
     }
 
-    /// a younger one may be a running push's, and other files are no push's.
+    /// a younger unfinished file may be a running push's, and other files are no push's.
     #[test]
     fn old_unfinished_files_are_swept_and_others_kept() {
         let folder = tempfile::tempdir().unwrap();

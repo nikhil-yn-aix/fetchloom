@@ -259,7 +259,7 @@ mod tests {
 
     use super::*;
 
-    /// which its callers turn back into a stop, and sees nothing until one is asked.
+    /// callers turn the interruption back into a stop; file work sees none until one is asked.
     #[test]
     fn file_work_sees_a_stop_as_interrupted() {
         let stop = Stop::default();
@@ -287,8 +287,8 @@ mod tests {
         assert!(finished.check_unfinished().is_ok());
     }
 
-    /// once, whether the mark came first or after; a run a first ctrl-c already let finish needs
-    /// no more telling.
+    /// the late stop is told once, whether the finishing mark came first or after, and a run a
+    /// first ctrl-c already let finish needs no more telling.
     #[test]
     fn a_stop_the_work_finishes_anyway_is_told_late() {
         let told = Arc::new(AtomicUsize::new(0));
@@ -327,8 +327,8 @@ mod tests {
         assert_eq!(told.load(Ordering::SeqCst), 2);
     }
 
-    /// stopping would download them again; a download still receiving, or yet to start, makes it
-    /// stop.
+    /// stopping would download bytes the disk already keeps again; a download still receiving, or
+    /// yet to start, makes the run stop.
     #[test]
     fn a_ctrl_c_while_the_disk_keeps_every_byte_lets_the_run_finish() {
         let stop = Stop::default();

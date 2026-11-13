@@ -941,7 +941,8 @@ mod tests {
         assert!(!plan.frees());
     }
 
-    /// same size with other bytes, longer or shorter; a later mirror's good copy is a route.
+    /// a copy of the right size with other bytes, a longer one or a shorter one is no route, but a
+    /// later mirror's good copy is.
     #[test]
     fn a_damaged_mirror_copy_is_no_route() {
         let folder = tempfile::tempdir().unwrap();
@@ -982,7 +983,7 @@ mod tests {
         assert!(plan.fates.is_empty(), "no copy is read for it");
     }
 
-    /// the next build would put it back, so only the raw input it was made from goes.
+    /// the next build would put a result back, so only the raw input it is made from goes.
     #[test]
     fn a_result_only_builds_read_is_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1012,7 +1013,7 @@ mod tests {
         assert_eq!(fates(&plan, "raw"), ["kept: Linked"]);
     }
 
-    /// a copy gone since keeps the file; the next run frees it once a good copy is back.
+    /// a copy gone since its check keeps the file; the next run frees it once a good one is back.
     #[test]
     fn a_copy_that_changed_after_its_check_is_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1056,7 +1057,7 @@ mod tests {
         assert!(cache.object_path(&raw).is_file());
     }
 
-    /// with none set, or a folder without the file or without its marker, the file stays.
+    /// the file stays with no folder mirror set, or with one lacking the file or its marker.
     #[test]
     fn an_input_needs_a_copy_on_a_folder_mirror() {
         let folder = tempfile::tempdir().unwrap();

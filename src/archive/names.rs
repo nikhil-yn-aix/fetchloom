@@ -430,8 +430,8 @@ mod tests {
         }
     }
 
-    /// any names, in any order: every file taken is a safe path in NFC that reads back as itself,
-    /// and no two files, or a file and a folder, are one name on a disk that ignores case.
+    /// whatever the names and their order, every file taken is a safe NFC path that reads back as
+    /// itself, and no two files, or a file and a folder, are one name on a disk that ignores case.
     #[test]
     fn fuzz_member_names() {
         bolero::check!()

@@ -1091,7 +1091,8 @@ mod tests {
             .collect())
     }
 
-    /// by its name before the counter, its parts landing nowhere; packed, it lands as its parts.
+    /// a split archive lands by its name before the counter, its parts landing nowhere; kept
+    /// packed, it lands as its parts.
     #[test]
     fn a_split_archive_lands_as_the_whole_would() {
         let parts: &[&str] = &["scans.zip.001", "scans.zip.002"];
@@ -1159,7 +1160,7 @@ mod tests {
         );
     }
 
-    /// as they land below the dataset's folder, but not in a member its table leaves out.
+    /// names are checked where they land below the dataset's folder, skipping members left out.
     #[test]
     fn names_windows_cannot_store_are_found_in_files_and_archives() {
         let (manifest, locked) = pinned(
@@ -1211,8 +1212,8 @@ mod tests {
         );
     }
 
-    /// as after an upgrade renamed it, rather than let the files it left out return. a pin
-    /// data.toml moved past is planned as it stands until sync pins again.
+    /// a table orphaned when an upgrade renames its archive is refused, so the files it left out
+    /// stay out. a pin data.toml moved past is planned as it stands until sync pins again.
     #[test]
     fn a_members_table_for_an_archive_the_lock_does_not_pin_is_refused() {
         let text = format!("{ONE}\n[datasets.a.members.\"pets.zip\"]\nexclude = \"x\"\n");
@@ -1265,8 +1266,8 @@ mod tests {
             .collect()
     }
 
-    /// as a table under that path would, and an archive's own table wins over it. `*` stays in one
-    /// folder, so a shard in a folder of the dataset is not matched.
+    /// a glob key chooses as a table under each archive's path would, and the archive's own table
+    /// wins. `*` stays in one folder, so a shard in a folder of the dataset is not matched.
     #[test]
     fn a_glob_key_chooses_the_files_of_every_archive_it_matches() {
         let paths = [&SHARDS[..], &["train/shard-000003.tar"]].concat();
@@ -1370,7 +1371,7 @@ mod tests {
         );
     }
 
-    /// as a typo would, naming the key and the pattern, once every archive it covers is known.
+    /// the refusal names key and pattern, as for a typo, once every archive covered is known.
     #[test]
     fn a_glob_tables_select_that_matches_in_no_archive_is_refused() {
         let (manifest, locked) = pinned(
@@ -1403,7 +1404,7 @@ mod tests {
         );
     }
 
-    /// naming the key, as an own table leaving its archive none is, once all are known here.
+    /// the refusal names the key, as an own table's does, once every covered archive is known.
     #[test]
     fn a_glob_table_that_leaves_every_archive_no_file_is_refused() {
         let (manifest, locked) = pinned(
@@ -1484,8 +1485,8 @@ mod tests {
         );
     }
 
-    /// it leaves the file where it is, found by the path the file lands at, as a person writes it;
-    /// one that left out a file the listing named, as `images/x.png`, did its job.
+    /// a dataset's exclude leaves an archive's files where they are, so one naming them is found by
+    /// the path they land at; one that left out a listed file, as `images/x.png`, did its job.
     #[test]
     fn an_exclude_naming_files_inside_an_archive_is_found() {
         let (manifest, locked) = pinned(
@@ -1668,9 +1669,9 @@ mod tests {
         assert_eq!(planned.unknown[0].1.path, "x.zip");
     }
 
-    /// a file beside an archive holding one of the same name: either can be left out, the member
-    /// only while its table keeps another file, or the archive kept packed. two archives with one
-    /// path are both named, with the same remedies beside a dataset for each.
+    /// for a file beside an archive holding one of the same name, either can be left out, the
+    /// member only while its table keeps another file, or the archive kept packed. two archives
+    /// with one path are both named, with the same remedies beside a dataset for each.
     #[test]
     fn a_clash_between_two_archives_names_both() {
         let (manifest, locked) = pinned(ONE, &[("a", &["fold-000000.tar", "fold-000001.tar"])]);
@@ -1715,7 +1716,7 @@ mod tests {
         }
     }
 
-    /// only a build makes its files, whatever source pin data.lock still has under its name.
+    /// only a build makes a recipe's files, whatever source pin data.lock keeps under its name.
     #[test]
     fn a_recipe_places_nothing_from_an_old_source_pin() {
         let made = manifest(
@@ -1741,7 +1742,8 @@ mod tests {
         );
     }
 
-    /// fetched or made, nothing of it is downloaded, unpacked or placed, and nothing clashes.
+    /// a dataset with `place = false`, fetched or made, has nothing downloaded, unpacked or placed,
+    /// and nothing of it clashes.
     #[test]
     fn an_unplaced_dataset_has_no_targets() {
         let (unplaced, mut locked) = pinned(
@@ -1832,7 +1834,7 @@ mod tests {
         }
     }
 
-    /// before anything is written, its help saying how to leave it out; 255 bytes still fit.
+    /// the refusal comes before any write, with help to leave the file out; 255 bytes still fit.
     #[test]
     fn a_name_longer_than_the_255_bytes_a_disk_allows_is_refused() {
         for (name, fits) in [("f".repeat(255), true), ("f".repeat(256), false)] {

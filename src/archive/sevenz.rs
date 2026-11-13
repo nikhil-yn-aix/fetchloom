@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(err.kind, Kind::LocalIo, "{}", err.message);
     }
 
-    /// any bytes of a 7z changed: unpacking it never panics, and fails only as a damaged or
+    /// whatever bytes of a 7z change, unpacking never panics and fails only as a damaged or
     /// refused archive.
     #[test]
     fn fuzz_seven_zip() {

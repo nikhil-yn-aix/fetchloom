@@ -1460,7 +1460,7 @@ mod tests {
         assert_eq!(shown(""), "''");
     }
 
-    /// as a step run again for a pin the cache lost makes what data.lock already pinned.
+    /// a result matches when a rerun for a pin the cache lost makes what data.lock already pins.
     #[test]
     fn the_last_line_tells_new_pins_from_results_that_match() {
         let repinned = ["clean".to_owned(), "tidy".to_owned()];
@@ -1485,8 +1485,8 @@ mod tests {
         }
     }
 
-    /// a bare name from PATH, one with a folder from the project folder that set-up fills, a full
-    /// path from this machine alone; no help asks for a full path, which builds on one machine.
+    /// a bare name is looked for on PATH, one with a folder in the project folder set-up fills, and
+    /// a full path on this machine alone; no help asks for a full path, which works on one machine.
     #[test]
     fn a_missing_program_is_told_by_how_run_names_it() {
         let absolute = if cfg!(windows) {
@@ -1523,8 +1523,8 @@ mod tests {
         );
     }
 
-    /// told without a guess at why: the help names another version of what a step uses beside the
-    /// time and random numbers, then `status -v`, and `--accept` last, for one step and several.
+    /// the help names possible causes, not one: another version of what a step uses, the time and
+    /// random numbers. then comes `status -v`, and `--accept` last, for one step and several.
     #[test]
     fn a_differing_rebuild_is_compared_before_it_is_accepted() {
         let manifest = Manifest::parse("").unwrap();

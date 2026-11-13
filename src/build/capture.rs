@@ -350,7 +350,7 @@ mod tests {
         }
     }
 
-    /// each is refused by its path in the result, a link as itself, never followed.
+    /// each link or special file is refused by its own path in the result, never followed.
     #[cfg(unix)]
     #[test]
     fn links_and_special_files_are_refused() {
@@ -477,7 +477,7 @@ mod tests {
         assert!(cache.find(&found.members[0].sha256, None).is_none());
     }
 
-    /// as `chmod -R a-w` leaves them: their files are still taken in and moved out.
+    /// after `chmod -R a-w` on the result, its files are still taken in and moved out.
     #[cfg(unix)]
     #[test]
     fn folders_the_step_made_read_only_are_taken_in() {

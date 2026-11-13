@@ -682,7 +682,8 @@ mod tests {
         }
     }
 
-    /// as one file would, at its first part, so the same files split again keep the content.
+    /// a split archive keys as one file would, at its first part, so the same files split again
+    /// keep the content.
     #[test]
     fn a_split_archive_keys_by_its_tree_however_it_is_split() {
         let tree = Some(digest::sha256(b"tree"));

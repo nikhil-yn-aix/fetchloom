@@ -617,8 +617,8 @@ mod tests {
         }
     }
 
-    /// each folder on a match's way, the top included, may reach it and the scope holds it, but
-    /// where a `**` matched no folder at the end, as `data/**` matches a file named `data`.
+    /// every folder on a match's way, the top included, may reach it, and the scope holds the match
+    /// unless a `**` at the end matched no folder, as `data/**` matches a file named `data`.
     #[test]
     fn no_folder_holding_a_match_is_skipped() {
         let names = ["a", "b", "ab", "a*b", "x[1]", "é.csv", "a.csv"];

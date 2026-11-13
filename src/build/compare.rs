@@ -84,7 +84,7 @@ mod tests {
         }
     }
 
-    /// each kind is named whatever order either list comes in.
+    /// each kind of difference is named whatever order either list comes in.
     #[test]
     fn changed_missing_and_extra_are_named() {
         let pinned = [

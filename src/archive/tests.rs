@@ -171,7 +171,7 @@ fn found(bytes: &[u8], pattern: &[u8]) -> Vec<usize> {
         .collect()
 }
 
-/// the cuts fall anywhere, in a zip inside a local header or its central directory too.
+/// the parts may be cut anywhere, in a zip inside a local header or its central directory too.
 #[test]
 fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
     let files: &[(&str, &[u8])] = &[
@@ -566,7 +566,7 @@ fn an_archive_inside_another_has_a_next_step_for_each_system() {
     );
 }
 
-/// zip joins the parts, and on windows 7-Zip reads them all from the `.zip`.
+/// zip joins a spanned zip's parts, and on windows 7-Zip reads them all from the `.zip`.
 #[test]
 fn a_spanned_zip_left_packed_has_a_next_step_for_each_system() {
     let step =
@@ -653,7 +653,7 @@ fn refused_archive_workers_keep_every_member_without_a_queue_wait() {
     }
 }
 
-/// as on FAT32, which holds no file of 4 GiB, by the size the archive declares for the member.
+/// FAT32, for one, holds no file of 4 GiB; the refusal goes by the size the archive declares.
 #[test]
 fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
     let limits = Limits::default();
