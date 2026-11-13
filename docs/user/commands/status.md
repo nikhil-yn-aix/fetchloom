@@ -31,6 +31,8 @@ fetchloom status [options]
 
 status changes nothing. without `--verify` it is not a full integrity check: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`. `--verify` checks the hash of every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. a project still as the last complete sync left it is settled, as `sync` finds it, and status lists only files fetchloom did not place.
 
+bare `fetchloom` in a project prints the closing line alone, with one hint: `fetchloom sync` when a plain sync sets every difference right, as in a fresh clone, and `fetchloom status` when something needs a look first, such as an edited or untracked file.
+
 when `iris.csv` is missing and `notes.txt` is extra, stdout holds the rows:
 
 ```text

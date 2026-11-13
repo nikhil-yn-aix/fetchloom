@@ -226,11 +226,19 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     )?;
     let output = &context.output;
     warn_git(output, project)?;
-    if sum_up(output, &status) {
+    if !sum_up(output, &status) {
+        return Ok(status);
+    }
+    let status_command = super::project::command("status");
+    if status.sync_repairs_all() {
+        let (_, manifest) = project.manifest()?;
         output.hint(&format!(
-            "`{}` lists what differs",
-            super::project::command("status")
+            "`{}` puts the pinned files in {}/; `{status_command}` lists them",
+            super::project::command("sync"),
+            manifest.data_dir
         ));
+    } else {
+        output.hint(&format!("`{status_command}` lists what differs"));
     }
     Ok(status)
 }
@@ -866,6 +874,23 @@ impl Status {
         !self.unneeded.is_empty() || self.places()
     }
 
+    /// whether a plain `sync` sets every difference right, so nothing needs a person's look first,
+    /// as in a fresh clone.
+    fn sync_repairs_all(&self) -> bool {
+        self.needs_sync()
+            && !self.lockless
+            && self.edited.is_empty()
+            && self.untracked.is_empty()
+            && self.extra.is_empty()
+            && self.blocked.is_empty()
+            && self.unbuilt.is_empty()
+            && self.candidates.is_empty()
+            && self
+                .damaged
+                .iter()
+                .all(|path| !self.hashed_only.contains(path))
+    }
+
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
     fn places(&self) -> bool {
         !self.removed.is_empty()
@@ -1160,14 +1185,28 @@ mod tests {
             };
             paths.push("data/set/file.csv".to_owned());
             assert_eq!(status.needs_sync(), category < 8, "category {category}");
+            // an untracked file is a person's own until they say otherwise
+            assert_eq!(
+                status.sync_repairs_all(),
+                category < 8 && category != 5,
+                "category {category}"
+            );
             assert!(sum_up(&output, &status), "category {category}");
         }
         let mut damaged = Status::default();
         damaged.damaged.push("data/set/file.csv".to_owned());
-        assert!(damaged.needs_sync());
+        assert!(damaged.needs_sync() && damaged.sync_repairs_all());
         damaged.hashed_only.insert("data/set/file.csv".to_owned());
         assert!(!damaged.needs_sync(), "only sync --verify finds it");
+        assert!(!damaged.sync_repairs_all());
         assert!(sum_up(&output, &damaged));
+        let mut unlocked = Status {
+            unlocked: vec!["set".to_owned()],
+            ..Status::default()
+        };
+        assert!(unlocked.sync_repairs_all());
+        unlocked.lockless = true;
+        assert!(!unlocked.sync_repairs_all(), "a sync would pin new bytes");
     }
 
     #[test]

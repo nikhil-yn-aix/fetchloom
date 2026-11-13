@@ -375,7 +375,7 @@ fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result 
     let alone = on_a_terminal(&["-C", &typed])?.unwrap_or_default();
     assert!(
         alone.contains(&format!(
-            "hint: `fetchloom -C {typed} status` lists what differs"
+            "hint: `fetchloom -C {typed} sync` puts the pinned files in data/; `fetchloom -C {typed} status` lists them"
         )),
         "{alone}"
     );
@@ -1324,7 +1324,7 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     let missing = sandbox.run(&[])?;
     assert_eq!(
         text(&missing.stderr)?,
-        "      Found 1 difference from data.lock\n  hint: `fetchloom status` lists what differs\n"
+        "      Found 1 difference from data.lock\n  hint: `fetchloom sync` puts the pinned files in data/; `fetchloom status` lists them\n"
     );
     let document = json(&sandbox.run(&["--json"])?)?;
     assert_eq!(document["command"], "status");
