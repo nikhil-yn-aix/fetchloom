@@ -699,6 +699,20 @@ impl Output {
         self.line(line.trim_end());
     }
 
+    /// one match of a search whose title has no room beside what to type, as a paper's on a
+    /// narrow terminal: the title on a line of its own under it, then its dim facts.
+    pub(crate) fn candidate_under(&self, typed: &str, title: &str, facts: &str) {
+        if !self.tells(Level::Normal) {
+            return;
+        }
+        self.candidate(typed, 0, "", ("", false));
+        self.line(&format!("{:>11} {}", "", plain(title)));
+        if !facts.is_empty() {
+            let dim = paint(self.style.color, Paint::new().dimmed());
+            self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(facts)));
+        }
+    }
+
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
         if !self.json

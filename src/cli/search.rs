@@ -33,12 +33,16 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
             .min(crate::output::REFERENCE_COLUMN);
         for shown in &parts {
-            output.candidate(
-                &shown.reference,
-                pad,
-                &shown.title,
-                (&shown.facts, shown.below),
-            );
+            if shown.title_below {
+                output.candidate_under(&shown.reference, &shown.title, &shown.facts);
+            } else {
+                output.candidate(
+                    &shown.reference,
+                    pad,
+                    &shown.title,
+                    (&shown.facts, shown.below),
+                );
+            }
         }
         for candidate in &report.candidates {
             output.answer_untold(&line(candidate));
@@ -330,12 +334,15 @@ fn line(candidate: &Candidate) -> String {
 }
 
 /// one candidate as a person reads it: what to type, its title and its facts, already padded
-/// into columns, and whether the facts take a line of their own under the reference.
+/// into columns, and whether the facts take a line of their own under the reference, or the title
+/// does, with the facts under it.
+#[derive(Debug)]
 struct Shown {
     reference: String,
     title: String,
     facts: String,
     below: bool,
+    title_below: bool,
 }
 
 /// the fewest columns a title keeps before it gives way altogether, and the most it takes.
@@ -345,7 +352,9 @@ const TITLE_MOST: usize = 52;
 /// each candidate as what to type, its title and its facts, in columns every row shares: title,
 /// size, downloads, note, a missing cell blank and an empty column left out. hugging face titles
 /// stay blank, as the reference names the repository. in `width` columns after `lead`, downloads
-/// give way first, then the title; size and note go under the reference when they do not fit.
+/// give way first, then a dataset's title, while a paper's author line gives way before its title;
+/// size and note go under the reference when they do not fit, and a paper's title goes under it
+/// when even the title alone has no room beside it.
 fn parts(
     output: &Output,
     candidates: &[Candidate],
@@ -356,19 +365,7 @@ fn parts(
         .iter()
         .map(|candidate| candidate.reference.to_string())
         .collect();
-    let cells: Vec<[String; 3]> = candidates
-        .iter()
-        .map(|candidate| {
-            [
-                candidate.size.map(units::size).unwrap_or_default(),
-                candidate
-                    .downloads
-                    .map(worded_downloads)
-                    .unwrap_or_default(),
-                candidate.note.clone().unwrap_or_default(),
-            ]
-        })
-        .collect();
+    let told = cells(candidates, true);
     let reference_width =
         widest(references.iter().map(String::as_str)).min(crate::output::REFERENCE_COLUMN);
     // what a row leaves after its reference and two spaces, with the last column spare
@@ -398,7 +395,7 @@ fn parts(
     let more = console::measure_text_width(output.more());
     let mut plan = (false, None);
     for downloads in [true, false] {
-        let facts_width = widest(facts(&cells, downloads).iter().map(String::as_str));
+        let facts_width = widest(facts(&told, downloads).iter().map(String::as_str));
         let gap = if facts_width > 0 { 2 } else { 0 };
         match shared {
             None => {
@@ -420,7 +417,11 @@ fn parts(
         }
     }
     let (downloads, most) = plan;
-    let facts = facts(&cells, downloads);
+    // once titles give way, papers keep theirs and leave out their author lines
+    let facts = match most {
+        Some(_) => facts(&told, downloads),
+        None => facts(&cells(candidates, false), downloads),
+    };
     let titles: Vec<String> = given
         .iter()
         .map(|title| most.map_or_else(String::new, |most| output.clip(title, most)))
@@ -430,8 +431,14 @@ fn parts(
         .into_iter()
         .zip(titles)
         .zip(facts)
-        .map(|((reference, title), facts)| {
+        .zip(candidates.iter().zip(&given))
+        .map(|(((reference, title), facts), (candidate, given))| {
             let facts = facts.trim_end().to_owned();
+            if most.is_none() && candidate.reference.is_paper() && !given.is_empty() {
+                let beside = room(&reference);
+                let under = width.map_or(TITLE_MOST, |width| width.saturating_sub(lead + 1 + more));
+                return paper_row(output, (reference, given), facts, beside, under);
+            }
             let title = if facts.is_empty() {
                 title
             } else {
@@ -449,9 +456,68 @@ fn parts(
                 reference,
                 facts,
                 below,
+                title_below: false,
             }
         })
         .collect()
+}
+
+/// each row's size, downloads and note, with a paper's author line before its note where
+/// `bylines` keeps it.
+fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 3]> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let note = if bylines {
+                candidate.told()
+            } else {
+                candidate.note.clone()
+            };
+            [
+                candidate.size.map(units::size).unwrap_or_default(),
+                candidate
+                    .downloads
+                    .map(worded_downloads)
+                    .unwrap_or_default(),
+                note.unwrap_or_default(),
+            ]
+        })
+        .collect()
+}
+
+/// a paper's row once titles give way to facts: its title beside the reference in the `beside`
+/// columns left there, its note under it when both do not fit, or else the title on a line of its
+/// own under the reference, cut to `under` columns.
+fn paper_row(
+    output: &Output,
+    (reference, title): (String, &str),
+    facts: String,
+    beside: Option<usize>,
+    under: usize,
+) -> Shown {
+    let more = console::measure_text_width(output.more());
+    if let Some(room) = beside.filter(|room| *room >= TITLE_LEAST + more) {
+        let title = output.clip(title, (room - more).min(TITLE_MOST));
+        let noted = if facts.is_empty() {
+            0
+        } else {
+            2 + console::measure_text_width(&facts)
+        };
+        return Shown {
+            below: console::measure_text_width(&title) + noted > room,
+            reference,
+            title,
+            facts,
+            title_below: false,
+        };
+    }
+    Shown {
+        title: output.clip(title, under),
+        reference,
+        facts,
+        below: false,
+        title_below: true,
+    }
 }
 
 /// each row's facts in their columns: size, then downloads where `downloads` keeps them, then
@@ -542,6 +608,7 @@ mod tests {
                     source: "test",
                     size: None,
                     downloads: None,
+                    byline: None,
                     note: None,
                 })
                 .collect();
@@ -570,6 +637,7 @@ mod tests {
             source: "kaggle",
             size: Some(3687),
             downloads: None,
+            byline: None,
             note: None,
         };
         assert_eq!(
@@ -609,6 +677,7 @@ mod tests {
                 source: "kaggle",
                 size: Some(3687),
                 downloads: Some(12_000),
+                byline: None,
                 note: None,
             },
             Candidate {
@@ -617,6 +686,7 @@ mod tests {
                 source: "zenodo",
                 size: None,
                 downloads: None,
+                byline: None,
                 note: Some("needs access".to_owned()),
             },
             Candidate {
@@ -625,6 +695,7 @@ mod tests {
                 source: "hugging face",
                 size: None,
                 downloads: Some(950),
+                byline: None,
                 note: None,
             },
             Candidate {
@@ -633,6 +704,7 @@ mod tests {
                 source: "hugging face",
                 size: None,
                 downloads: Some(1),
+                byline: None,
                 note: None,
             },
         ];
@@ -680,6 +752,7 @@ mod tests {
             source: "kaggle",
             size: Some(size),
             downloads: Some(downloads),
+            byline: None,
             note: gated.then(|| "needs access".to_owned()),
         };
         let candidates = vec![
@@ -757,6 +830,89 @@ mod tests {
         );
     }
 
+    /// a paper is known by its title, so on a narrow terminal its author line gives way first: the
+    /// title stays beside the reference where it fits, else on a line under it, and a note add
+    /// needs, `no open-access pdf`, stays too. a wide terminal shows both.
+    #[test]
+    fn a_papers_author_line_gives_way_before_its_title() {
+        let paper = |reference: &str, title: &str, byline: &str, closed: bool| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "arXiv",
+            size: None,
+            downloads: None,
+            byline: Some(byline.to_owned()),
+            note: closed.then(|| "no open-access pdf".to_owned()),
+        };
+        let candidates = vec![
+            paper(
+                "arxiv:1706.03762",
+                "Attention Is All You Need",
+                "Vaswani et al. 2017",
+                false,
+            ),
+            paper(
+                "arxiv:2104.04692",
+                "Not All Attention Is All You Need",
+                "Wu et al. 2021",
+                false,
+            ),
+            paper(
+                "s2:CorpusId:229349233",
+                "Channel Attention Is All You Need for Video Frame Interpolation",
+                "Choi et al. 2020",
+                true,
+            ),
+        ];
+        let output = quiet_output();
+        for width in [40, 50, 60] {
+            let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
+            let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
+            for (shown, candidate) in parts.iter().zip(&candidates) {
+                let kept = shown.title.trim_end_matches(output.more());
+                assert!(
+                    kept.len() > 3 && candidate.title.starts_with(kept),
+                    "{width}: {shown:?}"
+                );
+                let byline = candidate.byline.as_deref().unwrap_or_default();
+                assert!(!shown.facts.contains(byline), "{width}: {shown:?}");
+                assert_eq!(
+                    shown.facts.contains("no open-access pdf"),
+                    candidate.note.is_some(),
+                    "{width}: {shown:?}"
+                );
+                let lines = if shown.title_below {
+                    vec![
+                        shown.reference.clone(),
+                        shown.title.clone(),
+                        shown.facts.clone(),
+                    ]
+                } else if shown.below {
+                    let beside = format!("{:column$}  {}", shown.reference, shown.title);
+                    vec![beside, shown.facts.clone()]
+                } else {
+                    let beside = format!("{:column$}  {}", shown.reference, shown.title);
+                    vec![format!("{beside}  {}", shown.facts)]
+                };
+                for line in &lines {
+                    assert!(
+                        LIST_LEAD + console::measure_text_width(line.trim_end()) < width,
+                        "{width}: {line:?}"
+                    );
+                }
+            }
+        }
+        let wide = parts(&output, &candidates, Some(200), LIST_LEAD);
+        for (shown, candidate) in wide.iter().zip(&candidates) {
+            assert!(!shown.below && !shown.title_below, "{shown:?}");
+            assert!(
+                shown
+                    .facts
+                    .contains(candidate.byline.as_deref().unwrap_or_default())
+            );
+        }
+    }
+
     /// a chinese title is cut by the columns it shows, two for each of its characters, so it
     /// fits beside its facts as an ascii one does.
     #[test]
@@ -767,6 +923,7 @@ mod tests {
             source: "zenodo",
             size: Some(1_181_116_006),
             downloads: Some(2400),
+            byline: None,
             note: None,
         };
         let candidates = vec![
@@ -801,6 +958,7 @@ mod tests {
             source: "zenodo",
             size: Some(size),
             downloads: Some(downloads),
+            byline: None,
             note: None,
         };
         let candidates = vec![
@@ -882,6 +1040,7 @@ mod tests {
                 source: "kaggle",
                 size: Some(3687),
                 downloads: None,
+                byline: None,
                 note: None,
             },
             Candidate {
@@ -890,6 +1049,7 @@ mod tests {
                 source: "hugging face",
                 size: Some(3687),
                 downloads: None,
+                byline: None,
                 note: None,
             },
         ];

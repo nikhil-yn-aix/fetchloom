@@ -196,10 +196,10 @@ the work counters still count metadata requests a dry run makes to resolve chang
 |---|---|
 | `reference` | canonical reference string to pass to add or get |
 | `title` | the title the site gives, or the repository id for hugging face |
-| `source` | `hugging face`, `kaggle`, `zenodo`, `ENA`, `GEO`, `dandi` or `openneuro` |
+| `source` | `hugging face`, `kaggle`, `zenodo`, `ENA`, `GEO`, `dandi`, `openneuro`, `arXiv` or `semantic scholar` |
 | `size` | byte count as the site lists it: for kaggle the zipped download, for dandi the version's assets and for openneuro the snapshot; null when unknown, as always for ENA and GEO |
 | `downloads` | the download count the site gives, or null, as always for ENA, GEO and dandi |
-| `note` | access note, or null |
+| `note` | an access note, as `needs access`; for a paper, its first author and year, then `no open-access pdf` for one `add` would refuse, as `Vaswani et al. 2017, no open-access pdf`; or null |
 
 [search](../commands/search.md) defines ordering and interactive selection. `list.datasets` instead reflects the manifest and lock, with null lock-derived values when a dataset has no lock entry; a stale entry can still supply values.
 

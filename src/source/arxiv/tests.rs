@@ -594,7 +594,7 @@ fn a_search_asks_titles_first_then_everywhere() {
             (
                 found.reference.to_string(),
                 found.title.as_str(),
-                found.note.as_deref(),
+                found.byline.as_deref(),
             )
         })
         .collect();

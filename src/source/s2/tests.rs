@@ -259,15 +259,11 @@ fn a_search_offers_papers_by_corpus_id_and_tells_those_without_a_pdf() {
     assert_eq!(found.len(), 5);
     assert_eq!(found[0].reference.to_string(), "s2:CorpusId:13756489");
     assert_eq!(found[0].title, "Attention is All you Need");
-    assert_eq!(found[0].note.as_deref(), Some("Vaswani et al. 2017"));
+    assert_eq!(found[0].byline.as_deref(), Some("Vaswani et al. 2017"));
+    assert_eq!(found[0].note, None);
     let refused: Vec<&str> = found
         .iter()
-        .filter(|found| {
-            found
-                .note
-                .as_deref()
-                .is_some_and(|note| note.ends_with("no open-access pdf"))
-        })
+        .filter(|found| found.note.as_deref() == Some("no open-access pdf"))
         .map(|found| found.title.as_str())
         .collect();
     assert_eq!(

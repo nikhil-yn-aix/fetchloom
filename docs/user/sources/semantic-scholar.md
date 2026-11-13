@@ -64,7 +64,7 @@ s2:CorpusId:225068152	Attention Is All You Need In Speech Separation
 s2:CorpusId:275470886	Tensor Product Attention Is All You Need
 ```
 
-at a terminal each match also shows its first author and year, and a paper add would refuse says `no open-access pdf`.
+at a terminal each match also shows its first author and year, and a paper add would refuse says `no open-access pdf`. on a narrow terminal the author and year give way first, so the title stays.
 
 ## datasets
 

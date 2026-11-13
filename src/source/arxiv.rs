@@ -313,7 +313,8 @@ pub(crate) async fn search(
     Ok(found
         .into_iter()
         .map(|entry| Found {
-            note: entry.byline(),
+            byline: entry.byline(),
+            note: None,
             reference: Reference::Arxiv(Paper::newest(entry.id)),
             title: entry.title,
         })

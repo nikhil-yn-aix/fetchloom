@@ -15,19 +15,42 @@ use crate::error::{Error, Kind};
 use crate::net::Api;
 
 /// one public catalog match, named by a canonical reference rather than the search words.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct Candidate {
-    #[serde(serialize_with = "reference_text")]
     pub(crate) reference: Reference,
     pub(crate) title: String,
     pub(crate) source: &'static str,
     pub(crate) size: Option<u64>,
     pub(crate) downloads: Option<u64>,
+    /// a paper's first author and year, `Vaswani et al. 2017`.
+    pub(crate) byline: Option<String>,
+    /// what to know before adding it, as `needs access`.
     pub(crate) note: Option<String>,
 }
 
-fn reference_text<S: Serializer>(reference: &Reference, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.collect_str(reference)
+impl Candidate {
+    /// the byline and the note as one, `Vaswani et al. 2017, no open-access pdf`, as `--json`
+    /// gives it and a wide terminal shows it.
+    pub(crate) fn told(&self) -> Option<String> {
+        match (&self.byline, &self.note) {
+            (Some(byline), Some(note)) => Some(format!("{byline}, {note}")),
+            (byline, note) => byline.clone().or_else(|| note.clone()),
+        }
+    }
+}
+
+impl Serialize for Candidate {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut record = serializer.serialize_struct("Candidate", 6)?;
+        record.serialize_field("reference", &self.reference.to_string())?;
+        record.serialize_field("title", &self.title)?;
+        record.serialize_field("source", self.source)?;
+        record.serialize_field("size", &self.size)?;
+        record.serialize_field("downloads", &self.downloads)?;
+        record.serialize_field("note", &self.told())?;
+        record.end()
+    }
 }
 
 /// successful matches and any catalogs that could not answer.
@@ -435,6 +458,7 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
                 source: Catalog::Hf.label(),
                 size: item.main_size,
                 downloads: item.downloads,
+                byline: None,
                 note: gated.then(|| "needs access".to_owned()),
             })
         })
@@ -471,6 +495,7 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                 source: Catalog::Kaggle.label(),
                 size: item.total_bytes.filter(|_| !unserved),
                 downloads: item.download_count.filter(|_| !unserved),
+                byline: None,
                 note: None,
             })
         })
@@ -616,6 +641,7 @@ async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
             source: Catalog::Arxiv.label(),
             size: None,
             downloads: None,
+            byline: found.byline,
             note: found.note,
         })
         .collect())
@@ -633,6 +659,7 @@ async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>,
             source: Catalog::S2.label(),
             size: None,
             downloads: None,
+            byline: found.byline,
             note: found.note,
         })
         .collect())
@@ -658,6 +685,7 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                         .try_fold(0_u64, |sum, file| sum.checked_add(file.size?))
                 }),
                 downloads: item.stats.and_then(|stats| stats.unique_downloads),
+                byline: None,
                 note: None,
             })
         })
@@ -742,6 +770,7 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 source: Catalog::Ena.label(),
                 size: None,
                 downloads: None,
+                byline: None,
                 note: None,
             })
         })
@@ -824,6 +853,7 @@ async fn geo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 source: Catalog::Geo.label(),
                 size: None,
                 downloads: None,
+                byline: None,
                 note: None,
             })
         })
@@ -886,6 +916,7 @@ async fn dandi(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
                 source: Catalog::Dandi.label(),
                 size: version.size,
                 downloads: None,
+                byline: None,
                 note: None,
             })
         })
@@ -1008,6 +1039,7 @@ async fn openneuro(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Cand
                 source: Catalog::OpenNeuro.label(),
                 size: snapshot.size,
                 downloads: analytics.and_then(|analytics| analytics.downloads),
+                byline: None,
                 note: None,
             })
         })

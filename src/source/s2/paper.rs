@@ -347,18 +347,11 @@ impl Answer {
         let year = self.year.map(|year| year.to_string());
         let byline = crate::source::byline(&authors, year.as_deref());
         let addable = self.arxiv().is_some() || self.pdf().is_some_and(|pdf| !is_page(&pdf.url));
-        let note = if addable {
-            byline
-        } else {
-            Some(match byline {
-                Some(byline) => format!("{byline}, no open-access pdf"),
-                None => "no open-access pdf".to_owned(),
-            })
-        };
         Found {
             reference: Reference::S2Paper(Paper { id }),
             title: self.title.unwrap_or_default(),
-            note,
+            byline,
+            note: (!addable).then(|| "no open-access pdf".to_owned()),
         }
     }
 }

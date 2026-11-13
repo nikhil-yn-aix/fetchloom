@@ -615,7 +615,9 @@ impl fmt::Display for Reference {
 pub(crate) struct Found {
     pub(crate) reference: Reference,
     pub(crate) title: String,
-    /// what tells it apart, such as its first author and year, `Vaswani et al. 2017`.
+    /// its first author and year, `Vaswani et al. 2017`, which tells it apart.
+    pub(crate) byline: Option<String>,
+    /// what to know before adding it, as `no open-access pdf` for a paper add would refuse.
     pub(crate) note: Option<String>,
 }
 

@@ -44,6 +44,18 @@ at a terminal, each match is one row with its reference, then title, size, downl
 
 the reference is never cut. on a narrow terminal the download count gives way first, then the title; the size and the access note move to a line of their own when they do not fit. a fact the site does not give stays blank, as ENA and GEO give no size or download count, and dandi no download count. sizes are as each site lists them: hugging face gives the size of a dataset's files, while kaggle gives the size of its zipped download, so the files `add` reports can be larger. kaggle lists a dataset it does not serve as files, such as one kept in bigquery, with 0 bytes and 0 downloads, which fetchloom shows as unknown.
 
+a paper keeps its title, which is how people know it: its first author and year give way first, and the title goes on a line under the reference when even it has no room beside it. from a real run at a 40-column terminal, shortened:
+
+```text
+      Found 4 papers for
+            "attention is all you need"
+            arxiv:1706.03762
+            Attention Is All You Need
+            arxiv:2104.04692
+            Not All Attention Is All…
+```
+
+
 with `-q`, a redirected stdout, or no interactive terminal, as under CI or with `TERM=dumb`, stdout gets one match per line: its reference, a tab, its title and, when the site gives a size, a tab and the size, so `cut -f1` reads the references. a control character in a title reads as a space, and a bidi control, which could turn the line around on a terminal, as its escape, such as `\u{202e}`. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields. figshare, osf, dataverse and the other sources have no keyword search; pass their links or ids to `add` and `get`.
 
 a site that fails gives a warning while the others can still return matches. once one site has answered, the others have 3 s more, so a search ends in about 3 s however slow one site is; sites named with `--source` have 10 s more, and one named alone is waited for. one still silent then is left out with a warning that names the command searching it alone, as `fetchloom search "iris" --source zenodo`. if every site fails, the first error ends the command. no matches fails with `reference.unresolved` and an empty candidate list.
