@@ -335,6 +335,33 @@ fn yes_answers_the_question_to_save_a_key() -> Result {
     Ok(())
 }
 
+/// a screen reader reads a line again once it is drawn over, so with `FETCHLOOM_ACCESSIBLE` the
+/// masked key comes on a line of its own below the prompt.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_accessible_terminal_shows_the_masked_key_without_drawing_over_the_prompt() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut login = sandbox.command(&["auth", "login", "hf", "--offline", "--yes"]);
+    login.env("FETCHLOOM_ACCESSIBLE", "1");
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_test1234567890\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains("        key ************ · 17 characters\n"),
+        "{screen:?}"
+    );
+    assert!(!screen.contains('\u{1b}'), "{screen:?}");
+    Ok(())
+}
+
 /// the questions are saving the key, replacing one and removing a key other tools read; one line
 /// says what was cancelled, and the exit code is 1, as for any no.
 #[cfg(target_os = "linux")]

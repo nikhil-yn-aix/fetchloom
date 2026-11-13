@@ -931,8 +931,9 @@ impl Output {
                 };
                 let blank = text.trim().is_empty();
                 if hidden && !blank {
-                    // a terminal that reads no escape codes keeps the empty line it showed
-                    if self.style.interactive {
+                    // a terminal that reads no escape codes keeps the empty line it showed, and so
+                    // does a screen reader's, which would read the line again
+                    if self.style.interactive && !self.style.accessible {
                         let _ = terminal.clear_last_lines(1);
                     }
                     let _ = terminal.write_line(&format!("{label}{}", masked(&text)));
