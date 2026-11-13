@@ -296,6 +296,7 @@ body {
   letter-spacing: 0;
   color: var(--fl-ink);
   hyphens: manual;
+  -webkit-hyphens: manual;
   text-wrap: balance;
 }
 .md-typeset h1 {
@@ -466,17 +467,22 @@ body {
   font-size: .75rem;
   line-height: 1.45;
   font-variant-numeric: tabular-nums lining-nums;
+  hyphens: manual;
+  -webkit-hyphens: manual;
   background: none;
   border: 0;
   border-top: 1.5px solid var(--fl-ink);
   border-bottom: 1.5px solid var(--fl-ink);
   border-collapse: collapse;
 }
+/* words and code names stay whole in a cell; a table too wide for them scrolls */
+.md-typeset table:not([class]) :is(code, kbd) {
+  word-break: normal;
+}
 .md-typeset table:not([class]) th {
   font-weight: 600;
   text-align: left;
   vertical-align: bottom;
-  hyphens: manual;
   padding: .55em 1.1em .45em 0;
   border-bottom: 1px solid var(--fl-ink);
   background: none;
