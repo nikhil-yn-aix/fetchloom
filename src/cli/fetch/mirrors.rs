@@ -1,6 +1,5 @@
-//! pinned files and archive trees from the mirrors a run names, before their sources. mirrors are
-//! asked in order; one that is not there is skipped for the rest of the run after one warning,
-//! and every file a mirror gives is checked against its pin before the cache keeps it.
+//! pinned files and archive trees from the mirrors a run names, asked in order before sources. one
+//! not there is skipped after one warning, and every file one gives is checked against its pin.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -109,11 +108,7 @@ impl Mirrored {
     }
 
     /// whether mirror `index` may be asked: its marker was found, once a run. one without it is
-    /// told once and skipped from then on, and a web mirror is never asked offline.
-    ///
-    /// # Errors
-    ///
-    /// a stop while a web mirror is asked.
+    /// told once and skipped, a web mirror is never asked offline, and a stop while asking fails.
     async fn usable(
         &self,
         context: &Context,
@@ -219,12 +214,8 @@ fn refused_help(location: &Location, status: u16) -> String {
     }
 }
 
-/// the mirrors this run asks: those `given` with `--mirror`, then those the settings list.
-///
-/// # Errors
-///
-/// `usage` for a `--mirror` that is no folder or web address, and for `mirrors_only` with no
-/// mirror to ask.
+/// the mirrors this run asks: those `given` with `--mirror`, then the settings' list. `usage` for a
+/// `--mirror` that is no folder or web address, or `mirrors_only` with no mirror to ask.
 pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirrors, Error> {
     let mut flagged = Vec::with_capacity(given.len());
     for text in given {
@@ -288,13 +279,9 @@ fn refusal(context: &Context, what: &str, remedy: &str) -> Error {
     .help(format!("{remedy}, or {off} to ask sources too"))
 }
 
-/// refuses, in mirror-only mode, to download `files` from their sources: each by its name and
-/// its SHA-256, when known, and named with what each mirror said of it. a file without one is
-/// new, so no mirror can be asked for it, and data.lock does not name it yet.
-///
-/// # Errors
-///
-/// `network.refused` naming the files, in mirror-only mode, when there are any.
+/// refuses, in mirror-only mode, to download `files` from their sources, with `network.refused`
+/// naming each with what each mirror said of it. a file without a SHA-256 is new, so no mirror can
+/// be asked for it.
 pub(in crate::cli) fn sources_allowed(
     context: &Context,
     files: &[(String, Option<Sha256>)],
@@ -377,16 +364,10 @@ pub(in crate::cli) fn pinned(jobs: &[Job], cache: &Cache) -> Vec<Wanted> {
         .collect()
 }
 
-/// puts into the cache what the data folder and then the mirrors hold of the files `wanted`
-/// lists: the data folder's files where data.lock places them, then each mirror in order for the
-/// files the ones before it lacked. a damaged copy on a mirror is told and left, so a later mirror
-/// or the source gives the file. `wanted` runs only when the data folder or a mirror may hold
-/// something, since listing what the cache lacks looks at every file.
-///
-/// # Errors
-///
-/// a failure to write the cache, a stop, and `unconfirmed` when a web mirror's files are more
-/// than a person agreed to download.
+/// puts into the cache what the data folder and then each mirror in order hold of the files
+/// `wanted` lists; a damaged copy on a mirror is told and left for a later one or the source.
+/// `wanted` runs only when one may hold something, since listing what the cache lacks reads every
+/// file. fails at a stop, a cache write, or `unconfirmed` past what a person agreed to download.
 pub(in crate::cli) async fn fill(
     context: &Context,
     net: &Arc<Net>,
@@ -480,9 +461,8 @@ async fn from_folder(
     Ok(stored)
 }
 
-/// downloads `ask` from the web mirror `index` at `base` through the download pipeline, after
-/// the question a download of their size asks, and says which files it stored. a mirror that
-/// refuses or fails is skipped for the rest of the run.
+/// downloads `ask` from the web mirror `index` at `base` as any download, question included, and
+/// says which files it stored. a mirror that refuses or fails is skipped for the rest of the run.
 async fn from_web(
     context: &Context,
     net: &Arc<Net>,
@@ -578,12 +558,8 @@ async fn from_web(
 }
 
 /// the archives among `unknown` whose trees no mirror gave. a tree a mirror gives that hashes to
-/// the one data.lock pins becomes the record of what its archive unpacks to, so the files it
-/// holds can come one by one without the archive.
-///
-/// # Errors
-///
-/// a failure to write the cache, and a stop.
+/// data.lock's pin becomes the record of what its archive unpacks to, so its files can come one by
+/// one without the archive. fails at a stop or a cache write.
 pub(in crate::cli) async fn trees<'f>(
     context: &Context,
     net: &Net,
@@ -616,9 +592,8 @@ enum Got {
     Trouble(String),
 }
 
-/// asks each mirror in order for the tree `tree` that `archive` of `dataset` unpacks to, and
-/// records the first that matches under the archive's own key, for a split archive the one its
-/// parts give. says whether one did.
+/// asks each mirror in order for the tree `tree` of `archive` in `dataset`, recording the first
+/// that matches under the archive's key, a split archive's from its parts. says whether one did.
 async fn tree_from_mirrors(
     context: &Context,
     net: &Net,
@@ -764,8 +739,7 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
-    /// listing what the cache lacks looks at every file, so a run without a mirror, and with no
-    /// file in the data folder that may hold one, never does.
+    /// listing what the cache lacks looks at every file, so a run with nowhere to ask never does.
     #[test]
     fn a_run_without_a_mirror_lists_nothing_to_ask_for() {
         let context = Context::new(Output::new(
@@ -793,8 +767,7 @@ mod tests {
         assert!(!listed.load(Ordering::Relaxed));
     }
 
-    /// in mirror-only mode, files data.lock pins that no mirror gave and new files whose SHA-256
-    /// is not known yet are refused together, each counted for what it is.
+    /// refused together, each counted for what it is.
     #[test]
     fn mirror_only_mode_tells_pinned_files_from_new_ones() {
         let mut context = Context::new(Output::new(

@@ -1,9 +1,6 @@
-//! pinned files the project's data folder holds, taken into the cache when it lacks them, before
-//! any mirror or source is asked. a project copied with its data folder to a machine whose cache
-//! never held its files then pushes, builds and places them with no download. a file there is
-//! only read: the cache gets a clone or a copy, kept only when it hashes to the pin, so an edit is
-//! never taken, and the file is never changed, moved or linked, since a link would let a later
-//! edit of it change the cache's copy.
+//! pinned files the project's data folder holds, taken into the cache before any mirror or source
+//! is asked, so a project copied with its data needs no download. a file there is only read: the
+//! cache gets a clone or copy that hashes to the pin, never a link a later edit would reach.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -102,10 +99,8 @@ impl DataFolder {
         DataFolder::of(project, manifest, found)
     }
 
-    /// every file data.lock places, laid out as `lock` plans it with what `cache` records its
-    /// archives unpacked to, with what the project's state records of each, which vouches for a
-    /// file as sync trusts it. a data folder that is a link, or a lock that does not plan, gives
-    /// none.
+    /// every file data.lock places, laid out as `lock` plans it, with what the project's state
+    /// records of each. a data folder that is a link, or a lock that does not plan, gives none.
     pub(in crate::cli) fn planned(
         project: &Project,
         manifest: &Manifest,
@@ -165,17 +160,14 @@ impl DataFolder {
         self.paths.is_empty()
     }
 
-    /// which of `wanted` a file here holds, as a dry run tells it: a file the state vouches for
-    /// counts unread, and any other once it hashes to its pin, read as [`DataFolder::take`] reads
-    /// it but with nothing written. a stop asked meanwhile leaves the rest uncounted, so the
-    /// caller looks for it after.
+    /// which of `wanted` a file here holds, as a dry run tells it: one the state vouches for
+    /// unread, any other once it hashes to its pin. a stop leaves the rest uncounted.
     pub(in crate::cli) fn holds(&self, context: &Context, wanted: &[Wanted]) -> Vec<bool> {
         self.counted(context, wanted, true)
     }
 
-    /// which of `wanted` a file here may hold, by one look and no read: a file the state vouches
-    /// for, or one it says nothing of that has the pinned size. a run that then takes them reads
-    /// each, so this only spares it a question when nothing here can hold a file.
+    /// which of `wanted` a file here may hold, by one look and no read: one the state vouches for,
+    /// or of the pinned size. it only spares a question when nothing here can hold a file.
     pub(in crate::cli) fn may_hold(&self, context: &Context, wanted: &[Wanted]) -> Vec<bool> {
         self.counted(context, wanted, false)
     }
@@ -205,13 +197,9 @@ impl DataFolder {
         })
     }
 
-    /// takes into the cache each of `wanted` a file here holds, from the first path whose bytes
-    /// hash to the pin, and returns the rest. a file that holds other bytes, or cannot be read,
-    /// is left as it is and the next path tried. says once how many files came in.
-    ///
-    /// # Errors
-    ///
-    /// a failure to write the cache, and a stop.
+    /// takes into the cache each of `wanted` a file here holds, from the first path that hashes to
+    /// the pin, and returns the rest; a file with other bytes, or unreadable, is left. fails at a
+    /// stop or when the cache cannot be written.
     pub(in crate::cli) fn take(
         &self,
         context: &Context,
@@ -341,9 +329,8 @@ impl DataFolder {
     }
 }
 
-/// how the plain file at `path` looks, when every folder between the data folder `placer` is
-/// rooted at and it is a real one: a link on the way may point anywhere, and fetchloom never
-/// places through one.
+/// how the plain file at `path` looks, when every folder from `placer`'s root to it is a real one,
+/// since a link on the way may point anywhere and fetchloom never places through one.
 fn readable(placer: &Placer, path: &Path) -> Option<Look> {
     placer.check_parent(path).ok()?;
     std::fs::symlink_metadata(path)
@@ -420,8 +407,7 @@ mod tests {
         DataFolder::found(project, manifest, at.collect())
     }
 
-    /// the pinned bytes come into the cache as an object of their own, a clone or a copy, so the
-    /// file stays as it was and an edit of it later never reaches the cache.
+    /// so the file stays as it was and a later edit of it never reaches the cache.
     #[test]
     fn a_file_holding_its_pin_comes_into_the_cache_as_a_copy_of_its_own() {
         let (_folder, project, manifest, cache) = project();
@@ -451,8 +437,7 @@ mod tests {
         assert_eq!(counts.objects_written, 1);
     }
 
-    /// a file of the pinned size with other bytes is left as it is, and the next path data.lock
-    /// places the object at is tried; with none left, the object stays wanted.
+    /// with no path left, the object stays wanted.
     #[test]
     fn an_edit_is_left_and_the_next_path_tried() {
         let (_folder, project, manifest, cache) = project();
@@ -479,8 +464,6 @@ mod tests {
         assert_eq!(context.work.counts().data_folder_objects, 1);
     }
 
-    /// a path the state records with other bytes holds those while it still looks as recorded,
-    /// so it is not read; once it changed, it is.
     #[test]
     fn a_file_the_state_records_with_other_bytes_is_read_only_once_it_changed() {
         let (_folder, project, manifest, cache) = project();
@@ -516,8 +499,7 @@ mod tests {
         );
     }
 
-    /// a link among the folders on a file's way may lead out of the project, and fetchloom never
-    /// places through one, so nothing is read through it.
+    /// it may lead out of the project, and fetchloom never places through one.
     #[cfg(unix)]
     #[test]
     fn a_link_on_the_way_is_not_followed() {
@@ -573,10 +555,8 @@ mod tests {
         }
     }
 
-    /// a dry run counts a file unread only where the project's state vouches for it: the state
-    /// records the pinned bytes at its path, and the file looks as recorded, from before the
-    /// state was written. any other file counts once it hashes to its pin, so an edit of the
-    /// pinned size never counts, and a file the state records with other bytes is never read.
+    /// the pinned bytes recorded at its path, and the file looking as recorded from before the
+    /// state was written. any other counts once it hashes to its pin, as an edit never does.
     #[test]
     fn a_file_counts_unread_only_where_the_state_vouches_for_it() {
         let (_folder, project, _, cache) = project();

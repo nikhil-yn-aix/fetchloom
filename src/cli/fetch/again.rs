@@ -1,6 +1,5 @@
-//! a pinned file whose recorded link is dead is looked up again through its source, since a
-//! dataset id or a DOI usually outlives the links it once listed. the pinned hash still decides
-//! whether the bytes found there are the right ones.
+//! a pinned file whose recorded link is dead is looked up again through its source, since an id or
+//! a DOI usually outlives its links. the pinned hash still decides whether the bytes are right.
 
 use std::collections::HashMap;
 use std::sync::Arc;

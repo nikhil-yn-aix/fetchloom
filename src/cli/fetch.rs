@@ -1,6 +1,5 @@
-//! many downloads at once: a bar for each running one and one for them all, or plain lines now
-//! and then off a terminal, and a stop at the first failure that keeps what already arrived for
-//! the next run.
+//! many downloads at once, with a bar for each and one for all, or plain lines off a terminal. the
+//! first failure stops them, keeping what already arrived for the next run.
 
 mod again;
 pub(super) mod data_folder;
@@ -77,9 +76,8 @@ pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
     }
 }
 
-/// the path a listed file takes once its bytes are known: `path` with `.zip` added when its
-/// source sent it as a zip of that one file, so it unpacks as any archive does and data.lock
-/// names what its bytes are, else `path` as it is.
+/// the path a listed file takes once its bytes are known: `path`, with `.zip` added when its source
+/// sent a zip of that one file, so it unpacks as any archive and data.lock names its bytes.
 pub(super) fn wrapped(cache: &Cache, remote: &Remote, path: String, bytes: &Sha256) -> String {
     let wraps = source::may_wrap(&remote.url)
         && archive::by_name(&path).is_none()
@@ -97,14 +95,11 @@ struct Overall {
     what: String,
     /// the sizes the batch knows before it starts, added up, and how many files it does not.
     sizes: (u64, usize),
-    /// the sizes known so far, added up, and how many files have yet to tell theirs: the bar
-    /// fills to that sum only once none is left, so it promises no time left before. downloads
-    /// run on several threads and learn sizes at once, so each addition reads and writes it under
-    /// one lock.
+    /// the sizes known so far, added up, and how many files have yet to tell theirs: the bar takes
+    /// that sum as its length only once none is left, so it promises no time left before then.
     length: std::sync::Mutex<(u64, usize)>,
     /// the run's stop, told how many downloads still receive and how many the disk keeps, so a
-    /// first ctrl-c with only the disk left lets the run finish. `waiting` counts the downloads
-    /// that have not begun, which it was told of when the batch began.
+    /// first ctrl-c with only the disk left lets the run finish. `waiting` counts those not begun.
     stop: Arc<Stop>,
     waiting: AtomicUsize,
 }
@@ -212,10 +207,8 @@ impl Drop for Overall {
     }
 }
 
-/// the bytes a download whose server told `total` needs room for on the disk holding the cache:
-/// what is left to transfer from `resumed`, and when it `unpacks` an archive whose members nobody
-/// listed, the whole archive once more, the least its files can take. a lower bound: an archive
-/// may unpack to much more.
+/// the room a download whose server told `total` needs on the cache's disk: what is left after
+/// `resumed`, and the whole archive again when it `unpacks`, a lower bound for its files.
 fn room_needed(total: Option<u64>, resumed: u64, unpacks: bool) -> u64 {
     total.map_or(0, |total| {
         let left = total.saturating_sub(resumed);
@@ -235,8 +228,7 @@ fn sized(sizes: impl Iterator<Item = Option<u64>>) -> (u64, usize) {
     })
 }
 
-/// what the bar for a batch of `count` files says once `done` of them finished, while others
-/// may still be under way.
+/// the bar's words for a batch of `count` files once `done` of them finished.
 fn batch(done: usize, count: usize) -> String {
     format!(
         "{} · {done} done",
@@ -284,9 +276,8 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
-    /// for a download nobody stated the size of, what the disk holding the cache had free when
-    /// it started, or `u64::MAX` when nothing is to be watched, and what `received` was then.
-    /// bytes that arrive past that free space stop it, as a known size stops before it starts.
+    /// for a download of no stated size, what the cache's disk had free as it started, `u64::MAX`
+    /// when unwatched, and `received` then: bytes past that free space stop it, in [`Watch::room`].
     free: AtomicU64,
     free_from: AtomicU64,
     /// what this download holds for the next run. the batch owns it, to say what a stop kept.
@@ -359,7 +350,7 @@ impl<'a> Watch<'a> {
         }
         let decide = || self.approval.answer.get_or_init(question).clone();
         let waiting = std::time::Instant::now();
-        // a terminal question must not occupy a network worker while it waits for an answer.
+        // a terminal question must not occupy a network worker while it waits for an answer
         let answer = if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
             handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
         }) {
@@ -398,9 +389,8 @@ impl<'a> Watch<'a> {
         }
     }
 
-    /// stops a download nobody stated the size of once `received`, the bytes it holds, passes
-    /// what the disk holding the cache had free when it started: the bytes that just arrived are
-    /// not written, so the disk is left near full rather than full. a person may go on anyway.
+    /// stops a download of no stated size once `received` passes what the cache's disk had free as
+    /// it started, before writing the bytes that just arrived, so the disk is left near full.
     fn room(&self, received: u64) -> Result<(), Error> {
         let free = self.free.load(Ordering::Relaxed);
         let arrived = received.saturating_sub(self.free_from.load(Ordering::Relaxed));
@@ -535,9 +525,8 @@ impl<'a> Watch<'a> {
             } => self.started(total, resumed, resumable)?,
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
-                // a page that names no file, at a link whose own name has no extension, is a
-                // folder listing or a site's page rather than data; hashes that prove the bytes
-                // decide instead
+                // a page that names no file, at a link whose name has no extension, is a folder
+                // listing or a site's page rather than data, unless hashes prove the bytes
                 if given.is_none()
                     && std::path::Path::new(label).extension().is_none()
                     && !self.job.fetch.expect.proves()
@@ -607,9 +596,8 @@ impl Drop for Watch<'_> {
     }
 }
 
-/// whether the name of the file at `path` already says its bytes are compressed with
-/// `encoding`, as `data.csv.gz` does for gzip, so the server's label changes nothing a reader
-/// expects.
+/// whether the name at `path` already says its bytes are compressed with `encoding`, as
+/// `data.csv.gz` does gzip, so the server's label changes nothing a reader expects.
 fn compressed_by_name(path: &str, encoding: &str) -> bool {
     let name = path.to_ascii_lowercase();
     let endings: &[&str] = match encoding {
@@ -637,9 +625,8 @@ fn encoded(path: &str, encoding: &str) -> (String, String) {
     (said, help)
 }
 
-/// downloads every job within the network's limits and returns what each fetched, in the jobs'
-/// order. on linux the finished downloads are flushed together and put in place a group at a
-/// time, the last group once every job ended, whether or not every job succeeded.
+/// downloads every job within the network's limits, returning what each fetched in order. on linux
+/// finished downloads are flushed and named a group at a time, the last once every job ended.
 pub(super) async fn all(
     context: &Context,
     net: &Arc<Net>,
@@ -704,9 +691,8 @@ fn collected(
     Ok(fetched)
 }
 
-/// downloads every job as [`all`] does, but a file that fails keeps its failure to itself while
-/// the others go on, as several unrelated links need. only an interruption, or a failure of the
-/// run itself, stops them all.
+/// [`all`], but a file that fails keeps its failure to itself while the others go on, as unrelated
+/// links need. only an interruption or a failure of the run itself stops them all.
 pub(super) async fn apart(
     context: &Context,
     net: &Arc<Net>,
@@ -721,9 +707,8 @@ pub(super) async fn apart(
     Ok(results)
 }
 
-/// whether `downloads` wait for the cache's batch flushes, in a process that may hold
-/// `open_files` files open. a few, or any without a batch, flush one by one, since one flush of
-/// the filesystem also waits for everything other programs wrote there.
+/// whether `downloads` wait for the cache's batch flushes, given `open_files`. a few flush one by
+/// one, since a filesystem flush also waits for everything other programs wrote there.
 fn defer(cache: &Cache, downloads: usize, open_files: Option<u64>) -> bool {
     downloads > crate::cache::MOST_FLUSHED_ALONE
         && cache.defer_downloads(open_files).unwrap_or(false)
@@ -844,7 +829,7 @@ async fn run_each(
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.settings.jobs.value * 2;
     let mut done = 0;
-    // unknown source sizes share one answer, once headers or received bytes show a large file.
+    // unknown source sizes share one answer, once headers or received bytes show a large file
     let approval =
         Arc::new(Approval::new(context.settings.ask_above.value).with_room(cache.root()));
     let listings = again::Listings::default();
@@ -924,8 +909,7 @@ async fn run_each(
             Ok((_, Err(err))) => {
                 if err.kind == Kind::Interrupted {
                     // a ctrl-c read as a key at a question reaches no signal handler, so the stop
-                    // is asked here too. every download then winds down and keeps what it
-                    // received; one cut off would lose bytes this count already promised
+                    // is asked here, and each download winds down keeping what this count promised
                     context.stop.ask();
                     wind_down(&mut tasks, &held).await;
                 } else {
@@ -983,9 +967,8 @@ impl Held {
     }
 }
 
-/// tells a person who stopped, or whose network failed, what the bytes so far are worth: what
-/// the unfinished downloads in `held` keep, an earlier run's included, and whether the next run
-/// goes on from them, which only the servers that send parts of a file allow.
+/// tells a person who stopped, or whose network failed, what the unfinished downloads in `held`
+/// keep, an earlier run's bytes included, and whether the next run can go on from them.
 fn kept(error: Error, held: &[Held]) -> Error {
     if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
         return error;
@@ -1117,11 +1100,9 @@ pub(super) struct Told<'a> {
     pub(super) error: &'a Error,
 }
 
-/// the lines one error gives for `failed`, in their order. failures alike, of one kind with one
-/// help and the same words but for the link or file each names, are told once: the first one's
-/// line, then what the others failed on, each named once, then their help, unless every failure
-/// has the one help the error gives itself, as `shared` says. the first [`NAMED`] failures are
-/// named, and the rest are counted.
+/// the lines one error gives for `failed`, in order. failures alike, of one kind and help with the
+/// same words but for what each names, are told once, then each other named, then their help unless
+/// `shared`. the first [`NAMED`] failures are named and the rest counted.
 pub(super) fn alike(failed: &[Told<'_>], shared: bool) -> Vec<String> {
     let mut groups: Vec<Vec<&Told<'_>>> = Vec::new();
     let mut group_of: HashMap<(&str, Option<&str>, String), usize> = HashMap::new();
@@ -1194,10 +1175,9 @@ fn cause(message: &str, label: &str) -> String {
         .join(" ")
 }
 
-/// says which file a failure concerns, and for bytes that changed upstream, the two ways on: the
-/// pinned bytes from a folder mirror someone pushed them to, or the new bytes by an upgrade,
-/// which only a person may choose, so the help offers it in words no fix takes. a pinned file
-/// whose link has nothing at it now may still be on such a mirror too.
+/// says which file a failure concerns, and for pinned bytes that changed upstream, the ways on: a
+/// folder mirror someone pushed them to, or an upgrade only a person may choose, so no fix takes
+/// it. a pinned link with nothing at it now may still be on such a mirror.
 fn explain(error: Error, job: &Job) -> Error {
     if job.again.is_some() && error.help.as_deref() == Some(crate::net::MOVED_HELP) {
         return error.help(GONE_HELP);
@@ -1539,8 +1519,7 @@ mod tests {
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
     }
 
-    /// a download whose bytes may turn out unchanged is not asked about before it starts, so a
-    /// large one asks once the server sends it, though its size was known before.
+    /// though its size was known before, since it was not asked about before it started.
     #[test]
     fn a_download_that_may_be_unchanged_asks_once_the_server_sends_it() {
         let output = Output::new(
@@ -1625,8 +1604,7 @@ mod tests {
         assert!(overall.ticker.get().is_some());
     }
 
-    /// a download its question stops never begins the batch's plain lines, so a person who
-    /// answers no, however long they took, never hears that it started.
+    /// the batch's plain lines, however long a person took to answer no.
     #[test]
     fn a_download_its_question_stops_never_says_it_began() {
         let context = Context::new(Output::new(
@@ -1663,8 +1641,7 @@ mod tests {
         assert!(overall.ticker.get().is_none());
     }
 
-    /// a batch whose sizes are not all known has no total to fill to, so its bar promises no
-    /// time left, until the last size is told; each size counts once.
+    /// so its bar promises no time left until then; each size counts once.
     #[test]
     fn a_batch_has_a_total_only_once_every_size_is_known() {
         let context = Context::new(Output::new(
@@ -1705,10 +1682,8 @@ mod tests {
         );
     }
 
-    /// an archive whose size only its server told, and which is unpacked once it is in, needs
-    /// room for what is left to transfer and for its files once more, at least the archive's
-    /// size, when nobody listed them; a file kept as it came, or not an archive, needs only the
-    /// transfer.
+    /// what is left to transfer and its files once more, at least its size, when nobody listed
+    /// them. a file kept as it came, or no archive, needs only the transfer.
     #[test]
     fn an_archive_whose_server_told_its_size_needs_room_to_unpack_it() {
         const MB: u64 = 1_000_000;
@@ -1723,8 +1698,7 @@ mod tests {
         assert_eq!(room_needed(Some(u64::MAX), 0, true), u64::MAX);
     }
 
-    /// a lone download that finds bytes an earlier run kept says so on its bar while it gets
-    /// ready to go on from them, before the server answers, rather than an empty bar.
+    /// on a lone download's bar, before the server answers, rather than an empty bar.
     #[test]
     fn a_kept_part_is_told_before_the_download_starts() {
         let context = Context::new(Output::new(
@@ -1861,8 +1835,7 @@ mod tests {
         assert!(error.help.unwrap().contains("published size or SHA-256"));
     }
 
-    /// a file data.lock pins whose link has nothing at it now can still come from a folder
-    /// mirror, so its help names that way first. a new link keeps the help its command words.
+    /// a new link keeps the help its command words.
     #[test]
     fn a_pinned_file_with_nothing_at_its_link_names_the_mirror_route() {
         let gone = || {
@@ -1892,8 +1865,7 @@ mod tests {
         );
     }
 
-    /// a stop promises the next run goes on only from bytes their server lets a later run go on
-    /// from, says when a server never said whether it would, and says what starts over instead.
+    /// it says when a server never said whether it would, and what starts over instead.
     #[test]
     fn a_stop_promises_to_go_on_only_where_a_server_allows() {
         let mib = 1 << 20;
@@ -1973,7 +1945,6 @@ mod tests {
         );
     }
 
-    /// a count of failed files has its thousands apart, as every count a person reads does.
     #[test]
     fn many_download_failures_are_counted_with_thousands_apart() {
         let labels: Vec<String> = (0..1200).map(|n| format!("f{n}.csv")).collect();
