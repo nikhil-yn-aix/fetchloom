@@ -223,15 +223,13 @@ pub(crate) fn host(typed: &str) -> Option<String> {
 
 /// the header a saved key goes in, from the name a person typed, or why no key may go in it.
 pub(crate) fn header_name(typed: &str) -> Result<HeaderName, Error> {
+    // what was typed may hold the key itself, as `X-API-Key: sk_…` does, so none of it is told
     let name = HeaderName::from_bytes(typed.trim().as_bytes()).map_err(|_| {
         Error::new(
             Kind::Usage,
-            format!(
-                "\"{}\" is not a header name",
-                crate::net::mask_query(typed).escape_debug()
-            ),
+            "--header takes a header's name alone, which holds no `:`, space or other character a name cannot",
         )
-        .help("give the name alone, such as `--header X-API-Key`, and type its value when asked")
+        .help("give the name, as `--header X-API-Key`, and type its value when asked, where it stays hidden; a script pipes it in with --with-token")
     })?;
     if name.as_str() == "cookie" {
         return Err(

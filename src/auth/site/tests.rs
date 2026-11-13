@@ -100,11 +100,31 @@ fn a_header_that_frames_a_request_or_its_connection_carries_no_key() {
             .is_some_and(|help| help.contains("--cookies")),
         "{cookie:?}"
     );
-    for typed in ["X API", "X:Key", "", "Key\nX-Other"] {
+    // what was typed may hold the key itself, as `X-API-Key: sk_…` does, so none of it is told
+    for typed in [
+        "X API",
+        "X:Key",
+        "",
+        "Key\nX-Other",
+        "X-API-Key: sk_live_secret",
+        "Authorization: Bearer tok-secret",
+    ] {
         let error = header_name(typed).unwrap_err();
         assert_eq!(
             error.message,
-            format!("\"{}\" is not a header name", typed.escape_debug())
+            "--header takes a header's name alone, which holds no `:`, space or other character a name cannot"
+        );
+        let told = format!("{error:?}");
+        assert!(
+            !told.contains("secret") && !told.contains("X API"),
+            "{told}"
+        );
+        assert!(
+            error
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("stays hidden")),
+            "{told}"
         );
     }
 }

@@ -298,7 +298,10 @@ fn a_header_goes_to_its_own_host_by_the_name_the_site_reads() -> Result {
             "--header does not take Transfer-Encoding, which fetchloom or HTTP itself sets on each request",
         ),
         ("Cookie", "--header does not take Cookie"),
-        ("X API", "\"X API\" is not a header name"),
+        (
+            "X-API-Key: sk_live_secret",
+            "--header takes a header's name alone, which holds no `:`, space or other character a name cannot",
+        ),
     ] {
         let refused = with_stdin(
             sandbox.command(&[
@@ -314,6 +317,8 @@ fn a_header_goes_to_its_own_host_by_the_name_the_site_reads() -> Result {
         )?;
         assert_eq!(refused.status.code(), Some(2), "{name}");
         assert_eq!(json(&refused)?["errors"][0]["message"], said);
+        let told = [refused.stdout, refused.stderr].concat();
+        assert!(!text(&told)?.contains("sk_live_secret"), "{}", text(&told)?);
     }
     let login = with_stdin(
         sandbox.command(&[
