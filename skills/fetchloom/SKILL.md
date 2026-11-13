@@ -46,7 +46,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed` | a question no one answered: a big download, too little disk, data to `push` that asked for an account or terms, what `cache gc --inputs` frees, or a side to keep after a git merge. ask the user; then `--yes`, or `fetchloom lock --ours <name>` or `--theirs <name>` |
+| 1 | `unconfirmed` | a question no one answered: a big download, too little disk, data to `push` that asked for an account or terms, what `cache gc --inputs` frees, an `auth logout` that signs other tools out too, or a side to keep after a git merge. ask the user; then `--yes`, or `fetchloom lock --ours <name>` or `--theirs <name>` |
 | 1 | `lock.outdated` | data.lock is missing or does not pin what data.toml asks. review the change with the user before `fetchloom lock`, which pins what the sources serve today. a clone with no data.lock should get it from the project's owner |
 | 1 | `data.not_ready` | tell the user each line of `errors[0].details`: replacing an edit with `fetchloom sync --force`, or building a recipe, is their call. `fix` is `fetchloom sync` only when a plain sync puts everything in place |
 | 2 | `usage` | fix the command line as `help` says |

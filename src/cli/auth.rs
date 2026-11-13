@@ -797,8 +797,11 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                     // nobody can be asked, so a file other tools need stays unless --yes says so
                     None => {
                         return Err(Error::new(
-                            Kind::Usage,
-                            format!("{tools} read {} too", path.display()),
+                            Kind::Unconfirmed,
+                            format!(
+                                "{tools} read {} too, and fetchloom cannot ask you here whether to sign them out",
+                                path.display()
+                            ),
                         )
                         .help(format!(
                             "to sign them out as well, run `fetchloom auth logout {} --yes`",

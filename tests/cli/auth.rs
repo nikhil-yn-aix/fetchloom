@@ -116,11 +116,12 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     assert_eq!(hf["signed_in"], true);
     assert_eq!(hf["from"], token.display().to_string());
 
-    // the hf tools read the same file, so nobody at a terminal means it stays without --yes,
-    // and signing them out too is a choice no script is handed
+    // the hf tools read the same file, so nobody at a terminal means it stays without --yes, a
+    // question no one answered, as every other one is, which a script asks the person about
     let refused = sandbox.run(&["auth", "logout", "hf", "--json"])?;
-    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr)?);
     let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{error}");
     assert_eq!(error["fix"], serde_json::Value::Null);
     assert!(
         error["help"]
