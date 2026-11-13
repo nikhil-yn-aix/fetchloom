@@ -20,7 +20,7 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 | option | meaning |
 |---|---|
 | `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi` or `openneuro`. repeat it or separate names with commas. any other name is a usage error |
-| `--limit <n>` | keep up to n matches from each site, 1 to 20. the default is 3; any other value is a usage error, exit 2 |
+| `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives 3 and 12 show in all, as [results](#results) says; any other value is a usage error, exit 2 |
 
 [global options](README.md#global-options) apply.
 
@@ -28,12 +28,14 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 
 fetchloom asks hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. it interleaves the sites by rank: each site's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
 
+without `--limit`, at most 12 matches show, so the list and the picker fit a terminal 24 rows high: each site's best, then matches named as the search words, then each site's next by rank, as interleaved. a hint says when some were left out, and `--limit` shows every match it asks for. JSON keeps the same 12.
+
 each site finds its own kind of dataset. ENA's matches are studies, found through EBI's search, and adding one adds every run in it. GEO's are series, found through NCBI's E-utilities, which take a second request for their titles. dandi leaves out embargoed dandisets and ones with no assets yet, and describes one never published by its draft. openneuro leaves out the private datasets it finds and ones with no snapshot yet.
 
 at a terminal, each match is one row with its reference, then title, size, download count and access note in columns, and no number, since `add` takes the reference, not a row's place in the list:
 
 ```text
-      Found 17 datasets for "iris"
+      Found 12 datasets for "iris"
             hf:datasets/scikit-learn/iris                                    18.1 KiB
             kaggle:uciml/iris                            Iris Species         3.6 KiB
             zenodo:23233774                              IRIS: ICESat-2…      1.1 GiB
@@ -69,7 +71,7 @@ with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same ro
     2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  959k downloads
     3 zenodo:23233774                      IRIS: ICESat-2 River Surface…   1.1 GiB  2.4k downloads
     more matches: fetchloom search iris --limit 20
-  type a number from 1 to 17 and press enter, or q to cancel: 2
+  type a number from 1 to 12 and press enter, or q to cancel: 2
       Chose kaggle:uciml/iris
 ```
 
@@ -77,7 +79,7 @@ without an interactive terminal, or with `--json`, fetchloom refuses to choose, 
 
 ```text
   Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
-      Found 17 datasets for "iris"; add one by its id:
+      Found 12 datasets for "iris"; add one by its id:
             hf:datasets/scikit-learn/iris                                      18.1 KiB
             kaggle:uciml/iris                            Iris Species           3.6 KiB
             zenodo:23233774                              IRIS: ICESat-2...      1.1 GiB

@@ -13,11 +13,14 @@ use crate::units;
 #[derive(Serialize)]
 pub(super) struct Report {
     candidates: Vec<Candidate>,
+    /// the matches found but not shown, which `--limit` would show.
+    #[serde(skip)]
+    left_out: usize,
 }
 
 pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report, Error> {
     let words = args.words.join(" ");
-    let limit = usize::from(args.limit);
+    let limit = args.limit.map(usize::from);
     let report = find(context, &context.net(), &words, &args.source, limit).await?;
     let output = &context.output;
     output.done(
@@ -48,9 +51,15 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             output.answer(&line(candidate));
         }
     }
-    if limit < 20 && more(&report.candidates, limit) {
+    let each = limit.unwrap_or(search::LIMIT);
+    if report.left_out > 0 {
         output.hint(&format!(
-            "each site's first {limit} matches are shown; `--limit 20` shows up to 20 from each"
+            "each site's best matches are shown, {} in all; `--limit 20` shows up to 20 from each",
+            report.candidates.len()
+        ));
+    } else if each < 20 && more(&report.candidates, each) {
+        output.hint(&format!(
+            "each site's first {each} matches are shown; `--limit 20` shows up to 20 from each"
         ));
     }
     if report
@@ -113,14 +122,14 @@ pub(super) async fn pick(
     words: &str,
     command: &str,
 ) -> Result<String, Error> {
-    let report = find(context, api, words, &[], search::LIMIT).await?;
+    let report = find(context, api, words, &[], None).await?;
     let rows = rows(
         &context.output,
         &report.candidates,
         context.output.width(),
         PICKER_LEAD,
     );
-    let footer = if more(&report.candidates, search::LIMIT) {
+    let footer = if report.left_out > 0 || more(&report.candidates, search::LIMIT) {
         // words a shell would read differently are not offered as something to paste
         let safe = !words.trim_start().starts_with('-')
             && words
@@ -207,7 +216,7 @@ async fn find(
     api: &impl Api,
     words: &str,
     catalogs: &[Catalog],
-    limit: usize,
+    limit: Option<usize>,
 ) -> Result<Report, Error> {
     if words.trim().is_empty() {
         return Err(Error::new(Kind::Usage, "there are no words to search for")
@@ -261,6 +270,7 @@ async fn find(
     }
     Ok(Report {
         candidates: result.candidates,
+        left_out: result.left_out,
     })
 }
 

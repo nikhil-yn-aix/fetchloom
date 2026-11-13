@@ -20,8 +20,8 @@ options:
                          dandi or openneuro. repeat it or use commas for more
                          [possible values: hf, kaggle, zenodo, ena, geo, dandi,
                          openneuro]
-      --limit <n>        keep up to this many matches from each site, 1 to 20
-                         [default: 3]
+      --limit <n>        keep up to this many matches from each site, 1 to 20.
+                         without it, 12 in all, each site's best among them
   [global options]
 
 on disk: nothing. prints the exact reference of each match, such as

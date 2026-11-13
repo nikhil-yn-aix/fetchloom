@@ -35,6 +35,8 @@ fn reference_text<S: Serializer>(reference: &Reference, serializer: S) -> Result
 pub(crate) struct Search {
     pub(crate) candidates: Vec<Candidate>,
     pub(crate) warnings: Vec<String>,
+    /// the matches found but not shown, since a search without a limit shows at most [`MOST`].
+    pub(crate) left_out: usize,
 }
 
 /// a catalog that answers keyword searches, named as references name it.
@@ -112,19 +114,25 @@ type Asking<'a> = Pin<Box<dyn Future<Output = (usize, Result<Vec<Candidate>, Err
 /// the matches each catalog keeps when nobody asks for another number.
 pub(crate) const LIMIT: usize = 3;
 
+/// the most matches a search shows when nobody asks for a number, so a picker of them fits a
+/// terminal 24 rows high.
+pub(crate) const MOST: usize = 12;
+
 /// how long the other catalogs may take once one has answered, so one slow site cannot hold up
 /// the matches the rest found. a healthy zenodo answered in 0.7 to 7 s; a failing one retried
 /// for 76 s.
 const GRACE: Duration = Duration::from_secs(10);
 
-/// asks the `catalogs` together, keeping rank order while giving each catalog a turn, then moves
-/// matches named exactly as the words to the front, in that same order.
+/// asks the `catalogs` together for `limit` matches each, keeping rank order while giving each
+/// catalog a turn, then moves matches named exactly as the words to the front, in that same
+/// order. with no `limit`, each gives [`LIMIT`] and [`MOST`] of them are shown.
 pub(crate) async fn search(
     api: &impl Api,
     words: &str,
     catalogs: &[Catalog],
-    limit: usize,
+    limit: Option<usize>,
 ) -> Result<Search, Error> {
+    let (limit, most) = limit.map_or((LIMIT, Some(MOST)), |limit| (limit, None));
     let asked: Vec<Catalog> = Catalog::ALL
         .into_iter()
         .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
@@ -184,16 +192,46 @@ pub(crate) async fn search(
     {
         return Err(error);
     }
-    for _ in 0..limit {
+    let mut ranked = Vec::new();
+    for rank in 0..limit {
         for list in &mut lists {
-            result.candidates.extend(list.next());
+            ranked.extend(list.next().map(|candidate| (rank, candidate)));
         }
     }
     let wanted = folded(words);
+    if let Some(most) = most {
+        result.left_out = keep(&mut ranked, most, |candidate| exact(candidate, &wanted));
+    }
+    result.candidates = ranked.into_iter().map(|(_, candidate)| candidate).collect();
     result
         .candidates
         .sort_by_key(|candidate| !exact(candidate, &wanted));
     Ok(result)
+}
+
+/// keeps `most` of the `ranked` matches in their order, each with its rank in its catalog: every
+/// catalog's best, then those `named` as the words, then the rest by rank. how many it left out.
+fn keep(
+    ranked: &mut Vec<(usize, Candidate)>,
+    most: usize,
+    named: impl Fn(&Candidate) -> bool,
+) -> usize {
+    let found = ranked.len();
+    let mut order: Vec<usize> = (0..found).collect();
+    order.sort_by_key(|&at| {
+        let (rank, candidate) = &ranked[at];
+        (*rank > 0, !named(candidate))
+    });
+    let mut kept = vec![false; found];
+    for at in order.into_iter().take(most) {
+        kept[at] = true;
+    }
+    let mut at = 0;
+    ranked.retain(|_| {
+        at += 1;
+        kept[at - 1]
+    });
+    found - ranked.len()
 }
 
 /// text compared without case and with spaces, `-` and `_` alike.

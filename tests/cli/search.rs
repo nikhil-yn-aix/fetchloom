@@ -444,6 +444,63 @@ fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
     Ok(())
 }
 
+/// a search without `--limit` shows at most 12 matches, so its list fits a terminal of 24 rows:
+/// each site's best first, by rank, then the next best of each in turn. `--limit` asks each site
+/// for that many, and shows them all.
+#[test]
+fn a_search_without_a_limit_shows_twelve_matches_and_each_sites_best() -> Result {
+    let sandbox = Sandbox::new()?;
+    let every = || -> Result<Catalogs> {
+        Ok(Catalogs {
+            others: finding()?,
+            ..Catalogs::new(HF, KAGGLE, ZENODO)?
+        })
+    };
+    let found = |args: &[&str]| -> Result<Vec<String>> {
+        let output = every()?.command(&sandbox, args).output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let document = json(&output)?;
+        let candidates = document["result"]["candidates"].as_array().cloned();
+        Ok(candidates
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|candidate| candidate["reference"].as_str().map(str::to_owned))
+            .collect())
+    };
+    assert_eq!(
+        found(&["search", "iris", "--json"])?,
+        [
+            "hf:datasets/scikit-learn/iris",
+            "kaggle:uciml/iris",
+            "zenodo:23233774",
+            "ena:SRP455996",
+            "geo:GSE318345",
+            "dandi:000623",
+            "openneuro:ds001037",
+            "hf:datasets/fatdove/Iris_Database",
+            "kaggle:himanshunakrani/iris-dataset",
+            "zenodo:1319069",
+            "ena:SRP630995",
+            "geo:GSE311178",
+        ]
+    );
+    assert_eq!(
+        found(&["search", "iris", "--limit", "3", "--json"])?.len(),
+        20
+    );
+    let output = every()?.command(&sandbox, &["search", "iris"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(text(&output.stdout)?.lines().count(), 12, "{stderr}");
+    assert!(
+        stderr.contains(
+            "each site's best matches are shown, 12 in all; `--limit 20` shows up to 20 from each"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn search_json_carries_metadata_and_joins_words() -> Result {
     let sandbox = Sandbox::new()?;

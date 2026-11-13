@@ -776,9 +776,10 @@ pub(crate) struct Search {
     )]
     pub(crate) source: Vec<crate::source::search::Catalog>,
 
-    /// keep up to this many matches from each site, 1 to 20
-    #[arg(long, value_name = "n", default_value_t = 3, value_parser = limit, help_heading = "options")]
-    pub(crate) limit: u8,
+    /// keep up to this many matches from each site, 1 to 20. without it, 12 in all, each site's
+    /// best among them
+    #[arg(long, value_name = "n", value_parser = limit, help_heading = "options")]
+    pub(crate) limit: Option<u8>,
 }
 
 /// which files of a dataset to keep, for `add` and `get`.

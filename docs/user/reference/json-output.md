@@ -194,7 +194,7 @@ the work counters still count metadata requests a dry run makes to resolve chang
 
 ## search candidates
 
-`search` returns `candidates` on success. plain-word `add` and `get` retain the same array when they fail with `reference.ambiguous`; no matches returns an empty array with `reference.unresolved`.
+`search` returns `candidates` on success: at most 12 without `--limit`, else up to `--limit` from each site. plain-word `add` and `get` retain the same array when they fail with `reference.ambiguous`; no matches returns an empty array with `reference.unresolved`.
 
 | field | value |
 |---|---|
