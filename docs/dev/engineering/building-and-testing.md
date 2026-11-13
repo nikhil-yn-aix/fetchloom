@@ -65,6 +65,39 @@ the recipe tests in `tests/cli/build.rs` run [examples/recipe_step.rs](https://g
 
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. on a drive that makes no links, `Sandbox::placed_filters` turns the copy wording of a story into the linking wording, so one snapshot covers every filesystem. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 
+### debug-only hooks
+
+debug builds read these variables so a CLI test can put a local server where a host would be, fake a disk or a machine, or hold a run at a moment that passes too fast to catch. each read sits behind `#[cfg(debug_assertions)]`, so a release build never reads one. the sandbox sets the ticker and the log for every command; a test sets the others on its own `Command`. tests are the files under `tests/cli`.
+
+| variable | what a debug build does with it | tests that set it |
+|---|---|---|
+| `FETCHLOOM_TEST_TICKER` | `off` drops the lines a long batch prints as time passes; any other value brings the first at 0.1 s rather than 2 s | every command, as `off`; `progress.rs`, `cache.rs` and `get.rs` set `on` |
+| `FETCHLOOM_TEST_LOG` | appends the debug log, an event a write, to the file it names | every command, as `logs/<n>.log` |
+| `FETCHLOOM_TEST_SPLIT` | splits a slow download from 4 MiB rather than 64 MiB, in pieces from 512 KiB, after measuring for 0.2 s | `split.rs` |
+| `FETCHLOOM_TEST_HOLD_PUSH` | holds each copy of a push once its part is in the mirror's `tmp/`, until a stop or the file it names | `concurrent.rs` |
+| `FETCHLOOM_TEST_HOLD_FLUSH` | a download with every byte in writes `<file>.held`, then holds before its flush until the file appears, whatever is asked | `progress.rs` |
+| `FETCHLOOM_TEST_HOLD_FINISH` | a run writes `<file>.held` right after `Stop::finish`, then holds until the file appears | `build.rs`, and `held_at_its_mark` in `support.rs` for `auth.rs`, `cache.rs`, `export.rs`, `get.rs` and `push.rs` |
+| `FETCHLOOM_TEST_BUCKETS` | sends each request to an `amazonaws.com`, `storage.googleapis.com` or `blob.core.windows.net` host to `/<host><path>` on the local server it names | `buckets.rs`, `azure.rs`, `google.rs`, `archives.rs`, `drop.rs`, `layout.rs`, `project.rs`, `repositories.rs` |
+| `FETCHLOOM_TEST_SOURCES` | the same for the repository hosts `test_source` in [net/api.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api.rs) lists | `repositories.rs` |
+| `FETCHLOOM_TEST_DRIVE` | the same for google drive's pages, its download host and its api | `google/drive.rs` |
+| `FETCHLOOM_TEST_HF_API`, `FETCHLOOM_TEST_KAGGLE_API`, `FETCHLOOM_TEST_ZENODO_API`, `FETCHLOOM_TEST_ENA_API`, `FETCHLOOM_TEST_GEO_API`, `FETCHLOOM_TEST_DANDI_API`, `FETCHLOOM_TEST_OPENNEURO_API` | sends each API request to that site's host, searches and listings alike, to the local server it names, with the same path and query | `search.rs`, `add.rs` and `mirrors.rs`; hugging face also `auth.rs`, zenodo also `get.rs` and `secrets.rs` |
+| `FETCHLOOM_TEST_GOOGLE_TOKEN` | stands a local server in for google's token endpoint | `google.rs`, `google/drive.rs` |
+| `FETCHLOOM_TEST_AZURE_IDENTITY` | stands a local server in for the instance metadata service a managed identity asks | `azure.rs` |
+| `FETCHLOOM_TEST_FILESYSTEM` | the format every disk reports, by the name `Filesystem::named` reads, such as `vfat` | `project.rs`, `get.rs`, `buckets.rs` |
+| `FETCHLOOM_TEST_FREE` | the bytes free on every disk | `project.rs`, `import.rs`, `build.rs`, `get.rs` |
+| `FETCHLOOM_TEST_ROOM` | the memory the machine has, as a container's limit leaves it | `caps.rs` |
+| `FETCHLOOM_TEST_INLINE` | the most files a source lists in data.lock itself, rather than 50,000, so a test writes lists to `data.lock.d` with few files | `project.rs`, `import.rs`, `merge.rs`, `buckets.rs` |
+
+the debug binary never reads these, only test processes do:
+
+| variable | what it does |
+|---|---|
+| `FETCHLOOM_TEST_REQUIRE` | the capabilities a test must find, as [above](#test-layers) |
+| `FETCHLOOM_TEST_NOOP_CHMOD` | the fat mount the chmod test places on, as [the xfs loop mount](#xfs-loop-mount) says |
+| `FETCHLOOM_TEST_WRITE_MANUAL` | writes the manual page instead of comparing it, as [update snapshots](#update-snapshots) says |
+| `FETCHLOOM_TEST_LIVE_DRIVE_FOLDER` | the private drive folder a live test reads, as [python and live tests](#python-and-live-tests) says |
+| `FETCHLOOM_TEST_CLI_STOPPED_LIST`, `FETCHLOOM_TEST_SCAN_DESCRIPTOR_LIMIT`, `FETCHLOOM_TEST_LOG_TIMELINE`, `FETCHLOOM_TEST_LOG_MODE`, `FETCHLOOM_TEST_COPY_CHILD`, `FETCHLOOM_TEST_FEW_OPEN_FILES`, `FETCHLOOM_TEST_PIPE_CHILD` | marks a child: the test starts its own test binary again with the variable set, so the body runs alone in a process the test can limit, stop or kill |
+
 ### test directories
 
 if you override `TMPDIR` on linux or macos, or `TMP` and `TEMP` on windows, choose an existing writable folder outside every git repository and fetchloom project. `Sandbox::new` uses `tempfile::tempdir`, and commands still inspect parent folders for project discovery and git integration. a test folder inside a checkout can therefore produce extra `.gitignore` files or different snapshots. do not accept those differences as intended output.
