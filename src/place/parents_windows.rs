@@ -53,7 +53,7 @@ impl Parents {
                 } else {
                     absolute
                 };
-            // aliases above the selected root are allowed; its own link policy is unchanged.
+            // aliases above the selected root are allowed; its own link policy is unchanged
             let mut handles = lock_chain(&selected, make, !real_root)?;
             let path = fs::canonicalize(&selected)?;
             handles.extend(lock_chain(&path, false, false)?);
@@ -135,8 +135,7 @@ impl Location {
         fs::rename(&self.path, &target.path)
     }
 
-    /// renames to `target`'s name without replacing anything there: a name already taken is
-    /// refused with `AlreadyExists`.
+    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
         rename_new_path(&self.path, &target.path)
     }
@@ -220,7 +219,7 @@ impl Location {
 }
 
 pub(super) struct Staged {
-    // this field is dropped before location releases the directory handles.
+    // this field is dropped before location releases the directory handles
     temporary: Option<tempfile::TempPath>,
     location: Arc<Location>,
 }
@@ -237,9 +236,8 @@ impl Staged {
         self.location.metadata()
     }
 
-    /// gives the staged file its name in place of the plain file there, while `unchanged` says
-    /// that file still looks as it did, and returns how the file now at the name looks. none, with
-    /// the staged file gone, when the file there changed or is no plain file.
+    /// gives the staged file its name in place of the plain file there while `unchanged` says that
+    /// file still looks as it did, and returns the new look; none, the staged file gone, otherwise.
     pub(super) fn replace(
         mut self,
         unchanged: impl FnOnce(&Metadata) -> bool,
@@ -260,11 +258,9 @@ impl Staged {
     }
 }
 
-/// renames the file at `from` to `to` without replacing anything there: a name already taken is
-/// refused with `AlreadyExists`. std renames over an existing file, so the file gets its new name
-/// as a second link and loses the old one. FAT and exFAT make no links, and there tempfile's
-/// rename, which refuses an existing name too, clears the file's attributes, so a read-only file
-/// is made read-only again under whichever name it has after.
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`: by a second link and the
+/// old name's removal, since std's rename replaces, or on fat and exfat, which make no links, by
+/// tempfile's rename, which clears attributes, so a read-only file is made read-only again.
 pub(super) fn rename_new_path(from: &Path, to: &Path) -> io::Result<()> {
     match fs::hard_link(from, to) {
         Ok(()) => fs::remove_file(from).inspect_err(|_| {

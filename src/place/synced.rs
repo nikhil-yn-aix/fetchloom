@@ -29,9 +29,8 @@ pub(super) fn mounts() -> Option<String> {
     }
 }
 
-/// the sync client whose filesystem holds `folder`, as the mount table `mounts` tells: google
-/// colab mounts google drive, by default at /content/drive, as a fuse filesystem of type
-/// `fuse.drive`. the deepest mount holding `folder` is its filesystem.
+/// google drive, when the deepest mount in `mounts` holding `folder` is of type `fuse.drive`, as
+/// google colab mounts it, by default at /content/drive.
 fn mounted(folder: &Path, mounts: &str) -> Option<&'static str> {
     let (_, kind) = mounts
         .lines()
@@ -132,9 +131,8 @@ fn roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<(PathBuf, &'static str)>
     roots
 }
 
-/// the folders macos sync clients own under `home`: icloud drive's, and those that onedrive,
-/// dropbox and other file provider clients keep in `Library/CloudStorage`, one per account,
-/// such as `OneDrive-Personal` or `Dropbox (Lab)`.
+/// the folders macos sync clients own under `home`: icloud drive's, and one per account in
+/// `Library/CloudStorage` for file provider clients, as `OneDrive-Personal` or `Dropbox (Lab)`.
 fn mac_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
     let library = home.join("Library");
     let mut roots = vec![(library.join("Mobile Documents"), "icloud drive")];

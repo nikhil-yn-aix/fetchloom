@@ -176,8 +176,7 @@ impl Location {
         .map_err(Into::into)
     }
 
-    /// renames to `target`'s name without replacing anything there: a name already taken is
-    /// refused with `AlreadyExists`.
+    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
         rename_new(
             self.parent.file.as_fd(),
@@ -329,7 +328,7 @@ pub(super) struct Staged {
     root: Arc<File>,
     relative: PathBuf,
     identity: Identity,
-    // only synchronous reflinks retain a parent; queued copies share just the root descriptor.
+    // only synchronous reflinks retain a parent; queued copies share just the root descriptor
     retained: Option<Parent>,
     hidden: String,
     published: bool,
@@ -354,9 +353,8 @@ impl Staged {
         metadata(&parent, &self.name)
     }
 
-    /// gives the staged file its name in place of the plain file there, while `unchanged` says
-    /// that file still looks as it did, and returns how the file now at the name looks. none, with
-    /// the staged file gone, when the file there changed or is no plain file.
+    /// gives the staged file its name in place of the plain file there while `unchanged` says that
+    /// file still looks as it did, and returns the new look; none, the staged file gone, otherwise.
     pub(super) fn replace(
         mut self,
         unchanged: impl FnOnce(&Metadata) -> bool,
@@ -417,9 +415,9 @@ pub(super) fn rename_new_path(from: &Path, to: &Path) -> io::Result<()> {
     rename_new(native::CWD, from, native::CWD, to, false)
 }
 
-/// renames `from` in `from_parent` to `to` in `to_parent`, never replacing a file or link there:
-/// the rename linux and macos have that refuses an existing name, else, or with `fallback`, a
-/// link to the new name and the old name's removal, which refuses one too.
+/// renames `from` in `from_parent` to `to` in `to_parent` without replacing anything: by the
+/// rename linux and macos have that refuses a taken name, else, or with `fallback`, by a link to
+/// the new name and the old name's removal.
 fn rename_new<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
     from_parent: BorrowedFd<'_>,
     from: P,
@@ -520,7 +518,7 @@ pub(super) fn open_root(path: &Path, make: bool, real: bool) -> io::Result<File>
             .map(File::from)
             .map_err(Into::into);
     };
-    // ancestors of the chosen root may themselves have aliases, such as /var on macos.
+    // ancestors of the chosen root may themselves have aliases, such as /var on macos
     let folder = match File::open(parent) {
         Ok(folder) => folder,
         Err(error) if make && error.kind() == io::ErrorKind::NotFound => {

@@ -29,14 +29,12 @@ use crate::threads::Threads;
 use crate::volume::Volume;
 use crate::volume::{crosses_volumes, is_plain, refuses_links};
 
-/// the most threads that place files or look up objects at once. creating a link or opening a
-/// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
-/// other's waits. placing 10,000 files on windows took 7.5 s on four threads and 5.1 s on eight,
-/// and sixteen gained little more.
+/// the most threads that place files or look up objects at once, since each call waits on the
+/// disk and, on windows, the antivirus scanner: placing 10,000 files on windows took 7.5 s on
+/// four threads, 5.1 s on eight, and little less on sixteen.
 const THREADS: usize = 8;
 
-/// the fewest items worth a thread of their own, since starting a thread costs more than a few
-/// calls.
+/// the fewest items worth a thread of their own, since starting one costs more than a few calls.
 const PER_THREAD: usize = 64;
 
 /// hashing this many bytes repays starting a worker even for a short file list.
@@ -96,8 +94,7 @@ pub(crate) struct Placer {
 #[cfg(test)]
 type Observation = dyn Fn(&Metadata) + Send + Sync;
 
-/// one file to place: the object, where it goes, whether it must be a writable copy, and how many
-/// bytes it holds.
+/// one file to place; `writable` asks for a writable copy.
 pub(crate) struct Order {
     pub(crate) object: PathBuf,
     pub(crate) destination: PathBuf,
@@ -190,9 +187,9 @@ impl Placer {
         Placer::starting_at(root, Method::Reflink, synced)
     }
 
-    /// prepares placement under a folder someone named, which may be a link to a folder. the
-    /// folders below it must still be real. it is the one folder fetchloom writes to on its
-    /// volume, so a removal tests there, with a hidden file, whether the volume can hardlink.
+    /// prepares placement under a folder someone named, which may itself be a link, though the
+    /// folders below it must be real. as fetchloom's one folder on its volume, a removal probes
+    /// there, with a hidden file, whether the volume can hardlink.
     pub(crate) fn in_named_folder(root: &Path) -> Placer {
         Placer {
             checks_root: false,
@@ -200,10 +197,8 @@ impl Placer {
         }
     }
 
-    /// prepares placement of scratch files under `root` that never makes a hardlink: a reflink
-    /// where the disk clones, else a copy, which is not flushed. no file placed this way is the
-    /// cache's object under another name, so a write to it, as by a recipe's step, never
-    /// reaches the cache.
+    /// prepares placement of scratch files under `root` by reflink, else unflushed copy, never a
+    /// hardlink, so a write to one, as by a recipe's step, never reaches the cache.
     pub(crate) fn without_hardlinks(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let placer = Placer {
@@ -296,11 +291,9 @@ impl Placer {
         }
     }
 
-    /// places every order and says how each went, in order, with what `seen` keeps of the metadata
-    /// of each placed file, read right after it was placed, so a later edit is never taken for the
-    /// placed file. the first goes alone, so it learns which methods the filesystem allows before
-    /// the rest go several at once. orders are rebuilt for checks and placement so only active
-    /// workers keep their paths. copies flushed as a batch take their names only after the flush.
+    /// places every order and says how each went, in order, with what `seen` keeps of each file's
+    /// metadata, read right after placing it. the first goes alone to learn which methods the
+    /// filesystem allows; copies flushed as a batch take their names only after the flush.
     pub(crate) fn place_all<T: Send>(
         &mut self,
         count: usize,
@@ -395,9 +388,8 @@ impl Placer {
         in_order(count, results)
     }
 
-    /// tries each method the filesystem may allow, best first. with `batch`, a copy is left
-    /// under its hidden name until [`Placer::flush_copies`] has flushed it; without, it flushes
-    /// on its own.
+    /// tries each method the filesystem may allow, best first. with `batch` a copy waits under its
+    /// hidden name for [`Placer::flush_copies`]; without, it flushes on its own.
     fn put(
         &self,
         object: &Path,
@@ -425,7 +417,7 @@ impl Placer {
                 Err(error) => self.learn(Method::Reflink, error)?,
             }
         }
-        // sync clients break hardlinks or upload every link as a full file.
+        // sync clients break hardlinks or upload every link as a full file
         if !early_hardlink
             && self.can_hardlink.load(Ordering::Relaxed)
             && !writable
@@ -438,7 +430,7 @@ impl Placer {
             }
         }
         // outside a batch a copy flushes on its own, as on a nested mount, which the root
-        // filesystem's batch flush does not cover.
+        // filesystem's batch flush does not cover
         let flush = self.durable && !batch;
         #[cfg(unix)]
         let flush = flush || (self.durable && location.other_device());
@@ -543,9 +535,8 @@ impl Placer {
         Ok(())
     }
 
-    /// checks every folder between the root and `path`, refusing a link among them, so a link
-    /// inside the data folder can never send a file elsewhere. with `make`, missing folders are
-    /// made one at a time. each folder is checked once.
+    /// checks every folder between the root and `path` once, refusing a link among them, so none
+    /// inside the data folder sends a file elsewhere. with `make`, missing folders are made.
     pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
         self.stop.check_io()?;
         let (_, parent) = self.within(path)?;
@@ -561,11 +552,9 @@ impl Placer {
         Ok(())
     }
 
-    /// removes a file fetchloom placed, by `placed` when fetchloom recorded how. every folder on
-    /// its way is checked again first, since a deletion must not trust a check made before
-    /// downloads ran. with `prune`, folders it leaves empty go too, up to the root. a file
-    /// recorded as a hardlink is the cached object under another name, so it never has its
-    /// read-only flag cleared; any other follows the volume's rule for read-only files.
+    /// removes a file fetchloom placed, checking its folders again since downloads ran, and with
+    /// `prune` the folders it leaves empty, up to the root. a file `placed` as a hardlink is the
+    /// cache's object, so its read-only flag is never cleared.
     pub(crate) fn remove(
         &mut self,
         path: &Path,
@@ -625,9 +614,8 @@ impl Placer {
         self.location(path, false)?.create_file(readonly)
     }
 
-    /// renames between two checked parents below the pinned root. like the system's rename, it
-    /// replaces a file already at `to`, so it suits only a folder no one else writes, such as a
-    /// staging folder this run made; [`Placer::move_aside`] never replaces.
+    /// renames between two checked parents below the pinned root, replacing a file at `to`, so it
+    /// suits only a folder no one else writes; [`Placer::move_aside`] never replaces.
     pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.stop.check_io()?;
         self.location(from, false)?
@@ -635,8 +623,7 @@ impl Placer {
     }
 
     /// moves the file at `path` to a new name beside it, `.fetchloom-<hex>.old`, never replacing
-    /// anything, so its bytes stay while a replacement takes its name, and returns that name. a
-    /// sync leaves such a file alone, so one a run cut off midway kept is there to find.
+    /// anything, and returns it; a sync leaves such a file alone for a person to find.
     pub(crate) fn move_aside(&self, path: &Path) -> io::Result<PathBuf> {
         self.stop.check_io()?;
         let (path, parent) = self.within(path)?;
@@ -666,10 +653,9 @@ impl Placer {
             .link_to(&self.location(to, false)?)
     }
 
-    /// gives `to` a file of its own holding the bytes of the plain file at `from`, both below the
-    /// pinned root: a reflink where the filesystem clones, else a copy flushed to disk, never a
-    /// hardlink, so a later write to either leaves the other as it is. a name already taken is
-    /// refused with `AlreadyExists`, so nothing is replaced.
+    /// gives `to` a file of its own with the bytes of the plain file at `from`, both below the
+    /// pinned root: a reflink, else a flushed copy, never a hardlink, so a write to one leaves the
+    /// other. a taken name is refused with `AlreadyExists`.
     pub(crate) fn copy_file(&self, from: &Path, to: &Path, writable: bool) -> io::Result<Method> {
         self.stop.check_io()?;
         self.check_parent(from)?;
@@ -684,11 +670,9 @@ impl Placer {
         Ok(Method::Copy)
     }
 
-    /// replaces the plain file at `destination`, which holds the bytes of `object`, with a
-    /// hardlink to `object`, while `unchanged` says the file still looks as it did. the link is
-    /// made under a hidden name in the same folder first, so the file keeps its bytes until the
-    /// link takes its name in one rename. returns how the link looks; none when the filesystem,
-    /// or a sync client owning the folder, allows no hardlink here, or the file changed.
+    /// replaces the plain file at `destination`, holding `object`'s bytes, with a hardlink to it
+    /// while `unchanged` says the file still looks as it did, renaming the link over it in one
+    /// step. none when no hardlink is allowed here or the file changed.
     pub(crate) fn relink(
         &self,
         object: &Path,
@@ -821,10 +805,9 @@ impl Placer {
         Ok(below)
     }
 
-    /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
-    /// again, and an error no other method can avoid, such as an existing destination, is returned.
-    /// a hardlink refusal holds for every file only once the volume's own probe agrees, since one
-    /// file can be refused alone, as linux's `protected_hardlinks` refuses another user's object.
+    /// learns from `method` failing with `error`: a refused method is not tried again, and an
+    /// error no method can avoid, as an existing destination, is returned. a hardlink refusal holds
+    /// for all only when the probe agrees, as `protected_hardlinks` may refuse one file alone.
     fn learn(&self, method: Method, error: io::Error) -> io::Result<()> {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
@@ -866,9 +849,8 @@ pub(crate) fn has_other_names(path: &Path) -> bool {
     }
 }
 
-/// renames the file at `from` to `to`, never replacing a file or link already at `to`: a name
-/// already taken is refused with `AlreadyExists`. on a disk that can neither link nor rename that
-/// way, it fails with the disk's refusal of the link.
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`. a disk that can neither
+/// link nor rename that way fails with its refusal of the link.
 pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
     parents::rename_new_path(from, to)
 }
@@ -917,6 +899,7 @@ fn run_work<T: Sync, R: Send>(items: &[T], threads: usize, job: impl Fn(&T) -> R
     }
     let next = AtomicUsize::new(0);
     let done: Vec<Vec<(usize, R)>> = std::thread::scope(|scope| {
+        // collected so every worker starts before the first is joined, not one at a time
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 crate::threads::scoped(scope, || {
@@ -967,6 +950,7 @@ fn run_owned<T: Send, R: Send>(items: Vec<T>, cap: Threads, job: impl Fn(T) -> R
     let runs = owned_runs(items, threads);
     let job = &job;
     std::thread::scope(|scope| {
+        // collected so every worker starts before the first is joined, not one at a time
         let workers: Vec<_> = runs
             .into_iter()
             .map(|mut run| {
@@ -994,9 +978,8 @@ fn owned_runs<T>(items: Vec<T>, threads: usize) -> Vec<Vec<T>> {
     .collect()
 }
 
-/// the orders, each with its folder's number, reordered so that neighbours go to different
-/// folders. links made into one folder wait on each other, so threads taking the next order in
-/// turn would queue on one folder.
+/// the orders, each with its folder's number, reordered so neighbours go to different folders,
+/// since links made into one folder wait on each other.
 fn spread(orders: impl IntoIterator<Item = (usize, usize)>) -> Vec<usize> {
     let mut seen: Vec<usize> = Vec::new();
     let mut ranked: Vec<(usize, usize)> = orders
@@ -1100,8 +1083,7 @@ fn check_object(object: &Path) -> io::Result<Metadata> {
     ))
 }
 
-/// copies `object` to `destination`, failing when `destination` exists, and makes the copy
-/// writable or read-only as asked.
+/// copies `object` to `location`, failing when a file is there, writable or read-only as asked.
 fn copy_at(
     object: &Path,
     location: &Arc<Location>,
@@ -1155,7 +1137,7 @@ fn stage_copy_at(
 ) -> io::Result<(Staged, File)> {
     stop.check_io()?;
     let (staged, file) = location.create(0o666, false)?;
-    // publishing clears windows attributes, so seal through the claimed handle afterward.
+    // publishing clears windows attributes, so seal through the claimed handle afterward
     fill(object, &file, cfg!(windows) || writable, threads, stop)?;
     Ok((staged, file))
 }
@@ -1239,10 +1221,9 @@ fn publish_flushed<T: Send>(
     first.into_iter().chain(rest).collect()
 }
 
-/// clones `object` to `destination`, failing when `destination` exists. the outer result says
-/// whether the clone was made, the inner whether it was then made writable or read-only as asked.
-/// the clone is made under a hidden name with its final mode and named only once complete, as a
-/// copy is, since an interrupted clone would leave an empty file where the project expects one.
+/// clones `object` to `location`, failing when a file is there, under a hidden name with its final
+/// mode, named once complete, as an interrupted clone would leave an empty file. the outer result
+/// says whether the clone was made, the inner whether its mode was then set as asked.
 #[cfg(target_os = "linux")]
 fn reflink(
     object: &Path,
@@ -1300,7 +1281,7 @@ fn fill(
 ) -> io::Result<()> {
     let mut input = read_unfollowed(object)?;
     if threads.is_limited() {
-        // a reader per copy would multiply the placement worker cap.
+        // a reader per copy would multiply the placement worker cap
         copy_stoppable(&mut input, &mut output, stop)?;
     } else {
         transfer(input, output, stop)?;
@@ -1357,10 +1338,9 @@ fn copy_stoppable(mut input: impl Read, mut output: impl Write, stop: &Stop) -> 
     }
 }
 
-/// copies `input` into `output` a block at a time, reading the next block on another thread
-/// while this one writes the last. with the disk never waiting on the other side, a copy keeps
-/// pace with the operating system's own: 1 GiB took 0.62 s against 0.99 s one block at a time
-/// on an nvme laptop.
+/// copies `input` into `output` a block at a time, reading the next block on another thread while
+/// this one writes the last, which keeps pace with the system's own copy: 1 GiB took 0.62 s
+/// against 0.99 s one block at a time on an nvme laptop.
 #[cfg(any(not(target_os = "linux"), test))]
 fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
     let (full, filled) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(2);
@@ -1371,7 +1351,7 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
     let caller = std::thread::current().id();
     std::thread::scope(move |scope| {
         let worker = crate::threads::scoped(scope, move || {
-            // a refused reader runs at join, when there is no concurrent queue consumer.
+            // a refused reader runs at join, when there is no concurrent queue consumer
             if std::thread::current().id() == caller {
                 return copy_stoppable(&mut input, output, stop);
             }

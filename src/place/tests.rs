@@ -289,9 +289,8 @@ fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     assert!(is_read_only(&copied));
 }
 
-/// windows stamps a written file's time when the handle that wrote it closes, and fat or exfat
-/// keep that time coarser than the open handle shows. so a copy must look as its folder lists
-/// it, even when the disk's clock ticks between the write and the close.
+/// windows stamps a written file's time when its handle closes, coarser on fat and exfat than the
+/// open handle shows, so a copy must look as its folder lists it even if the clock ticked between.
 #[cfg(windows)]
 #[test]
 fn a_copy_looks_as_its_folder_lists_it() {
@@ -847,7 +846,7 @@ fn a_method_the_filesystem_refuses_is_not_tried_again() {
         // how FAT32 and exFAT refuse a hardlink: ERROR_INVALID_FUNCTION on windows, EPERM on
         // linux
         io::Error::from_raw_os_error(1),
-        // how NTFS refuses a reflink: "incorrect function", wrapped in an HRESULT.
+        // how NTFS refuses a reflink: "incorrect function", wrapped in an HRESULT
         #[cfg(windows)]
         io::Error::from_raw_os_error(0x8007_0001_u32.cast_signed()),
     ];
@@ -889,9 +888,8 @@ fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
     assert_eq!(placer.unlinked(), None);
 }
 
-/// ext4 lets one file have 65,000 names. a hardlink past that fails with EMLINK, and windows
-/// answers `ERROR_TOO_MANY_LINKS` past 1,023, so that file is copied, and the next file is linked
-/// again.
+/// a hardlink past ext4's 65,000 names fails with EMLINK, and past windows' 1,023 with
+/// `ERROR_TOO_MANY_LINKS`, so that file is copied and the next one linked again.
 #[test]
 fn too_many_links_copies_that_file_alone() {
     let (folder, object) = cache(true);
@@ -1741,9 +1739,8 @@ fn a_hardlink_still_refuses_an_object_swapped_for_a_symlink() {
     assert!(fs::symlink_metadata(&destination).is_err());
 }
 
-/// FAT32 holds no file of 4 GiB or more, so a file that large is refused before any of its bytes
-/// are copied there, while one a byte smaller is placed, as is the larger one on exFAT. the order
-/// says how large the file is, so the object here can stay small.
+/// FAT32 holds no file of 4 GiB or more, so one is refused before any byte is copied, while one a
+/// byte smaller, or one on exFAT, is placed. the order states the size, so the object stays small.
 #[test]
 fn a_file_fat32_cannot_hold_is_refused_before_it_is_copied() {
     let (folder, object) = cache(true);
