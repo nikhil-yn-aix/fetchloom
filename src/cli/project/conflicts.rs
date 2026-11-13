@@ -1,6 +1,5 @@
-//! `fetchloom lock` in a project where a git merge left both sides in data.toml or data.lock:
-//! both merged a dataset at a time, each side whole from git where it can tell, else from the
-//! conflict lines, and nothing resolved or downloaded.
+//! `fetchloom lock` where a git merge left both sides in data.toml or data.lock, merged a dataset
+//! at a time, each side whole from git where it can tell, with nothing resolved or downloaded.
 
 use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
@@ -13,8 +12,7 @@ use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, git};
 
-/// data.toml and data.lock as a merge left them, and the sides of each that holds git's conflict
-/// lines.
+/// data.toml and data.lock as a merge left them, with sides for each holding conflict lines.
 struct Conflicted {
     manifest: String,
     /// none when the project has no data.lock.
@@ -91,7 +89,6 @@ pub(super) fn merge(
     }))
 }
 
-/// the side `--ours` and `--theirs` name for each dataset.
 fn choices(args: &args::Lock) -> Result<Choices, Error> {
     let mut choices = Choices::new();
     for (names, side) in [(&args.ours, Side::Ours), (&args.theirs, Side::Theirs)] {
@@ -111,8 +108,7 @@ fn choices(args: &args::Lock) -> Result<Choices, Error> {
     Ok(choices)
 }
 
-/// data.toml and data.lock with the sides of each, or none when data.toml cannot be read, which
-/// the usual reader then explains.
+/// none when data.toml cannot be read, which the usual reader then explains.
 fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
     let Ok(manifest) = std::fs::read_to_string(project.manifest_path()) else {
         return Ok(None);
@@ -132,13 +128,8 @@ fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
     }))
 }
 
-/// the sides of data.toml and of data.lock. data.lock's come whole from git's index when git gives
-/// them, base and all, so no pin mixes lines of both sides; else from its conflict lines. data.toml
-/// keeps the sides its conflict lines give, which hold what git merged by itself and edits made
-/// since, with git's whole sides beside them for a choice to take an entry from. its base is the
-/// one its conflict lines show when it reads, else git's index's, else the one read around the
-/// lines zdiff3 moved out of the conflicts. a file without conflict lines is the same on both
-/// sides, data.toml with whole sides from the commits being merged.
+/// data.lock's sides come whole from git's index when git has them, so no pin mixes both sides.
+/// data.toml keeps its conflict lines' sides, which hold what git merged itself and edits since.
 fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
     let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
     let git = program.as_deref();
@@ -180,8 +171,6 @@ fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
     (manifest, lock)
 }
 
-/// a file without conflict lines, the same on both sides, with each side whole as `whole` gives
-/// it.
 fn same(text: &str, whole: Option<[String; 2]>) -> Sides {
     Sides {
         ours: text.to_owned(),
@@ -201,9 +190,7 @@ fn in_project(error: Error, project: &Project) -> Error {
     error.with_result(result)
 }
 
-/// writes the merged data.toml when it changed, then, when data.lock changed into `rendered`, the
-/// lists it names and data.lock itself, and sweeps the lists no side needs any more. returns the
-/// parts of lists it wrote anew.
+/// writes what changed, data.lock when `rendered`, and returns the parts of lists it wrote anew.
 fn write(
     project: &Project,
     merged: &Merged,
@@ -223,7 +210,6 @@ fn write(
     Ok(written)
 }
 
-/// what the merge did, or with `dry_run` would do, to `files`, and what comes next.
 fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_run: bool) {
     let output = &context.output;
     let verb = if dry_run { "Would merge" } else { "Merged" };

@@ -1,7 +1,6 @@
-//! `sync` and `lock`, and the steps the other project commands share with them: finding the
-//! project, taking its lock and the run that brings data.lock, the cache and the data folder in
-//! line. each command reads the project, takes its lock when it changes something, and leaves the
-//! order of work to the sync loop.
+//! `sync` and `lock`, and the steps other project commands share: finding the project, taking its
+//! lock and the run that brings data.lock, the cache and the data folder in line. a command takes
+//! the lock only when it changes something, and leaves the order of work to the sync loop.
 
 mod conflicts;
 
@@ -54,7 +53,6 @@ pub(super) struct Report {
 }
 
 impl Report {
-    /// what a dry run found: whether data.lock would change and what placing would do.
     pub(super) fn dry(project: PathBuf, datasets: Vec<String>, outcome: Outcome<Preview>) -> Self {
         Report {
             project,
@@ -95,10 +93,8 @@ pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Er
     Ok(())
 }
 
-/// ends a run that wrote lists anew into data.lock.d that git does not have, which `git commit
-/// -a` would leave out and a clone then misses: a `next:` line for a person at a terminal, else a
-/// warning, which scripts and `--json` read too. it says nothing when git has them, and with no
-/// git or outside a repository.
+/// ends a run that wrote lists into data.lock.d that git lacks, which `git commit -a` leaves out
+/// and a clone then misses; without a terminal it warns, so scripts and `--json` read it too.
 pub(super) fn remind_lists(context: &Context) {
     let written = std::mem::take(
         &mut *context
@@ -160,9 +156,8 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
         .collect()
 }
 
-/// the project files a person commits: data.lock.d as well when a recipe's result or a big
-/// dataset keeps its file list there, since a clone without it cannot read data.lock, and in a
-/// git repository the .gitignore beside data.toml, where fetchloom keeps the data folder out.
+/// the project files a person commits: data.lock.d too, if any, since a clone without it cannot
+/// read data.lock, and in a git repository the .gitignore that keeps the data folder out.
 pub(super) fn committed(project: &Project) -> &'static str {
     let lists = project.root.join(lock::lists::FOLDER).is_dir();
     let ignore =
@@ -175,9 +170,8 @@ pub(super) fn committed(project: &Project) -> &'static str {
     }
 }
 
-/// `fetchloom`, then `-C` and the folder the run worked in when its command line gave `-C`, then
-/// `words`: a command a help names, which then finds the same project from whatever folder a
-/// person runs it in. the folder is quoted for a shell as typed commands are.
+/// a command a help names, with `-C` and the folder the run worked in when the run was given `-C`,
+/// so it finds the same project from whatever folder a person runs it in.
 pub(crate) fn command(words: &str) -> String {
     static DIRECTORY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     // the run changed into the folder -C named, so only the command line still says it did
@@ -203,11 +197,8 @@ struct Uncommitted<'m> {
     recipes: &'m [&'m str],
 }
 
-/// warns of the files a recipe's code in data.toml takes in that git does not have, which a
-/// commit then leaves out, so a clone cannot build the recipe from the same code: new files, as
-/// a new file in a code folder, apart from those .gitignore leaves out. `-v` names each file.
-/// it asks git once, and says nothing with no git, outside a repository, or when git has them
-/// all.
+/// warns of recipe code files git lacks, new or left out by .gitignore, since a commit leaves them
+/// out and a clone then cannot build the recipe from the same code.
 pub(super) fn warn_recipe_code(output: &Output, project: &Project, manifest: &Manifest) {
     let mut code: Vec<(&str, Vec<&str>)> = Vec::new();
     for (name, entry) in &manifest.datasets {
@@ -273,8 +264,6 @@ fn in_git(listed: &std::collections::HashSet<String>, file: &str, end: &str) -> 
             .any(|(at, _)| listed.contains(&format!("{}{end}", &file[..at])))
 }
 
-/// the warning and its help for `files`, recipe code git does not have, which .gitignore leaves
-/// out when `ignored`.
 fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, String)> {
     let first = files.first()?;
     let mut recipes: Vec<&str> = files
@@ -329,8 +318,7 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
     ))
 }
 
-/// `sync`, and with `--strict` the `data.not_ready` error, keeping what the sync did, when the
-/// data it was asked for is not ready to use once it is done.
+/// `sync`, failing with `--strict` when the data asked for is not ready once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
     let (report, closing) = sync_as_asked(context, args).await?;
@@ -460,8 +448,6 @@ async fn sync_as_asked(
     .map(|report| (report, closing))
 }
 
-/// `report`, or when the run `stops` for the recipes whose pinned results its placement left
-/// out, the `build.needed` error for them, which keeps it.
 fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
     let unbuilt = report
         .placement
@@ -473,8 +459,7 @@ fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
     Err(engine::unbuilt_here(unbuilt).with_report(&report))
 }
 
-/// the datasets `names` asks `command` for: every one when it names none. a name data.toml does
-/// not have is refused before anything else happens, with the closest name it has.
+/// the datasets `names` asks `command` for, every one when it names none.
 pub(super) fn selected(
     manifest: &Manifest,
     names: &[String],
@@ -489,11 +474,8 @@ pub(super) fn selected(
     Ok(Scope::Only(names.iter().cloned().collect()))
 }
 
-/// a sync of named datasets that would write nothing, found from their pins and their folders
-/// alone, so it costs what they hold rather than what the project holds, with its last lines.
-/// none when that cannot tell: a run of every dataset, one that would place or record anything,
-/// or one whose hashing asks for the state to be written again, which needs every record. the
-/// whole run then starts over.
+/// a sync of named datasets that would write nothing, costing only what they hold. none when it
+/// cannot tell, as when the state must be written again, which needs every record.
 fn settled_named(
     context: &Context,
     project: &Project,
@@ -557,10 +539,8 @@ fn settled_named(
     Ok(Some((report, closing)))
 }
 
-/// a sync that would write nothing, found without the project's hold, with its last lines:
-/// data.toml and data.lock are byte for byte as the last complete sync left them, every file
-/// still looks as placed, no doubt is open, and the ignore rule is in place. none when a sync
-/// would write anything, which needs the hold.
+/// a sync that would write nothing, found without the project's hold: both files as the last
+/// complete sync left them, every file as placed and the ignore rule in place. none otherwise.
 fn settled_unheld(
     context: &Context,
     project: &Project,
@@ -593,9 +573,8 @@ fn settled_unheld(
     let reading = context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
     drop(reading);
-    // hashing proved the files placed too recently to trust by time unchanged, and only asks
-    // for the state to be written again, which this project cannot be. an edit hashing found
-    // stays an edit
+    // hashing proved files placed too recently to trust by time unchanged, and only asks for the
+    // state to be written again, which this project cannot take. an edit it found stays an edit
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
     if args.verify {
@@ -631,8 +610,8 @@ struct Closing {
 }
 
 impl Closing {
-    /// tells the lines. a closing `Ok` says the sync found nothing amiss, so a strict sync whose
-    /// data is not `ready` leaves it untold, and its error says what is not ready instead.
+    /// a closing `Ok` says nothing is amiss, so a strict sync whose data is not `ready` leaves it
+    /// untold, and its error says what is not ready instead.
     fn tell(self, output: &Output, ready: bool) {
         if self.verb == "Ok" && !ready {
             return;
@@ -644,7 +623,6 @@ impl Closing {
     }
 }
 
-/// the last lines of a sync of `scope`: nothing to do, or what it synced and what to do next.
 fn closing(
     project: &Project,
     manifest: &Manifest,
@@ -698,11 +676,7 @@ fn closing(
     Closing { verb, text, next }
 }
 
-/// the last line of a sync of `scope` that changed something, as its verb and text: what it
-/// synced, with how many other datasets it left as they were, how many files, `kept`, it left
-/// unchanged and the recipes whose results it left out, `unbuilt`. a sync of every dataset counts
-/// those it placed, so neither those left out nor those with `place = false`, and one that placed
-/// none says there was nothing to place, and until which build.
+/// the last line of a sync of `scope` that changed something, as its verb and text.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
@@ -762,9 +736,7 @@ fn synced(
     ("Synced", format!("{said}{kept}"))
 }
 
-/// what a sync of `scope` with nothing to do found in place: every pinned file, or the named
-/// datasets' files, by size and time or, `verified`, byte for byte. a dataset with `place = false`
-/// has no files in the data folder, so it is named as not placed instead.
+/// what a sync of `scope` with nothing to do found in place.
 fn in_place(manifest: &Manifest, scope: &Scope, verified: bool) -> String {
     let placed = |name: &String| manifest.datasets.get(name).is_some_and(|entry| entry.place);
     let (files, unplaced) = match scope {
@@ -797,7 +769,6 @@ fn in_place(manifest: &Manifest, scope: &Scope, verified: bool) -> String {
     }
 }
 
-/// the datasets a sync was asked for, as its last line names them: the one name, or how many.
 fn named(names: &BTreeSet<String>) -> String {
     match names.iter().next() {
         Some(only) if names.len() == 1 => only.clone(),
@@ -805,8 +776,7 @@ fn named(names: &BTreeSet<String>) -> String {
     }
 }
 
-/// `sync --dry-run` of `scope`: what syncing would change, given data.lock as `read` and both
-/// files as `seen`.
+/// `sync --dry-run`, given data.lock as `read` and both files as `seen`.
 async fn preview_sync(
     context: &Context,
     project: &Project,
@@ -934,8 +904,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     })
 }
 
-/// what a lock that changed nothing says of data.lock while the recipes `stale` need a build,
-/// so it never calls data.lock up to date.
+/// said instead of "up to date" when a lock changed nothing but the recipes `stale` need a build.
 fn unbuilt_pins(stale: &[String]) -> String {
     let need = if stale.len() > 1 { "need" } else { "needs" };
     format!(
@@ -944,8 +913,6 @@ fn unbuilt_pins(stale: &[String]) -> String {
     )
 }
 
-/// says which datasets an upgrade of all leaves as they are: imports, which no source has a newer
-/// version of.
 fn tell_imports_kept(output: &Output, manifest: &Manifest) {
     let imported: Vec<&str> = manifest
         .datasets
@@ -963,9 +930,8 @@ fn tell_imports_kept(output: &Output, manifest: &Manifest) {
     );
 }
 
-/// `lock --dry-run`: what locking would change, found without downloading, unpacking or
-/// writing. a file no checksum pins is planned with the pin it had and listed as a download,
-/// since only its bytes can tell whether it changed.
+/// `lock --dry-run`, which never downloads, unpacks or writes. a file no checksum pins keeps its
+/// old pin and is listed as a download, since only its bytes can tell whether it changed.
 async fn preview_lock(
     context: &Context,
     project: &Project,
@@ -1038,8 +1004,7 @@ async fn preview_lock(
     })
 }
 
-/// the two ways on for a project without data.lock, such as a clone whose owner never committed
-/// it: the owner's pins, or new pins of what the sources serve now.
+/// the help for a project without data.lock, such as a clone whose owner never committed it.
 pub(super) fn unpinned() -> String {
     format!(
         "ask whoever shares the project to commit data.lock, or run `{}` to pin what the sources serve today",
@@ -1047,9 +1012,8 @@ pub(super) fn unpinned() -> String {
     )
 }
 
-/// what `--locked` asks: data.lock exists and its entries for the datasets of `scope` are up to
-/// date with data.toml, or the command fails without writing it. `instead` is the other way out
-/// the help names for an outdated data.lock, such as "sync without --locked".
+/// what `--locked` asks: data.lock is there and up to date with data.toml for `scope`. `instead`
+/// is the help's other way out, such as "sync without --locked".
 pub(super) fn locked(
     project: &Project,
     manifest: &Manifest,
@@ -1076,11 +1040,8 @@ pub(super) fn locked(
         })
 }
 
-/// `lock --check`: compares the entries of the datasets in `scope` without the network and
-/// without writing. a fetched dataset data.lock does not pin as data.toml asks is
-/// `lock.outdated`, which `fetchloom lock` fixes; a recipe whose result data.lock does not pin as
-/// building it now would make is `build.needed`, which only `fetchloom build` fixes, since it
-/// runs the project's code.
+/// `lock --check`, without network or writing. a recipe not built as it would be now is
+/// `build.needed`, not `lock.outdated`, since only a build, which runs the code, fixes it.
 fn check(
     project: &Project,
     manifest: &Manifest,
@@ -1150,9 +1111,8 @@ fn check(
     })
 }
 
-/// a file data.lock pins in `scope` at another size than the bytes its SHA-256 names, as a file
-/// fetchloom placed shows them: one the state records with that SHA-256 that still looks as
-/// placed and hashes to it. only a file the state records at another size is read.
+/// a pin in `scope` whose size is not that of its SHA-256's bytes, as a placed file that still
+/// hashes to it shows; only a file the state records at another size is read.
 fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope) -> Option<Error> {
     let (state, _) = project.state();
     if state.files.is_empty() {
@@ -1180,8 +1140,7 @@ fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope)
     None
 }
 
-/// the error for recipes whose result data.lock does not pin as building them now would make,
-/// each named with what moved since it was built, or nothing when there are none.
+/// the `build.needed` error for recipes data.lock does not pin as building them now would make.
 pub(super) fn needs_building(unbuilt: &[(String, Vec<Change>)]) -> Option<Error> {
     let message = match unbuilt {
         [] => return None,
@@ -1233,10 +1192,8 @@ pub(super) enum Read<'a> {
 #[derive(Debug)]
 pub(super) struct Outcome<T> {
     pub(super) lock_changed: bool,
-    /// the datasets whose pins changed: pinned for the first time, pinned to other data or files,
-    /// or no longer pinned.
+    /// the datasets newly pinned, pinned to other data or files, or no longer pinned.
     pub(super) pins: Vec<String>,
-    /// what placing did, or would do.
     pub(super) placed: T,
 }
 
@@ -1252,8 +1209,6 @@ pub(super) struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
-    /// a run that plans even when the data folder looks settled, upgrades nothing, replaces no
-    /// edit and hashes only the files it must, as `path` makes when its dataset is not in place.
     pub(super) fn planned(seen: &'a Seen) -> Self {
         Run {
             upgrade: Upgrade::Nothing,
@@ -1264,9 +1219,8 @@ impl<'a> Run<'a> {
     }
 }
 
-/// the lock, the cache and the data folder brought in line, in that order, and the state left
-/// recording data.toml and data.lock as the run read them and as it leaves them. `given` is a
-/// listing already resolved for one dataset.
+/// brings the lock, the cache and the data folder in line, in that order, leaving the state to
+/// record both files as read and as left. `given` is a listing already resolved for one dataset.
 pub(super) async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1376,9 +1330,8 @@ pub(super) async fn sync_all(
     })
 }
 
-/// the lines a sync that stops before it places adds to its error for the files of `scope` linked
-/// to a cache copy someone changed, whose pinned bytes it must fetch again: why it needed them,
-/// since the error alone may name only the download. at most five, then how many more.
+/// error lines naming files of `scope` linked to a changed cache copy, why a sync that stops
+/// before placing fetches their bytes again; its error alone may name only the download.
 pub(super) fn refetched(survey: &Survey, scope: &Scope) -> Vec<String> {
     let mut paths: Vec<&String> = survey
         .elsewhere
@@ -1410,11 +1363,9 @@ pub(super) fn refetched(survey: &Survey, scope: &Scope) -> Vec<String> {
     said
 }
 
-/// what [`sync_all`] would do, told as it is found: the lock it would write when that changes,
-/// the downloads and unpacking it would need, then what placing would change. it stops before
-/// anything [`sync_all`] changes: no download, unpacking, lock, state or registration, and cached
-/// objects are read without being sealed or marked. given `seen`, it takes the settled-sync
-/// shortcut as [`sync_all`] does, so a settled project needs neither the cache nor the network.
+/// what [`sync_all`] would do, told as it is found. it changes nothing: no download, unpacking,
+/// lock, state or registration, and cached objects are read without being sealed or marked. given
+/// `seen`, a settled project needs neither the cache nor the network, as in [`sync_all`].
 pub(super) async fn preview_all(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1525,8 +1476,7 @@ pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
     }
 }
 
-/// registers the project with the cache. gc keeps what registered projects need, so a failure
-/// here only risks a later download.
+/// a failure only warns: gc keeps what registered projects need, so it risks a later download.
 pub(super) fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
         work.context.output.warn_with(
@@ -1540,8 +1490,7 @@ pub(super) fn register(work: &Loop<'_>) {
     }
 }
 
-/// the project around the current folder. a person working in a folder below it is told which
-/// data.toml the command uses.
+/// the project around the current folder.
 pub(super) fn find(output: &Output) -> Result<Project, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
@@ -1570,12 +1519,12 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
     Ok(project)
 }
 
-/// takes the project lock, waiting while another fetchloom changes the project.
 pub(super) enum Waited<T> {
     Held(Held),
     Ready(T),
 }
 
+/// takes the project lock, waiting while another fetchloom changes the project.
 pub(super) async fn hold(
     context: &Context,
     project: &Project,
@@ -1651,14 +1600,12 @@ pub(super) async fn hold_until<T>(
     }
 }
 
-/// whether `a` and `b` name one folder, by their paths or, through links, where they lead.
 fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
     a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
-/// refuses a dataset name data.toml does not have, suggesting the closest one as the `command`
-/// that names it, such as `path` in `fetchloom path iris`. a link given where a name belongs is
-/// shown with its secrets masked.
+/// refuses a name data.toml does not have, suggesting the closest as `command` would take it, as
+/// `path` in `fetchloom path iris`; a link typed as a name is shown with its secrets masked.
 pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
     known_with_rest(manifest, name, "", command)
 }
@@ -1947,9 +1894,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// two datasets in the data folder itself: `b` pinned with a README, and `a`, whose listing
-    /// has `remote` as its one file and needs a download to learn its hash. the error a sync
-    /// meets first, when every download fails, and whether data.lock stayed as it was.
+    /// `b` pinned with a README and `a` listing only `remote`, both in the data folder itself: the
+    /// error a sync meets first, with every download failing, and whether data.lock stayed.
     fn sync_beside_a_readme(remote: crate::source::Remote) -> (Error, bool) {
         let dir = tempfile::tempdir().unwrap();
         let project = Project {
@@ -1988,9 +1934,7 @@ pub(crate) mod tests {
         (error, kept)
     }
 
-    /// a listing names its files before any is downloaded, so a clash it shows stops the sync
-    /// before the download that would only learn the file's hash. the datasets are named in
-    /// data.lock's order, as the check after the downloads names them.
+    /// the datasets are named in data.lock's order, as the check after the downloads names them.
     #[test]
     fn a_clash_the_listing_shows_is_found_before_any_download() {
         let mut listed = stated("README", "https://example.org/a/README", b"a");
@@ -2008,8 +1952,7 @@ pub(crate) mod tests {
         assert!(kept, "data.lock changed though nothing could be placed");
     }
 
-    /// a name only a guess from the link, which the server's name for the file replaces, cannot
-    /// clash before the download that tells it.
+    /// until then the name is only a guess from the link.
     #[test]
     fn a_name_the_server_gives_is_checked_once_downloaded() {
         let mut guessed = stated("README", "https://example.org/a/README", b"a");
@@ -2023,9 +1966,8 @@ pub(crate) mod tests {
         assert!(kept);
     }
 
-    /// kaggle may send a competition file as a zip of itself, which data.lock then pins as
-    /// `<name>.zip`. a listing that also holds a real `<name>.zip` must not pin both on one path,
-    /// or no later run could read data.lock.
+    /// kaggle may send a competition file as a zip of itself, pinned as `<name>.zip`; with a real
+    /// `<name>.zip` beside it, pinning both on one path would leave data.lock unreadable.
     #[test]
     fn two_files_on_one_path_are_refused_before_data_lock_is_written() {
         let dir = tempfile::tempdir().unwrap();
@@ -2085,8 +2027,7 @@ pub(crate) mod tests {
         assert!(Lock::parse(&old.render()).is_ok());
     }
 
-    /// a name data.toml lacks is shown with any secret it holds masked, as when a link is given
-    /// where a dataset's name belongs.
+    /// as when a link is given where a dataset's name belongs.
     #[test]
     fn an_unknown_name_never_shows_a_secret() {
         let manifest =
@@ -2104,9 +2045,7 @@ pub(crate) mod tests {
         assert!(shown.contains("token=***"), "{shown}");
     }
 
-    /// a sync that finds its project settled has nothing left to do, so a stop asked once it
-    /// found so, as by ctrl-c while it prints its last lines, leaves it done, while one asked
-    /// before ends it as stopped.
+    /// as by ctrl-c while it prints its last lines; a stop asked before ends it as stopped.
     #[test]
     fn a_stop_once_a_settled_sync_found_nothing_to_do_leaves_it_done() {
         let dir = tempfile::tempdir().unwrap();
@@ -2171,8 +2110,7 @@ pub(crate) mod tests {
         assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
     }
 
-    /// a sync of every dataset counts the datasets it placed. one that placed none, since each
-    /// has `place = false` or waits for a build, says there was nothing to place, and until what.
+    /// it counts only datasets it placed, not those with `place = false` or waiting for a build.
     #[test]
     fn a_sync_that_places_no_dataset_says_so() {
         let raw = "[datasets.raw]\nplace = false\nref = \"zenodo:1\"\n";
