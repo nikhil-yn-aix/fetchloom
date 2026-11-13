@@ -53,20 +53,7 @@ no request went to a source. with `--json`, `work.mirror_objects` and `work.mirr
 
 a web mirror is the same layout on a web server, at an `http://` or `https://` address, so any server of static files works, such as nginx over a folder mirror. fetchloom asks for its `fetchloom-mirror` file once a run, then for each file it lacks at `<address>/objects/<2 hex>/<62 hex>`. the files come through the same downloads as files from sources: resumed after a stop, retried while the server says to try again, split over several connections when slow, and checked against their pins. a tree is read whole, up to 64 MiB, about 600,000 files; an archive with a longer list comes as itself. files a mirror gives over the network count in `work.requests` and `work.bytes_down` too, and the question before a download larger than `ask_above` covers them.
 
-a reviewer whose copy of a paper's data is gone from its source restores it from the lab's server:
-
-```sh
-fetchloom sync --locked --mirror https://data.lab.example/fetchloom
-```
-
-stderr:
-
-```text
- Downloaded 6 files · 91 B in 27 ms from https://data.lab.example/fetchloom
-     Placed data/dataset · 5 files linked to the cache
-     Placed data/iris · 1 file linked to the cache
-     Synced 2 datasets into data
-```
+so a reviewer whose copy of a paper's data is gone from its source restores it from the lab's server with `fetchloom sync --locked --mirror https://data.lab.example/fetchloom`, whose first line then reads `Downloaded 6 files · 91 B in 27 ms from https://data.lab.example/fetchloom`, the rest as for a folder mirror.
 
 a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its origin, the scheme, host and port of its address, may be reached whatever its address is. another port or scheme of that host is not trusted, so it reaches public addresses only, unless [`allowed_origins`](reference/environment.md) lists it. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
 
@@ -141,23 +128,7 @@ mirrors = ["/mnt/lab/fetchloom"]
 push_to = "/mnt/lab/fetchloom"
 ```
 
-whoever synced the project pushes it, and their teammates' syncs then take the files from the nas:
-
-```sh
-fetchloom push
-```
-
-at a terminal, from a real run with the mirror's path shortened:
-
-```text
-the sources of iris and pets did not say who may read them. anyone who can read /mnt/lab/fetchloom can take their files from there. push them anyway? [y/N] y
-    Started a mirror in /mnt/lab/fetchloom
-     Pushed 6 files · 106 B to /mnt/lab/fetchloom
-         Ok every file iris and pets need is on the mirror
-  next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file, here ~/.config/fetchloom/settings.toml; `fetchloom settings` shows where
-```
-
-push copies the project's files alone, never the rest of a cache other projects share. [push](commands/push.md) says what it asks first, how a web mirror or a bucket gets a folder mirror through a copying tool such as rclone, and how it replaces a damaged copy.
+whoever synced the project runs `fetchloom push`, and their teammates' syncs then take the files from the nas. push copies the project's files alone, never the rest of a cache other projects share. [push](commands/push.md) shows a run, what it asks first, how a web mirror or a bucket gets a folder mirror through a copying tool such as rclone, and how it replaces a damaged copy.
 
 ## freeing raw data a mirror holds
 

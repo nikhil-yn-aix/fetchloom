@@ -29,12 +29,14 @@ fetchloom push [options] [name]...
 
 push writes the [layout every mirror has](../mirrors.md#a-folder-mirror): the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of its files under `trees/`. a reader takes an archive's files one by one, so push leaves the archive itself out, and every part of a split one; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out is not placed, so it is not pushed either. a file several datasets need goes once. push writes nothing else, not data.toml, data.lock or code, and never changes the project.
 
-from a real run, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened, on stderr:
+from a real run at a terminal, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened:
 
 ```text
+the sources of iris and pets did not say who may read them. anyone who can read /mnt/lab/fetchloom can take their files from there. push them anyway? [y/N] y
     Started a mirror in /mnt/lab/fetchloom
      Pushed 6 files · 106 B to /mnt/lab/fetchloom
          Ok every file iris and pets need is on the mirror
+  next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file, here ~/.config/fetchloom/settings.toml; `fetchloom settings` shows where
 ```
 
 each file is written read-only under a temporary name in the mirror's `tmp/` folder, flushed to the disk, read back and hashed again, and only then given its name, never replacing a file already there. a file that reads back other bytes than were written stops push with `integrity.mismatch`, exit 30, and so does a copy in the cache that no longer holds its pinned bytes. a file another program put in place of one push wrote stops it with `local.io`, exit 50. a network disk may still answer the read-back from memory, but every reader checks each file against its pin again.

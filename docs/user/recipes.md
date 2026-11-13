@@ -74,17 +74,7 @@ no command but `build` runs a step. `sync` places a pinned result like any datas
 
 ## build
 
-`fetchloom build --dry-run` lists the steps in the order a build runs them, each with its command, what it reads and where its result goes, and runs nothing:
-
-```text
-      Would run clean · not built yet
-            python3 clean.py <build>/in/iris <build>/out
-            reads iris and clean.py, with SOURCE_DATE_EPOCH=315532800; writes data/clean
-         Ok dry run, nothing was run or changed
-  hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
-```
-
-read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. in a fresh clone the dry run says `Would run clean · its pinned result is not on this machine or a mirror`, and `Would fetch` where the data folder or a [mirror](mirrors.md) holds the result, so nothing runs; [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`, as [what happens](commands/build.md#what-happens) shows.
+`fetchloom build --dry-run` lists the steps in the order a build runs them, each with its command, what it reads and where its result goes, and runs nothing, as [dry run](commands/build.md#dry-run) shows with every action. read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. in a fresh clone the dry run says `Would run clean · its pinned result is not on this machine or a mirror`, or `Would fetch` where the data folder or a [mirror](mirrors.md) holds the result, so nothing runs. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`, as [what happens](commands/build.md#what-happens) shows.
 
 the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, never from the data folder, where you may have changed a file, and writes its result into `{out}`: plain files whose names every system can store. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned; a build warns of each file of `code` git does not have. [build](commands/build.md) has the details, the errors and the JSON.
 
@@ -128,12 +118,7 @@ the build places the result and retires what the add placed of raw, unchanged fi
          Ok pinned clean's result in data.lock
 ```
 
-to leave a bad sample of raw out of what clean reads, run [`fetchloom drop`](commands/drop.md#raw-data-only-recipes-read) with the path the file would have in the data folder, as for any dataset. `status` and `list` say raw is not placed, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them:
-
-```text
- Not placed raw · place = false in data.toml
-         Ok everything matches data.lock by size and time
-```
+to leave a bad sample of raw out of what clean reads, run [`fetchloom drop`](commands/drop.md#raw-data-only-recipes-read) with the path the file would have in the data folder, as for any dataset. `status` and `list` say raw is not placed, as `Not placed raw · place = false in data.toml`, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them.
 
 a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out, and `status` names the build, and raw, which it reads and the cache lacks too, as [status](commands/status.md#what-happens) shows. their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, and `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
 
