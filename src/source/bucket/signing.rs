@@ -1,9 +1,6 @@
-//! which requests to an S3 bucket go signed. a request for a bucket the `s3_buckets` setting lists
-//! goes without a key first, so a public bucket never sees one; once S3 refuses it, that bucket's
-//! requests are signed for the rest of the run, with the keys the person's AWS settings give for
-//! its endpoint. a bucket nobody listed is never signed for, whatever a project names, and once a
-//! bucket's keys come from a program that fails or gives keys that expired, its requests fail
-//! rather than go without a key or with other keys.
+//! which requests to an S3 bucket go signed: a listed bucket's, once S3 refused one without a key
+//! this run. a bucket nobody listed is never signed for, whatever a project names, and one whose
+//! keys could not be had fails rather than going without them.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -86,9 +83,8 @@ impl Signing {
         }
     }
 
-    /// the bucket `url` is for: on AWS, by its host and path over https, and at another service
-    /// when `s3_buckets` lists a bucket there. none for a link that carries a signature or another
-    /// secret of its own.
+    /// the bucket `url` is for: on AWS by its host and path over https, elsewhere when
+    /// `s3_buckets` lists a bucket there. none for a link with a signature or another secret.
     pub(crate) fn locate(&self, url: &Url) -> Option<Located> {
         if crate::net::secret(url).is_some() {
             return None;
@@ -125,9 +121,8 @@ impl Signing {
         })
     }
 
-    /// the keys and region that sign a request made at `now` for the bucket `located`, once S3
-    /// refused that bucket without a key this run and keys were found for it; none, so the
-    /// request goes without a key, for any other.
+    /// the keys and region that sign a request made at `now` for `located`, once S3 refused its
+    /// bucket without a key this run and keys were found; else none, and the request goes unsigned.
     ///
     /// # Errors
     ///
@@ -170,9 +165,8 @@ impl Signing {
         }))
     }
 
-    /// learns from `answer`, S3's to an unsigned request for `located`, when it refused it with
-    /// 401 or 403, in the region its `x-amz-bucket-region` names, as [`Signing::refused`] does.
-    /// says whether keys were found to ask with.
+    /// learns from `answer`, S3's 401 or 403 to an unsigned request for `located`, as
+    /// [`Signing::refused`] does, in the region it names. says whether keys were found to ask with.
     ///
     /// # Errors
     ///
@@ -192,9 +186,8 @@ impl Signing {
         self.refused(located, region)
     }
 
-    /// learns from S3 refusing an unsigned request for `located`: a listed bucket is asked with
-    /// a key from now on, in the `region` the refusal named, if it named one. says whether keys
-    /// were found to ask with.
+    /// learns from S3 refusing an unsigned request for `located`: a listed bucket is asked with a
+    /// key from now on, in the `region` the refusal named. says whether keys were found.
     ///
     /// # Errors
     ///

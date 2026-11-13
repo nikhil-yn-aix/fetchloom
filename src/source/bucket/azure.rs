@@ -1,7 +1,5 @@
-//! azure blob storage: a container's `List Blobs` over HTTPS, a page of up to 5,000 blobs at a
-//! time, without a SAS unless the `azure_containers` setting lists the container and it refused
-//! a request without one, as [`crate::net`] decides. every request to a blob host asks for
-//! [`VERSION`] of azure's API.
+//! azure blob storage: a container's `List Blobs` over HTTPS, up to 5,000 blobs a page, without a
+//! SAS unless `azure_containers` lists the container and it refused a request without one.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -12,10 +10,9 @@ use super::{Object, Prefix, object_url, query, xml};
 use crate::error::Error;
 use crate::net::{Api, Response};
 
-/// the version of azure's API every request to a blob host asks for. an anonymous request that
-/// names none gets the account's default, as old as 2009-09-19, under which a container holding
-/// newer kinds of blob refuses to list. later versions escape some blob names in a way the
-/// listing's reader cannot see.
+/// the version of azure's API every request to a blob host asks for. without one, a request gets
+/// the account's default, as old as 2009-09-19, under which newer kinds of blob refuse to list;
+/// later versions escape some blob names in a way the listing's reader cannot see.
 pub(crate) const VERSION: &str = "2020-10-02";
 /// the end of every blob host's name in azure's public cloud.
 pub(crate) const BLOB_HOST: &str = ".blob.core.windows.net";
@@ -284,9 +281,8 @@ fn without_folder_marks(objects: Vec<Object>) -> Vec<Object> {
         .collect()
 }
 
-/// the error for an answer other than a listing, with the code and message azure's error
-/// document gives. the rest of that document, which for a refused SAS repeats what it signs,
-/// never shows.
+/// the error for an answer other than a listing, with the code and message azure gives. the rest
+/// of its error document, which for a refused SAS repeats what it signs, never shows.
 fn refused(prefix: &Prefix, response: &Response, said: Option<&xml::Element>) -> Error {
     let code = said.and_then(|said| said.text_of("Code"));
     let message = said

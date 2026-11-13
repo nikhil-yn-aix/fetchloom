@@ -182,8 +182,8 @@ fn an_endpoint_reference_is_a_plain_origin_and_a_bucket() {
     }
 }
 
-/// an object's link names its bucket: on AWS by the host or the first segment of the service's
-/// own host, and at another service by the origin and the first segment.
+/// on AWS by the host or the first segment of the service's own host, and at another service by
+/// the origin and the first segment.
 #[test]
 fn an_object_link_names_the_bucket_holding_it() {
     for (link, bucket) in [
@@ -642,8 +642,7 @@ fn a_signed_listing_states_no_md5_and_links_objects_in_the_region_it_was_signed_
     assert_eq!(listing.files[0].md5, None);
 }
 
-/// a refused cloud storage listing says whether google credentials went with it, and what would
-/// let the next one through.
+/// and what would let the next one through.
 #[test]
 fn a_refused_cloud_storage_listing_says_whether_credentials_went_with_it() {
     let url = STATES
@@ -754,8 +753,7 @@ fn missing_buckets_are_unresolved() {
     assert!(error.details[0].contains("notFound"));
 }
 
-/// a listing answered with a status no case handles, such as 418, names it and keeps what the
-/// service said, rather than reading as a refusal or a missing bucket.
+/// such as 418, rather than reading as a refusal or a missing bucket.
 #[test]
 fn a_listing_answered_with_another_status_names_it_and_what_the_service_said() {
     let url = STATES
@@ -1160,8 +1158,8 @@ fn live_buckets() {
     );
 }
 
-/// a store may pause a listing with empty pages, which must never fail it. a server that answers
-/// every page with nothing in it and a token for another is stopped after a hundred.
+/// empty pages must never fail a listing, but a server that answers every page empty, with a
+/// token for another, is stopped after a hundred.
 #[test]
 fn empty_pages_pause_a_listing_and_a_hundred_in_a_row_end_it() {
     use std::sync::atomic::{AtomicUsize, Ordering};

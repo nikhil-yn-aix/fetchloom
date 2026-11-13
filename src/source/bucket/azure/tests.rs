@@ -19,9 +19,8 @@ fn paths(listing: &crate::source::Listing) -> Vec<&str> {
         .collect()
 }
 
-/// a container's blobs, each with its size, the MD5 azure keeps when it keeps one, its link and
-/// its `ETag` as a GET quotes it. the empty blobs that only mark a folder of other blobs are no
-/// files.
+/// each with its size, link and `ETag` as a GET quotes it. the empty blobs that only mark a folder
+/// of other blobs are no files.
 #[test]
 fn a_container_lists_its_blobs_with_the_md5_azure_states() {
     let recorded = Recorded::default().fixture(&format!("{LISTING}&prefix="), "azure/mnist.xml");
@@ -67,7 +66,6 @@ fn a_container_lists_its_blobs_with_the_md5_azure_states() {
     assert_eq!(recorded.asked(), [format!("{LISTING}&prefix=")]);
 }
 
-/// a prefix that names one blob lists that blob alone.
 #[test]
 fn a_prefix_naming_a_blob_is_that_one_file() {
     let recorded = Recorded::default().fixture(
@@ -110,7 +108,7 @@ fn a_folder_in_pages_follows_each_marker() {
     assert_eq!(recorded.asked(), [first, second]);
 }
 
-/// a page that sends a marker it sent before would keep fetchloom asking, so it is refused.
+/// since it would keep fetchloom asking.
 #[test]
 fn a_marker_sent_twice_is_refused() {
     let page = |marker: &str| {
@@ -129,10 +127,8 @@ fn a_marker_sent_twice_is_refused() {
     assert!(error.message.contains("repeated"), "{}", error.message);
 }
 
-/// azure refuses a container without credentials as it refuses one that does not exist. the
-/// error says how to send them, as the request went: for a container nobody listed, for a listed
-/// one with none found, and for a SAS azure refused. what azure's error repeats of the SAS never
-/// shows.
+/// as the request went: for a container nobody listed, a listed one with none found, or a SAS
+/// azure refused. what azure's error repeats of the SAS never shows.
 #[test]
 fn a_refused_listing_says_how_to_send_a_sas() {
     let url = "https://lab.blob.core.windows.net/raw?restype=container&comp=list&prefix=scans%2F";
@@ -192,7 +188,7 @@ fn a_refused_listing_says_how_to_send_a_sas() {
     assert!(!said.contains("CANARY"), "{said}");
 }
 
-/// an answer that is no listing, or a blob a listing cannot describe, is refused with why.
+/// as is a blob a listing cannot describe.
 #[test]
 fn an_answer_that_is_no_listing_says_why() {
     let url = "https://lab.blob.core.windows.net/raw?restype=container&comp=list&prefix=";

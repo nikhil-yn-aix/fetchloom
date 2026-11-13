@@ -8,9 +8,8 @@ use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 
-/// where a bucket's requests go: the bucket's own host, or for a name with dots, which the
-/// service's wildcard certificate does not cover, a path on the service's host. a bucket at
-/// another service is always a path on its host, as those services serve every bucket.
+/// where a bucket's requests go: its own host, or a path on the service's host for a dotted name
+/// the wildcard certificate does not cover, as always for a bucket at another service.
 struct Endpoint {
     base: Url,
 }
@@ -150,9 +149,8 @@ fn region(response: &Response, said: Option<&xml::Element>) -> Option<String> {
         .filter(|region| is_region(region))
 }
 
-/// an object of the listing. its `ETag` stands for an MD5 only on AWS and in an unsigned listing,
-/// since a bucket that needs a key may encrypt with keys of its own, whose `ETag`s are no MD5, and
-/// other services promise nothing about theirs.
+/// an object of the listing. its `ETag` stands for an MD5 only in an unsigned AWS listing: a
+/// bucket that needs a key may encrypt with its own, and other services promise nothing.
 fn object(
     prefix: &Prefix,
     endpoint: &Endpoint,
@@ -178,7 +176,7 @@ fn object(
         .and_then(|size| size.parse().ok())
         .ok_or_else(|| prefix.invalid(&format!("the size of \"{key}\" is not a number")))?;
     let mut url = object_url(&endpoint.base, &key);
-    // s3 reserves the exact key soap on a bucket host for its legacy SOAP endpoint.
+    // s3 reserves the exact key soap on a bucket host for its legacy SOAP endpoint
     if key == "soap" && prefix.endpoint.is_none() && !prefix.bucket.contains('.') {
         let service = endpoint
             .base

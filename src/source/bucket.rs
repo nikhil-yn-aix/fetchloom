@@ -1,7 +1,6 @@
-//! cloud object storage: an S3, google cloud storage or azure blob bucket, or a prefix inside
-//! one, or a bucket at another service that speaks S3's API. listings and downloads go without a
-//! key, and only an S3 bucket the `s3_buckets` setting lists is asked again with one, as
-//! [`signing`] decides; cloud storage and azure containers have settings of their own.
+//! cloud object storage: an S3, cloud storage or azure bucket, a prefix inside one, or a bucket
+//! at a service that speaks S3's API. requests go without a key until a bucket the settings list
+//! refuses one, as [`signing`] decides for S3.
 
 mod azure;
 mod gcs;
@@ -120,9 +119,8 @@ impl Bucket {
         })
     }
 
-    /// the bucket a link to one of its objects names: on AWS by its host, or by its first
-    /// segment on the service's own host, and elsewhere by its origin and first segment, as a
-    /// service that speaks S3's API serves every bucket. none when no bucket name is there.
+    /// the bucket a link to one of its objects names: on AWS by its host or first segment,
+    /// elsewhere by its origin and first segment, as an S3-like service serves every bucket.
     pub(crate) fn holding(url: &Url) -> Option<Bucket> {
         let host = url.host_str()?.to_ascii_lowercase();
         let mut segments = url.path_segments()?;
@@ -665,9 +663,7 @@ fn endpoint(text: &str) -> Option<(url::Origin, &str)> {
     plain.then(|| (url.origin(), path))
 }
 
-/// whether `name` follows the bucket naming rules: lowercase letters, digits, `-` and `.`, and
-/// `_` in cloud storage, starting and ending with a letter or digit. an azure container's name
-/// has stricter rules of its own.
+/// whether `name` follows `store`'s bucket naming rules.
 fn is_bucket(store: Store, name: &str) -> bool {
     let longest = match store {
         Store::S3 => 63,
@@ -732,11 +728,11 @@ fn query(pairs: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-/// `base` with the object key appended to its path, each segment escaped.
 fn dotted(key: &str) -> bool {
     key.split('/').any(|part| matches!(part, "." | ".."))
 }
 
+/// `base` with the object key appended to its path, each segment escaped.
 fn object_url(base: &Url, key: &str) -> Url {
     let mut url = base.clone();
     let path = key
