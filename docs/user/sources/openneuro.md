@@ -27,6 +27,7 @@ $ fetchloom add openneuro:ds000001@1.0.0 --select "sub-01/anat/*" --as bart
 Downloading 2 files · 6.0 MiB
  Downloaded 2 files · 6.0 MiB in 767 ms
       Added bart, its files are in data/bart
+  hint: scripts can find it with `fetchloom path bart`
 ```
 
 ## pins

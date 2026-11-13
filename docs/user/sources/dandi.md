@@ -28,6 +28,7 @@ $ fetchloom add dandi:000027 --as rat
 Downloading rat/sub-RAT123/sub-RAT123.nwb · 18.4 KiB
  Downloaded 1 file · 18.4 KiB in 224 ms
       Added rat, its files are in data/rat
+  hint: scripts can find it with `fetchloom path rat`
 ```
 
 ## pins
