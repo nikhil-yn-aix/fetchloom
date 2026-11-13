@@ -6,7 +6,7 @@ use std::fmt::{self, Write as _};
 use serde::Deserialize;
 use url::Url;
 
-use super::{Object, Prefix, Store, is_bucket, object_url, query};
+use super::{Listed, Object, Prefix, Store, is_bucket, object_url, query};
 use crate::digest::Md5;
 use crate::error::Error;
 use crate::net::Api;
@@ -60,7 +60,7 @@ impl fmt::Display for GcsBucket {
 }
 
 /// every object under the prefix, a page of up to 1,000 at a time.
-pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>, Error> {
+pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Error> {
     let bad = || prefix.invalid("the bucket makes no valid link");
     let listing = Url::parse(&format!(
         "https://storage.googleapis.com/storage/v1/b/{}/o",
@@ -75,6 +75,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
     let mut token: Option<String> = None;
     let mut pages = super::Pages::default();
     let mut objects = Vec::new();
+    let mut credentials = false;
     loop {
         let mut pairs = vec![("prefix", prefix.key.as_str()), ("fields", FIELDS)];
         pairs.extend(token.as_deref().map(|token| ("pageToken", token)));
@@ -89,6 +90,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             return Err(prefix.refused(&response, code, message, None));
         }
         let page: Page = response.json()?;
+        credentials |= super::with_credentials(&response);
         for item in page.items {
             objects.push(object(prefix, &objects_at, item)?);
             if objects.len() > crate::source::most_files() {
@@ -96,7 +98,12 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             }
         }
         match page.next_page_token.filter(|next| !next.is_empty()) {
-            None => return Ok(objects),
+            None => {
+                return Ok(Listed {
+                    objects,
+                    credentials,
+                });
+            }
             Some(next) => {
                 pages.follow(prefix, &next, objects.len())?;
                 token = Some(next);

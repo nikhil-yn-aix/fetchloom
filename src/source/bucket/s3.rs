@@ -3,7 +3,7 @@
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Keyed, Object, Prefix, is_region, object_url, query, s3_host, xml};
+use super::{Keyed, Listed, Object, Prefix, is_region, object_url, query, s3_host, xml};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
@@ -47,7 +47,7 @@ impl Endpoint {
 }
 
 /// every object under the prefix, a page of up to 1,000 at a time.
-pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>, Error> {
+pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Error> {
     let mut endpoint = Endpoint::new(prefix, None)?;
     let mut moved = false;
     // whether the endpoint names the bucket's region, which a signed request must name too
@@ -55,6 +55,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
     let mut token: Option<String> = None;
     let mut pages = super::Pages::default();
     let mut objects = Vec::new();
+    let mut credentials = false;
     loop {
         let response = api
             .get(&endpoint.listing(&prefix.key, token.as_deref()))
@@ -92,6 +93,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         if page.name != "ListBucketResult" {
             return Err(prefix.invalid(&format!("the answer is <{}>", page.name)));
         }
+        credentials |= super::with_credentials(&response);
         let signed = match &response.keyed {
             Some(Keyed::Signed { region, .. }) => Some(region.as_str()),
             _ => None,
@@ -120,7 +122,12 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             }
         }
         match page.text_of("IsTruncated") {
-            Some("false") => return Ok(objects),
+            Some("false") => {
+                return Ok(Listed {
+                    objects,
+                    credentials,
+                });
+            }
             Some("true") => {}
             _ => return Err(prefix.invalid("a page does not say whether more follow")),
         }

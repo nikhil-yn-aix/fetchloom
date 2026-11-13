@@ -112,6 +112,8 @@ the same credentials read the [private google drive folders and files](google-dr
 
 ## access and limits
 
+a bucket that S3 or cloud storage lists only once a key or token goes with the request records `access = "login"` in [data.lock](../reference/data-lock.md), since a teammate needs one too, and [`push`](../commands/push.md#data-you-may-not-share) asks before copying it into a mirror. a bucket either lists to anyone records no `access`.
+
 a refused listing (401 or 403, such as S3's `AccessDenied`) fails with `auth.required` and exit code 40, saying whether a key went with the request and what to do. a bucket `s3_buckets` does not list:
 
 ```text

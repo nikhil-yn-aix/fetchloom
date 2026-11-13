@@ -237,6 +237,27 @@ impl fmt::Display for Bucket {
     }
 }
 
+/// the objects a store listed under a prefix, and whether it listed them only once credentials
+/// went with the request.
+struct Listed {
+    objects: Vec<Object>,
+    credentials: bool,
+}
+
+/// whether `response` answers a request that carried credentials, which every store gets only
+/// once it refused the same request without them: an S3 signature, or anything but an
+/// anonymous request to cloud storage or azure.
+fn with_credentials(response: &Response) -> bool {
+    matches!(response.keyed, Some(Keyed::Signed { .. }))
+        || response.authorized.as_ref().is_some_and(|authorized| {
+            !matches!(
+                authorized,
+                net::Authorized::Anonymous { .. }
+                    | net::Authorized::Azure(net::Sent::Anonymous { .. })
+            )
+        })
+}
+
 /// an object a bucket listed, before its key becomes a dataset path.
 struct Object {
     key: String,
@@ -369,12 +390,12 @@ impl Prefix {
 
     /// lists every object under the prefix, then names each by its key below the prefix.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let objects = match self.store {
+        let listed = match self.store {
             Store::S3 => s3::list(self, api).await?,
             Store::Gcs => gcs::list(self, api).await?,
             Store::Azure => azure::list(self, api).await?,
         };
-        let files = self.files(objects)?;
+        let files = self.files(listed.objects)?;
         if files.is_empty() {
             return Err(Error::new(
                 Kind::ReferenceUnresolved,
@@ -384,7 +405,12 @@ impl Prefix {
         }
         Ok(Listing {
             within: Vec::new(),
-            access: Access::Unknown,
+            // a teammate needs credentials too for a bucket listed only to them
+            access: if listed.credentials {
+                Access::Login
+            } else {
+                Access::Unknown
+            },
             resolved: Reference::Bucket(self.clone()),
             title: None,
             license: None,

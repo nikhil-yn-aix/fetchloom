@@ -6,7 +6,7 @@ use std::fmt;
 
 use url::Url;
 
-use super::{Object, Prefix, object_url, query, xml};
+use super::{Listed, Object, Prefix, object_url, query, xml};
 use crate::error::Error;
 use crate::net::{Api, Response};
 
@@ -169,13 +169,14 @@ fn container_url(prefix: &Prefix) -> Result<Url, Error> {
 
 /// every blob under the prefix, a page at a time, without the empty blobs that only mark a
 /// folder other blobs are in.
-pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>, Error> {
+pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Error> {
     let blobs_at = container_url(prefix)?;
     let mut listing = blobs_at.clone();
     listing.set_path(blobs_at.path().trim_end_matches('/'));
     let mut marker: Option<String> = None;
     let mut pages = super::Pages::default();
     let mut objects = Vec::new();
+    let mut credentials = false;
     loop {
         let mut pairs = vec![
             ("restype", "container"),
@@ -194,6 +195,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         if page.name != "EnumerationResults" {
             return Err(prefix.invalid(&format!("the answer is <{}>", page.name)));
         }
+        credentials |= super::with_credentials(&response);
         for blob in page
             .children("Blobs")
             .flat_map(|blobs| blobs.children("Blob"))
@@ -204,7 +206,12 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             }
         }
         match page.text_of("NextMarker").filter(|next| !next.is_empty()) {
-            None => return Ok(without_folder_marks(objects)),
+            None => {
+                return Ok(Listed {
+                    objects: without_folder_marks(objects),
+                    credentials,
+                });
+            }
             Some(next) => {
                 pages.follow(prefix, next, objects.len())?;
                 marker = Some(next.to_owned());

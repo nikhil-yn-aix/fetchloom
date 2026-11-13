@@ -642,6 +642,123 @@ fn a_signed_listing_states_no_md5_and_links_objects_in_the_region_it_was_signed_
     assert_eq!(listing.files[0].md5, None);
 }
 
+/// a bucket S3 listed only to a signature, which it gets only once S3 refused the same listing
+/// without one, records `login`, the access a teammate needs too; one listed to anyone records
+/// nothing, as before.
+#[test]
+fn a_bucket_listed_only_when_signed_records_login() {
+    use crate::source::Access;
+
+    let s3 = listing_url("https://lab-raw.s3.amazonaws.com/", "raw/");
+    let bucket = || Bucket::parse("s3://lab-raw").unwrap();
+    for (keyed, access) in [
+        (
+            Some(Keyed::Signed {
+                bucket: bucket(),
+                key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
+                region: "us-east-1".to_owned(),
+            }),
+            Access::Login,
+        ),
+        (
+            Some(Keyed::Unsigned {
+                bucket: bucket(),
+                listed: true,
+            }),
+            Access::Unknown,
+        ),
+        (None, Access::Unknown),
+    ] {
+        let body = page(
+            true,
+            &[("raw%2Fa.csv", "\"1beeac62f1ded905f45c6d6d20a4688b\"")],
+        );
+        let mut recorded = Recorded::default().on(&s3, 200, body);
+        if let Some(keyed) = keyed {
+            recorded = recorded.keyed(&s3, keyed);
+        }
+        let listing = resolve("s3://lab-raw/raw/", &recorded).unwrap();
+        assert_eq!(listing.access, access, "{s3}");
+    }
+}
+
+/// a cloud storage bucket or an azure container listed only to a token, a SAS or a key records
+/// `login`, as a signed S3 bucket does; one listed anonymously records nothing.
+#[test]
+fn a_bucket_or_container_listed_only_to_credentials_records_login() {
+    use crate::net::{Authorized, Given, Sent};
+    use crate::source::Access;
+
+    let gcs = [
+        (STATES, "bucket/gcs-page1.json"),
+        (STATES_NEXT, "bucket/gcs-page2.json"),
+    ];
+    let mnist = [(
+        "https://azureopendatastorage.blob.core.windows.net/mnist?restype=container&comp=list&prefix=",
+        "azure/mnist.xml",
+    )];
+    let container = || "azure:azureopendatastorage/mnist".to_owned();
+    for (reference, pages, authorized, access) in [
+        (
+            "gs://cloud-samples-data/bigquery/us-states/",
+            &gcs[..],
+            Authorized::Token {
+                bucket: "cloud-samples-data".to_owned(),
+                identity: "the google login in adc.json".to_owned(),
+                lacks_scope: false,
+            },
+            Access::Login,
+        ),
+        (
+            "gs://cloud-samples-data/bigquery/us-states/",
+            &gcs[..],
+            Authorized::Anonymous {
+                bucket: "cloud-samples-data".to_owned(),
+                listed: true,
+            },
+            Access::Unknown,
+        ),
+        (
+            "azure:azureopendatastorage/mnist/",
+            &mnist[..],
+            Authorized::Azure(Sent::Sas {
+                container: container(),
+                given: Given::Environment,
+                expiry: None,
+            }),
+            Access::Login,
+        ),
+        (
+            "azure:azureopendatastorage/mnist/",
+            &mnist[..],
+            Authorized::Azure(Sent::Key {
+                container: container(),
+                account: "azureopendatastorage".to_owned(),
+            }),
+            Access::Login,
+        ),
+        (
+            "azure:azureopendatastorage/mnist/",
+            &mnist[..],
+            Authorized::Azure(Sent::Anonymous {
+                container: container(),
+                listed: true,
+            }),
+            Access::Unknown,
+        ),
+    ] {
+        let recorded = pages
+            .iter()
+            .fold(Recorded::default(), |recorded, (url, fixture)| {
+                recorded
+                    .fixture(url, fixture)
+                    .authorized(url, authorized.clone())
+            });
+        let listing = resolve(reference, &recorded).unwrap();
+        assert_eq!(listing.access, access, "{reference} {authorized:?}");
+    }
+}
+
 /// the error also says what would let the next listing through.
 #[test]
 fn a_refused_cloud_storage_listing_says_whether_credentials_went_with_it() {
