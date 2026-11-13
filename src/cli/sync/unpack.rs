@@ -807,6 +807,7 @@ mod tests {
                 reference: "https://example.org/set.tar".to_owned(),
                 spec: String::new(),
                 extract: true,
+                web_page: false,
                 resolved: "https://example.org/set.tar".to_owned(),
                 title: None,
                 license: None,

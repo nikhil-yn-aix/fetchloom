@@ -220,6 +220,7 @@ mod tests {
                 reference: String::new(),
                 spec: String::new(),
                 extract: true,
+                web_page: false,
                 resolved: String::new(),
                 title: None,
                 license: None,

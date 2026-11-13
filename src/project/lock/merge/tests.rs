@@ -24,6 +24,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
         reference: reference.to_owned(),
         spec: spec(entry.source().unwrap()),
         extract: true,
+        web_page: false,
         resolved: reference.to_owned(),
         title: None,
         license: None,
@@ -331,6 +332,7 @@ fn a_pin_one_side_made_again_for_extract_or_access_wins() {
     unpacked.files[0].unpacks_to = Some(digest::sha256(b"tree"));
     let packed = Locked {
         extract: false,
+        web_page: false,
         files: vec![LockedFile {
             unpacks_to: None,
             ..unpacked.files[0].clone()

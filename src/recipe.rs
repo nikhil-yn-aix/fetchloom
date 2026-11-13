@@ -619,6 +619,7 @@ mod tests {
             reference: "zenodo:1".to_owned(),
             spec: "sha256:00".to_owned(),
             extract: true,
+            web_page: false,
             resolved: "zenodo:1@1".to_owned(),
             title: Some("raw".to_owned()),
             license: None,

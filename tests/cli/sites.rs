@@ -1157,6 +1157,55 @@ fn an_offline_add_takes_a_kept_page_only_when_asked() -> Result {
     Ok(())
 }
 
+/// a pin made while data.toml asked for a page is never carried once it no longer asks, though
+/// an exclude changed with it: the link is asked again, and the page refused.
+#[test]
+fn a_page_pin_is_never_carried_once_web_page_goes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the notes</body></html>";
+    let length = page.len().to_string();
+    let server = Server::start(
+        "/notes",
+        vec![
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    ("ETag", "\"n1\""),
+                    ("Content-Length", &length),
+                ],
+                page,
+            ),
+            reply("304 Not Modified", &[("ETag", "\"n1\"")], b""),
+        ],
+    )?;
+    let added = sandbox.run(&["add", &server.url, "--web-page"])?;
+    assert!(added.status.success(), "{}", text(&added.stderr)?);
+    sandbox.allow(&server.url);
+    let manifest = sandbox.work().join("data.toml");
+    let asked = std::fs::read_to_string(&manifest)?;
+    assert!(asked.contains("web_page = true\n"), "{asked}");
+    std::fs::write(
+        &manifest,
+        asked.replace("web_page = true\n", "exclude = \"*.csv\"\n"),
+    )?;
+    let refused = sandbox.run(&["sync"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("add web_page = true to [datasets.notes] in data.toml"),
+        "{stderr}"
+    );
+    let heads = server.requests();
+    assert!(
+        heads
+            .get(1)
+            .is_some_and(|head| head.contains("if-none-match")),
+        "{heads:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_pinned_page_follows_web_page_in_data_toml() -> Result {
     let sandbox = Sandbox::new()?;

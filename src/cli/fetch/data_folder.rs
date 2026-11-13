@@ -543,6 +543,7 @@ mod tests {
                 reference: "https://example.org/weather".to_owned(),
                 spec: "sha256:00".to_owned(),
                 extract: true,
+                web_page: false,
                 resolved: "https://example.org/weather".to_owned(),
                 title: None,
                 license: None,

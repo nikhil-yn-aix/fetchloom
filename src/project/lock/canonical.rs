@@ -177,9 +177,13 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
     }
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
-    // the writer records extract only when it is false
+    // the writer records extract only when it is false, and web_page only when it is true
     let extract = !lines.sets("extract");
     if !extract && lines.next()? != "extract = false" {
+        return None;
+    }
+    let web_page = lines.sets("web_page");
+    if web_page && lines.next()? != "web_page = true" {
         return None;
     }
     let resolved = lines.value("resolved")?;
@@ -223,6 +227,7 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         reference,
         spec,
         extract,
+        web_page,
         resolved,
         title,
         license,
@@ -483,6 +488,7 @@ mod tests {
             reference: format!("zenodo:{name}"),
             spec: format!("sha256:{}", digest::sha256(name.as_bytes())),
             extract: !extra,
+            web_page: false,
             resolved: format!("zenodo:{name}@1"),
             title: extra.then(|| "Iris \"classic\"\tset\nline\r\u{1f}\u{7}".to_owned()),
             license: extra.then(|| "CC-BY-4.0".to_owned()),

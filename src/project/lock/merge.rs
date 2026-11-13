@@ -988,6 +988,7 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         reference,
         spec,
         extract,
+        web_page,
         resolved,
         title,
         license,
@@ -997,7 +998,7 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         files,
     } = locked;
     (
-        name, reference, spec, extract, resolved, title, license, doi, access, files,
+        name, reference, spec, extract, web_page, resolved, title, license, doi, access, files,
     )
 }
 

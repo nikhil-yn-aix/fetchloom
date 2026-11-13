@@ -1376,6 +1376,7 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
         reference: local::IMPORTED.to_owned(),
         spec: lock::spec(source),
         extract: source.extract,
+        web_page: false,
         resolved: local::IMPORTED.to_owned(),
         title: None,
         license: None,

@@ -30,6 +30,7 @@ files = [
 | `dataset[].ref` | the manifest reference |
 | `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
 | `dataset[].extract` | `false` when `data.toml` keeps the dataset's archives packed; omitted when they unpack |
+| `dataset[].web_page` | `true` when `data.toml` asked for the link's web page as the data when the dataset was pinned, so its pins may be pages; omitted otherwise. once `data.toml` no longer asks, a relock never carries those pins, whatever else changed with it |
 | `dataset[].resolved` | the source reference used to list the files, or `local` for an import |
 | `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
 | `dataset[].access` | who may read the data, as the source said: `public`, `login` for an account, or `terms` for accepted terms; omitted when the source said nothing, which means unknown |
@@ -138,7 +139,7 @@ for the unfiltered iris entry above, SHA-256 hashes these UTF-8 bytes, including
 ref=zenodo:3608990
 ```
 
-the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines. a dataset with `web_page = true` ends with the line `web_page=true`, and one without adds nothing, so taking the line out of data.toml resolves the dataset again: the link is asked once more, and its page is refused, while the pin made with the line counts for nothing.
+the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines. a dataset with `web_page = true` ends with the line `web_page=true`, and one without adds nothing, so taking the line out of data.toml resolves the dataset again: the link is asked once more, and its page is refused, while the pin made with the line counts for nothing. the entry's own `web_page = true` keeps that so when a `select` or `exclude` changed in the same edit, since the spec then matches neither way.
 
 `extract`, `members`, `copy`, `path` and `project.data_dir` are excluded, since they decide what happens to the downloaded files, not which files are downloaded.
 

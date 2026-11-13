@@ -2175,6 +2175,7 @@ mod tests {
             reference: "zenodo:1".to_owned(),
             spec: String::new(),
             extract: true,
+            web_page: false,
             resolved: "zenodo:2".to_owned(),
             title: None,
             license: None,

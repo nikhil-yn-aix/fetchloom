@@ -1425,6 +1425,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             reference: "zenodo:1".to_owned(),
             spec: "sha256:00".to_owned(),
             extract: true,
+            web_page: false,
             resolved: "zenodo:1@1".to_owned(),
             title: None,
             license: None,

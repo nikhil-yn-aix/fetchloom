@@ -1799,6 +1799,7 @@ pub(crate) mod tests {
             reference: format!("https://example.org/{name}"),
             spec,
             extract: true,
+            web_page: false,
             resolved: format!("https://example.org/{name}"),
             title: None,
             license: None,

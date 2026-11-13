@@ -94,6 +94,9 @@ pub(crate) struct Locked {
     /// whether archives unpack, as data.toml asked when the dataset was pinned. it is compared
     /// apart from `spec`, since a switch keeps the files and changes only what they unpack to.
     pub(crate) extract: bool,
+    /// whether data.toml asked for the link's web page when the dataset was pinned, so its pins
+    /// may be pages: a relock once it no longer asks never carries one.
+    pub(crate) web_page: bool,
     pub(crate) resolved: String,
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
@@ -188,6 +191,7 @@ struct StoredDataset {
     reference: Option<String>,
     spec: Option<String>,
     extract: Option<bool>,
+    web_page: Option<bool>,
     resolved: Option<String>,
     title: Option<String>,
     license: Option<String>,
@@ -258,6 +262,7 @@ impl StoredDataset {
             reference,
             spec,
             extract: self.extract.unwrap_or(true),
+            web_page: self.web_page.unwrap_or(false),
             resolved,
             title: self.title,
             license: self.license,
@@ -307,6 +312,7 @@ impl StoredDataset {
             ("ref", self.reference.is_some()),
             ("spec", self.spec.is_some()),
             ("extract", self.extract.is_some()),
+            ("web_page", self.web_page.is_some()),
             ("resolved", self.resolved.is_some()),
             ("title", self.title.is_some()),
             ("license", self.license.is_some()),
@@ -488,6 +494,9 @@ fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
     }
     if !dataset.extract {
         out.push_str("extract = false\n");
+    }
+    if dataset.web_page {
+        out.push_str("web_page = true\n");
     }
     let _ = writeln!(out, "resolved = {}", quoted(&dataset.resolved));
     for (key, value) in [
@@ -720,14 +729,10 @@ pub(crate) fn spec(source: &Source) -> String {
 }
 
 /// whether `locked` was pinned while data.toml asked for its link's web page, which `source` no
-/// longer does: such a pin counts for nothing then, since only a page asked for is the data.
+/// longer does, whatever else changed: such a pin counts for nothing then, since only a page
+/// asked for is the data.
 pub(crate) fn page_no_longer_asked(locked: &Locked, source: &Source) -> bool {
-    !source.web_page
-        && locked.spec
-            == spec(&Source {
-                web_page: true,
-                ..source.clone()
-            })
+    locked.web_page && !source.web_page
 }
 
 /// the current time as `data.lock` records it: `2026-10-27T17:30:00Z`.
@@ -1023,6 +1028,7 @@ mod tests {
                     reference: "https://example.org/z.csv".to_owned(),
                     spec: "sha256:00".to_owned(),
                     extract: false,
+                    web_page: false,
                     resolved: "https://example.org/z.csv".to_owned(),
                     title: None,
                     license: None,
@@ -1036,6 +1042,7 @@ mod tests {
                     reference: "zenodo:3608990".to_owned(),
                     spec: "sha256:11".to_owned(),
                     extract: true,
+                    web_page: false,
                     resolved: "zenodo:3608990".to_owned(),
                     title: Some("Iris \"classic\"\tset".to_owned()),
                     license: Some("CC-BY-4.0".to_owned()),
@@ -1796,6 +1803,7 @@ mod tests {
         let locked = Locked {
             spec: spec(entry("").source().unwrap()),
             extract: true,
+            web_page: false,
             ..sample().datasets[1].clone()
         };
         assert_eq!(locked.drift(&entry("")), None);
@@ -1836,6 +1844,7 @@ mod tests {
         let asked = asked.source().unwrap();
         let pinned = |source: &Source| Locked {
             spec: spec(source),
+            web_page: source.web_page,
             ..sample().datasets[1].clone()
         };
         assert_eq!(
@@ -1845,6 +1854,52 @@ mod tests {
         assert!(page_no_longer_asked(&pinned(asked), plain));
         assert!(!page_no_longer_asked(&pinned(asked), asked));
         assert!(!page_no_longer_asked(&pinned(plain), plain));
+    }
+
+    /// a pin made while data.toml asked for a page says so in data.lock, written only then, so a
+    /// relock that no longer asks never carries it, whatever else changed with it.
+    #[test]
+    fn a_page_pin_is_marked_and_never_carried_once_unasked() {
+        let entry = |extra: &str| {
+            Manifest::parse(&format!(
+                "[datasets.x]\nref = \"https://example.org/notes\"\n{extra}"
+            ))
+            .unwrap()
+            .datasets["x"]
+                .clone()
+        };
+        let asked = entry("web_page = true\n");
+        let mut pinned = Locked {
+            spec: spec(asked.source().unwrap()),
+            web_page: true,
+            ..sample().datasets[1].clone()
+        };
+        pinned.files.sort_by(|a, b| a.path.cmp(&b.path));
+        for unasked in ["", "exclude = \"*.csv\"\n", "select = \"notes\"\n"] {
+            let unasked = entry(unasked);
+            assert!(
+                page_no_longer_asked(&pinned, unasked.source().unwrap()),
+                "{unasked:?}"
+            );
+        }
+        let still = entry("web_page = true\nexclude = \"*.csv\"\n");
+        assert!(!page_no_longer_asked(&pinned, still.source().unwrap()));
+        let lock = Lock {
+            datasets: vec![pinned.clone()],
+            ..sample()
+        };
+        let text = lock.render();
+        assert!(
+            text.contains("spec = \"sha256:") && text.contains("\nweb_page = true\nresolved = "),
+            "{text}"
+        );
+        assert_eq!(text.matches("web_page").count(), 1, "{text}");
+        assert_eq!(Lock::parse(&text).unwrap().datasets, [pinned]);
+        assert_eq!(
+            canonical::read(&text, false),
+            Some(parse_toml(&text).unwrap())
+        );
+        assert!(!sample().render().contains("web_page"));
     }
 
     #[test]

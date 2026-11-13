@@ -392,6 +392,7 @@ impl Draft {
             reference: self.reference.clone(),
             spec: self.spec.clone(),
             extract: self.extract,
+            web_page: self.web_page,
             resolved: self.resolved.clone(),
             title: None,
             license: None,
@@ -533,6 +534,7 @@ impl Draft {
             reference: self.reference,
             spec: self.spec,
             extract: self.extract,
+            web_page: self.web_page,
             resolved: self.resolved,
             title: self.title,
             license: self.license,
@@ -566,7 +568,10 @@ pub(in crate::cli) fn without_files(
     let mut kept = locked.clone();
     kept.files
         .retain(|file| !paths.contains(file.path.as_str()));
-    kept.spec = lock::spec(source);
+    // a page's pin data.toml no longer asks for stays out of date, so a relock drops it
+    if !lock::page_no_longer_asked(locked, source) {
+        kept.spec = lock::spec(source);
+    }
     now.clone_into(&mut kept.timestamp);
     kept
 }
@@ -1082,6 +1087,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            web_page: false,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -1354,6 +1360,7 @@ mod tests {
             reference: packed.source().unwrap().reference.clone(),
             spec: lock::spec(packed.source().unwrap()),
             extract: false,
+            web_page: false,
             resolved: "https://example.org/set.zip".to_owned(),
             title: Some("set".to_owned()),
             license: None,
@@ -1375,6 +1382,7 @@ mod tests {
         assert_eq!(
             Locked {
                 extract: false,
+                web_page: false,
                 timestamp: locked.timestamp.clone(),
                 files: locked.files.clone(),
                 ..unpacked.clone()
@@ -1437,6 +1445,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            web_page: false,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -1484,6 +1493,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            web_page: false,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -1521,6 +1531,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            web_page: false,
             resolved: url.to_string(),
             title: None,
             license: None,

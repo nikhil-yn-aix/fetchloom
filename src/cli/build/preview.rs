@@ -588,6 +588,7 @@ mod tests {
                 reference: "zenodo:1".to_owned(),
                 spec: spec(source),
                 extract: source.extract,
+                web_page: false,
                 resolved: "zenodo:1@1".to_owned(),
                 title: None,
                 license: None,
