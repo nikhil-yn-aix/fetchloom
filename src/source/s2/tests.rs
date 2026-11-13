@@ -1,5 +1,8 @@
 //! tests on semantic scholar's answers, recorded on 2026-11-13: papers and a search from its
-//! graph API.
+//! graph API, and a release and the links to a dataset's files from its datasets API, these with
+//! a placeholder in place of each signature and a far expiry in place of a week's.
+
+use std::time::UNIX_EPOCH;
 
 use super::*;
 use crate::error::Kind;
@@ -129,7 +132,7 @@ fn an_open_access_paper_is_pinned_at_the_pdf_semantic_scholar_links() {
         "https://journals.plos.org/ploscompbiol/article/file?id=10.1371/journal.pcbi.1003285&type=printable"
     );
     assert_eq!((file.size, file.sha256, file.md5), (None, None, None));
-    assert!(listing.is_known_by_title());
+    assert!(!listing.names_its_file());
 }
 
 #[test]
@@ -259,6 +262,228 @@ fn a_search_offers_papers_by_corpus_id_and_tells_those_without_a_pdf() {
     assert!(block_on(search(&recorded, &[], 5)).unwrap().is_empty());
 }
 
+const RELEASE: &str = "https://api.semanticscholar.org/datasets/v1/release/latest";
+const LINKS: &str = "https://api.semanticscholar.org/datasets/v1/release/2026-11-10/dataset/tldrs";
+/// the first file of the recorded dataset, by the name its signed links share.
+const FIRST: &str = "20261113_085251_00187_5yhyg_01e7a63d-0ddd-4f4d-956b-98f2199bbd92.gz";
+
+#[test]
+fn a_dataset_is_named_with_or_without_its_release() {
+    for (text, canonical) in [
+        ("s2:papers", "s2:papers"),
+        ("s2:Papers@2026-11-10", "s2:papers@2026-11-10"),
+        ("s2:embeddings-specter_v2", "s2:embeddings-specter_v2"),
+        (
+            "https://api.semanticscholar.org/datasets/v1/release/2026-11-10/dataset/tldrs",
+            "s2:tldrs@2026-11-10",
+        ),
+        (
+            "https://api.semanticscholar.org/datasets/v1/release/latest/dataset/tldrs",
+            "s2:tldrs",
+        ),
+    ] {
+        assert_eq!(reference(text), canonical, "{text}");
+        assert_eq!(reference(canonical), canonical, "{canonical} reads back");
+    }
+    for bad in [
+        "s2:papers@latest",
+        "s2:papers@2026-1-10",
+        "s2:-papers",
+        "s2:pa/pers",
+        "s2:papers@",
+    ] {
+        let error = Reference::parse(bad).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid, "{bad}");
+    }
+}
+
+/// the release names the dataset and its license to anyone; the files come from the links the
+/// API gives a key, each kept in data.lock as the listing with the file's name, never a link
+/// that holds a signature.
+#[test]
+fn a_dataset_is_pinned_at_the_newest_release_by_its_files_names() {
+    let recorded = Recorded::default()
+        .fixture(RELEASE, "s2/release.json")
+        .fixture(LINKS, "s2/dataset.json");
+    let listing = resolve(&recorded, "s2:tldrs").unwrap();
+    assert_eq!(listing.resolved.to_string(), "s2:tldrs@2026-11-10");
+    assert_eq!(
+        listing.title.as_deref(),
+        Some("A short natural-language summary of the contents of a paper.")
+    );
+    assert_eq!(listing.license.as_deref(), Some("ODC-By-1.0"));
+    assert_eq!(listing.access, Access::Login);
+    assert_eq!(listing.naming_title(), None);
+    assert!(!listing.names_its_file());
+    assert_eq!(listing.files.len(), 30);
+    let first = &listing.files[0];
+    assert_eq!(first.path, FIRST);
+    assert_eq!(first.url.as_str(), format!("{LINKS}#{FIRST}"));
+    assert_eq!((first.size, first.sha256, first.md5), (None, None, None));
+    assert!(listing.files.iter().all(|file| file.url.query().is_none()));
+    assert_eq!(recorded.asked(), [RELEASE, LINKS]);
+}
+
+#[test]
+fn an_embeddings_dataset_takes_the_license_its_readme_names() {
+    let recorded = Recorded::default()
+        .fixture(
+            "https://api.semanticscholar.org/datasets/v1/release/2026-11-10",
+            "s2/release.json",
+        )
+        .fixture(
+            "https://api.semanticscholar.org/datasets/v1/release/2026-11-10/dataset/embeddings-specter_v2",
+            "s2/dataset.json",
+        );
+    let listing = resolve(&recorded, "s2:embeddings-specter_v2@2026-11-10").unwrap();
+    assert_eq!(listing.license.as_deref(), Some("Apache-2.0"));
+    assert_eq!(
+        listing.resolved.to_string(),
+        "s2:embeddings-specter_v2@2026-11-10"
+    );
+}
+
+/// without a key the release still answers, so the refusal comes once the name is known good,
+/// and names the key's page and the sign-in.
+#[test]
+fn a_datasets_files_without_a_key_are_refused_naming_the_sign_in() {
+    let recorded = Recorded::default().fixture(RELEASE, "s2/release.json").on(
+        LINKS,
+        401,
+        br#"{"error":"A valid API key is required"}"#.to_vec(),
+    );
+    let error = resolve(&recorded, "s2:tldrs").unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "semantic scholar gives the files of s2:tldrs@2026-11-10 only for an API key"
+    );
+    let help = error.help.as_deref().unwrap();
+    assert!(
+        help.contains(S2_KEYS) && help.contains("`fetchloom auth login s2`"),
+        "{help}"
+    );
+    assert_eq!(
+        error.need.as_deref().map(|need| &need.account),
+        Some(&Account::S2)
+    );
+}
+
+#[test]
+fn an_unknown_release_or_dataset_is_refused_with_what_there_is() {
+    let recorded = Recorded::default().on(
+        "https://api.semanticscholar.org/datasets/v1/release/2000-01-01",
+        404,
+        br#"{"error":"No release with ID 2000-01-01"}"#.to_vec(),
+    );
+    let error = resolve(&recorded, "s2:papers@2000-01-01").unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert_eq!(error.message, "semantic scholar has no release 2000-01-01");
+    assert!(
+        error
+            .help
+            .unwrap()
+            .contains("https://api.semanticscholar.org/datasets/v1/release/")
+    );
+    let recorded = Recorded::default().fixture(RELEASE, "s2/release.json");
+    let error = resolve(&recorded, "s2:paper").unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert_eq!(
+        error.message,
+        "semantic scholar's release 2026-11-10 has no dataset paper"
+    );
+    assert!(
+        error.help.unwrap().contains("paper-ids, papers"),
+        "it names the datasets there are"
+    );
+    assert_eq!(recorded.asked(), [RELEASE], "no links are asked for");
+}
+
+/// a link to anywhere but S3 over https is no file of the dataset, whatever the API says.
+#[test]
+fn a_link_that_is_not_on_s3_is_refused() {
+    let recorded = Recorded::default().fixture(RELEASE, "s2/release.json").on(
+        LINKS,
+        200,
+        br#"{"name":"tldrs","files":["http://ai2-s2ag.s3.amazonaws.com/staging/a.gz"]}"#.to_vec(),
+    );
+    let error = resolve(&recorded, "s2:tldrs").unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+}
+
+/// a stable link names the listing to ask again and the file to find in it; a file the listing
+/// no longer has says how to pin the files it has.
+#[test]
+fn a_stable_link_finds_its_files_fresh_link_by_name() {
+    let stable = Url::parse(&format!("{LINKS}#{FIRST}")).unwrap();
+    let first = relink(&stable).unwrap();
+    assert!(
+        relink(&Url::parse(LINKS).unwrap()).is_none(),
+        "no file named"
+    );
+    assert!(
+        relink(
+            &Url::parse(&format!(
+                "https://api.semanticscholar.org/datasets/v1/release/latest/dataset/tldrs#{FIRST}"
+            ))
+            .unwrap()
+        )
+        .is_none(),
+        "no release pinned"
+    );
+    let recorded = Recorded::default().fixture(LINKS, "s2/dataset.json");
+    let link = block_on(first.link(&recorded)).unwrap();
+    assert_eq!(
+        link.as_str(),
+        format!(
+            "https://ai2-s2ag.s3.amazonaws.com/staging/2026-11-10/tldrs/{FIRST}?AWSAccessKeyId=PLACEHOLDER&Signature=PLACEHOLDER&x-amz-security-token=PLACEHOLDER&Expires=4102444800"
+        )
+    );
+    let gone = relink(&Url::parse(&format!("{LINKS}#gone.gz")).unwrap()).unwrap();
+    let error = block_on(gone.link(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert_eq!(
+        error.message,
+        "semantic scholar no longer lists gone.gz in s2:tldrs@2026-11-10"
+    );
+    assert!(
+        crate::source::fetch_plan(&stable).expired.is_some(),
+        "a download tells an expired link apart"
+    );
+}
+
+#[test]
+fn a_signed_link_expires_a_minute_before_its_time() {
+    let link = |expires: &str| {
+        Url::parse(&format!(
+            "https://ai2-s2ag.s3.amazonaws.com/a.gz?Signature=x&Expires={expires}"
+        ))
+        .unwrap()
+    };
+    let now = UNIX_EPOCH + Duration::from_secs(1_763_000_000);
+    assert!(link_expired(&link("1762999999"), now));
+    assert!(link_expired(&link("1763000060"), now));
+    assert!(!link_expired(&link("1763000061"), now));
+    assert!(!link_expired(&link("4102444800"), now));
+    let unstated = Url::parse("https://ai2-s2ag.s3.amazonaws.com/a.gz").unwrap();
+    assert!(!link_expired(&unstated, now), "no expiry is S3's to judge");
+}
+
+/// S3's error documents for a link whose time ran out and for one whose signing session ended,
+/// as AWS words them, against refusals that are not about expiry.
+#[test]
+fn s3_says_a_link_expired_in_two_ways() {
+    let expired = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>1970-01-01T00:00:00Z</Expires><ServerTime>2026-11-13T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
+    let token = "<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>";
+    let signature = "<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided.</Message></Error>";
+    let denied = "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";
+    let check = expiry_check(&Url::parse(&format!("{LINKS}#{FIRST}")).unwrap()).unwrap();
+    assert!(check(expired));
+    assert!(check(token));
+    assert!(!check(signature));
+    assert!(!check(denied));
+}
+
 /// semantic scholar answers without a key, so these run in CI's live job: one paper and one small
 /// search, a few seconds apart.
 #[test]
@@ -277,4 +502,26 @@ fn live_semantic_scholar_paper_and_search() {
     let words = ["attention", "is", "all", "you", "need"].map(str::to_owned);
     let found = block_on(search(&net, &words, 3)).unwrap();
     assert_eq!(found[0].reference.to_string(), "s2:CorpusId:13756489");
+}
+
+/// a dataset's links need a key, which the owner sets in `S2_API_KEY`; without one this says so
+/// and passes.
+#[test]
+#[ignore = "asks semantic scholar's API with the key in S2_API_KEY"]
+fn live_semantic_scholar_dataset_with_a_key() {
+    let Some(key) = std::env::var_os("S2_API_KEY").filter(|key| !key.is_empty()) else {
+        eprintln!("skipped: S2_API_KEY is not set");
+        return;
+    };
+    let var = move |name: &str| (name == "S2_API_KEY").then(|| key.clone());
+    let (net, _work) = crate::source::recorded::live(crate::auth::credentials(&var));
+    let dataset = Reference::parse("s2:tldrs").unwrap().reference;
+    let listing = block_on(dataset.resolve(&net)).unwrap();
+    assert!(listing.resolved.to_string().starts_with("s2:tldrs@"));
+    assert_eq!(listing.license.as_deref(), Some("ODC-By-1.0"));
+    assert!(!listing.files.is_empty(), "the release lists its files");
+    let first = relink(&listing.files[0].url).unwrap();
+    let link = block_on(first.link(&net)).unwrap();
+    assert_eq!(link.host_str(), Some("ai2-s2ag.s3.amazonaws.com"));
+    assert!(!link_expired(&link, std::time::SystemTime::now()));
 }

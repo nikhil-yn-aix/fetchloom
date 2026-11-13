@@ -143,6 +143,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/arxiv/month.rs` | a month from the mirror's folder, and a category's month paged from the API, joined with the mirror, withdrawals left out | `Month` | `Month::resolve` |
 | `src/source/arxiv/feed.rs` | arXiv's answers: the API's atom feed and the OAI-PMH record of a paper | `ask`, `record` | `Entry`, `Page`, `Record`, `search` |
 | `src/source/s2.rs` | semantic scholar papers by any id its API takes; its search; the pace of its API, with a key or without; refusals naming the key or the account | `parse`, `search`, `spacing`, `most_at_once` | `answer`, `busy` |
+| `src/source/s2/dataset.rs` | a release's dataset: its name, description and license from the release, its files from the links the API gives a key, each kept by its name; a stable link's fresh signed link; S3's word that a link expired | `Dataset`, `Relink` | `expired`, `expired_answer` |
 | `src/source/s2/paper.rs` | one paper's open-access pdf, its license and DOI; an arXiv paper through the arXiv source; a paper without a pdf refused with its page | `Paper` | `Paper::resolve`, `license`, `Answer` |
 | `src/source/dandi.rs` | DANDI dandisets at a published version or the draft, with the SHA-256 DANDI states | `Dandiset` |  |
 | `src/source/openneuro.rs` | OpenNeuro snapshots through its GraphQL API, large files from its S3 bucket | `Dataset` |  |
@@ -191,8 +192,9 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/download/split.rs` | one large file over several ranged streams, a stream added only while it makes the whole faster | `split` | `Job`, `Board`, `Share`, `Streamed` |
 | `src/net/headers.rs` | the headers downloads read: lengths, ranges, validators and `Content-Disposition` file names | `file_name`, `validators` | `if_range`, `changed`, `range_start`, `range_end` |
 | `src/net/failure.rs` | which failures get another try, and how long to wait | `classify`, `Failure` | `Retry`, `retry_after` |
-| `src/net/pace.rs` | how often a host lets fetchloom ask, from its rate-limit headers or a spacing such as NCBI's, and which waits get a line | `Paces` | `Limit`, `Hold`, `Ticket`, `admit`, `heard`, `told` |
+| `src/net/pace.rs` | how often a host lets fetchloom ask, from its rate-limit headers or a spacing such as NCBI's, longer after it refuses for load, and which waits get a line | `Paces` | `Limit`, `Hold`, `Ticket`, `admit`, `heard`, `answered`, `pause`, `busy`, `told` |
 | `src/net/rate.rs` | the one byte budget every response in a run shares | `Rate` | `read`, `throttle` |
+| `src/net/relink.rs` | links a source gives only for a while: a fresh one by the stable link data.lock keeps, asked again once when it expired | `Net::relinked` |  |
 | `src/net/address.rs` | where a request may go: private addresses only for origins a person typed, named as a mirror or listed in `allowed_origins`; DNS; and proxies with the variables that name them | `Reach`, `Proxies` | `Typed`, `Resolver`, `is_private`, `named` |
 | `src/net/address/reach.rs` | whether the proxy carrying a request can be reached, so a dead proxy is named within seconds | `Proxies::carrier` | `Carrier`, `unreachable`, `watch`, `reached` |
 | `src/net/shown.rs` | which query names hold secrets, and links as messages and logs show them, every query value masked unless its name is known to be harmless | `Shown`, `mask_query` | `secret`, `depends_on_path` |

@@ -1014,6 +1014,8 @@ pub(crate) struct Routes {
     pub(crate) url: String,
     requests: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+    /// answers each served once, in order, before a target's own answer.
+    turns: Arc<Mutex<std::collections::HashMap<String, std::collections::VecDeque<Vec<u8>>>>>,
     _running: ServerTask,
 }
 
@@ -1022,11 +1024,13 @@ impl Routes {
     /// builds.
     pub(crate) fn start(routes: Vec<(String, Vec<Part>)>) -> Result<Routes> {
         let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let turns = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let seen = requests.clone();
         let known = answers.clone();
+        let queued = turns.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             let missing = head("404 Not Found", &[("Content-Length", "0")]);
             while let Some((mut stream, _connection)) = stop.accept(&listener) {
@@ -1040,12 +1044,19 @@ impl Routes {
                 if let Ok(mut seen) = seen.lock() {
                     seen.push(asked.clone());
                 }
-                let answer = known
+                let turn = queued
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .get(&target)
-                    .unwrap_or(&missing)
-                    .clone();
+                    .get_mut(&target)
+                    .and_then(std::collections::VecDeque::pop_front);
+                let answer = turn.unwrap_or_else(|| {
+                    known
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get(&target)
+                        .unwrap_or(&missing)
+                        .clone()
+                });
                 let _ = stream.write_all(&answer);
                 let _ = stream.flush();
             }
@@ -1054,6 +1065,7 @@ impl Routes {
             url,
             requests,
             answers,
+            turns,
             _running: running,
         };
         served.change(routes);
@@ -1073,6 +1085,28 @@ impl Routes {
             }
             answers.insert(target, bytes);
         }
+    }
+
+    /// answers `target` with each of `answers` once, in order, before its own answer, as a
+    /// service whose answer changes between two requests does.
+    pub(crate) fn turns(&self, target: &str, answers: Vec<Vec<Part>>) {
+        let queue = answers
+            .into_iter()
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        Part::Bytes(part) => Some(part),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect()
+            })
+            .collect();
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(target.to_owned(), queue);
     }
 
     /// the head of every request so far, lowercased.

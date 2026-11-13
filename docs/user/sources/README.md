@@ -25,7 +25,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [DANDI](dandi.md) | neurophysiology dandisets | `dandi:000027` | nothing; embargoed dandisets are refused |
 | [OpenNeuro](openneuro.md) | neuroimaging datasets | `openneuro:ds000001@1.0.0` | nothing; private datasets are refused |
 | [arXiv](arxiv.md) | papers' pdfs: one paper, a month's or one category's month | `arxiv:1706.03762`, `arxiv:2401`, `arxiv:cs.LG/2401` | nothing |
-| [semantic scholar](semantic-scholar.md) | papers' open-access pdfs, found by any id its graph knows | `s2:DOI:10.1371/journal.pcbi.1003285`, `s2:ARXIV:1706.03762` | nothing; a key gives a rate of your own |
+| [semantic scholar](semantic-scholar.md) | papers' open-access pdfs, found by any id its graph knows, and the datasets of its releases | `s2:DOI:10.1371/journal.pcbi.1003285`, `s2:ARXIV:1706.03762`, `s2:papers` | a dataset's files; for papers, a key gives a rate of your own |
 | OpenAlex, through [cloud buckets](buckets.md) | OpenAlex's snapshot of scholarly works, authors and venues | `s3://openalex/data/jsonl/works/` | nothing |
 | [github and gitlab releases](releases.md) | the files of a release | `github:jqlang/jq@jq-1.8.2`, `gitlab:gitlab-org/gitlab-runner@v19.3.6` | private gitlab projects, and on github more than 60 requests an hour |
 | [google drive](google-drive.md) | shared files and folders | a shared link, `drive:<id>` or `drive:folders/<id>` | items shared only with some people |

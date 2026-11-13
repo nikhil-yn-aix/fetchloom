@@ -11,6 +11,7 @@ mod google;
 mod headers;
 mod pace;
 mod rate;
+mod relink;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod roots;
 mod shown;

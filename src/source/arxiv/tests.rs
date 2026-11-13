@@ -230,7 +230,7 @@ fn a_paper_is_pinned_at_its_newest_version_with_the_mirrors_pdf() {
         recorded.asked(),
         [PAPER.to_owned(), LICENSE.to_owned(), mirror(key)]
     );
-    assert!(listing.is_known_by_title());
+    assert!(!listing.names_its_file());
     assert_eq!(listing.naming_title(), Some("Attention Is All You Need"));
 }
 

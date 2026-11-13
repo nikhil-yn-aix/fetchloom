@@ -25,6 +25,8 @@ mod osf;
 pub(crate) mod recorded;
 mod s2;
 pub(crate) mod search;
+
+pub(crate) use s2::Relink;
 mod xml;
 mod zenodo;
 
@@ -207,6 +209,8 @@ pub(crate) enum Reference {
     ArxivMonth(arxiv::Month),
     /// one paper semantic scholar knows, at the open-access pdf it links.
     S2Paper(s2::Paper),
+    /// a dataset of a semantic scholar release, at that release or the newest.
+    S2Dataset(s2::Dataset),
     /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
     /// pins their bytes, never where they were.
     Local,
@@ -302,15 +306,22 @@ impl Listing {
     /// such as `multi_nli`, more than by its card's title, so its name comes from the id.
     pub(crate) fn naming_title(&self) -> Option<&str> {
         match self.resolved {
-            Reference::HuggingFace(_) | Reference::ArxivMonth(_) => None,
+            Reference::HuggingFace(_) | Reference::ArxivMonth(_) | Reference::S2Dataset(_) => None,
             _ => self.title.as_deref(),
         }
     }
 
-    /// whether a generated name comes from the title before the one file the listing holds: a
-    /// paper is known by its title, and its file only by an id, as `1706.03762v7.pdf`.
-    pub(crate) fn is_known_by_title(&self) -> bool {
-        matches!(self.resolved, Reference::Arxiv(_) | Reference::S2Paper(_))
+    /// whether a generated name may come from the one file the listing holds. a paper is known by
+    /// its title, and its file only by an id, as `1706.03762v7.pdf`; an arXiv month and a
+    /// semantic scholar dataset by their reference, and their files by ids and times.
+    pub(crate) fn names_its_file(&self) -> bool {
+        !matches!(
+            self.resolved,
+            Reference::Arxiv(_)
+                | Reference::ArxivMonth(_)
+                | Reference::S2Paper(_)
+                | Reference::S2Dataset(_)
+        )
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -557,6 +568,7 @@ impl Reference {
             Reference::Arxiv(paper) => paper.resolve(api).await,
             Reference::ArxivMonth(month) => month.resolve(api).await,
             Reference::S2Paper(paper) => paper.resolve(api).await,
+            Reference::S2Dataset(dataset) => dataset.resolve(api).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
@@ -588,6 +600,7 @@ impl fmt::Display for Reference {
             Reference::Arxiv(paper) => write!(f, "{paper}"),
             Reference::ArxivMonth(month) => write!(f, "{month}"),
             Reference::S2Paper(paper) => write!(f, "{paper}"),
+            Reference::S2Dataset(dataset) => write!(f, "{dataset}"),
             Reference::Local => f.write_str(local::IMPORTED),
         }
     }
@@ -626,9 +639,20 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
     Fetch {
         from,
         divert,
-        expired: osf::expiry_check(url),
+        expired: osf::expiry_check(url).or_else(|| s2::expiry_check(url)),
         ..Fetch::new(url.clone())
     }
+}
+
+/// a file of a source's dataset whose download link the source gives only for a while, as
+/// semantic scholar's, by the stable link data.lock keeps: the request for a fresh link to it.
+pub(crate) fn relink(url: &Url) -> Option<Relink> {
+    s2::relink(url)
+}
+
+/// whether a signed link a source gave for a while expires before `now`, or too soon after it.
+pub(crate) fn link_expired(link: &Url, now: std::time::SystemTime) -> bool {
+    s2::link_expired(link, now)
 }
 
 /// whether the source behind `url` may send the file wrapped in a zip, `train.csv` as
@@ -784,7 +808,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
         })
         .or_else(|| kaggle::from_link(&url).map(|(reference, file)| parsed(reference, file)))
         .or_else(|| arxiv::from_link(&url).map(|paper| parsed(Reference::Arxiv(paper), None)))
-        .or_else(|| s2::from_link(&url).map(|reference| parsed(reference, None)))
+        .or_else(|| s2::from_link(&url).map(|(reference, file)| parsed(reference, file)))
         .or_else(|| drive::Item::from_link(&url).map(|item| parsed(Reference::Drive(item), None)))
         .or_else(|| {
             dropbox::Link::from_link(&url).map(|link| parsed(Reference::Dropbox(link), None))

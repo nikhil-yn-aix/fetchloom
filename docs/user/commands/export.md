@@ -64,6 +64,8 @@ warning: the list leaves out 2 files of flowers: they were imported from a folde
   help: share them through a folder mirror, which `fetchloom push --to <folder>` fills
 ```
 
+a [semantic scholar dataset](../sources/semantic-scholar.md#datasets)'s files are listed by the links data.lock keeps, the API's listing of the dataset with each file's name after `#`, since the links to the files themselves last only a week. other tools cannot download those; fetchloom asks the listing for a fresh link to each file.
+
 the zenodo and UCI project above as an aria2 input file, which aria2c 1.37 downloaded and checked; a file whose bytes differ from its `checksum=` line fails with exit 32:
 
 ```sh

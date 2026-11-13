@@ -487,3 +487,228 @@ fn semantic_scholar_is_searched_when_named() -> Result {
     assert_eq!(stdout.lines().count(), 3, "{stdout}");
     Ok(())
 }
+
+const S2_RELEASE: &[u8] = include_bytes!("../fixtures/sources/s2/release.json");
+const S2_DATASET: &[u8] = include_bytes!("../fixtures/sources/s2/dataset.json");
+/// where the stand-in for semantic scholar's API answers about the newest release, and lists the
+/// links to its tldrs files.
+const S2_RELEASE_AT: &str = "/api.semanticscholar.org/datasets/v1/release/latest";
+const S2_LINKS_AT: &str = "/api.semanticscholar.org/datasets/v1/release/2026-11-10/dataset/tldrs";
+/// a key that stands in for the one semantic scholar gives.
+const S2_KEY: &str = "s2-placeholder-key";
+
+/// the names of the recorded dataset's first `count` files.
+fn s2_names(count: usize) -> Result<Vec<String>> {
+    let answer: serde_json::Value = serde_json::from_slice(S2_DATASET)?;
+    Ok(answer["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(count)
+        .filter_map(|link| {
+            let link = link.as_str()?;
+            let path = link.split('?').next()?;
+            Some(path.rsplit('/').next()?.to_owned())
+        })
+        .collect())
+}
+
+/// the API's answer that links each of `names`, signed with `signature` and expiring at `expires`,
+/// and where the stand-in for S3 serves each of those links.
+fn s2_links(names: &[String], signature: &str, expires: u64) -> (Vec<u8>, Vec<String>) {
+    let query = format!(
+        "AWSAccessKeyId=PLACEHOLDER&Signature={signature}&x-amz-security-token=PLACEHOLDER&Expires={expires}"
+    );
+    let files: Vec<String> = names
+        .iter()
+        .map(|name| {
+            format!("https://ai2-s2ag.s3.amazonaws.com/staging/2026-11-10/tldrs/{name}?{query}")
+        })
+        .collect();
+    let targets = names
+        .iter()
+        .map(|name| format!("/ai2-s2ag.s3.amazonaws.com/staging/2026-11-10/tldrs/{name}?{query}"))
+        .collect();
+    let body = serde_json::to_vec(&serde_json::json!({"name": "tldrs", "files": files}))
+        .unwrap_or_default();
+    (body, targets)
+}
+
+/// how many requests asked for `target`.
+fn asked(routes: &Routes, target: &str) -> usize {
+    routes
+        .targets()
+        .iter()
+        .filter(|asked| asked.as_str() == target)
+        .count()
+}
+
+/// without a key the release still names the dataset, so the refusal names the key's page and
+/// the sign-in, and nothing changes.
+#[test]
+fn a_semantic_scholar_dataset_without_a_key_is_refused_naming_the_sign_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
+        (
+            S2_LINKS_AT.to_owned(),
+            reply(
+                "401 Unauthorized",
+                &[("Content-Type", "application/json")],
+                br#"{"error":"A valid API key is required"}"#,
+            ),
+        ),
+    ])?;
+    let output = command(&sandbox, &routes, &["--json", "add", "s2:tldrs"]).output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "auth.required");
+    assert_eq!(
+        error["message"],
+        "semantic scholar gives the files of s2:tldrs@2026-11-10 only for an API key"
+    );
+    assert_eq!(
+        error["help"],
+        "get a free key at https://www.semanticscholar.org/product/api#api-key-form, then sign in with `fetchloom auth login s2`, or set S2_API_KEY"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
+/// data.lock keeps each file by the API's listing and the file's name, never a signed link, so a
+/// teammate's sync asks the API for fresh links and downloads each by its name.
+#[test]
+fn a_semantic_scholar_dataset_is_pinned_by_its_files_names_and_each_sync_asks_fresh_links() -> Result
+{
+    let sandbox = Sandbox::new()?;
+    let names = s2_names(2)?;
+    let (links, targets) = s2_links(&names, "PLACEHOLDER", 4_102_444_800);
+    let parts: [&[u8]; 2] = [b"first part\n", b"second part\n"];
+    let mut served = vec![
+        (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
+        (S2_LINKS_AT.to_owned(), s2_json(&links)),
+    ];
+    for (target, part) in targets.iter().zip(parts) {
+        served.push((target.clone(), file(part, "\"s3\"")));
+    }
+    let routes = Routes::start(served)?;
+    let output = command(&sandbox, &routes, &["add", "s2:tldrs"])
+        .env("S2_API_KEY", S2_KEY)
+        .output()?;
+    let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        !stdout.contains(S2_KEY) && !stderr.contains(S2_KEY),
+        "{stderr}"
+    );
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.tldrs]\nref = \"s2:tldrs\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    for expected in [
+        "resolved = \"s2:tldrs@2026-11-10\"".to_owned(),
+        "title = \"A short natural-language summary of the contents of a paper.\"".to_owned(),
+        "license = \"ODC-By-1.0\"".to_owned(),
+        "access = \"login\"".to_owned(),
+        format!(
+            "url = \"https://api.semanticscholar.org/datasets/v1/release/2026-11-10/dataset/tldrs#{}\"",
+            names[0]
+        ),
+    ] {
+        assert!(lock.contains(&expected), "{expected}\n{lock}");
+    }
+    for secret in ["Signature", "PLACEHOLDER", "Expires", "amazonaws"] {
+        assert!(
+            !lock.contains(secret) && !manifest.contains(secret),
+            "{secret}"
+        );
+    }
+    assert_eq!(fs::read(work.join("data/tldrs").join(&names[0]))?, parts[0]);
+    assert_eq!(fs::read(work.join("data/tldrs").join(&names[1]))?, parts[1]);
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = command(&sandbox, &routes, &["sync", "--locked"])
+        .current_dir(&teammate)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .env("S2_API_KEY", S2_KEY)
+        .output()?;
+    ok(&synced)?;
+    let mut asked_since = routes.targets()[listed..].to_vec();
+    asked_since.sort();
+    let mut expected = vec![
+        S2_LINKS_AT.to_owned(),
+        targets[0].clone(),
+        targets[1].clone(),
+    ];
+    expected.sort();
+    assert_eq!(asked_since, expected, "one listing, then each file by name");
+    Ok(())
+}
+
+/// a link past its `Expires` is never used: the listing is asked again, and its fresh link
+/// downloads the file.
+#[test]
+fn a_semantic_scholar_link_past_its_expiry_is_asked_for_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let names = s2_names(1)?;
+    let (stale, stale_targets) = s2_links(&names, "PLACEHOLDER", 1_700_000_000);
+    let (fresh, fresh_targets) = s2_links(&names, "PLACEHOLDER", 4_102_444_800);
+    let routes = Routes::start(vec![
+        (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
+        (S2_LINKS_AT.to_owned(), s2_json(&fresh)),
+        (fresh_targets[0].clone(), file(b"part\n", "\"s3\"")),
+    ])?;
+    routes.turns(S2_LINKS_AT, vec![s2_json(&stale)]);
+    let output = command(&sandbox, &routes, &["add", "s2:tldrs"])
+        .env("S2_API_KEY", S2_KEY)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(asked(&routes, S2_LINKS_AT), 2);
+    assert_eq!(asked(&routes, &stale_targets[0]), 0);
+    assert_eq!(asked(&routes, &fresh_targets[0]), 1);
+    Ok(())
+}
+
+/// S3 answers that a link expired, as it does once the session that signed it ends: the listing
+/// is asked again, and the fresh link downloads the file.
+#[test]
+fn a_semantic_scholar_link_s3_calls_expired_is_asked_for_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let names = s2_names(1)?;
+    let (old, old_targets) = s2_links(&names, "PLACEHOLDER", 4_102_444_800);
+    let (new, new_targets) = s2_links(&names, "PLACEHOLDER-AGAIN", 4_102_444_800);
+    let expired = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>2026-11-20T13:36:33Z</Expires><ServerTime>2026-11-20T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
+    let routes = Routes::start(vec![
+        (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
+        (S2_LINKS_AT.to_owned(), s2_json(&new)),
+        (
+            old_targets[0].clone(),
+            reply(
+                "403 Forbidden",
+                &[("Content-Type", "application/xml")],
+                expired,
+            ),
+        ),
+        (new_targets[0].clone(), file(b"part\n", "\"s3\"")),
+    ])?;
+    routes.turns(S2_LINKS_AT, vec![s2_json(&old)]);
+    let output = command(&sandbox, &routes, &["add", "s2:tldrs"])
+        .env("S2_API_KEY", S2_KEY)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(asked(&routes, S2_LINKS_AT), 2);
+    assert_eq!(asked(&routes, &old_targets[0]), 1);
+    assert_eq!(asked(&routes, &new_targets[0]), 1);
+    assert_eq!(
+        fs::read(sandbox.work().join("data/tldrs").join(&names[0]))?,
+        b"part\n"
+    );
+    Ok(())
+}

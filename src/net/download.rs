@@ -66,6 +66,7 @@ impl Expect {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Fetch {
     /// the URL the file is known by. it names the unfinished download and what the URL served.
     pub(crate) url: Url,
@@ -475,6 +476,18 @@ impl Net {
                     failure::offline(&fetch.url, self.offline, pinned)
                 });
         }
+        // a link the source gives only for a while is asked for afresh by the stable one
+        let relinked;
+        let fetch = match crate::source::relink(&fetch.from) {
+            Some(relink) => {
+                relinked = Fetch {
+                    from: self.relinked(&relink, None).await?,
+                    ..fetch.clone()
+                };
+                &relinked
+            }
+            None => fetch,
+        };
         self.typed
             .check(&fetch.from)
             .map_err(|reason| failure::refused(&fetch.from, &reason))?;
@@ -955,11 +968,18 @@ impl Net {
                 .map_err(Failure::Final);
         }
         if let Some(expired) = fetch.expired
-            && status == StatusCode::FORBIDDEN
+            && matches!(status, StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST)
             && headers::is_xml(response.headers())
         {
             let head = response.headers().clone();
             if self.expired_link(from, response, expired).await? {
+                if let Some(relink) = crate::source::relink(&fetch.url) {
+                    return self
+                        .relinked(&relink, Some(from))
+                        .await
+                        .map(Err)
+                        .map_err(Failure::Final);
+                }
                 return Err(failure::transient(format!(
                     "{} supplied an expired download link",
                     host(from)
