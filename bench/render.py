@@ -73,11 +73,11 @@ def ratio(value, base):
     return "even (<5%)" if abs(result - 1) < .05 else f"{result:.2f}x"
 
 
-# instrument serif for the finding, geist mono for everything measured, both under the OFL. the
-# subsets in fonts/ ride inside each svg, since github shows svgs as images that load nothing else.
+# source serif 4 for every word and number, as on the site: the latin subset
+# @fontsource-variable/source-serif-4 5.3.1 publishes, unchanged, under the OFL beside it in fonts/.
+# it rides inside each svg, since github shows svgs as images that load nothing else.
 FONTS = Path(__file__).with_name("fonts")
-SERIF = "'Instrument Serif', Georgia, serif"
-MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+SERIF = "'Source Serif 4', Georgia, serif"
 
 # what each scenario does, in words a reader needs no benchmark design for
 STORIES = {"s1": "{files} of {size}, downloaded and checked",
@@ -113,23 +113,19 @@ def palette(dark):
 
 WIDTH = 760
 PAD = 32
-NAMES = 116
+NAMES = 128
 ROW = 32
 BAR = 12
 TIMES = 90
 
 
 def font_faces():
-    """the card fonts as @font-face rules carrying the font files inline."""
+    """the card's font as an @font-face rule carrying the file inline, with figures that line up."""
     import base64
-    faces = []
-    for family, file, weight in (("Instrument Serif", "InstrumentSerif.woff2", 400),
-                                 ("Geist Mono", "GeistMono-Regular.woff2", 400),
-                                 ("Geist Mono", "GeistMono-Medium.woff2", 500)):
-        data = base64.b64encode((FONTS / file).read_bytes()).decode()
-        faces.append(f"@font-face{{font-family:'{family}';font-weight:{weight};"
-                     f"src:url(data:font/woff2;base64,{data}) format('woff2')}}")
-    return "".join(faces)
+    data = base64.b64encode((FONTS / "source-serif-4-latin-wght-normal.woff2").read_bytes()).decode()
+    return ("@font-face{font-family:'Source Serif 4';font-weight:200 900;"
+            f"src:url(data:font/woff2;base64,{data}) format('woff2')}}"
+            "text{font-variant-numeric:lining-nums tabular-nums}")
 
 def times(result):
     """a ratio as people say it: 3x, 1.6x, 95x."""
@@ -161,11 +157,10 @@ def story(scenario, count, file_size):
     return STORIES.get(scenario, "{files}").format(files=files, size=size(file_size))
 
 
-def text(x, y, value, colors, role="text", size=13, weight=400, anchor="start", family=MONO, spacing=0):
+def text(x, y, value, colors, role="text", size=13, weight=400, anchor="start"):
     """an svg text element; the value is escaped."""
-    extra = f' letter-spacing="{spacing}"' if spacing else ""
-    return (f'<text x="{x:.1f}" y="{y:.1f}" fill="{colors[role]}" font-family="{family}" font-size="{size}" '
-            f'font-weight="{weight}" text-anchor="{anchor}"{extra}>{html.escape(value)}</text>')
+    return (f'<text x="{x:.1f}" y="{y:.1f}" fill="{colors[role]}" font-family="{SERIF}" font-size="{size}" '
+            f'font-weight="{weight}" text-anchor="{anchor}">{html.escape(value)}</text>')
 
 
 def chart(path, title, subtitle, summaries, dark=False, label=None):
@@ -184,20 +179,20 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
              f'<rect x=".5" y=".5" width="{WIDTH - 1}" height="{height - 1}" fill="{colors["card"]}" '
              f'stroke="{colors["edge"]}"/>']
     if label:
-        parts += [text(PAD, 42, label.upper(), colors, "accent", 11, 500, spacing=1.4),
-                  text(PAD, 86, title, colors, size=40, family=SERIF)]
+        parts += [text(PAD, 42, label, colors, "muted", 14),
+                  text(PAD, 86, title, colors, size=40, weight=560)]
     else:
-        parts += [text(PAD, 56, title, colors, size=30, family=SERIF),
-                  text(PAD, 80, subtitle, colors, "muted", 12)]
+        parts += [text(PAD, 56, title, colors, size=30, weight=560),
+                  text(PAD, 80, subtitle, colors, "muted", 13)]
     for index, (name, result) in enumerate(rows):
         middle = top + ROW * index + ROW / 2
         mine = name == "fetchloom"
-        parts.append(text(PAD, middle + 4, name, colors, "accent" if mine else "text", 13, 500 if mine else 400))
+        parts.append(text(PAD, middle + 4, name, colors, "accent" if mine else "text", 14, 600 if mine else 400))
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{span}" height="{BAR}" '
                      f'fill="{colors["track"]}"/>')
         right = WIDTH - PAD
         if result["median"] is None or result["failures"]:
-            parts.append(text(right, middle + 4, no_bar(result), colors, "muted", 12.5, anchor="end"))
+            parts.append(text(right, middle + 4, no_bar(result), colors, "muted", 14, anchor="end"))
             continue
         width = max(span * result["median"] / reach, BAR)
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{width:.1f}" height="{BAR}" '
@@ -207,7 +202,7 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
             high = left + span * result["high"] / reach
             parts.append(f'<line x1="{low:.1f}" x2="{high:.1f}" y1="{middle:.1f}" y2="{middle:.1f}" '
                          f'stroke="{colors["range"]}" stroke-opacity=".3" stroke-width="1.5"/>')
-        parts.append(text(right, middle + 4, seconds(result["median"]), colors, "text", 13, 500 if mine else 400,
+        parts.append(text(right, middle + 4, seconds(result["median"]), colors, "text", 14, 600 if mine else 400,
                           anchor="end"))
     parts.append("</svg>")
     Path(path).write_text("\n".join(parts) + "\n")
@@ -346,7 +341,8 @@ def render(results, repo):
         sample = next(iter(buckets[(scenario, profile, fs)].values()))[0]
         rounds = max(item["rounds"] for item in summaries.values())
         title = TITLES[scenario]
-        subtitle = f"{sample['count']:,} \u00d7 {size(sample['file_size'])} \u00b7 {profile} \u00b7 {fs}"
+        files = f"{sample['count']:,} file" + ("" if sample["count"] == 1 else "s")
+        subtitle = f"{files} of {size(sample['file_size'])}, {profile} network, {fs}"
         name = f"{scenario}-{profile}-{fs}"
         lines += [f"## {scenario}: {title} ({profile}, {fs})\n", story(scenario, sample["count"], sample["file_size"]) + f", median of {rounds} runs.\n",
                   "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
@@ -382,7 +378,7 @@ def render(results, repo):
         sample = next(iter(group.values()))[0]
         for dark in (False, True):
             chart(charts / f"live-{service}{'-dark' if dark else ''}.svg", service,
-                  f"{sample['count']:,} files \u00b7 {size(sample['file_size'])} \u00b7 live", summaries, dark)
+                  f"{sample['count']:,} files of {size(sample['file_size'])}, live", summaries, dark)
         lines += ["", picture(f"live-{service}", service)]
     for row in all_rows:
         if row.get("status") == "skipped":

@@ -354,6 +354,18 @@ class PageTests(Quiet):
             self.assertIn(site["accent"], fills, name)
             self.assertNotIn(site["muted"], fills, name)
 
+    def test_cards_set_every_word_in_the_site_serif_as_written(self):
+        """one face rides in each card, source serif 4, and a hero card names its scenario as written,
+        never in capitals."""
+        import xml.etree.ElementTree as ET
+        self.render([lab_row(), lab_row(tool="curl", wall_seconds=3)], dict(kind="lab", quick=True))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        svg = "{http://www.w3.org/2000/svg}"
+        hero = ET.parse(cards / "hero-s1-ext4.svg")
+        self.assertEqual({element.get("font-family") for element in hero.iter(svg + "text")}, {render.SERIF})
+        self.assertEqual(hero.find(svg + "style").text.count("@font-face"), 1)
+        self.assertEqual([element.text for element in hero.iter(svg + "text")][:2], ["one large file", "3\u00d7 faster"])
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)
