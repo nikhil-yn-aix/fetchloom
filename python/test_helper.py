@@ -1,4 +1,4 @@
-"""the python helper's command arguments and returned paths."""
+"""the python helper and its fl launcher, run against stand-ins for the fetchloom program."""
 
 import inspect
 import io
@@ -6,6 +6,8 @@ import itertools
 import json
 import os
 import pickle
+import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -56,12 +58,8 @@ class HelperOptions(unittest.TestCase):
             fetchloom.sync(".", ["iris"])
 
     def test_a_name_like_an_option_stays_a_name(self):
+        # fetchloom reads -h before any -- as a request for help, so each name comes after --
         def program(argv, **_):
-            # as fetchloom does, it reads -h before any -- as a request for help, which has no path
-            options = argv[: argv.index("--")] if "--" in argv else argv
-            if "-h" in options:
-                document = {"status": "ok", "command": "help", "result": {"commands": [], "options": []}, "warnings": []}
-                return subprocess.CompletedProcess(argv, 0, json.dumps(document), "")
             error = {"kind": "usage", "message": f'data.toml has no dataset called "{argv[-1]}"', "details": [], "help": None}
             return subprocess.CompletedProcess(argv, 2, json.dumps({"status": "error", "errors": [error], "warnings": []}), "")
 
@@ -149,7 +147,8 @@ class HelperOptions(unittest.TestCase):
         self.assertEqual((raised.exception.kind, raised.exception.code), ("data.not_ready", 1))
         self.assertEqual(raised.exception.details, error["details"])
 
-    # the words of the cli's own case table, quoted as it quotes them
+    # the words of the cli's own case table, quoted as it quotes them, and one that opens and
+    # closes on a single quote, which then stands outside the quotes
     QUOTED = [
         ("plain", "plain", "plain"),
         ("", '""', '""'),
@@ -166,6 +165,7 @@ class HelperOptions(unittest.TestCase):
         ("=notes.csv", '"=notes.csv"', '"=notes.csv"'),
         ("@notes.csv", '"@notes.csv"', '"@notes.csv"'),
         ("ada’s “best” data", '"ada’s “best” data"', "'ada’’s “best” data'"),
+        ("'$5'", "\\''$5'\\'", "'''$5'''"),
     ]
 
     def test_suggested_words_are_quoted_as_fetchloom_quotes_them(self):
@@ -303,30 +303,6 @@ class Errors(unittest.TestCase):
         )
         self.assertEqual(raised.exception.code, 2)
 
-    def test_hints_show_the_command_a_person_runs(self):
-        typed = "unset FETCHLOOM_OFFLINE, then run `fetchloom --json --progress -C {project} path iris`"
-        for project, shown in [
-            (".", "unset FETCHLOOM_OFFLINE, then run `fetchloom path iris`"),
-            ("analysis", "unset FETCHLOOM_OFFLINE, then run `fetchloom -C analysis path iris`"),
-        ]:
-            answer = {
-                "status": "error",
-                "errors": [{
-                    "kind": "offline.missing",
-                    "message": "offline, and 1 file data.lock names is not in the cache",
-                    "details": ["iris/iris.csv"],
-                    "help": typed.format(project=project),
-                }],
-                "warnings": [],
-            }
-            response = subprocess.CompletedProcess([], 20, json.dumps(answer), "")
-            with self.subTest(project=project):
-                with patch.object(fetchloom, "_program", return_value="fetchloom"):
-                    with patch.object(fetchloom, "_call", return_value=response):
-                        with self.assertRaises(fetchloom.Error) as raised:
-                            fetchloom.path("iris", project)
-                self.assertEqual(raised.exception.help, shown)
-
     def test_commands_leave_out_the_folder_and_separator_the_helper_added(self):
         # what fetchloom says with the -C and the -- the helper gives it, and how python shows it
         cases = [
@@ -339,6 +315,11 @@ class Errors(unittest.TestCase):
                 lambda: fetchloom.sync("/work/study", strict=True),
                 "`fetchloom -C /work/study build clean` makes it",
                 "`fetchloom -C /work/study build clean` makes it",
+            ),
+            (
+                lambda: fetchloom.path("iris", "analysis"),
+                "unset FETCHLOOM_OFFLINE, then run `fetchloom --json --progress -C analysis path iris`",
+                "unset FETCHLOOM_OFFLINE, then run `fetchloom -C analysis path iris`",
             ),
             (
                 lambda: fetchloom.sync(names=["irs"]),
@@ -379,6 +360,12 @@ class Errors(unittest.TestCase):
                 lambda: fetchloom.path("irs", "study", offline=True),
                 "fetchloom --json --progress -C study path --offline -- iris",
                 'fetchloom.path("iris", project="study", offline=True)',
+            ),
+            # a name a shell needs quoted stays the command a person types
+            (
+                lambda: fetchloom.path("my dat"),
+                'fetchloom --json --progress -C . path -- "my data"',
+                'fetchloom path "my data"',
             ),
         ]:
             answer = {
@@ -472,6 +459,11 @@ class Errors(unittest.TestCase):
                 "get",
                 "unpack it into a folder with `--dir=flowers`",
                 "unpack it into a folder with `folder='flowers'`",
+            ),
+            (
+                "get",
+                "replace it with `--force -o data.csv`",
+                "replace it with `force=True, path='data.csv'`",
             ),
             (
                 "get",
@@ -644,17 +636,52 @@ class Progress(unittest.TestCase):
             "    print(f'line {number}', file=sys.stderr)\n"
             "sys.exit(101)\n"
         )
+        closed = io.StringIO()
+        closed.close()
+
+        class Broken(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        # a script under pythonw has no stderr, and one may close it or pipe it to a reader that
+        # left: every line is still read, or fetchloom would hang once the pipe filled
+        for stderr, case in [(io.StringIO(), "shown"), (None, "none"), (closed, "closed"), (Broken(), "broken")]:
+            with self.subTest(stderr=case):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "Popen", side_effect=standing_in(child)):
+                        with patch.object(fetchloom.sys, "stderr", stderr):
+                            with self.assertRaises(fetchloom.Error) as raised:
+                                fetchloom.sync("p")
+                if case == "shown":
+                    self.assertEqual(stderr.getvalue().splitlines(), [f"line {number}" for number in range(1000)])
+                self.assertEqual((raised.exception.kind, raised.exception.code), (None, 101))
+                message = raised.exception.message
+                self.assertTrue(message.startswith("fetchloom exited with code 101 without a JSON answer. it said: "), message)
+                self.assertTrue(message.endswith("line 999"), message)
+                self.assertNotIn("line 0\n", message)
+
+    def test_an_interrupt_stops_fetchloom_before_it_goes_on(self):
+        # as a notebook's stop button interrupts python while fetchloom downloads
+        start = standing_in("import sys, time\ntime.sleep(60)\nsys.exit(7)\n")
+        started = []
+
+        def interrupted(argv, **options):
+            process = start(argv, **options)
+            started.append(process)
+
+            def wait(timeout=None):
+                raise KeyboardInterrupt
+
+            process.wait = wait
+            return process
+
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
-            with patch.object(fetchloom.subprocess, "Popen", side_effect=standing_in(child)):
-                with patch.object(fetchloom.sys, "stderr", io.StringIO()) as shown:
-                    with self.assertRaises(fetchloom.Error) as raised:
-                        fetchloom.sync("p")
-        self.assertEqual(shown.getvalue().splitlines(), [f"line {number}" for number in range(1000)])
-        self.assertEqual((raised.exception.kind, raised.exception.code), (None, 101))
-        message = raised.exception.message
-        self.assertTrue(message.startswith("fetchloom exited with code 101 without a JSON answer. it said: "), message)
-        self.assertTrue(message.endswith("line 999"), message)
-        self.assertNotIn("line 0\n", message)
+            with patch.object(fetchloom.subprocess, "Popen", side_effect=interrupted):
+                with self.assertRaises(KeyboardInterrupt):
+                    fetchloom.sync("p")
+        # left running, the stand-in would end on its own a minute later with code 7
+        killed = 1 if os.name == "nt" else -signal.SIGKILL
+        self.assertEqual(subprocess.Popen.wait(started[0], timeout=60), killed)
 
 
 class PublicNames(unittest.TestCase):
@@ -850,3 +877,43 @@ class Launcher(unittest.TestCase):
         self.assertEqual(process.returncode, 127)
         self.assertEqual(stdout, b"")
         self.assertEqual(stderr.splitlines(), ["error: the fetchloom program is missing"])
+
+    def running(self, program):
+        """the ``fl`` starter with ``program`` found in place of fetchloom."""
+        return self.starters()["fl"].replace("lambda: sys.executable", f"lambda: {str(program)!r}")
+
+    def test_a_program_that_cannot_start_exits_126(self):
+        with tempfile.TemporaryDirectory() as folder:
+            # text, and not marked as a program this user may run
+            program = Path(folder, "fetchloom.exe" if os.name == "nt" else "fetchloom")
+            program.write_text("not a program\n", encoding="utf-8")
+            process, stdout, stderr = self.launch(self.running(program))
+        self.assertEqual(process.returncode, 126)
+        self.assertEqual(stdout, b"")
+        said = f"error: could not run {program}: "
+        if os.name == "posix":
+            self.assertEqual(stderr.splitlines(), [said + "Permission denied"])
+        else:
+            self.assertTrue(stderr.startswith(said), stderr)
+
+    @unittest.skipUnless(Path("/proc/self/status").is_file(), "reads the signals a program starts with from /proc")
+    def test_fetchloom_starts_with_the_signals_a_shell_gives_it(self):
+        # python ignores a broken pipe and an oversized file from its start, and a program it execs
+        # would keep both ignored, as no shell leaves them
+        process, stdout, stderr = self.launch(self.running(shutil.which("cat")), "/proc/self/status")
+        self.assertEqual(process.returncode, 0, stderr)
+        status = dict(line.split(":", 1) for line in stdout.decode().splitlines())
+        ignored = int(status["SigIgn"], 16)
+        for number in [signal.SIGPIPE, signal.SIGXFSZ]:
+            with self.subTest(signal=number.name):
+                self.assertFalse(ignored & 1 << number - 1)
+
+    @unittest.skipUnless(os.name == "posix", "sends ctrl-c as a posix signal")
+    def test_on_windows_fetchloom_runs_as_a_child_that_decides_how_ctrl_c_stops(self):
+        # windows has no exec, and ctrl-c reaches the launcher as well as its child: the stand-in
+        # passes it to the launcher, which must still return the stand-in's own exit code
+        starter = self.starters()["fl"].replace("from ", "sys.platform = 'win32'\nfrom ", 1)
+        child = "import os, signal, sys\nos.kill(os.getppid(), signal.SIGINT)\nsys.exit(3)\n"
+        process, stdout, stderr = self.launch(starter, "-c", child)
+        self.assertEqual(process.returncode, 3, stderr)
+        self.assertEqual((stdout, stderr), (b"", ""))

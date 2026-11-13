@@ -27,9 +27,8 @@ def main() -> int:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             return subprocess.run(arguments, check=False).returncode
         # python starts with these ignored, and fetchloom would keep that through exec
-        for name in ("SIGPIPE", "SIGXFSZ"):
-            if hasattr(signal, name):
-                signal.signal(getattr(signal, name), signal.SIG_DFL)
+        for number in (signal.SIGPIPE, signal.SIGXFSZ):
+            signal.signal(number, signal.SIG_DFL)
         os.execv(program, arguments)
     except OSError as error:
         print(f"error: could not run {program}: {error.strerror or error}", file=sys.stderr)

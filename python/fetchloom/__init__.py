@@ -1,10 +1,11 @@
 """run the fetchloom program this package installs.
 
-each function runs ``fetchloom --json --progress`` and returns its answer, or raises
-:class:`Error` with the kind and message of the JSON error. the kinds and their exit codes are
-listed in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/exit-codes.md,
-and the helpers in https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
-the progress lines a long download prints go to ``sys.stderr`` as they come.
+each helper runs ``fetchloom --json --progress`` and returns a :class:`pathlib.Path`, or raises
+:class:`Error` with the kind and message of the JSON error. each warning goes on as a python
+warning, and the progress lines a long download prints go to ``sys.stderr`` as they come.
+https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md describes the
+helpers, and https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/exit-codes.md
+lists the kinds with their exit codes.
 """
 
 import collections
@@ -63,12 +64,11 @@ class Error(Exception):
     """a fetchloom run that failed.
 
     ``kind`` is the JSON error's kind, such as ``usage`` or ``network.unreachable``, and
-    ``message`` its summary. ``details`` lists supporting lines, ``help`` names the command
-    or flag that fixes the error or is None, and ``code`` is the exit code, or None when the
-    helper raised the error itself, with no process to exit. ``kind`` is None
-    when fetchloom stopped without a JSON answer, and ``message`` then ends with the last
-    lines it said on stderr. ``str(error)`` reads like the command
-    line's error: the message, then each detail and the help on a line of its own.
+    ``message`` its summary. ``details`` lists supporting lines, ``help`` is advice for a person
+    or None, and ``code`` is the exit code. ``kind`` is None when fetchloom stopped without a JSON
+    answer, and ``message`` then ends with the last lines it said on stderr. ``code`` is None when
+    the helper raised the error itself, with no process to exit. ``str(error)`` reads like the
+    command line's error: the message, then each detail and the help on a line of its own.
     """
 
     def __init__(
@@ -135,26 +135,25 @@ def sync(
     locked: bool = False,
     verify: bool = False,
 ) -> Path:
-    """make the project's data folder match data.lock and return the project's path.
+    """make the project's data folder match data.lock and return the project's absolute root.
 
     ``project`` is the project folder or any folder inside it. ``names``, such as ``["iris"]``
     or ``"iris"``, syncs those datasets alone; the others keep their pins and files, and the
-    next sync without names checks them all. files edited by hand stay, each reported as a
-    python warning. a file put back as pinned, such as a link to the cache's copy that was
-    edited in place, matches the lock again, and its warning names the file that keeps the
-    changed copy.
+    next sync without names checks them all. a file edited by hand stays, reported as a python
+    warning. a link to the cache's copy that was edited in place is put back as pinned, and its
+    warning names the file beside it that keeps the changed bytes.
 
     ``strict=True`` raises :class:`Error` with kind ``data.not_ready`` and code 1, as
     ``sync --strict`` does, when the data is not ready to use afterwards: a file it kept, a
     recipe's result not on this machine, or a dataset data.lock does not pin as data.toml
     asks, each named in ``details`` with what makes it ready. ``yes=True`` approves a
-    download above 1 GiB, which otherwise raises kind ``unconfirmed``. ``offline=True``
-    prevents network requests. ``locked=True`` raises kind ``lock.outdated`` instead of
-    updating a missing or out-of-date data.lock, for the named datasets alone when ``names``
-    names some, and kind ``build.needed`` for a recipe data.lock does not pin as building it
-    now would make, which only ``fetchloom build`` changes. ``verify=True`` checks the
-    SHA-256 of every placed file, as ``sync --verify`` does, and puts back one whose bytes
-    changed though its size and time did not.
+    download above 1 GiB, or the size ``FETCHLOOM_ASK_ABOVE`` sets, which otherwise raises kind
+    ``unconfirmed``. ``offline=True`` prevents network requests. ``locked=True`` raises kind
+    ``lock.outdated`` instead of updating a missing or out-of-date data.lock, for the named
+    datasets alone when ``names`` names some, and kind ``build.needed`` for a recipe data.lock
+    does not pin as building it now would make, which only ``fetchloom build`` changes.
+    ``verify=True`` checks the SHA-256 of every placed file, as ``sync --verify`` does, and puts
+    back one whose bytes changed though its size and time did not.
     """
     arguments = _options(["sync"], yes, offline, locked)
     if verify:
@@ -186,11 +185,11 @@ def get(
     that holds the same bytes stays as it is; one holding other bytes raises :class:`Error`
     with kind ``local.not_empty`` unless ``force=True``, which needs ``path``, replaces it.
     without ``path``, the download goes into a new folder named after it, or into
-    ``folder``, and the folder is returned. a leading ``~`` in ``path`` or ``folder`` is your
-    home folder, as pandas reads it. ``sha256`` is the hash the one file must have, and with
-    ``path`` a file already holding it is kept without a download. ``yes=True`` approves
-    large downloads; ``offline=True`` prevents network requests, and keeps a file at ``path``
-    that still holds what the link served last time.
+    ``folder``, and the folder is returned; giving both raises kind ``usage``. a leading ``~``
+    in ``path`` or ``folder`` is your home folder, as pandas reads it. ``sha256`` is the hash
+    the one file must have, and with ``path`` a file already holding it is kept without a
+    download. ``yes=True`` approves large downloads; ``offline=True`` prevents network
+    requests, and keeps a file at ``path`` that still holds what the link served last time.
     """
     if path is not None and folder is not None:
         raise Error(
@@ -255,6 +254,8 @@ def _shell_word(word: str, windows: bool = sys.platform == "win32") -> str:
 
 
 def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> list[str]:
+    """append ``--yes``, ``--offline`` and ``--locked`` to ``arguments`` for each one that is on, and
+    return the same list."""
     for flag, wanted in [("--yes", yes), ("--offline", offline), ("--locked", locked)]:
         if wanted:
             arguments.append(flag)
@@ -262,6 +263,11 @@ def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> li
 
 
 def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[str]) -> Any:
+    """run fetchloom with ``arguments`` in ``project`` and return the result of its JSON answer.
+
+    each warning goes on as a python warning, and an error raises :class:`Error`. their texts
+    name the ``keywords`` the caller takes in place of the flags those set.
+    """
     finished = _call([_program(), "--json", "--progress", "-C", _local(project), *arguments])
     try:
         answer = json.loads(finished.stdout)
@@ -373,7 +379,7 @@ def _call(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _forward(stream: IO[str], tail: collections.deque[str]) -> None:
-    """passes each line of ``stream`` to ``sys.stderr`` as it comes, keeping the last in ``tail``."""
+    """pass each line of ``stream`` on to ``sys.stderr`` as it comes, keeping the last in ``tail``."""
     for line in stream:
         tail.append(line)
         try:
@@ -403,8 +409,6 @@ def _spoken(text: str, keywords: set[str]) -> str:
     """
     switches = {flag: name for flag, name in _SWITCHES.items() if name in keywords}
     values = {flag: name for flag, name in _VALUES.items() if name in keywords}
-    if not switches and not values:
-        return text
     longest = sorted([*switches, *values], key=len, reverse=True)
     found = re.compile(rf"(add )?(?<![\w-])({'|'.join(map(re.escape, longest))})(?![\w-])")
 
@@ -444,6 +448,12 @@ def _example(code: str, switches: dict[str, str], values: dict[str, str]) -> str
 
 
 def _program(windows: bool = sys.platform == "win32") -> str:
+    """the fetchloom program to run: the one installed with this package, else the one in the
+    interpreter's scripts folder, its base interpreter's or the user's, else the first on PATH
+    that :func:`_on_path` accepts.
+
+    raises FileNotFoundError, pointing at the install steps, when there is none.
+    """
     name = "fetchloom.exe" if windows else "fetchloom"
     package = Path(__file__).resolve().parent
     # --target keeps scripts beside the package; --prefix puts them above site-packages.
@@ -464,11 +474,8 @@ def _program(windows: bool = sys.platform == "win32") -> str:
     folders.extend([
         sysconfig.get_path("scripts"),
         sysconfig.get_path("scripts", vars={"base": sys.base_prefix}),
+        sysconfig.get_path("scripts", sysconfig.get_preferred_scheme("user")),
     ])
-    try:
-        folders.append(sysconfig.get_path("scripts", sysconfig.get_preferred_scheme("user")))
-    except KeyError:
-        pass
     for folder in folders:
         if folder and Path(folder, name).is_file():
             return str(Path(folder, name))
