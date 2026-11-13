@@ -10,8 +10,7 @@ const PENGUINS: &[u8] = b"species,island,bill_length_mm\nAdelie,Torgersen,39.1\n
 const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
 const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 
-/// a cache that many projects use says how many on one line, and `-v` names each, so ten long
-/// paths never fill the screen.
+/// one line counts the projects, so ten long paths never fill the screen.
 #[test]
 fn many_projects_are_counted_and_named_with_v() -> Result {
     let sandbox = Sandbox::new()?;
@@ -192,11 +191,8 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
     Ok(())
 }
 
-/// `fetchloom cache` tells where the cache's space goes: what the registered projects need and
-/// how much of it is linked into their folders too, which deleting the cache would not free,
-/// what no project needs, which gc frees once it is a day old, except what a folder outside the
-/// cache links, as one `get` made does, and the files of their own projects hold, as `copy =
-/// true` places them. a file younger than a day, as every one here is, waits for its day.
+/// linked bytes are ones deleting the cache would not free, and gc frees unneeded bytes only
+/// once a day old, so nothing here is freeable yet.
 #[test]
 fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     let sandbox = Sandbox::new()?;
@@ -254,9 +250,8 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     Ok(())
 }
 
-/// a project copied with its cache by a tool that keeps no hardlinks, as `rsync -a` without -H
-/// copies, holds files of their own where it had links to the cache, and the copied cache's
-/// files are no longer linked. the report counts them as copies that were linked when placed.
+/// a copy by `rsync -a` without -H holds files of its own where it had links to the cache, which
+/// the report counts as copies that were linked when placed.
 #[test]
 fn a_project_copied_without_hardlinks_is_reported() -> Result {
     let sandbox = Sandbox::new()?;
@@ -299,9 +294,8 @@ fn a_project_copied_without_hardlinks_is_reported() -> Result {
     Ok(())
 }
 
-/// copies the folder `from` to `to` as `rsync -a` without -H does: every file a new one with the
-/// same bytes, modification time and read-only flag, so files that were one file under two
-/// names become two.
+/// copies `from` to `to` as `rsync -a` without -H does, each file a new one with the same bytes,
+/// time and read-only flag, so one file under two names becomes two.
 fn copy_apart(from: &std::path::Path, to: &std::path::Path) -> Result {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
@@ -398,9 +392,8 @@ fn verify_keeps_damage_findings_in_json() -> Result {
     Ok(())
 }
 
-/// a container can run fetchloom as a user with no home of its own, as openshift does with
-/// HOME=/, where the default cache folder cannot be made. that user cannot fix the folder's
-/// permissions, so the help also names the variable that moves the cache.
+/// a container user with no home of its own, as openshift runs with HOME=/, cannot fix the
+/// folder's permissions, so the help also names the variable that moves the cache.
 #[cfg(unix)]
 #[test]
 fn a_default_cache_folder_that_cannot_be_made_says_how_to_move_it() -> Result {
@@ -528,7 +521,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     let sandbox = Sandbox::new()?;
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     // a sparse file keeps hashing busy without allocating its payload on disk. hfs+ has no
-    // sparse files, so there the cache moves to the build's folder, which usually has them.
+    // sparse files, so there the cache moves to the build's folder, which usually has them
     let build = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let mut cache = sandbox.cache();
     let object = loop {
@@ -917,8 +910,7 @@ fn small_downloads_keep_their_bytes_and_sealing() -> Result {
     Ok(())
 }
 
-/// a cache this user may not write to is named in the error a download ends with, for a person
-/// and in `--json`, since "the cache" alone does not say which folder to fix.
+/// both forms name the folder, since "the cache" alone does not say which one to fix.
 #[cfg(unix)]
 #[test]
 fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
@@ -964,8 +956,7 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     Ok(())
 }
 
-/// a sync with nothing to do finds its project registered and its registration flushed already,
-/// so it leaves the cache's projects folder alone, even one it could not open to flush.
+/// the registration is flushed already, so a projects folder it cannot open warns of nothing.
 #[cfg(unix)]
 #[test]
 fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
@@ -993,9 +984,8 @@ fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
     Ok(())
 }
 
-/// a project folder that moved leaves its registration behind with no data.toml, and gc forgets
-/// that project and frees what only it needed. gc says which project it forgot, to a person and
-/// in `--json`, and a dry run says which it would forget, with `-v` and in `--json`.
+/// a moved project folder leaves its registration with no data.toml behind; gc names it to a
+/// person and in `--json`, and so does a dry run with `-v`.
 #[test]
 fn gc_names_each_project_it_forgets() -> Result {
     for json in [false, true] {
@@ -1042,9 +1032,8 @@ fn gc_names_each_project_it_forgets() -> Result {
     Ok(())
 }
 
-/// an interrupted download keeps its bytes under the cache's partial folder, so a later run can
-/// continue it. `fetchloom cache` says how much they hold, and `cache gc --now` frees those no
-/// running fetchloom holds, however new, while a download in progress keeps its bytes.
+/// an interrupted download keeps its bytes so a later run can continue it; `--now` frees them
+/// however new, but never those a running fetchloom holds.
 #[test]
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1099,9 +1088,7 @@ fn on_disk(path: &std::path::Path) -> Result<u64> {
     Ok(held)
 }
 
-/// a ctrl-c once `cache gc` has swept the cache, or `cache verify` has hashed it, and marked its
-/// work as finishing lets it say what it did, exit 0, rather than say it stops and then end as if
-/// nothing had been asked.
+/// the mark comes once gc has swept the cache or verify has hashed it, and the exit is 0.
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_past_the_caches_mark_lets_it_tell_what_it_did() -> Result {
