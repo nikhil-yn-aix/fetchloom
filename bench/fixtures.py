@@ -1,4 +1,4 @@
-"""Deterministic high-entropy fixtures and native prepared projects."""
+"""deterministic high-entropy fixtures and native prepared projects."""
 import hashlib
 import json
 from pathlib import Path
@@ -35,7 +35,7 @@ def case_specs(profiles, scenarios, quick):
             if quick:
                 size = 2 * 1024 * 1024 if base == "s1" else size
                 count = min(count, 12)
-                # keep the prescribed ten-second interruption meaningful at 100 mbit/s.
+                # keep the prescribed ten-second interruption meaningful at 100 mbit/s
                 if scenario == "s7":
                     size = 256 * 1024 * 1024
             cases.append(dict(id=scenario, base=base, profile=profile, size=size,

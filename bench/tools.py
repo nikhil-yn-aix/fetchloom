@@ -1,4 +1,4 @@
-"""Native workflows, with preparation kept outside the measured command."""
+"""native workflows, with preparation kept outside the measured command."""
 import json
 from pathlib import Path
 import shlex

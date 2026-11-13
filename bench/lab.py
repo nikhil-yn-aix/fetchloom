@@ -194,9 +194,8 @@ def profile(name):
 
 
 def forget_connections():
-    """drops what each side's kernel kept from earlier connections between them, such as how far
-    packets were reordered, which the next connection's loss recovery would start from. every run
-    then meets the server as a first download would, whatever ran before it."""
+    """drops what each side's kernel kept from earlier connections, such as how far packets were
+    reordered, which loss recovery would start from, so each run meets the server fresh."""
     call(["ip", "-n", NS, "tcp_metrics", "flush", "all"])
     # the host keeps entries for its other peers too, which are not the lab's to reset
     shown = subprocess.check_output(["ip", "tcp_metrics", "show"], text=True)

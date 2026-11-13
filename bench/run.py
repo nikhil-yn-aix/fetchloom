@@ -89,7 +89,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
             timed_out = not interrupted
             signal.setitimer(signal.ITIMER_REAL, 5)
         elif stage == 2:
-            # GNU time survives so it can report the killed command's status and usage.
+            # GNU time survives so it can report the killed command's status and usage
             for member in group(pid):
                 if member != pid:
                     try:
@@ -107,10 +107,10 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
         log = os.open(logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             os.chdir(cwd)
-            # affinity is inherited before the client can execute or create workers.
+            # affinity is inherited before the client can execute or create workers
             with lab.affinity(cpus):
                 start = time.monotonic()
-                # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory.
+                # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory
                 pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
                                      file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
         finally:
@@ -145,7 +145,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
                 signal.setitimer(signal.ITIMER_REAL, 0)
             finally:
                 signal.signal(signal.SIGALRM, previous_handler)
-    # a shell may exit before a child handles SIGINT; keep the next run isolated.
+    # a shell may exit before a child handles SIGINT; keep the next run isolated
     if signalled is not None:
         lab.end_group(pid, signalled + 5 - time.monotonic())
     result = dict(wall_seconds=now - start, user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime,
@@ -369,7 +369,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         time.sleep(0.05)
         paths = {urlsplit(item["url"]).path for item in case["files"]}
         if tool.name == "dvc":
-            # DVC addresses file bodies by MD5, not by the input filename.
+            # DVC addresses file bodies by MD5, not by the input filename
             for path in (lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"):
                 if path.is_file() and not path.name.endswith(".dir"):
                     paths.add("/" + str(path.relative_to(lab.ROOT / "www")))
