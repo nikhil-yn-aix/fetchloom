@@ -79,6 +79,13 @@ fn malformed_ids_and_unknown_links_are_refused() {
     }
     let error = Reference::parse("s2:DOI:abc").unwrap_err();
     assert!(error.help.unwrap().contains("s2:DOI:<doi>"));
+    let error = Reference::parse("https://www.semanticscholar.org/search?q=attention").unwrap_err();
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "paste a paper's page, as https://www.semanticscholar.org/paper/12b056fd90c1300c44c4a8cff9f01f0c7a75cab4, or write its id, as s2:DOI:10.1371/journal.pcbi.1003285"
+        )
+    );
 }
 
 /// semantic scholar links arXiv's pdf of an arXiv paper, which comes through arXiv's own source:

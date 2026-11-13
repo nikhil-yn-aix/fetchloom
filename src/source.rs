@@ -830,7 +830,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
                     net::Shown(&url)
                 ),
             )
-            .help("paste the link of the dataset's own page, as in `fetchloom add https://zenodo.org/records/3608990`, or a name to search for"));
+            .help(other_page_help(source)));
         }
         return Ok(parsed(Reference::Url(raw_link(&url).unwrap_or(url)), None));
     };
@@ -943,6 +943,18 @@ fn lfs_link(url: &Url) -> Option<String> {
             ))
         }
         _ => None,
+    }
+}
+
+/// what to give instead of a link to a page of `source` that names no dataset or paper: a paper
+/// site's own forms, else a dataset's page.
+fn other_page_help(source: &str) -> &'static str {
+    match source {
+        "arXiv" => arxiv::PAGES,
+        "semantic scholar" => s2::PAGES,
+        _ => {
+            "paste the link of the dataset's own page, as in `fetchloom add https://zenodo.org/records/3608990`, or a name to search for"
+        }
     }
 }
 

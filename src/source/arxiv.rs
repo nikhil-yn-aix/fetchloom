@@ -36,6 +36,9 @@ const PACED_AS: &str = "arxiv.org";
 /// what to write for a reference that is no arXiv id, month or category.
 const FORMS: &str = "arxiv:1706.03762, with @v7 to pin a version, arxiv:2401 for a month's papers or arxiv:cs.LG/2401 for one category's";
 
+/// what to give for a page of arXiv's that is no paper's, as its list of a category's month.
+pub(super) const PAGES: &str = "paste a paper's page or its pdf link, as https://arxiv.org/abs/1706.03762, or write arxiv:2401 for a month's papers or arxiv:cs.LG/2401 for one category's";
+
 /// the name a request to `host` is paced under, when it is one of arXiv's.
 pub(super) fn paced_as(host: &str) -> Option<&'static str> {
     (host == PACED_AS || host.ends_with(".arxiv.org")).then_some(PACED_AS)

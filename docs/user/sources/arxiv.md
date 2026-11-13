@@ -20,7 +20,7 @@ fetchloom search attention is all you need --source arxiv
 | `arxiv:2401` | the papers whose ids arXiv gave in january 2024, from the mirror |
 | `arxiv:cs.LG/2401` | the papers of the category cs.LG whose first version was submitted in january 2024 |
 
-`arXiv:1706.03762`, as citations write it, works too. a category is written as arXiv writes it, `cs.LG`, `hep-th` or `cond-mat.mes-hall`, in any case. arXiv's other pages, such as its list pages, are refused with `reference.invalid`.
+`arXiv:1706.03762`, as citations write it, works too. a category is written as arXiv writes it, `cs.LG`, `hep-th` or `cond-mat.mes-hall`, in any case. arXiv's other pages, such as its list pages, are refused with `reference.invalid`, and the help names a paper's page and the forms of a month.
 
 ## one paper
 

@@ -172,6 +172,13 @@ fn malformed_references_are_refused() {
     ] {
         let error = Reference::parse(other).unwrap_err();
         assert!(error.message.contains("arXiv link"), "{other}: {error:?}");
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "paste a paper's page or its pdf link, as https://arxiv.org/abs/1706.03762, or write arxiv:2401 for a month's papers or arxiv:cs.LG/2401 for one category's"
+            ),
+            "{other}"
+        );
     }
 }
 

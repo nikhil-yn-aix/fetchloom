@@ -24,6 +24,9 @@ const API: &str = "https://api.semanticscholar.org";
 /// what to write for a reference that is no paper or dataset of semantic scholar's.
 const FORMS: &str = "s2:<paper id>, or an id from another index after its prefix: s2:DOI:<doi>, s2:ARXIV:<id>, s2:CorpusId:<number>, s2:PMID:<number>, s2:PMCID:<number>, s2:MAG:<number> or s2:ACL:<id>; or a dataset, as s2:papers, with @<release> to pin one, as s2:papers@2026-11-10";
 
+/// what to give for a page of semantic scholar's that is no paper's, as its search page.
+pub(super) const PAGES: &str = "paste a paper's page, as https://www.semanticscholar.org/paper/12b056fd90c1300c44c4a8cff9f01f0c7a75cab4, or write its id, as s2:DOI:10.1371/journal.pcbi.1003285";
+
 /// how far apart requests paced as `name` start: semantic scholar's API takes one a second from a
 /// key, its documented rate, and fetchloom asks three seconds apart without one, since every
 /// program without a key shares one pool.

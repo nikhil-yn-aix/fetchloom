@@ -22,7 +22,7 @@ fetchloom add s2:papers
 | `s2:papers` | a dataset of semantic scholar's newest release, pinned at that release when it is added |
 | `s2:papers@2026-11-10` | a dataset of one release |
 
-a prefix is read in any case, `s2:doi:` as `s2:DOI:`, and a DOI is kept in lowercase. other pages of semantic scholar's site are refused with `reference.invalid`. the release `2026-11-10` held `abstracts`, `authors`, `citations`, `embeddings-specter_v1`, `embeddings-specter_v2`, `paper-ids`, `papers`, `publication-venues`, `s2orc`, `s2orc_v2` and `tldrs`; a name the release does not hold is refused with that list.
+a prefix is read in any case, `s2:doi:` as `s2:DOI:`, and a DOI is kept in lowercase. other pages of semantic scholar's site are refused with `reference.invalid`, and the help names a paper's page and an id. the release `2026-11-10` held `abstracts`, `authors`, `citations`, `embeddings-specter_v1`, `embeddings-specter_v2`, `paper-ids`, `papers`, `publication-venues`, `s2orc`, `s2orc_v2` and `tldrs`; a name the release does not hold is refused with that list.
 
 ## one paper
 
