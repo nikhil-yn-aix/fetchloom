@@ -15,8 +15,8 @@ fn version_prints_the_package_version() -> Result {
     Ok(())
 }
 
-/// `--version -v` names the commit the build came from, as a bug report needs, and the json of
-/// `--version` does too, with or without -v. a test build comes from a git checkout.
+/// the commit, which a bug report needs, shows with `-v` and in the json with or without it; a
+/// test build always comes from a git checkout.
 #[test]
 fn the_version_names_the_commit_it_was_built_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -37,9 +37,8 @@ fn the_version_names_the_commit_it_was_built_from() -> Result {
     Ok(())
 }
 
-/// `--help` lists every command and the options every command takes. the introduction above
-/// them is the welcome's, which `a_bare_run_prints_a_short_welcome_with_a_first_command` holds
-/// and `help_opens_like_the_first_run` finds here.
+/// the welcome's tests hold the introduction above the usage line:
+/// `a_bare_run_prints_a_short_welcome_with_a_first_command` and `help_opens_like_the_first_run`.
 #[test]
 fn help_lists_every_command() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
@@ -52,9 +51,8 @@ fn help_lists_every_command() -> Result {
     Ok(())
 }
 
-/// `-h` is the quick lookup: the commands and options used most, or a command's own options and
-/// examples, then where the rest is. `--help` shows all of it, and the first of the two on a
-/// line decides.
+/// `-h` shows the commands and options used most, or a command's own options and examples, and
+/// when a line has both `-h` and `--help`, the first one decides.
 #[test]
 fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     let sandbox = Sandbox::new()?;
@@ -167,8 +165,7 @@ fn help_follows_color_environment() -> Result {
     Ok(())
 }
 
-/// the welcome and `help concepts` follow color flags. only `help concepts` tells the analogy;
-/// the welcome names each thing itself.
+/// only `help concepts` tells the analogy; the welcome names each thing itself.
 #[test]
 fn welcome_and_concepts_follow_color_flags() -> Result {
     let sandbox = Sandbox::new()?;
@@ -477,8 +474,7 @@ fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
     for line in ANALOGY {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
-    // under --json a text topic is one document like every other answer, with no ANSI even when
-    // color is forced
+    // under --json a topic is one document like any answer, with no ANSI even when color is forced
     for topic in ["concepts", "environment", "exit-codes", "recipes"] {
         let json = sandbox
             .command(&["--json", "help", topic])
@@ -517,9 +513,8 @@ fn help_shows_a_command_and_suggests_a_topic() -> Result {
     Ok(())
 }
 
-/// a command line fetchloom cannot run exits 2 and says what is wrong, how the command is used
-/// where that helps, and where to read more, naming options as they were typed.
-/// `cli::usage::tests` decides each answer; these rows check what the binary prints.
+/// options are named as they were typed. `cli::usage::tests` decides each answer; these rows
+/// check what the binary prints.
 #[test]
 fn usage_errors_say_what_is_wrong_and_where_help_is() -> Result {
     let sandbox = Sandbox::new()?;
@@ -681,8 +676,7 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     Ok(())
 }
 
-/// `--json` at a terminal is indented for a person to read, and in a pipe stays on one line for
-/// a program; both are the same one document, with no color and no progress.
+/// both are the same document, with no color and no progress.
 #[cfg(target_os = "linux")]
 #[test]
 fn json_is_indented_at_a_terminal_and_one_line_in_a_pipe() -> Result {
@@ -707,9 +701,8 @@ fn json_is_indented_at_a_terminal_and_one_line_in_a_pipe() -> Result {
     Ok(())
 }
 
-/// `--json` at a terminal writes what could steer it from a quoted line as `\u` escapes: a c1
-/// control, which some terminals act on, and a bidi control, which shows the text around it in
-/// another order. both read back as the same text, which a pipe gets as it is.
+/// a c1 control, which some terminals act on, and a bidi control, which reorders the text around
+/// it, become `\u` escapes that read back as the same text a pipe gets.
 #[cfg(target_os = "linux")]
 #[test]
 fn json_at_a_terminal_escapes_what_could_steer_it() -> Result {
@@ -737,10 +730,8 @@ fn json_at_a_terminal_escapes_what_could_steer_it() -> Result {
     Ok(())
 }
 
-/// a mistyped command, option or dataset name exits 2, changes nothing and suggests the line
-/// typed with that one word fixed. `cli::usage::tests` guesses each word and
-/// `cli::typed::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines;
-/// these rows check what the binary prints, in text and in json.
+/// the typo exits 2 and changes nothing. `cli::usage::tests` and
+/// `cli::typed::tests::a_guess_keeps_every_other_word_of_the_command_line` decide the guesses.
 #[test]
 fn a_typo_suggests_the_line_typed_with_one_word_fixed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -865,8 +856,7 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
     Ok(())
 }
 
-/// the welcome wraps between words at a narrow terminal, and the wordmark leads it only where
-/// the whole welcome still fits below it.
+/// the wordmark leads the welcome only where the whole welcome still fits below it.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Result {
@@ -894,8 +884,7 @@ fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Res
     Ok(())
 }
 
-/// at a terminal 60 columns wide an error wraps between words, going on under its own text past
-/// `error:`, at a dumb terminal too, so no word is cut in two where the terminal would wrap it.
+/// a wrapped error goes on under its own text past `error:`, at a dumb terminal too.
 #[cfg(target_os = "linux")]
 #[test]
 fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
@@ -938,10 +927,8 @@ fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
     Ok(())
 }
 
-/// a terminal narrower than a line wraps it at its last column, even inside a word: a
-/// 120-column terminal showed "authenticat" and "ed" on two lines of a long error. fetchloom
-/// wraps help and errors between words itself, an example after the mark a shell continues it
-/// at, and a word wider than the terminal goes whole onto a line of its own.
+/// a terminal wraps inside a word, so fetchloom wraps itself: an example goes on after the mark a
+/// shell continues it at, and a word wider than the terminal gets a line of its own.
 #[cfg(target_os = "linux")]
 #[test]
 fn at_a_narrow_terminal_help_and_errors_wrap_between_words() -> Result {
@@ -996,8 +983,6 @@ fn at_a_narrow_terminal_help_and_errors_wrap_between_words() -> Result {
     Ok(())
 }
 
-/// files that `get` and `sync` link to the cache's copies are said to be linked to the cache,
-/// where the bytes are.
 #[test]
 fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
