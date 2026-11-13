@@ -37,7 +37,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 1. find the project and take its lock, which the build holds until it ends.
 2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet. with `--locked`, a fetched dataset whose entry changed, a recipe never built or changed since it was built, or a pin building would change, as one of a recipe `data.toml` no longer has, stops the build with `lock.outdated`, exit 1, before anything is fetched or run.
-3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them, and, where the disk does not clone files, the copies of what the largest step reads. a result never built before is named instead, since its size is unknown. when that and the `build_floor` [setting](settings.md) are more than the disk has free, the build asks first; with no one to ask, it stops with `unconfirmed`, exit 1, unless `--yes` is given. a disk with less free than `build_floor` already stops the build with `local.io`, exit 50, `--yes` or not, as [the step](#the-step) shows.
+3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them and, where the disk does not clone files, copies of what the largest step reads. a result never built is named instead, since its size is unknown. when that plus the `build_floor` [setting](settings.md) passes the free space, the build asks first, and with no one to ask stops with `unconfirmed`, exit 1, unless `--yes` is given. a disk already below `build_floor` stops the build with `local.io`, exit 50, even with `--yes`, as [the step](#the-step) shows.
 4. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
    - `Fetched` when `data.lock` pins what building it now would make and the data folder or a [mirror](../mirrors.md) holds the files the cache lacks, which it copies into the cache;
@@ -93,9 +93,9 @@ error: made cannot start: the project folder has no .venv/bin/python
 
 for a bare name, such as `python3.99`, the help says to install it or add its folder to `PATH`.
 
-the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. the step and everything it starts run in a group of their own, a process group on linux and macos and a job object on windows: when the step ends, anything it started and left running is ended too, and ctrl-c ends the whole group. on windows the group also ends when fetchloom does, even when task manager or a cancelled CI job ends it outright. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does, ends the step's group at once and ends with `Stopped by a SIGTERM, so data.lock and the data folder are as they were`; [interruptions](../concepts.md#interruptions) has the rest.
+the step runs in the project folder, so a script `run` names is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. when the step ends, anything it started and left running is ended too, and ctrl-c ends them all; on windows they also end when fetchloom does, even when task manager or a cancelled CI job ends it outright. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does, ends the step and all it started at once, and ends with `Stopped by a SIGTERM, so data.lock and the data folder are as they were`; [interruptions](../concepts.md#interruptions) has the rest.
 
-while the step runs, fetchloom checks the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. a disk with less free than the floor before any step runs stops the build there, `--yes` or not. from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes made` on a disk with 321 GiB free, without the line under the error that says where the cache is:
+while the step runs, fetchloom watches the free space on the disk holding the cache and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes made` on a disk with 321 GiB free, which stops before any step runs, without the line under the error that says where the cache is:
 
 ```text
       Needs up to 122 B on the disk holding the cache, which has 321.1 GiB free
@@ -116,7 +116,7 @@ once the step exits with 0, fetchloom takes in what it wrote into `<build>/out`,
 - more files than the `most_files` [setting](settings.md) allows;
 - a file that changed while fetchloom read it, as when something the step started still writes.
 
-a step that changed a file of its own `code` while it ran fails too, since its result would answer code that is no longer there. fetchloom moves each file into the cache, or copies it when it has another name, so a file the step linked from elsewhere, such as one of your own, stays as it was.
+a step that changed a file of its own `code` while it ran fails too, since its result would answer code that is no longer there. a file the step linked into `<build>/out` from elsewhere, such as one of your own, is copied into the cache and stays as it was.
 
 ## what a failure leaves
 
@@ -168,13 +168,7 @@ error: emb differs from data.lock: 0 of 1 file match
 
 a check changes neither `data.lock` nor the data folder. when every step matches, it ends with `Ok every step made the files data.lock pins`, exit 0, and the results are in the cache for `sync` to place, even on a fresh clone. a step that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check. a step that reads a recipe whose check made other files, and whose pinned result is not on this machine or a mirror, is `Skipped`, and the error says so.
 
-a check runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks, as when a fetched dataset's entry changed or a recipe changed since it was built: that is `lock.outdated`, exit 1:
-
-```text
-error: data.lock is out of date: clean changed since it was built
-  clean: clean.py changed
-  help: run `fetchloom build clean`, then commit data.lock and data.lock.d
-```
+a check runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks, as when a fetched dataset's entry changed or a recipe changed since it was built: that is `lock.outdated`, exit 1, with the error [when a recipe needs building](../recipes.md#when-a-recipe-needs-building) shows.
 
 `--check` cannot be combined with `--accept` or `--dry-run`. with `--locked` it is the check CI runs, as [CI](../ci.md#recipes) shows.
 

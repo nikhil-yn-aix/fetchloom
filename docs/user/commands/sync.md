@@ -119,12 +119,7 @@ warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or mov
   help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
 ```
 
-[`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names drop only where it works: a recipe's result gets its files from the recipe's step, as in the `squares` example above, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once:
-
-```text
-warning: put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/
-  help: to leave a folder out for good, run `fetchloom drop data/many/part03`; keep files of your own in a folder outside data/
-```
+[`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names drop only where it works: a recipe's result gets its files from the recipe's step, as in the `squares` example above, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom drop` of that folder.
 
 a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere in the data folder stays, and status lists it as extra. a dry run warns the same way, as `a sync would put back`.
 
@@ -158,7 +153,7 @@ a changed hardlink shared by other projects, whose cached copy the cache no long
 
 an entry in a pinned file's way, such as a link at its path or a file where its folder belongs, stays without `--force`, with kept reason `blocked` and its path as `blocked_by`. with `--force`, sync removes it, a link itself and never what it points to; a folder that holds anything stays even then. a file fetchloom placed that no dataset needs now is removed first, so when a pinned file becomes a folder of files, or the other way round, one sync places the new files.
 
-sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` checks the hash of every placed file too, reusing a hash this scan already checked, and puts back one whose bytes changed though its size and time did not, without `--force`.
+sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` checks the hash of every placed file too, and puts back one whose bytes changed though its size and time did not, without `--force`.
 
 if registering with the cache fails, sync still succeeds, with a warning that `cache gc` may not keep the project's files; check the cache's permissions and run sync again.
 

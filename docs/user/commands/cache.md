@@ -111,18 +111,11 @@ $ fetchloom sync --mirror ../mirror
      Synced 1 dataset into data
 ```
 
-a project gc forgot, as one whose folder was moved away during gc, loses from the cache what only it needed. the sync that registers it again finds every file in place and puts nothing back, so its data folder then holds the only copy on this machine of those files. before you delete or move that data folder, push it to a folder mirror, which takes the files from the data folder. stderr of `fetchloom push --to ../mirror --yes` in such a project from a real run, the path shortened:
-
-```text
-     Copied 1 file · 8 B from data into the cache
-    Started a mirror in /home/me/mirror
-     Pushed 1 file · 8 B to /home/me/mirror
-         Ok every file two needs is on the mirror
-```
+a project gc forgot, as one whose folder was moved away during gc, loses from the cache what only it needed. the sync that registers it again finds every file in place and puts nothing back, so its data folder then holds the only copy on this machine of those files. before you delete or move that data folder, push it to a folder mirror, which takes the files from the data folder, as [push](push.md#what-it-fetches) shows.
 
 ### runs that use the cache
 
-commands that work with the cache, such as `add`, `sync`, `get`, `cache` and `cache verify`, share a lock on its `gc.lock` file while they work, which `cache gc` takes alone, so gc never removes a file a running command is about to place. gc waits for them with `Waiting for other fetchloom runs to finish with the cache`, a command started during gc waits for it the same way, and ctrl-c stops either wait. dry runs take no lock, so what a gc dry run lists can differ from what gc later frees. gc deletes nothing without its lock, as on a filesystem without locks or a read-only cache folder; on NFS it needs write access to `gc.lock`.
+gc never removes a file a running command is about to place: while `add`, `sync`, `get`, `cache` or `cache verify` work with the cache, gc waits, saying `Waiting for other fetchloom runs to finish with the cache`, a command started during gc waits for it the same way, and ctrl-c stops either wait. a dry run waits for nothing, so what a gc dry run lists can differ from what gc later frees. gc deletes nothing where it cannot lock the cache, as on a filesystem without locks or a read-only cache folder; on NFS it needs write access to the cache's `gc.lock`. [cache](../../dev/architecture/cache.md#layout) has the lock.
 
 ### reminder
 
@@ -184,7 +177,7 @@ error: freeing adult and covid, 99.5 MiB, from the cache needs a yes
   help: answer yes at a terminal, or add --yes, once you are sure the mirror named above keeps these files
 ```
 
-gc reads the copies and asks before it takes its lock, so the long read and the question never hold up other runs. once you say yes it looks again, and frees a file only while it is still raw input nothing else keeps and its copy on the mirror is as it was when hashed; then it frees what plain gc frees. `--dry-run` reads the copies too, says what gc would free and keep, and frees and asks nothing.
+the long read and the question never hold up other runs. after a yes, gc looks again and frees a file only while it is still raw input nothing else keeps and its copy on the mirror is as it was when hashed; then it frees what plain gc frees. `--dry-run` reads the copies too, says what gc would free and keep, and frees and asks nothing.
 
 each file kept says why:
 
@@ -200,16 +193,7 @@ each file kept says why:
 | `unreadable` | the copy on a mirror could not be read |
 | `changed` | the copy on a mirror changed or went after gc read it |
 
-the lines about adult in a dry run of the same project, after one copy on the mirror was damaged, its size kept and a byte changed:
-
-```text
-      Would free adult · 4 files, 1.9 MiB of raw input that only builds read
-            /home/me/lab-mirror holds a copy of each, hashed in this run
-      Costs rerunning clean fetches these 1.9 MiB back from /home/me/lab-mirror or adult's source
-      Would keep adult · 1 file, 3.8 MiB: its copy on /home/me/lab-mirror does not hash to its name
-```
-
-[push](push.md) replaces a copy of another size by itself; delete one of the right size that does not hash to its name, and the next `push --inputs` writes it again.
+a dry run names each kept file's reason in words, as `Would keep adult · 1 file, 3.8 MiB: its copy on /home/me/lab-mirror does not hash to its name` for a copy damaged with its size kept. [push](push.md) replaces a copy of another size by itself; delete one of the right size that does not hash to its name, and the next `push --inputs` writes it again.
 
 JSON adds `result.inputs`: `freed_objects` and `freed_bytes`; `datasets`, a record for each dataset freed, with `route.mirrors`, the folder mirrors whose copies hashed right, and `costs.recipes`, the recipes that fetch it back to run again; and `kept`, a record for each dataset and reason, with `mirror`, the folder mirror a `damaged`, `unreadable` or `changed` copy is on, else null. `removed_objects` and `removed_bytes` keep counting only what plain gc removes. `result.inputs` of that damaged run with `--yes`, the paths shortened:
 

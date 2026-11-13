@@ -82,16 +82,7 @@ a FAT32 drive refuses a file larger than 4 GiB, so push stops at the first one w
 
 ## what it fetches
 
-push copies what this machine's cache holds, and fills it first with what it lacks. a file the cache lacks that the data folder holds with its pinned bytes is copied into the cache, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder; the file in the data folder stays as it is. stderr from a real run in such a copy, whose cache was empty, the mirror's path shortened:
-
-```text
-     Copied 1 file · 21 B from data into the cache
-    Started a mirror in /mnt/lab/fetchloom
-     Pushed 1 file · 21 B to /mnt/lab/fetchloom
-         Ok every file squares and table need is on the mirror
-```
-
-what neither holds, push downloads as a sync would: from a [mirror](../mirrors.md) when one holds it, else from its source, each file checked against its pin. an archive this machine never unpacked is downloaded and unpacked to learn its files, and so is the raw data of a dataset with `place = false` when `--inputs` or its name asks for it. stderr from a real run in a copy of a project with a csv file, a zip and a recipe, whose cache was empty, the mirror's path shortened:
+push copies what this machine's cache holds, and fills it first with what it lacks. a file the cache lacks that the data folder holds with its pinned bytes is copied into the cache, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder; the file in the data folder stays as it is. what neither holds, push downloads as a sync would: from a [mirror](../mirrors.md) when one holds it, else from its source, each file checked against its pin. an archive this machine never unpacked is downloaded and unpacked to learn its files, and so is the raw data of a dataset with `place = false` when `--inputs` or its name asks for it. stderr from a real run in a copy of a project with a csv file, a zip and a recipe, whose cache was empty, the mirror's path shortened:
 
 ```text
  Downloaded 1 file · 824 B in 6 ms
@@ -153,14 +144,7 @@ error: the sources of iris and pets did not say who may read them, so pushing th
          Ok dry run, nothing was changed
 ```
 
-a dry run of a project whose cache holds every file:
-
-```text
-      Would start a mirror in /mnt/lab/fetchloom
-      Would push 6 files · 106 B to /mnt/lab/fetchloom
-      Would ask first: the sources of iris and pets did not say who may read them
-         Ok dry run, nothing was changed
-```
+a dataset that would ask first adds a line such as `Would ask first: the sources of iris and pets did not say who may read them`.
 
 ## JSON
 
