@@ -1,11 +1,6 @@
-//! `cache gc --inputs`: frees the cache's copy of raw data that only built recipes read, where a
-//! folder mirror holds a copy that hashes to its name in the same run. a person short on disk
-//! keeps every result, and a build takes the raw data from the mirror again when it needs it.
-//!
-//! the copies are read before anything is held or asked, as a dry run reads, so neither the long
-//! read nor the question keeps other runs from the cache. the frees then happen under gc's own
-//! lock, each only once the needs walk, read again, still finds it raw input only builds read and
-//! its copy is still the one that hashed.
+//! `cache gc --inputs`: frees the cache's copy of raw data only built recipes read, where a folder
+//! mirror's copy hashes to its name. copies are read before gc's lock is taken or a person asked,
+//! so neither blocks other runs. under the lock, the needs walk and each copy are checked again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,9 +26,7 @@ pub(super) struct Inputs {
     /// the objects freed, each once, and their payload bytes.
     pub(super) freed_objects: u64,
     freed_bytes: u64,
-    /// each dataset whose files were freed.
     datasets: Vec<Dataset>,
-    /// each dataset with files kept, once for each reason.
     kept: Vec<Kept>,
 }
 
@@ -55,7 +48,6 @@ struct Route {
     mirrors: Vec<PathBuf>,
 }
 
-/// what freeing a dataset costs.
 #[derive(Debug, Serialize)]
 struct Costs {
     /// the recipes that read it, which take its files back from its route to run again.
@@ -119,8 +111,6 @@ struct Cached {
     linked: bool,
 }
 
-/// what gc `--inputs` found: the datasets it may free, the folder mirrors it read, and what
-/// becomes of each cached object those datasets need.
 #[derive(Debug)]
 struct Plan {
     groups: Vec<Group>,
@@ -138,9 +128,7 @@ struct Plan {
     web: bool,
 }
 
-/// frees the raw input a folder mirror holds, as `cache gc --inputs` does, with what plain gc
-/// frees. a dry run reads the copies and says what it would free, freeing and asking nothing.
-/// otherwise it asks first, unless `--yes` answered, then takes gc's lock and frees.
+/// frees the raw input a folder mirror holds, then what plain gc frees.
 pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collected, Error> {
     let output = &context.output;
     let peeked = crate::cli::peek_cache()?;
@@ -194,7 +182,6 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     super::tell_swept(context, freed, found.projects.len(), Some(report(&plan)))
 }
 
-/// adds the removals of raw input that failed, `not_removed`, to the sweep's.
 fn merge(freed: &mut Freed, not_removed: Vec<Failure>) {
     freed.not_removed.extend(not_removed);
     freed
@@ -202,9 +189,7 @@ fn merge(freed: &mut Freed, not_removed: Vec<Failure>) {
         .sort_by(|left, right| left.path.cmp(&right.path));
 }
 
-/// the needs walk, with the datasets it may free, and the plan it leads to, with each copy it
-/// relies on read: what gc `--inputs` would free from `cache`. `collect_stale` queues the
-/// projects whose data.toml is gone, as gc's walk does.
+/// the needs walk and the plan it leads to, reading every copy the plan relies on.
 fn look(context: &Context, cache: &Cache, collect_stale: bool) -> Result<(Found, Plan), Error> {
     let mut found = super::needed_with(cache, None, &context.stop, collect_stale, Uses::Grouped)?;
     let groups = std::mem::take(&mut found.groups);
@@ -221,11 +206,8 @@ fn look(context: &Context, cache: &Cache, collect_stale: bool) -> Result<(Found,
     Ok((found, plan))
 }
 
-/// the cached objects the datasets in `groups` need, from one scan of the cache.
-///
-/// # Errors
-///
-/// an object folder that cannot be read, which could hide what is cached.
+/// the cached objects `groups` need, from one scan of the cache. it fails on an object folder it
+/// cannot read, which could hide what is cached.
 fn cached_of(
     cache: &Cache,
     groups: &[Group],
@@ -258,8 +240,7 @@ fn raw(group: &Group) -> bool {
     matches!(group.used, Use::Input(Supply::Source | Supply::Imported))
 }
 
-/// why a dataset that is no raw input keeps all its files: a recipe reading it is not built,
-/// or a recipe makes it.
+/// why a dataset that is no raw input keeps all its files.
 fn kept_whole(group: &Group) -> Option<Reason> {
     match group.used {
         Use::Input(Supply::Source | Supply::Imported) => None,
@@ -269,9 +250,8 @@ fn kept_whole(group: &Group) -> Option<Reason> {
     }
 }
 
-/// what gc `--inputs` would free of what `groups` need, given the needs walk's `needed`, the
-/// `cached` objects and the folder mirrors among `mirrors`, whose copies are read on up to
-/// `threads` threads each. a copy is read only for an object nothing else keeps.
+/// what gc `--inputs` would free of what `groups` need. it reads a copy only for an object
+/// nothing else keeps, on up to `threads` threads a mirror.
 fn plan(
     output: &Output,
     groups: Vec<Group>,
@@ -328,8 +308,7 @@ fn derived(groups: &[Group]) -> HashSet<Sha256> {
         .collect()
 }
 
-/// why an object of raw input stays whatever a mirror holds, if it does: a use of its bytes
-/// other than as raw input, in any project, or a name outside the cache that keeps them anyway.
+/// why an object of raw input stays whatever a mirror holds, if it does.
 fn kept_anyway(
     object: &Sha256,
     needed: &Needed,
@@ -342,14 +321,8 @@ fn kept_anyway(
     found.linked.then_some(Reason::Linked)
 }
 
-/// reads the copy of each of `wanted` on each folder mirror among `mirrors` in turn, asking a
-/// mirror only for what the ones before it held no good copy of, and notes in `fates` what each
-/// came to: free, by the first copy that hashed to its name; else kept, by the first damaged or
-/// unreadable copy, or as on no mirror. a mirror that is not there is told and skipped.
-///
-/// # Errors
-///
-/// a stop.
+/// asks each folder mirror in turn for what those before it held no good copy of; an object is
+/// free by the first copy that hashes, else kept by the first damaged or unreadable copy.
 fn route(
     output: &Output,
     mirrors: &[PathBuf],
@@ -457,7 +430,6 @@ fn route(
     Ok(())
 }
 
-/// the folder mirrors among `mirrors`, as absolute folders, in order.
 fn folders(mirrors: &Mirrors) -> Vec<PathBuf> {
     mirrors
         .list
@@ -471,9 +443,8 @@ fn folders(mirrors: &Mirrors) -> Vec<PathBuf> {
         .collect()
 }
 
-/// keeps each object `plan` would free that the needs walk, read again, no longer finds raw input
-/// only builds read, or nothing else keeps: `needed` and `groups` from that walk, and `cached`
-/// from a scan after it. an object gone from the cache meanwhile is left out.
+/// keeps each object `plan` would free that the second needs walk, `needed` and `groups`, no
+/// longer finds raw input nothing else keeps; `cached` comes from a scan after that walk.
 fn recheck(plan: &mut Plan, needed: &Needed, groups: &[Group], cached: &HashMap<Sha256, Cached>) {
     let derived = derived(groups);
     let raw: HashSet<Sha256> = groups
@@ -500,12 +471,8 @@ fn recheck(plan: &mut Plan, needed: &Needed, groups: &[Group], cached: &HashMap<
     }
 }
 
-/// frees each object `plan` would free whose copy on its mirror is still the one that hashed,
-/// recording each refused removal in `not_removed`.
-///
-/// # Errors
-///
-/// a stop, which leaves the rest in the cache.
+/// frees each object `plan` would free whose copy on its mirror is still the one that hashed; a
+/// stop leaves the rest in the cache.
 fn free(
     plan: &mut Plan,
     cache: &Cache,
@@ -536,14 +503,12 @@ fn free(
 }
 
 impl Plan {
-    /// whether it frees anything.
     fn frees(&self) -> bool {
         self.fates
             .values()
             .any(|fate| matches!(fate, Fate::Free { .. }))
     }
 
-    /// what becomes of `object` of `group`.
     fn fate(&self, group: &Group, object: &Sha256) -> Option<Fate> {
         match kept_whole(group) {
             Some(reason) => Some(Fate::Keep { reason, at: None }),
@@ -551,7 +516,6 @@ impl Plan {
         }
     }
 
-    /// what `group` comes to.
     fn tally(&self, group: &Group) -> Tally {
         let mut tally = Tally::default();
         for object in &group.objects {
@@ -579,7 +543,6 @@ impl Plan {
     }
 }
 
-/// what one dataset comes to.
 #[derive(Default)]
 struct Tally {
     /// the objects freed, or to be, and their bytes.
@@ -592,7 +555,6 @@ struct Tally {
     dropped: BTreeSet<(Reason, Option<usize>)>,
 }
 
-/// what `plan` comes to, as `--json` reports it.
 fn report(plan: &Plan) -> Inputs {
     let mut inputs = Inputs::default();
     let mut counted = HashSet::new();
@@ -650,7 +612,6 @@ enum Told {
     After,
 }
 
-/// the lines for what `plan` frees and keeps of each dataset, and what freeing costs.
 fn tell(output: &Output, plan: &Plan, told: Told) {
     let projects: BTreeSet<&Path> = plan
         .groups
@@ -719,8 +680,6 @@ fn tell(output: &Output, plan: &Plan, told: Told) {
     }
 }
 
-/// what freeing `bytes` of `group` costs: running a recipe that reads it again takes them back
-/// from one of `mirrors`, or for data from a source, that source.
 fn costs(plan: &Plan, group: &Group, mirrors: &[String], bytes: u64) -> String {
     let source = if group.used == Use::Input(Supply::Source) && !plan.only_mirrors {
         format!(" or {}'s source", group.name)
@@ -735,7 +694,6 @@ fn costs(plan: &Plan, group: &Group, mirrors: &[String], bytes: u64) -> String {
     )
 }
 
-/// why `files` files of `group` are kept, for `reason`, about the mirror at `at`.
 fn said(plan: &Plan, group: &Group, reason: Reason, at: Option<usize>, files: u64) -> String {
     let one = files == 1;
     let mirror = at
@@ -778,11 +736,7 @@ fn said(plan: &Plan, group: &Group, reason: Reason, at: Option<usize>, files: u6
 }
 
 /// asks before freeing what `plan` would free, unless `--yes` answered, and says whether it
-/// asked. a person at a terminal sees what would be freed and kept first.
-///
-/// # Errors
-///
-/// `unconfirmed` when nobody said yes, with what a yes would free; a no changed nothing.
+/// asked; without a yes it fails as `unconfirmed`, with what a yes would free.
 fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
     if context.yes {
         return Ok(false);
@@ -835,7 +789,6 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
     }
 }
 
-/// warns that the folder mirror at `root` is `missing`, so no copy on it is checked.
 fn warn_missing(output: &Output, root: &Path, missing: Missing) {
     let shown = root.display();
     let (warning, help) = match missing {
@@ -885,8 +838,7 @@ mod tests {
         Output::new(style, Level::Quiet, true, false)
     }
 
-    /// what the project at `root`, with `manifest` and `lock`, needs of `cache`, with how it uses
-    /// each object, and the datasets gc `--inputs` may free.
+    /// the needs walk for one project, with uses told and the datasets gc `--inputs` may free.
     fn walked(
         root: &Path,
         cache: &Cache,
@@ -914,8 +866,7 @@ mod tests {
         (needed, groups)
     }
 
-    /// what gc `--inputs` would free of what `walked` found in `cache`, with the folder mirrors at
-    /// `mirrors`.
+    /// the plan gc `--inputs` makes from what `walked` found, with folder mirrors at `mirrors`.
     fn planned(cache: &Cache, (needed, groups): (Needed, Vec<Group>), mirrors: &[&Path]) -> Plan {
         let stop = Stop::default();
         let cached = cached_of(cache, &groups, &stop).unwrap();
@@ -939,8 +890,6 @@ mod tests {
         .unwrap()
     }
 
-    /// what became of the files of the dataset `name` in `plan`: freed, from which mirrors, or
-    /// kept, why and about which mirror.
     fn fates(plan: &Plan, name: &str) -> Vec<String> {
         let inputs = report(plan);
         let folder = |root: &PathBuf| root.file_name().unwrap().to_string_lossy().into_owned();
@@ -992,8 +941,7 @@ mod tests {
         assert!(!plan.frees());
     }
 
-    /// a copy of the right size with other bytes, a longer one and a shorter one are no route,
-    /// while a later mirror's good copy is.
+    /// same size with other bytes, longer or shorter; a later mirror's good copy is a route.
     #[test]
     fn a_damaged_mirror_copy_is_no_route() {
         let folder = tempfile::tempdir().unwrap();
@@ -1034,8 +982,7 @@ mod tests {
         assert!(plan.fates.is_empty(), "no copy is read for it");
     }
 
-    /// only raw input goes: a recipe's result with `place = false` that recipes read stays, since
-    /// the next build would put it back.
+    /// the next build would put it back, so only the raw input it was made from goes.
     #[test]
     fn a_result_only_builds_read_is_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1065,8 +1012,7 @@ mod tests {
         assert_eq!(fates(&plan, "raw"), ["kept: Linked"]);
     }
 
-    /// a copy that hashed right is relied on only while it is still that copy: one gone since
-    /// keeps the file, and the next run frees it once a good copy is back.
+    /// a copy gone since keeps the file; the next run frees it once a good copy is back.
     #[test]
     fn a_copy_that_changed_after_its_check_is_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1091,8 +1037,7 @@ mod tests {
         assert_eq!(not_removed, Vec::<Failure>::new());
     }
 
-    /// the look again under gc's lock keeps what a project began to use another way since the
-    /// copies were read, as by setting `place = true`.
+    /// the look again under gc's lock sees `place = true` set since the copies were read.
     #[test]
     fn what_a_project_uses_otherwise_by_the_time_of_freeing_is_kept() {
         let folder = tempfile::tempdir().unwrap();
@@ -1111,8 +1056,7 @@ mod tests {
         assert!(cache.object_path(&raw).is_file());
     }
 
-    /// only a folder mirror's copy counts: with none set, or a folder without the file or
-    /// without its marker, the file stays.
+    /// with none set, or a folder without the file or without its marker, the file stays.
     #[test]
     fn an_input_needs_a_copy_on_a_folder_mirror() {
         let folder = tempfile::tempdir().unwrap();

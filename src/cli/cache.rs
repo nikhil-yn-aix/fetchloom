@@ -34,7 +34,6 @@ pub(super) struct Info {
     projects: Vec<PathBuf>,
     /// downloads a run stopped before they finished, kept so a later run can continue them.
     unfinished_downloads: u64,
-    /// the bytes those downloads hold.
     unfinished_bytes: u64,
 }
 
@@ -91,8 +90,6 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     })
 }
 
-/// the projects that use the cache: each on a line of its own while they are few, else how many,
-/// which `-v` lists.
 fn tell_projects(output: &Output, projects: &[PathBuf]) {
     const LISTED: usize = 3;
     if projects.len() <= LISTED {
@@ -115,8 +112,6 @@ fn tell_projects(output: &Output, projects: &[PathBuf]) {
     }
 }
 
-/// where the cache's space goes: what the `projects` registered need, what no project needs and
-/// what gc frees of it, and the copies of cached files projects hold.
 fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     if usage.objects == 0 {
         output.done("Ok", "the cache has no data files");
@@ -143,8 +138,6 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     }
 }
 
-/// what the projects need, how much of it only builds read, and how much deleting would not
-/// free.
 fn needed_line(usage: &Usage, projects: usize) -> String {
     let mut line = format!(
         "{} by {}",
@@ -164,7 +157,6 @@ fn needed_line(usage: &Usage, projects: usize) -> String {
     line
 }
 
-/// what no project needs and when gc frees it, if any object is unneeded.
 fn unneeded_line(usage: &Usage) -> Option<String> {
     if usage.unneeded_objects == 0 {
         return None;
@@ -200,7 +192,6 @@ fn unneeded_line(usage: &Usage) -> Option<String> {
     Some(line)
 }
 
-/// says that `linked` bytes of `whole` have a name outside the cache too.
 fn linked_part(linked: u64, whole: u64) -> String {
     format!(
         "{} is linked outside the cache too, so deleting it would free nothing",
@@ -208,7 +199,6 @@ fn linked_part(linked: u64, whole: u64) -> String {
     )
 }
 
-/// `part` of `whole` in words: all of it, or how much of it.
 fn of_it(part: u64, whole: u64) -> String {
     if part == whole {
         "all of it".to_owned()
@@ -217,8 +207,6 @@ fn of_it(part: u64, whole: u64) -> String {
     }
 }
 
-/// the files projects hold that are copies of cached files, if any: those placed as copies or
-/// clones, and those whose link to the cache a copy of their project broke.
 fn copies_line(usage: &Usage) -> Option<String> {
     if usage.copies == 0 {
         return None;
@@ -263,10 +251,8 @@ struct Removals {
     remove: Vec<PathBuf>,
 }
 
-/// frees what no project needs, and with `inputs` the raw input only builds read that a folder
-/// mirror holds. a dry run sweeps a cache that records each removal instead of making it, so it
-/// decides exactly as a real sweep does. it takes no lock and so never waits, while a real sweep
-/// waits until no other run uses the cache.
+/// frees what no project needs, and with `inputs` what [`inputs::gc`] frees. a dry run sweeps a
+/// cache that only records removals, so it decides as a real sweep does, but takes no lock.
 pub(super) fn gc(
     context: &Context,
     now: bool,
@@ -308,7 +294,6 @@ fn hold(context: &Context) -> Result<Cache, Error> {
     )
 }
 
-/// frees what `found` does not need from `cache` once it is a day old, or at once when `now`.
 fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<Freed, Error> {
     let grace = if now {
         std::time::Duration::ZERO
@@ -327,8 +312,6 @@ fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<F
     Ok(freed)
 }
 
-/// tells what a sweep `freed`, keeping the files `projects` registered projects need, after
-/// what `cache gc --inputs` freed of them, `inputs`, when it ran.
 fn tell_swept(
     context: &Context,
     freed: Freed,
@@ -399,7 +382,6 @@ fn tell_swept(
     Ok(collected(freed, inputs))
 }
 
-/// the lines for the objects and the leftovers a sweep removed, or would remove, under `verb`.
 fn tell_removed(output: &Output, verb: &str, freed: &Freed) {
     if freed.removed_objects > 0 {
         output.step(
@@ -442,7 +424,6 @@ fn tell_forgotten(output: &Output, forgotten: &[PathBuf]) {
     }
 }
 
-/// how a project gc forgot because it moved gets its files kept again.
 fn hint_forgotten(output: &Output, freed: &Freed) {
     if !freed.forgotten.is_empty() {
         output.hint(
@@ -451,7 +432,6 @@ fn hint_forgotten(output: &Output, freed: &Freed) {
     }
 }
 
-/// the line about unneeded files gc keeps for now, if any.
 fn kept(freed: &Freed) -> Option<String> {
     (freed.kept_objects > 0).then(|| {
         format!(
@@ -461,8 +441,6 @@ fn kept(freed: &Freed) -> Option<String> {
     })
 }
 
-/// says what a sweep that only pretended would have freed, naming each path with `-v`, after
-/// what `cache gc --inputs` would free, `inputs`, when it ran.
 fn tell_dry_gc(
     context: &Context,
     freed: Freed,
@@ -633,14 +611,11 @@ fn with_failures(mut error: Error, failures: &[Failure]) -> Error {
     error.help("address the filesystem errors above, then run the command again")
 }
 
-/// how often the cache may remind a person of what it holds that no project needs, and how much
-/// that has to be before it does.
 const REMIND_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
 const REMIND_FROM: u64 = 1 << 30;
 
-/// after a command that changed what projects need, at most once a week and only for a person at
-/// a terminal: one hint when the cache holds a GiB or more no project needs. it deletes nothing;
-/// freeing bytes stays `cache gc`'s, which a person runs on purpose. its errors are its own.
+/// hints at what gc frees, after a command that changed what projects need. it deletes nothing:
+/// freeing bytes stays `cache gc`'s, which a person runs on purpose.
 pub(super) fn remind(context: &Context) {
     if !context.output.can_ask() {
         return;
@@ -673,10 +648,10 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
         return;
     }
     let Ok(cache) = open_cache() else { return };
-    // gc would forget a project out of reach, so the number would mislead
     let Ok(found) = needed_with(&cache, None, stop, false, Uses::Untold) else {
         return;
     };
+    // gc would forget a project out of reach, so the number would mislead
     if !found.complete {
         return;
     }
@@ -698,18 +673,13 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
     }
 }
 
-/// sets `marker`'s time to `now`. writing an empty file again leaves its time alone on windows,
-/// and the marker is opened without following a link someone planted in its place.
+/// sets the time itself, since writing an empty file again leaves its time alone on windows.
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
     crate::cache::open_unfollowed(marker, true)?.set_modified(now)
 }
-/// every object a registered project, or `current`, needs, as gc keeps them: a project whose
-/// data.toml is gone needs nothing, since gc forgets it and frees what it alone needed.
-///
-/// # Errors
-///
-/// a registration, data.toml or lock that is there but cannot be read, as gc stops for, so the
-/// caller keeps what it would drop.
+
+/// every object a registered project, or `current`, needs, as gc keeps them. it fails, as gc
+/// stops, on a registration, data.toml or lock that is there but unreadable, so callers keep all.
 pub(super) fn needed_by_all(
     cache: &Cache,
     current: Option<&Lock>,
@@ -728,12 +698,11 @@ enum Uses {
     Untold,
 }
 
-/// what [`needed_with`] found. `complete` is false when a registered project's data.toml was
-/// missing, so what that project needs is not in `needed`.
 struct Found {
     needed: Needed,
     projects: Vec<PathBuf>,
     stale_projects: Vec<PathBuf>,
+    /// false when a registered project's data.toml was missing, so `needed` lacks what it needs.
     complete: bool,
     /// with [`Uses::Grouped`], each dataset with `place = false` that recipes read.
     groups: Vec<Group>,
@@ -745,10 +714,8 @@ struct Found {
 struct Group {
     project: PathBuf,
     name: String,
-    /// how the project uses it, as [`Readers::use_of`] tells: an input once every recipe reading
-    /// it is built.
+    /// its use, as [`Readers::use_of`] tells: an input once every recipe reading it is built.
     used: Use,
-    /// the recipes that read it.
     readers: Vec<String>,
     /// of those, the ones not built as data.lock pins them.
     unbuilt: Vec<String>,
@@ -756,11 +723,9 @@ struct Group {
     objects: Vec<Sha256>,
 }
 
-/// every object a registered project's data.lock, or `current`, needs, following each archive to
-/// the files it unpacked to, and the projects still on disk, with how each project uses each
-/// object when `uses` asks. unreadable registrations, manifests and locks stop gc rather than
-/// lose protection. `collect_stale` queues roots whose data.toml is gone for the sweep, so
-/// inspection does not discard removal errors or delete records early.
+/// what registered projects, and `current`, need. unreadable registrations, manifests and locks
+/// stop gc rather than lose protection. `collect_stale` queues roots whose data.toml is gone for
+/// the sweep, so inspection does not discard removal errors or delete records early.
 fn needed_with(
     cache: &Cache,
     current: Option<&Lock>,
@@ -854,13 +819,8 @@ struct Read<'a> {
     root: Option<&'a Path>,
 }
 
-/// adds what one lock needs. an archive needs the files it unpacked to that `read`'s members
-/// tables keep, and its own bytes too, every part of a split one, while this machine never
-/// unpacked it or lost such a file, since unpacking again is the only way back. without data.toml,
-/// every file is kept. a recipe's pinned result needs its files, which only a build makes again,
-/// and its record. with the project's folder, each object is noted with how the project uses it,
-/// as [`Readers::use_of`] tells; otherwise as placed or, for a result, as its output. `groups`,
-/// when given, gets each dataset with `place = false` that recipes read, with its objects.
+/// adds what one lock needs. an archive keeps its own bytes while this machine never unpacked it
+/// or lost a file of it that data.toml keeps, since unpacking again is the only way back.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
@@ -939,8 +899,6 @@ fn add_with_stop(
     stop.check()
 }
 
-/// notes that the dataset being added needs the object `digest`, as `used`, and lists it in
-/// `group` too when that dataset is one `cache gc --inputs` may free.
 fn note(needed: &mut Needed, group: &mut Option<Group>, digest: Sha256, used: Use) {
     needed.add(digest, used);
     if let Some(group) = group {
@@ -948,7 +906,6 @@ fn note(needed: &mut Needed, group: &mut Option<Group>, digest: Sha256, used: Us
     }
 }
 
-/// adds `group`, when there is one, to `groups`, when they are asked for, with each object once.
 fn gather(groups: &mut Option<&mut Vec<Group>>, group: Option<Group>) {
     if let (Some(groups), Some(mut group)) = (groups, group) {
         group.objects.sort_unstable();
@@ -957,10 +914,7 @@ fn gather(groups: &mut Option<&mut Vec<Group>>, group: Option<Group>) {
     }
 }
 
-/// the recipes that read each dataset of one project, from its data.toml and data.lock, which
-/// tell how the project uses the dataset's files: one `place = false` keeps out of the data
-/// folder is an input while recipes read it and every one of them is built. what is built is
-/// found once per recipe.
+/// the recipes that read each dataset of one project, to tell how it uses each dataset's files.
 struct Readers<'a> {
     root: &'a Path,
     manifest: &'a Manifest,
@@ -990,9 +944,7 @@ impl<'a> Readers<'a> {
         }
     }
 
-    /// how the project uses the files of the dataset `name`, a recipe's result when `made`: an
-    /// input when it has `place = false` and only built recipes read it; else the output of a
-    /// recipe; else pending while a recipe still to build reads it; else placed.
+    /// how the project uses the files of the dataset `name`, a recipe's result when `made`.
     fn use_of(&mut self, name: &str, made: bool, stop: &Stop) -> Result<Use, Error> {
         let readers = self.by_input.get(name).cloned().unwrap_or_default();
         let mut pending = false;
@@ -1018,8 +970,6 @@ impl<'a> Readers<'a> {
         })
     }
 
-    /// the dataset `name`, used as `used`, as `cache gc --inputs` sees it, with no objects yet,
-    /// when it has `place = false` and recipes read it. none for any other.
     fn group(&mut self, name: &str, used: Use, stop: &Stop) -> Result<Option<Group>, Error> {
         let Some(readers) = self.by_input.get(name).cloned() else {
             return Ok(None);
@@ -1048,9 +998,8 @@ impl<'a> Readers<'a> {
         }))
     }
 
-    /// whether data.lock pins a result of the recipe `name` as building it now would make, and
-    /// the cache holds all of it. a recipe whose code cannot be read counts as changed, which
-    /// keeps more.
+    /// whether data.lock pins the result building recipe `name` now would make, all of it cached.
+    /// a recipe whose code cannot be read counts as changed, which keeps more.
     fn built(&mut self, name: &'a str, stop: &Stop) -> Result<bool, Error> {
         if let Some(built) = self.built.get(name) {
             return Ok(*built);
@@ -1105,8 +1054,7 @@ mod tests {
         }
     }
 
-    /// a cache holding the archive set.zip, whose two files a.txt and b.txt it unpacked to, and a
-    /// lock pinning it, with the cached archive, a.txt and b.txt.
+    /// a lock pinning set.zip, cached and unpacked to a.txt and b.txt, and the three as stored.
     fn unpacked_archive(cache: &Cache) -> (Lock, [crate::cache::Stored; 3]) {
         let archive = store(cache, b"the archive itself");
         let first = store(cache, b"first\n");
@@ -1143,8 +1091,7 @@ mod tests {
         (lock, [archive, first, second])
     }
 
-    /// a split archive's record goes by its parts, and its parts are needed only while a file
-    /// it unpacked to is missing, as an archive in one file is.
+    /// a split archive's record goes by its parts.
     #[test]
     fn a_split_archive_needs_its_parts_only_while_a_file_it_unpacked_to_is_missing() {
         let folder = tempfile::tempdir().unwrap();
@@ -1215,8 +1162,7 @@ mod tests {
         );
     }
 
-    /// a file data.toml's members table leaves out is placed by no project, so gc may free it,
-    /// and its absence no longer keeps the archive. data.toml that cannot be read keeps both.
+    /// data.toml that cannot be read keeps both.
     #[test]
     fn an_excluded_member_neither_counts_as_needed_nor_holds_back_its_archive() {
         let folder = tempfile::tempdir().unwrap();
@@ -1250,14 +1196,11 @@ mod tests {
         assert!(unread.objects.contains(&archive.digest));
     }
 
-    /// what gc frees of what no project needs: now, once a day old, or nothing, for what a folder
-    /// outside the cache links too.
     /// raw, a csv file, and clean, a recipe made from it.
     pub(super) const RAW_AND_CLEAN: &str = "[datasets.raw]\nref = \"https://example.org/raw.csv\"\nplace = false\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n";
 
-    /// data.toml `text`, with each of `sources` pinned to one file in `cache`, and each of
-    /// `results`, in the order they are made, pinned as building it now would make one file in
-    /// `cache`. it gives each dataset's file by name.
+    /// data.toml `text`, pinning each of `sources` to one file in `cache`, then each of `results`,
+    /// given in the order they are made, as building it now would; it gives each file by name.
     pub(super) fn pinned(
         root: &Path,
         cache: &Cache,
@@ -1319,8 +1262,7 @@ mod tests {
         (manifest, lock, stored)
     }
 
-    /// what the project at `root` with `manifest` and `lock` needs of `cache`, with how it uses
-    /// each object.
+    /// what the project needs of `cache`, with how it uses each object.
     fn uses(root: &Path, cache: &Cache, manifest: &Manifest, lock: &Lock) -> Needed {
         let mut needed = Needed {
             told: true,
@@ -1334,8 +1276,7 @@ mod tests {
         needed
     }
 
-    /// a dataset with `place = false` that only built recipes read is an input, whose bytes its
-    /// source gives again; placed, or read by no recipe, it is placed data.
+    /// placed, or read by no recipe, the same dataset is placed data.
     #[test]
     fn an_unplaced_source_read_only_by_built_recipes_is_input() {
         let folder = tempfile::tempdir().unwrap();
@@ -1357,8 +1298,7 @@ mod tests {
         assert_eq!(needed.uses[&stored["raw"].digest], Use::Placed);
     }
 
-    /// a recipe still to build, as one not pinned, one changed since it was built or one whose
-    /// result the cache lacks, keeps what it reads pending, never an input.
+    /// unbuilt: not pinned, changed since built, or its result missing from the cache.
     #[test]
     fn an_input_of_an_unbuilt_recipe_is_pending() {
         let folder = tempfile::tempdir().unwrap();
@@ -1417,8 +1357,7 @@ mod tests {
         assert_eq!(needed.uses[&stored["tidy"].digest], Use::Output);
     }
 
-    /// a rebuild kept for `fetchloom build --accept` needs its files as a result does, so bytes
-    /// it shares with an input are no longer read only by builds.
+    /// bytes it shares with an input are then no longer read only by builds.
     #[test]
     fn a_kept_rebuild_needs_its_files_as_a_result_does() {
         let folder = tempfile::tempdir().unwrap();
@@ -1496,9 +1435,6 @@ mod tests {
         );
     }
 
-    /// copies say how much of them was linked when placed, and how much is clones.
-    /// the part of what projects need that only builds read is told beside it, once there is
-    /// some.
     #[test]
     fn the_needed_line_says_what_only_builds_read() {
         let usage = |inputs_only| Usage {
