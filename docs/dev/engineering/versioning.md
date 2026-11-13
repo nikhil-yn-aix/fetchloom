@@ -25,7 +25,7 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 | part | current boundary |
 |---|---|
 | [cache folders and records](../../user/reference/cache-folder.md) | internal indexes, not a public interchange format. URL and partial records require their declared fields; an unusable hint loses reuse, not the project's pins |
-| [.fetchloom/state](../../user/reference/project-folder.md#placement-state) | `version: 1`; missing, unreadable, malformed or unsupported state counts as empty and existing files must be checked before adoption |
+| [.fetchloom/state](../../user/reference/project-folder.md#placement-state) | `version: 2`; missing, unreadable, malformed or unsupported state counts as empty and existing files must be checked before adoption |
 | human-readable output | wording, colors and alignment may change; scripts read JSON |
 | the rust crate's API | fetchloom is a command, not a supported library API |
 
@@ -37,4 +37,4 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 
 fetchloom depends on web APIs it does not control. the [live checks](ci.md#live-source-checks) exercise the configured public services each monday; they do not cover every adapter. a removed source can still leave usable cached bytes when the manifest and lock remain unchanged.
 
-dependabot proposes github actions and crate updates monthly, once a release is a week old. every update goes through the full test gate and `cargo deny` under the [dependency policy](ci.md#native-tests).
+dependabot proposes github actions and crate updates monthly, once a release is a week old. every update goes through the full test gate and `cargo deny` under the [dependency policy](ci.md#quality).
