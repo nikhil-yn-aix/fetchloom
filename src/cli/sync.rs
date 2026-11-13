@@ -1232,32 +1232,59 @@ impl<'a> Loop<'a> {
             .iter()
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
             .collect();
-        let import = lacking
+        let imports: BTreeSet<&str> = lacking
             .iter()
-            .find(|(_, file)| file.url.is_empty())
-            .map(|(dataset, _)| *dataset);
+            .filter(|(_, file)| file.url.is_empty())
+            .map(|(dataset, _)| *dataset)
+            .collect();
         if self.net.offline().enabled() && !named.is_empty() {
-            if let Some(import) = import {
+            if let Some(import) = imports.first() {
                 return Err(self.offline_imported(manifest, import, lacking));
             }
             let labels: Vec<&str> = named.iter().map(|(label, _)| label.as_str()).collect();
             return Err(self.offline_missing(&labels));
         }
         fetch::mirrors::sources_allowed(self.context, &named)?;
-        let Some(import) = import else {
-            return Ok(());
+        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
+        let mut error = match imports.iter().copied().collect::<Vec<_>>().as_slice() {
+            [] => return Ok(()),
+            [import] => {
+                local::imported_elsewhere(import, &plan::folder(manifest, import), mirrored)
+            }
+            several => local::several_imported_elsewhere(several, mirrored),
         };
-        let imported: Vec<(String, Option<Sha256>)> = lacking
+        // each import's first file before any import's second, so the details name every one
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        let mut imported: Vec<_> = lacking
             .iter()
             .zip(named)
-            .filter(|((dataset, file), _)| *dataset == import && file.url.is_empty())
-            .map(|(_, named)| named)
+            .filter(|((_, file), _)| file.url.is_empty())
+            .map(|((dataset, _), named)| {
+                let rank = seen.entry(dataset).or_default();
+                *rank += 1;
+                ((*rank, *dataset), named)
+            })
             .collect();
-        let error = local::imported_elsewhere(
-            import,
-            &plan::folder(manifest, import),
-            !self.context.mirrors.mirrors.list.is_empty(),
-        );
+        imported.sort_by_key(|(order, _)| *order);
+        let imported: Vec<_> = imported.into_iter().map(|(_, named)| named).collect();
+        let others: Vec<&str> = manifest
+            .datasets
+            .iter()
+            .filter(|(name, entry)| {
+                entry.source().is_some()
+                    && self.scope.includes(name)
+                    && !imports.contains(name.as_str())
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if !others.is_empty()
+            && let Some(help) = error.help.take()
+        {
+            error = error.help(format!(
+                "{help}, or run `{}`, which places what this machine has",
+                super::project::command(&format!("sync {}", others.join(" ")))
+            ));
+        }
         Err(fetch::mirrors::lacked(self.context, &imported)
             .into_iter()
             .fold(error, Error::detail))

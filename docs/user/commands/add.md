@@ -130,6 +130,16 @@ error: flowers was imported from files, and this machine's cache does not hold t
 
 a [mirror](../mirrors.md) that `fetchloom push` filled gives them instead; when the mirrors asked lack them or hold damaged copies, the error says `neither this machine's cache nor a mirror holds them`, and whoever keeps the mirror can push them again. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
 
+one error names every import the run cannot supply, each import's first file before any second one in the details, so a teammate supplies them all in one round. when other datasets of the run are there to place, its help ends with the sync of them alone, which places what this machine has meanwhile; stderr from a real run whose mirror held only `flowers`:
+
+```text
+     Copied 4 files · 16 B from ../mirror
+error: a-very-long-dataset-name-for-testing and tiny were imported from files, and neither this machine's cache nor a mirror holds them
+  a-very-long-dataset-name-for-testing/l.csv: not there on ../mirror
+  tiny/t.csv: not there on ../mirror
+  help: copy each one's files to its folder by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as <name>` where they are, or run `fetchloom sync flowers`, which places what this machine has
+```
+
 `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset. the paths and sizes are compared with data.lock first, then the bytes as they are copied; other files stop it with `local.io`, exit 50, as `<folder> does not hold the files data.lock pins for <name>`, naming the first difference, and leave data.toml and data.lock as they were. supply the folder the files came from, or remove the dataset and import the new files. matching files change neither:
 
 ```text

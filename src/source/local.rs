@@ -87,6 +87,28 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
     ))
 }
 
+/// [`imported_elsewhere`] for several imports, `names`, whose files this machine lacks, in one
+/// error, so a teammate supplies them all in one round rather than learn of one a run.
+pub(crate) fn several_imported_elsewhere(names: &[&str], mirrored: bool) -> Error {
+    let lacking = if mirrored {
+        "neither this machine's cache nor a mirror holds them"
+    } else {
+        "this machine's cache does not hold them"
+    };
+    Error::new(
+        Kind::ReferenceUnresolved,
+        format!(
+            "{} were imported from files, and {lacking}",
+            crate::units::listed(names, "and")
+        ),
+    )
+    .help(format!(
+        "copy each one's files to its folder by hand, then run `{}`, or run `{}` where they are",
+        crate::suggested::command("sync"),
+        crate::suggested::command("add <folder> --as <name>")
+    ))
+}
+
 /// whether `text` is written as a path on this machine, from the root, `.`, `..`, `~`, a drive
 /// or `file:`. it reads the text alone, never the disk, so data.toml means the same everywhere.
 pub(crate) fn is_path(text: &str) -> bool {

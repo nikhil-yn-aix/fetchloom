@@ -158,6 +158,54 @@ fn a_clone_without_the_bytes_recovers_by_copying_them() -> Result {
     Ok(())
 }
 
+/// a clone lacking the files of several imports hears of every one in one error, with the command
+/// that places, meanwhile, what this machine has.
+#[test]
+fn a_clone_lacking_several_imports_names_each_and_what_it_can_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = flowers(&sandbox)?;
+    let tiny = sandbox.folder("tiny")?;
+    fs::write(tiny.join("t.csv"), b"t\n1\n")?;
+    let wide = sandbox.folder("wide")?;
+    fs::write(wide.join("w.csv"), b"w\n2\n")?;
+    for path in ["../flowers", "../tiny", "../wide"] {
+        let added = sandbox.run(&["add", path])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let clone = clone_of(&sandbox)?;
+    // flowers reaches the clone as a copy of its folder would bring it
+    let data = clone.join("data/flowers");
+    fs::create_dir_all(data.join("petals"))?;
+    fs::copy(folder.join("sepals.csv"), data.join("sepals.csv"))?;
+    fs::copy(folder.join("petals/red.csv"), data.join("petals/red.csv"))?;
+    let elsewhere = sandbox.folder("another-cache")?;
+    let sync = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .output()
+    };
+    let output = sync(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "tiny and wide were imported from files, and this machine's cache does not hold them"
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["tiny/t.csv", "wide/w.csv"])
+    );
+    assert_eq!(
+        error["help"],
+        "copy each one's files to its folder by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as <name>` where they are, or run `fetchloom sync flowers`, which places what this machine has"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    let named = sync(&["sync", "flowers"])?;
+    assert_eq!(named.status.code(), Some(0), "{}", text(&named.stderr)?);
+    Ok(())
+}
+
 #[test]
 fn supplying_the_same_folder_again_changes_no_pins() -> Result {
     let sandbox = Sandbox::new()?;

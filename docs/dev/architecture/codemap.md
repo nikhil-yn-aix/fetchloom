@@ -116,7 +116,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 |---|---|---|---|
 | `src/source.rs` | `Reference`, a source's identity, routed from what a person typed; `Listing`, what it resolves to, of `Remote` files to download; the checks every listing passes, the guard paged listings share, and per-source transfer rules | `Reference::parse`, `Reference::resolve` | `Parsed`, `Access`, `Unavailable`, `Pages`, `Found`, `byline`, `fetch_plan`, `may_wrap`, `refused`, `paced_as`, `spacing` |
 | `src/source/search.rs` | `search` across public catalogs, its candidates interleaved, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `search`, `near` | `Candidate`, `Search`, `is_search`, `Near` |
-| `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `reads_as_path`, `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere` |
+| `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `reads_as_path`, `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere`, `several_imported_elsewhere` |
 | `src/source/doi.rs` | DOIs, routed by the host doi.org names, never by their prefix | `Doi::locate` |  |
 | `src/source/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
 | `src/source/zenodo.rs` | zenodo records, with the MD5 zenodo states for every file | `Record` | `Record::resolve` |
