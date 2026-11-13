@@ -1142,27 +1142,41 @@ fn hashing_jobs_keep_digests_and_interruptions_in_order_when_spawns_fail() {
         "806582984e335c4f5fb7d310dbf7a790d51df348d77dc797a3b27c6da316995e",
     ];
     let items: Vec<_> = (b'a'..=b'h').enumerate().collect();
+    let path: FilePath<'_, (usize, u8)> =
+        &|(index, _)| Cow::Owned(PathBuf::from(index.to_string()));
     for refuse in [false, true] {
         let _refusing = refuse.then(|| crate::threads::refuse_after(0));
         let caller = std::thread::current().id();
         let seen: Vec<_> = items.iter().map(|_| AtomicUsize::new(0)).collect();
-        let digests = run_hashes(&items, 32 << 20, Threads::default(), |(index, byte)| {
-            if refuse {
-                assert_eq!(std::thread::current().id(), caller);
-            }
-            seen[*index].fetch_add(1, Ordering::Relaxed);
-            if *index == 3 {
-                crate::digest::Sha256::of_reader(Interrupted, crate::digest::Block::sized(1))
+        let ahead = ReadAhead {
+            items: &items,
+            path,
+            asked: AtomicUsize::new(0),
+            advise: |_| {},
+        };
+        let digests = run_hashes(
+            &items,
+            32 << 20,
+            Threads::default(),
+            Some(&ahead),
+            |(index, byte)| {
+                if refuse {
+                    assert_eq!(std::thread::current().id(), caller);
+                }
+                seen[*index].fetch_add(1, Ordering::Relaxed);
+                if *index == 3 {
+                    crate::digest::Sha256::of_reader(Interrupted, crate::digest::Block::sized(1))
+                        .map(|digest| digest.hex())
+                } else {
+                    let bytes = vec![*byte; 4 << 20];
+                    crate::digest::Sha256::of_reader(
+                        bytes.as_slice(),
+                        crate::digest::Block::sized(bytes.len() as u64),
+                    )
                     .map(|digest| digest.hex())
-            } else {
-                let bytes = vec![*byte; 4 << 20];
-                crate::digest::Sha256::of_reader(
-                    bytes.as_slice(),
-                    crate::digest::Block::sized(bytes.len() as u64),
-                )
-                .map(|digest| digest.hex())
-            }
-        });
+                }
+            },
+        );
         assert_eq!(digests.len(), expected.len());
         for (index, digest) in digests.into_iter().enumerate() {
             if index == 3 {
@@ -1763,4 +1777,47 @@ fn a_file_fat32_cannot_hold_is_refused_before_it_is_copied() {
             other => panic!("{filesystem:?} {size}: {other:?}"),
         }
     }
+}
+
+static ASKED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn ask(path: &Path) {
+    ASKED.lock().unwrap().push(path.to_owned());
+}
+
+/// a worker taking a file asks the kernel for the next ones, each once, in order, and never one
+/// taken already, while workers tell their takes out of the order they were handed out.
+#[test]
+fn reading_ahead_asks_for_each_later_file_once() {
+    let items: Vec<PathBuf> = (0..READ_AHEAD * 3)
+        .map(|n| PathBuf::from(format!("f{n}")))
+        .collect();
+    let path: FilePath<'_, PathBuf> = &|item| Cow::Borrowed(item.as_path());
+    let ahead = ReadAhead {
+        items: &items,
+        path,
+        asked: AtomicUsize::new(0),
+        advise: ask,
+    };
+    ahead.took(0);
+    assert_eq!(ASKED.lock().unwrap().as_slice(), &items[1..=READ_AHEAD]);
+    for taken in (1..items.len() + 8).map(|taken| taken ^ 1) {
+        ahead.took(taken);
+    }
+    assert_eq!(ASKED.lock().unwrap().as_slice(), &items[1..]);
+}
+
+/// files just written are in memory, so nothing reads ahead of them.
+#[test]
+fn files_in_memory_are_not_read_ahead() {
+    let folder = TempDir::new().unwrap();
+    let items: Vec<PathBuf> = (0..20)
+        .map(|n| {
+            let path = folder.path().join(format!("f{n}"));
+            fs::write(&path, b"bytes").unwrap();
+            path
+        })
+        .collect();
+    let path: FilePath<'_, PathBuf> = &|item| Cow::Borrowed(item.as_path());
+    assert!(ReadAhead::when_cold(&items, path).is_none());
 }

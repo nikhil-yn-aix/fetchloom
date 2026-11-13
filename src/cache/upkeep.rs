@@ -599,8 +599,18 @@ impl Cache {
             unreadable: scan.unreadable,
             ..Checked::default()
         });
+        let path: crate::place::FilePath<'_, Object> =
+            &|object| std::borrow::Cow::Borrowed(object.path.as_path());
+        let ahead = crate::place::ReadAhead::when_cold(&objects, path);
         let verify = || {
-            while let Some(object) = objects.get(next.fetch_add(1, Ordering::Relaxed)) {
+            loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                if let Some(ahead) = &ahead {
+                    ahead.took(index);
+                }
+                let Some(object) = objects.get(index) else {
+                    break;
+                };
                 if stop.is_asked() {
                     break;
                 }

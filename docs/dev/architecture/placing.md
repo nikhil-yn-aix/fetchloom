@@ -124,6 +124,8 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 
 `place::run_hashes` shares these reads by both count and bytes: the larger of one worker per 64 files and one per 4 MiB, bounded by the actual files, available CPUs, eight workers and `FETCHLOOM_THREADS`. a ceiling of one or two keeps the original count-based choice, so lean does not add read buffers to a short list. an empty or single-worker group stays on the caller. a few large files can therefore use spare CPUs without sending every small check to a worker.
 
+on linux, when a read of up to 8 files spread through the list that may not wait for the disk finds a quarter of them out of memory, `place::ReadAhead` has each worker, as it takes a file, ask the kernel with `posix_fadvise(WILLNEED)` for those up to 256 past it not asked for yet, through an open that follows no link and waits on no fifo, so a cold disk has more reads waiting than there are workers; `cache verify` does the same for objects. it takes no thread and reads nothing into the process. on ext4 over nvme that gave `status --verify` and `cache verify` of 10,000 and 100,000 small files a third of their time; files in memory are not asked for, since the extra open cost a warm `cache verify` 43%.
+
 the shared runner returns results in file order and joins every worker before returning errors. a refused thread keeps its work for the caller. each active hash uses the existing size-aware read buffer, at most 1 MiB plus page alignment, and reads each file once; no whole file or extra file contents are retained. the hash, damage classification and progress accounting are unchanged.
 
 ## related

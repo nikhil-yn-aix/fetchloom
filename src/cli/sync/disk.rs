@@ -724,11 +724,20 @@ impl Survey {
                 ticker.advance(bytes);
             }
         };
-        let intact = place::run_hashes(&files, total, self.threads, |(path, placed)| {
-            let file = fs::File::open(root.join(path.as_str()))?;
-            let block = Block::sized(placed.look.size.saturating_add(1));
-            Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)
-        });
+        let path: place::FilePath<'_, (&String, &crate::project::state::Placed)> =
+            &|(path, _)| std::borrow::Cow::Owned(root.join(path.as_str()));
+        let ahead = place::ReadAhead::when_cold(&files, path);
+        let intact = place::run_hashes(
+            &files,
+            total,
+            self.threads,
+            ahead.as_ref(),
+            |(path, placed)| {
+                let file = fs::File::open(root.join(path.as_str()))?;
+                let block = Block::sized(placed.look.size.saturating_add(1));
+                Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)
+            },
+        );
         drop(shown);
         let mut changed = Vec::new();
         for ((path, placed), intact) in files.into_iter().zip(intact) {

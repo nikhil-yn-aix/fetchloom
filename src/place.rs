@@ -862,7 +862,7 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     cap: Threads,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
-    run_work(items, workers(items.len(), cap), job)
+    run_work(items, workers(items.len(), cap), None, job)
 }
 
 /// runs `job` on every item in order on up to [`THREADS`] workers, one per `per` items, for
@@ -877,21 +877,25 @@ pub(crate) fn run_coarse<T: Sync, R: Send>(
     run_work(
         items,
         cap.limit(threads.min(THREADS).min(items.len() / per.max(1))),
+        None,
         job,
     )
 }
 
-/// runs hashing work in item order, using bytes as well as file count to repay worker startup.
+/// runs hashing work in item order, using bytes as well as file count to repay worker startup,
+/// reading `ahead` of the workers when given.
 pub(crate) fn run_hashes<T: Sync, R: Send>(
     items: &[T],
     bytes: u64,
     cap: Threads,
+    ahead: Option<&ReadAhead<'_, T>>,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
     let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
     run_work(
         items,
         hash_workers(items.len(), bytes, processors, cap),
+        ahead,
         job,
     )
 }
@@ -909,9 +913,22 @@ fn hash_workers(items: usize, bytes: u64, processors: usize, cap: Threads) -> us
         .min(items)
 }
 
-fn run_work<T: Sync, R: Send>(items: &[T], threads: usize, job: impl Fn(&T) -> R + Sync) -> Vec<R> {
+fn run_work<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    ahead: Option<&ReadAhead<'_, T>>,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let take = |index: usize| {
+        if let Some(ahead) = ahead {
+            ahead.took(index);
+        }
+        items.get(index)
+    };
     if threads < 2 {
-        return items.iter().map(job).collect();
+        return (0..items.len())
+            .map_while(|index| take(index).map(&job))
+            .collect();
     }
     let next = AtomicUsize::new(0);
     let done: Vec<Vec<(usize, R)>> = std::thread::scope(|scope| {
@@ -922,7 +939,7 @@ fn run_work<T: Sync, R: Send>(items: &[T], threads: usize, job: impl Fn(&T) -> R
                     let mut done = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(item) = items.get(index) else {
+                        let Some(item) = take(index) else {
                             return done;
                         };
                         done.push((index, job(item)));
@@ -936,6 +953,100 @@ fn run_work<T: Sync, R: Send>(items: &[T], threads: usize, job: impl Fn(&T) -> R
             .collect()
     });
     in_order(items.len(), done.into_iter().flatten())
+}
+
+/// how many files past the one it takes a worker checking files asks the kernel to read, when
+/// they are out of memory: on ext4 over nvme, 256 gave `cache verify` and `status --verify` of
+/// 10,000 and 100,000 small files 0.32 to 0.41 of their time, where 64 gave 0.41 to 0.46.
+const READ_AHEAD: usize = 256;
+
+/// the path of an item's file, borrowed where the item holds one.
+pub(crate) type FilePath<'a, T> = &'a (dyn for<'x> Fn(&'x T) -> Cow<'x, Path> + Sync);
+
+/// asks the kernel to read the files of `items` the workers take next, so a cold disk has more
+/// reads waiting than there are workers: on each take, those up to [`READ_AHEAD`] past it not
+/// asked for yet. a hint, which reads nothing into the process and takes no thread.
+pub(crate) struct ReadAhead<'a, T> {
+    items: &'a [T],
+    path: FilePath<'a, T>,
+    /// the items before this one were asked for, or taken.
+    asked: AtomicUsize,
+    advise: fn(&Path),
+}
+
+impl<'a, T> ReadAhead<'a, T> {
+    /// reading ahead of `items` when [`cold`] finds them out of memory. in memory the hints gain
+    /// nothing, and an open for each cost `cache verify` 43% more time on tmpfs.
+    pub(crate) fn when_cold(items: &'a [T], path: FilePath<'a, T>) -> Option<Self> {
+        cold(items, path).then(|| ReadAhead {
+            items,
+            path,
+            asked: AtomicUsize::new(0),
+            advise,
+        })
+    }
+
+    /// asks for the files past `taken`, the item a worker just took.
+    pub(crate) fn took(&self, taken: usize) {
+        let upto = taken.saturating_add(1 + READ_AHEAD).min(self.items.len());
+        let from = self.asked.fetch_max(upto, Ordering::Relaxed).max(taken + 1);
+        for item in self.items.get(from..upto).unwrap_or_default() {
+            (self.advise)(&(self.path)(item));
+        }
+    }
+}
+
+/// asks the kernel to read the file at `path` into memory, without waiting for it.
+#[cfg(target_os = "linux")]
+fn advise(path: &Path) {
+    use rustix::fs::OFlags;
+    use std::os::unix::fs::OpenOptionsExt;
+    // a fifo would hold an open for reading until something wrote to it
+    if let Ok(file) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits().cast_signed())
+        .open(path)
+    {
+        let _ = rustix::fs::fadvise(&file, 0, None, rustix::fs::Advice::WillNeed);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn advise(_: &Path) {}
+
+/// whether a quarter or more of up to 8 files spread through `items` are out of memory, by a read
+/// of each that may not wait for the disk. a filesystem that cannot say, as tmpfs, holds them.
+#[cfg(target_os = "linux")]
+fn cold<T>(items: &[T], path: FilePath<'_, T>) -> bool {
+    use rustix::fs::OFlags;
+    use std::os::unix::fs::OpenOptionsExt;
+    let probes = items.len().min(8);
+    let mut out = 0;
+    for at in 0..probes {
+        let Ok(file) = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits().cast_signed())
+            .open(path(&items[at * items.len() / probes]))
+        else {
+            continue;
+        };
+        let mut byte = [0; 1];
+        let read = rustix::io::preadv2(
+            &file,
+            &mut [io::IoSliceMut::new(&mut byte)],
+            0,
+            rustix::io::ReadWriteFlags::NOWAIT,
+        );
+        if read == Err(rustix::io::Errno::AGAIN) {
+            out += 1;
+        }
+    }
+    out > 0 && out * 4 >= probes
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cold<T>(_: &[T], _: FilePath<'_, T>) -> bool {
+    false
 }
 
 /// `results`, each tagged with the index of its item among `count`, in the order of the items.
