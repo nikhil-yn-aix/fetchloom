@@ -18,6 +18,7 @@ use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::Project;
 use crate::project::state::{Look, State, nanos};
+use crate::settings::Level;
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::{name, units};
@@ -154,6 +155,22 @@ fn gather_folders<'p>(folders: &mut HashSet<&'p str>, path: &'p str) {
 /// where 2.4 to 12.1 MB took that thread's own heap 11 to 18 MiB more.
 const BESIDE_FROM: u64 = 16 << 20;
 
+/// the run's `resources` level, as its settings give it, by which a survey weighs memory against
+/// time.
+static LEVEL: OnceLock<Level> = OnceLock::new();
+
+/// sets the run's `resources` level once its settings are read.
+pub(crate) fn set_level(level: Level) {
+    let _ = LEVEL.set(level);
+}
+
+/// whether a survey reads a whole state of `size` bytes on a thread of its own while it walks the
+/// data folder: from `from` bytes on, unless the run keeps to one worker or is lean, which
+/// spends memory before time.
+fn beside(size: u64, from: u64, threads: Threads, level: Level) -> bool {
+    size >= from && threads.limit(2) >= 2 && level != Level::Lean
+}
+
 impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
@@ -189,11 +206,12 @@ impl Survey {
         threads: Threads,
         stop: &Stop,
     ) -> Result<Survey, Error> {
-        Self::surveyed_from(project, data_dir, within, threads, stop, BESIDE_FROM)
+        let level = LEVEL.get().copied().unwrap_or_default();
+        Self::surveyed_from(project, data_dir, within, threads, stop, BESIDE_FROM, level)
     }
 
     /// [`Survey::surveyed`], reading a whole state of `beside_from` bytes or more on a thread of
-    /// its own while it walks the data folder, unless the run keeps to one worker.
+    /// its own while it walks the data folder, as [`beside`] decides for `threads` and `level`.
     fn surveyed_from(
         project: &Project,
         data_dir: &str,
@@ -201,6 +219,7 @@ impl Survey {
         threads: Threads,
         stop: &Stop,
         beside_from: u64,
+        level: Level,
     ) -> Result<Survey, Error> {
         let started = nanos(SystemTime::now());
         let within = within.map(|folders| outermost(data_dir, folders));
@@ -213,7 +232,7 @@ impl Survey {
         } else {
             let opened = project.open_state();
             let size = opened.as_ref().map_or(0, |(_, found)| found.size);
-            if size >= beside_from && threads.limit(2) >= 2 {
+            if beside(size, beside_from, threads, level) {
                 let mut opened = Some(opened);
                 std::thread::scope(|scope| {
                     let reading = crate::threads::scoped(scope, move || {

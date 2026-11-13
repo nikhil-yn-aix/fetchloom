@@ -146,13 +146,15 @@ fn a_state_read_beside_the_walk_is_the_same_survey() {
     let project = recorded_project(dir.path());
     let survey = |beside_from| {
         let stop = Stop::default();
+        let threads = Threads::default();
         Survey::surveyed_from(
             &project,
             "data",
             None,
-            Threads::default(),
+            threads,
             &stop,
             beside_from,
+            Level::Default,
         )
         .unwrap()
     };
@@ -172,16 +174,55 @@ fn a_state_read_beside_the_walk_is_the_same_survey() {
     }
 }
 
-/// a run kept to one worker reads the state on its own thread, however large.
+/// the run's cap on workers, as `FETCHLOOM_THREADS` sets it, or none.
+fn capped(cap: &str) -> Threads {
+    Threads::read(&|_| (!cap.is_empty()).then(|| cap.into())).unwrap()
+}
+
+/// a run kept to one worker, and a lean run, which spends memory before time, read the state on
+/// their own thread, however large.
 #[test]
-fn one_worker_reads_the_state_itself() {
+fn one_worker_or_lean_reads_the_state_itself() {
     let dir = tempfile::tempdir().unwrap();
     let project = recorded_project(dir.path());
-    let one = Threads::read(&|_| Some("1".into())).unwrap();
-    let _counting = crate::threads::refuse_after(usize::MAX);
-    let survey = Survey::surveyed_from(&project, "data", None, one, &Stop::default(), 0).unwrap();
-    assert_eq!(survey.state.files.len(), 4);
-    assert_eq!(crate::threads::spawns_left(), Some(usize::MAX));
+    for (cap, level) in [("1", Level::Default), ("", Level::Lean), ("2", Level::Lean)] {
+        let _counting = crate::threads::refuse_after(usize::MAX);
+        let stop = Stop::default();
+        let survey =
+            Survey::surveyed_from(&project, "data", None, capped(cap), &stop, 0, level).unwrap();
+        assert_eq!(survey.state.files.len(), 4);
+        assert_eq!(
+            crate::threads::spawns_left(),
+            Some(usize::MAX),
+            "{cap:?} {level}"
+        );
+    }
+}
+
+/// a whole state is read beside the walk from its size on, with two workers or more, at the
+/// default and max levels, never at lean.
+#[test]
+fn a_state_is_read_beside_the_walk_unless_lean_or_one_worker() {
+    let from = 16 << 20;
+    for (size, cap, level, read_beside) in [
+        (0, "", Level::Max, false),
+        (from - 1, "", Level::Default, false),
+        (from, "", Level::Default, true),
+        (from, "", Level::Max, true),
+        (u64::MAX, "8", Level::Max, true),
+        (from, "2", Level::Default, true),
+        (from, "1", Level::Default, false),
+        (from, "1", Level::Max, false),
+        (from, "", Level::Lean, false),
+        (from, "2", Level::Lean, false),
+        (u64::MAX, "8", Level::Lean, false),
+    ] {
+        assert_eq!(
+            beside(size, from, capped(cap), level),
+            read_beside,
+            "{size} bytes, cap {cap:?}, {level}"
+        );
+    }
 }
 
 fn record(root: &Path, path: &str, bytes: &[u8], method: Method) -> crate::project::state::Placed {

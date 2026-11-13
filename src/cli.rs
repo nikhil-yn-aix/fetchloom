@@ -563,6 +563,16 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
     })
 }
 
+/// hands the settings that work deep inside a run reads to it, once a run has read them.
+fn share(settings: &Settings, threads: Threads) {
+    crate::cache::set_hash_batches(settings.hash_batches());
+    crate::cache::set_hash_workers(threads.limit(settings.hash_workers()));
+    crate::source::set_most_files(settings.most_files.value);
+    crate::project::lock::set_room(settings.machine.container_room());
+    crate::archive::set_limits(settings.archive_limits());
+    sync::disk::set_level(settings.resources.value);
+}
+
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let _ = TYPED.set(std::env::args_os().skip(1).collect());
@@ -651,11 +661,7 @@ pub(crate) fn run() -> ExitCode {
             if let Some(threads) = settings.threads {
                 context.threads = context.threads.at_most(threads.value);
             }
-            crate::cache::set_hash_batches(settings.hash_batches());
-            crate::cache::set_hash_workers(context.threads.limit(settings.hash_workers()));
-            crate::source::set_most_files(settings.most_files.value);
-            crate::project::lock::set_room(settings.machine.container_room());
-            crate::archive::set_limits(settings.archive_limits());
+            share(&settings, context.threads);
             context.settings = settings;
         }
         Err(error) => return finish::<()>(&context, name, Err(error), started),
