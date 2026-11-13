@@ -67,6 +67,7 @@ start with one named test in the module, then widen to these filters, from the r
 | [.github](https://github.com/nikhil-yn-aix/fetchloom/tree/main/.github) | CI and release workflows, for linux, windows and macos on x86_64 and arm64 |
 | [bench](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md) | the linux benchmark runner, native client adapters, public-service comparisons and result rendering |
 | [docs](../README.md) | the [user guide](../user/README.md) and this guide |
+| [docs-site](https://github.com/nikhil-yn-aix/fetchloom/tree/main/docs-site) | the documentation site's pinned toolchain, its theme and the old addresses that redirect; `zensical.toml` configures the site |
 | [python](https://github.com/nikhil-yn-aix/fetchloom/tree/main/python) | a typed subprocess wrapper around `fetchloom --json` and its unittest cases; no rust bindings |
 | [src](https://github.com/nikhil-yn-aix/fetchloom/tree/main/src) | the crate, its executable entry point and module tests, file by file in the [code map](architecture/codemap.md) |
 | [tests](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests) | real-binary CLI tests, captured source responses, archive fixtures and output snapshots |

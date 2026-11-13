@@ -96,9 +96,6 @@ jobs:
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      MDBOOK_VERSION: 0.5.4
-      MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,28 +106,30 @@ jobs:
           python3 -m unittest discover -s python -p test_site.py
           python3 -m unittest discover -s python -p test_ci.py
           python3 -m unittest discover -s python -p test_snapshots.py
-      - name: install mdbook
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         if: always()
-        run: |
-          archive="mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/$archive" \
-            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/$archive"
-          echo "$MDBOOK_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
-          mkdir -p "$RUNNER_TEMP/mdbook"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/mdbook" mdbook
-          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+        with:
+          version: 0.13.7
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+          enable-cache: false
+      - name: install the site's toolchain
+        if: always()
+        run: uv sync --locked --project docs-site
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         if: always()
         with:
           tool: lychee@0.24.2
       - name: build the site and agent exports
         if: always()
-        run: python3 python/build_site.py --dest-dir site/fetchloom
+        run: uv run --locked --project docs-site python python/build_site.py
       - name: check rendered links and anchors
         if: always()
         run: |
-          test -s site/fetchloom/index.html
-          lychee --offline --include-fragments=anchor-only --no-ignore --root-dir "$GITHUB_WORKSPACE/site" 'site/fetchloom/**/*.html'
+          test -s site/index.html
+          # the 404 page links /fetchloom/..., where pages serves the site
+          mkdir -p "$RUNNER_TEMP/pages"
+          ln -s "$GITHUB_WORKSPACE/site" "$RUNNER_TEMP/pages/fetchloom"
+          lychee --offline --include-fragments=anchor-only --no-ignore --index-files index.html --root-dir "$RUNNER_TEMP/pages" 'site/**/*.html'
 
   artifacts:
     uses: $/.github/workflows/artifacts.yml

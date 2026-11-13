@@ -124,7 +124,7 @@ cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers
 cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_and_get_take -- --exact
 ```
 
-the second test checks a documentation option sentence against `add` and `get` help. `tests/cli/docs.rs` checks the rest of the user documentation against `help --json`: every option of every command is on its command page, every `fetchloom` line in a fenced shell example names a real command and real options, and every `FETCHLOOM_` setting the code reads is in the environment reference, while every setting the user docs name is read by fetchloom or its installers, and the agent skill and llms.txt name every command and option, each option on a line that names its command. a renamed or new option therefore fails the suite until its page changes too. it also checks that the [code map](../architecture/codemap.md) has a row for every file under `src/` that is not a test, and none for a file that is gone. `python/test_docs.py` checks that links reach their files and headings, and that SUMMARY.md, the user guide index and llms.txt each list every user page, since a page SUMMARY.md leaves out is never published. markdown transcripts are not executed. use `-- --list` with a filter when checking the test's exact name; a zero-test run is not coverage.
+the second test checks a documentation option sentence against `add` and `get` help. `tests/cli/docs.rs` checks the rest of the user documentation against `help --json`: every option of every command is on its command page, every `fetchloom` line in a fenced shell example names a real command and real options, and every `FETCHLOOM_` setting the code reads is in the environment reference, while every setting the user docs name is read by fetchloom or its installers, and the agent skill and llms.txt name every command and option, each option on a line that names its command. a renamed or new option therefore fails the suite until its page changes too. it also checks that the [code map](../architecture/codemap.md) has a row for every file under `src/` that is not a test, and none for a file that is gone. `python/test_docs.py` checks that links reach their files and headings, that SUMMARY.md, the user guide index and llms.txt each list every user page, since a page SUMMARY.md leaves out is never published, and that a nested list, or a block inside a list item, sits four spaces past its item's marker, since the site's markdown otherwise takes it out of the item. markdown transcripts are not executed. use `-- --list` with a filter when checking the test's exact name; a zero-test run is not coverage.
 
 ### update snapshots
 
@@ -168,6 +168,17 @@ cargo test --locked -- --ignored
 ```
 
 on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest discover -s python` when python 3.10 or later is on PATH. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. 22 ignored rust tests, each named `live_` with the hosts it talks to in its ignore reason, need working DNS, HTTPS and access to public records at zenodo, figshare, dataverse, dryad, mendeley data, OSF, hugging face, kaggle, doi.org, github, gitlab, ENA, GEO, dandi, openneuro, google drive, dropbox, s3, google cloud storage and azure blob storage. all but two construct clients without credentials: the kaggle competition test uses a kaggle key when one is found, and the private drive test reads the folder `FETCHLOOM_TEST_LIVE_DRIVE_FOLDER` names with google application default credentials; each skips without them and says so. allow time for real network retries and service rate limits; an unavailable or changed upstream record can fail them. Cargo's `--offline` only disables dependency downloads; it does not make live tests offline. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
+
+### the documentation site
+
+[uv](https://docs.astral.sh/uv/) installs the site's toolchain, pinned in `docs-site/uv.lock`, then the builder writes the site into `site/`:
+
+```sh
+uv sync --locked --project docs-site
+uv run --locked --project docs-site python python/build_site.py
+```
+
+the first build downloads mermaid from npm into `docs-site/.cache`. `uv run --locked --project docs-site zensical serve` previews the pages as you edit them, without what the builder adds after zensical: mermaid and the pages at old addresses. [CI](ci.md#documentation-site) runs the same build and checks.
 
 ### installed package checks
 

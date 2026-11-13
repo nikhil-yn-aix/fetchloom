@@ -92,11 +92,11 @@ every apt install in CI and release goes through `.github/scripts/apt-install.sh
 
 ## documentation site
 
-the required docs job runs the existing python markdown file, heading and sidebar checks, builds with mdBook 0.5.4, and checks generated HTML links and anchors with lychee 0.24.2 offline. it renders under `site/fetchloom/` so absolute `/fetchloom/` paths resolve against the local site root. missing HTML or local targets fail. external service availability is not part of this offline check.
+the required docs job runs the python markdown file, heading, sidebar and list-indent checks and the site builder's tests. it installs uv 0.13.7, pinned by its checksum, and the site's toolchain from `docs-site/uv.lock` with `uv sync --locked`: zensical 0.1.1 and what it needs, each pinned with its hashes. it builds the site into `site/`, then checks the HTML links and anchors with lychee 0.24.2 offline, with `--index-files index.html` since each page is a folder's `index.html`. the 404 page links `/fetchloom/...`, where pages serves the site, so lychee's root holds `site/` as `fetchloom`. missing HTML or local targets fail. external service availability is not part of this offline check.
 
-`python/build_site.py` is the shared builder for CI and `.github/workflows/pages.yml`. it runs mdBook and writes the same `llms.txt`, `llms-full.txt` and skills exports. `book.toml` and `docs/SUMMARY.md` still own the site layout. default preprocessors stay off, so README.md becomes README.html.
+`python/build_site.py` is the shared builder for CI and `.github/workflows/pages.yml`. it runs `zensical build --strict`, which fails on a broken link or anchor, then finishes the site: it adds mermaid, downloaded from npm and checked against the integrity npm publishes, writes a page at each address of `docs-site/redirects.txt` that sends a visitor on to the page's address with the `#fragment` they came with, and writes the `llms.txt`, `llms-full.txt` and skills exports. `zensical.toml` and `docs/SUMMARY.md`, one nested list, own the layout; a folder's README.md is its section's page, at the folder's address.
 
-pages remains the only deploying workflow. it builds the default branch and adds the signed apt repository from the latest published release before deploying the complete site. PR checks receive no apt key, pages-write or OIDC permission. [releasing](releasing.md#apt-repository) describes that publication boundary.
+pages remains the only deploying workflow. it builds the default branch the same way and adds the signed apt repository from the latest published release before deploying the complete site. PR checks receive no apt key, pages-write or OIDC permission. [releasing](releasing.md#apt-repository) describes that publication boundary.
 
 ## scheduled deep checks
 

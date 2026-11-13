@@ -1,0 +1,59 @@
+# the documentation site: zensical builds docs/ into site/ in the order docs/SUMMARY.md gives;
+# python/build_site.py adds what the site serves beside it
+[project]
+site_name = "fetchloom"
+site_description = "uv for research data: a manifest, a lock and one shared cache"
+site_url = "https://nikhil-yn-aix.github.io/fetchloom/"
+repo_url = "https://github.com/nikhil-yn-aix/fetchloom"
+repo_name = "nikhil-yn-aix/fetchloom"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+site_dir = "site"
+use_directory_urls = true
+# the navigation, not a page
+exclude_docs = """
+/SUMMARY.md
+"""
+
+[project.extra]
+generator = false
+
+[project.plugins.literate-nav]
+nav_file = "SUMMARY.md"
+
+[project.plugins.search]
+
+[project.theme]
+custom_dir = "docs-site/theme"
+language = "en"
+font = false
+features = [
+  "content.action.edit",
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.tabs",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle = { icon = "lucide/moon", name = "dark colors" }
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle = { icon = "lucide/sun", name = "light colors" }
+
+# only what the pages use, so nothing renders unlike github; heading ids are github's
+[project.markdown_extensions]
+tables = {}
+toc = { permalink = true, slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } } }
+"pymdownx.highlight" = { pygments_lang_class = true }
+"pymdownx.superfences" = { custom_fences = [{ name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }] }

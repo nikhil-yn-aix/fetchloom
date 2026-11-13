@@ -3,6 +3,9 @@ __fuzz__/
 __pycache__/
 /.cargo/config.toml
 /site
+/.cache/
+/docs-site/.venv/
+/docs-site/.cache/
 /.release/
 /.release-test/
 /THIRD-PARTY-LICENSES

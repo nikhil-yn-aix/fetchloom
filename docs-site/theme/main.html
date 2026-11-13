@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block scripts %}
+  {% if page and page.content and 'class="mermaid"' in page.content %}
+    <script src="{{ 'assets/javascripts/mermaid.tiny.js' | url }}"></script>
+  {% endif %}
+  {{ super() }}
+{% endblock %}

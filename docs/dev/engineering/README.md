@@ -46,6 +46,7 @@ CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a 
 | `cargo deny --locked check advisories licenses bans sources` | dependency changes and the CI dependency policy |
 | `python3 -m unittest discover -s python` | python wrapper arguments and report handling; use `py -3` on windows |
 | `python3 -m unittest discover -s bench` | benchmark runner, checks and report rendering |
+| `uv run --locked --project docs-site python python/build_site.py` | build the documentation site; [the documentation site](building-and-testing.md#the-documentation-site) has the rest |
 | `cargo test --locked -- --ignored` | live service checks; [details](building-and-testing.md#python-and-live-tests) |
 | `cargo test --locked --lib fuzz_` | parser fuzz properties in their ordinary test mode |
 
