@@ -36,6 +36,7 @@ every change measured with the current harness, one row each: what it gained whe
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | flushing | flush groups of finished downloads sized to a quarter of the open-file limit, at most 256 | `add -i` of 1,000 links under a hard limit of 256 open files: exit 50 to 0, at most 117 files open; at the default limit groups of 256 as before, 1.000 glibc, 0.987 musl | kept, for correctness | [low open-file limit](#flush-groups-under-a-low-open-file-limit-2026-11-12) |
 | flushing | the first 64 files of every batch flushed on their own | ext4 s1 1.078, peak memory 1.151 | dropped | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
+| flushing | a run of up to 64 files flushed with one `syncfs` while the system holds under 16 MiB of unwritten data | always one `syncfs` on an idle slow device: import of 32 files 0.331, zip of 32 0.820, 32 links 0.947; on the busy os disk 0.647, 1.168 and 2.097; the 16 MiB rule never found this machine quiet, 0.977 to 1.047 | dropped: no signal says which filesystem holds the unwritten data | [slow device](#flush-groups-on-a-slow-device-2026-11-13) |
 | archives | budget an explicit thread cap only for pending readers | xfs time 0.689 glibc / 0.703 musl; small musl +2.03 MiB, within the default budget | kept, reported memory cost | [reader budgets](#pending-archive-reader-budgets-2026-11-12) |
 | archives | archive staging spread over 16 folders | ext4 s4 0.798, xfs s4 0.830 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | archives | no-replace rename for new objects | ext4 s4 1.090 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -600,6 +601,25 @@ so lean pays 1.08 to 1.15 times on most local work and about 2 to 6.6 times wher
 glibc and musl release builds of bec45367, interleaved rounds after a warmup under the measure lock on cores 12-23. projects and caches on tmpfs, so flushes cost nothing; links from a local server on tmpfs, the zip and the 1 GiB file from the nvme disk's page cache. the copied 100,000-file and large projects were synced once by this build before the runs, since a state from before the [indexed format](#an-indexed-project-state-2026-11-12) reads as empty, and every file would be hashed. rounds with more than 12 other cores busy are left out; the settled sync and `cache verify` lost most rounds to load, and all 40 of each give the same answer: lean 1.095 [1.062, 1.122] and 1.963 [1.927, 1.987], max 1.003 and 1.009.
 
 every level's folders had names of one length. in a first pass they did not, and a project path five letters longer alone cost 3.3 MiB at the peak of the sync of 40,000 datasets, 1.023 [1.022, 1.026] for the same build without a level, enough to fake a 2 to 3% memory saving for both other levels. against the audit's pass on efbf3adf, whose levels shared one folder, every time ratio here is within its interval or at most 5% from it. the memory ratios overlap its intervals but three: max's on 1,000 local links on glibc, 1.318 then and 1.274 now; lean's on `cache verify`, 1.000 and 0.985; and lean's on the large files' verification, 0.621 and 0.673, where both levels' peaks rose by about 2 MiB. so nothing since has moved what the levels trade by more than that.
+
+## flush groups on a slow device, 2026-11-13
+
+a run of up to 64 files is flushed one file at a time, since one `syncfs` also waits for everything other programs left unwritten on the filesystem ([busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09)). on a slow device that holds nothing else, one `syncfs` would be far cheaper. this asked whether a rule can tell the two apart.
+
+one experiment build chose the run size below which files flush alone at run time, `FETCHLOOM_EXP_FLUSH_ALONE`: 64 as now, 0 for one `syncfs` always, or `quiet`, one `syncfs` only when /proc/meminfo's `Dirty` and `Writeback` add up to less than 16 MiB as the run starts. with one `syncfs`, an import of 32 files made 18 fsyncs and one `syncfs` instead of 50 fsyncs, and so did 32 links; a zip of 32 made 21 and two instead of 54. a sync placing 32 files made 3 fsyncs either way, since its placements are links to objects already flushed, so it was not timed.
+
+| run, project and cache on the device | rounds | one `syncfs` [95%] | `quiet` [95%] |
+|---|---:|---|---|
+| import of 32 files of 4 KiB, slow device | 15 | 0.331 [0.307, 0.333], 784 to 212 ms | 0.993 [0.979, 1.005] |
+| `add` of a zip of 32 members of 4 KiB, slow device | 15 | 0.820 [0.813, 0.820] | 0.999 [0.996, 1.005] |
+| `add -i` of 32 links of 90 to 110 kB, slow device | 15 | 0.947 [0.944, 0.957] | 1.001 [0.984, 1.004] |
+| the import, busy os disk | 20 | 0.647 [0.547, 0.759] | 1.024 [0.985, 1.064] |
+| the zip, busy os disk | 20 | 1.168 [1.025, 1.239] | 1.047 [0.915, 1.094] |
+| the links, busy os disk | 20 | 2.097 [1.848, 2.577], 232 to 515 ms | 0.977 [0.869, 1.056] |
+
+the slow device is a 2 GiB ext4 image of mine on dm-delay, 2 ms a read, 2 ms a write and 8 ms a flush, behind a loop device with direct I/O on the nvme disk, with nothing else on it. the os disk is the network disk the earlier busy case came from, which the kernel reports as rotational, with other users writing to it. glibc, interleaved rounds after a warmup under the measure lock on cores 12-23, the sources and the link server on tmpfs. other users' load flagged a quarter of the rounds; these ratios keep them, and the clean rounds alone give the same picture.
+
+so one `syncfs` saves up to two thirds where nothing else waits to be written, and on the busy disk it made the links twice as slow. the `quiet` rule never chose it on the slow device, where none of its 15 imports came near 210 ms: the two runs whose record survives saw 111 and 125 MiB of other users' unwritten data, and sampled every 5 s over a minute that ranged from 5 to 1,294 MiB. a higher bar would choose one `syncfs` on the busy disk too, since nothing unprivileged says which filesystem holds the data: the per-device writeback counts are in debugfs, and ext4's count of delayed blocks covers ext4 alone. dropped; runs of up to 64 files still flush alone.
 
 ## pending archive reader budgets, 2026-11-12
 
