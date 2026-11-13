@@ -23,11 +23,11 @@ fetchloom drop [options] <path>...
 
 1. find the files data.lock places at each path, from what this machine recorded about each archive.
 2. write a pattern for each file into `data.toml`, escaped so it matches that file alone:
-   - a file inside an archive gets its path inside the archive, in the archive's [members table](../reference/data-toml.md#files-inside-archives). in a dataset that is one archive, that path starts with the folder all its files share, which placing leaves out.
-   - an archive that a table under a [glob key](../reference/data-toml.md#one-table-for-many-shards) covers gets a table of its own, copied from the glob's, before the new pattern goes in, so the pattern leaves out a file of that archive alone and the archive keeps what the glob chose.
-   - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too, rewritten as relocking the same listing would, so `sync --locked` takes it and nothing is resolved again.
-   - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
-   - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
+    - a file inside an archive gets its path inside the archive, in the archive's [members table](../reference/data-toml.md#files-inside-archives). in a dataset that is one archive, that path starts with the folder all its files share, which placing leaves out.
+    - an archive that a table under a [glob key](../reference/data-toml.md#one-table-for-many-shards) covers gets a table of its own, copied from the glob's, before the new pattern goes in, so the pattern leaves out a file of that archive alone and the archive keeps what the glob chose.
+    - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too, rewritten as relocking the same listing would, so `sync --locked` takes it and nothing is resolved again.
+    - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
+    - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
 3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning. a dataset with `place = false` has none to delete.
 
 stderr when the curator drops a broken image from a dataset that is one zip, `pets.zip`:

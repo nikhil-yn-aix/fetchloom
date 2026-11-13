@@ -46,6 +46,35 @@ def anchors(page):
     return found
 
 
+def nested_too_shallow(page):
+    """yields (line number, line) for each line python-markdown, which builds the site, takes out of
+    the list item above it: a nested item, or a block after a blank line or a code fence, indented
+    less than four spaces past that item's marker. github keeps such a line in the item."""
+    items, blank, fence = [], True, None
+    for number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence:
+            if marker and marker[1][0] == fence:
+                fence = None
+            continue
+        if not line.strip():
+            blank = True
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        item = re.match(r" *([-*+]|\d{1,9}[.)]) +\S", line)
+        parents = [at for at in items if at < indent]
+        shallow = bool(parents) and indent < parents[-1] + 4 and bool(item or marker or blank)
+        if shallow:
+            yield number, line
+        elif item:
+            items = parents + [indent]
+        elif not indent and (blank or line.startswith("#")):
+            items = []
+        if marker:
+            fence = marker[1][0]
+        blank = False
+
+
 class Readers(unittest.TestCase):
     """what the checks below read from a page, on small pages."""
 
@@ -70,6 +99,21 @@ class Readers(unittest.TestCase):
                          "## données é\n```\n# not a heading\n```\n## local changes\n## local changes\n#hashtag\n")
         self.assertEqual(anchors(page), {"getting-started", "the-sync-command", "local-changes", "whats-new", "a--b",
                                          "données-é", "local-changes-1", "local-changes-2"})
+
+
+    def test_lines_python_markdown_takes_out_of_their_list_item(self):
+        page = self.page("1. step\n   - nested at three\n    - nested at four\n2. step\n\n   ```sh\n   fetchloom sync\n"
+                         "   ```\n\n    ```sh\n    x\n    ```\nlazy continuation\n\na paragraph ends the list\n\n"
+                         "  - a list of its own\n     - nested at three past it\n")
+        self.assertEqual([number for number, _ in nested_too_shallow(page)], [2, 6, 18])
+
+
+class Rendering(unittest.TestCase):
+    def test_lists_nest_as_the_site_reads_them(self):
+        for page in sorted((ROOT / "docs").rglob("*.md")):
+            with self.subTest(page=page.relative_to(ROOT).as_posix()):
+                self.assertEqual(list(nested_too_shallow(page)), [],
+                                 "indent a nested list or block four spaces past its item's marker")
 
 
 class DocumentationLinks(unittest.TestCase):

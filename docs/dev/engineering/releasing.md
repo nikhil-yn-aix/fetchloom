@@ -95,10 +95,10 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 3. watch the workflow with `gh run watch`. if it fails, fix the cause before retrying. a failed prerequisite does not create a release. retag only an unpublished failed release; published version tags must remain stable.
 4. inspect the draft's archives, debian packages, wheels, installers and checksums. download and check provenance:
 
-   ```sh
-   gh release download v0.1.0 --pattern '*.tar.gz' --dir check
-   gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
-   ```
+    ```sh
+    gh release download v0.1.0 --pattern '*.tar.gz' --dir check
+    gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
+    ```
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
 6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version`, `fl --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.

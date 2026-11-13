@@ -75,11 +75,11 @@ fetchloom signs its own request for a token with the key, for the `drive.readonl
 4. under clients, make a client of type desktop app, and download its JSON file.
 5. sign in through it:
 
-   ```sh
-   gcloud auth application-default login --client-id-file=client_secret.json --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform
-   ```
+    ```sh
+    gcloud auth application-default login --client-id-file=client_secret.json --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform
+    ```
 
-   google warns that it has not verified the app. it is your own, so go on. `cloud-platform` keeps the same login working for [private cloud storage buckets](buckets.md#private-cloud-storage-buckets) and other google cloud tools.
+    google warns that it has not verified the app. it is your own, so go on. `cloud-platform` keeps the same login working for [private cloud storage buckets](buckets.md#private-cloud-storage-buckets) and other google cloud tools.
 
 an external app left in testing gets logins that google ends after 7 days, by its [rules for refresh tokens](https://developers.google.com/identity/protocols/oauth2#expiration). to keep yours, publish the app under audience. google does not ask to [verify](https://support.google.com/cloud/answer/13464323) an app for personal use with fewer than 100 users; you only see the warning when you sign in. an internal app has neither limit.
 
