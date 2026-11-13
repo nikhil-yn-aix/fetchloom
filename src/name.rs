@@ -334,13 +334,15 @@ fn distance(a: &str, b: &str) -> usize {
 
 /// the file types a generated name leaves out, in lowercase: data, archives, documents, images,
 /// sound, video and models. any other part after a dot stays, as the dots of `1706.03762v7` do.
-const FILE_TYPES: &str = "7z arrow avi avro bam bed bib bin bmp bz2 cif ckpt cram csv dat \
-    data db dcm djvu doc docx dta edf eps epub fa faa fasta fastq feather fits flac fna fq \
-    geojson gff gguf gif gpkg gtf gz h5 h5ad hdf hdf5 htm html ipynb joblib jpeg jpg json \
-    jsonl lz4 lzma m4a mat md mgz mkv mov mp3 mp4 msgpack mzml nc ndjson nii npy npz odp ods \
-    odt ogg onnx orc parquet pdb pdf pickle pkl png ppt pptx ps pt pth rar rda rdata rds \
-    safetensors sam shp sql sqlite svg tar tex tfrecord tfrecords tgz tif tiff tsv txt \
-    txz vcf wav webm webp xls xlsx xml xz yaml yml zip zst";
+const FILE_TYPES: &str = "7z arrow avi avro bam bdf bed bib bin bmp bz2 cel cif ckpt cram csv \
+    czi dat data db dcm djvu doc docx dta edf eps epub fa faa fasta fastq fdt feather fif fits \
+    flac fna fq geojson gff gguf gif gii gpkg grib grib2 gtf gz h5 h5ad hdf hdf5 htm html idat \
+    ipynb joblib jpeg jpg json jsonl jsonld kml kmz las laz loom lz4 lzma m4a mat md mgz mkv mol \
+    mol2 mov mp3 mp4 mrc msgpack mtx mzml nc nc4 ndjson nii npy npz nwb obj obo odp ods odt \
+    ogg onnx orc owl parquet pdb pdf pickle pkl ply png por ppt pptx ps pt pth rar rda rdata rdf \
+    rds root safetensors sam sas7bdat sav sdf shp snirf sql sqlite stl svg svs tab tar tex \
+    tfrecord tfrecords tgz tif tiff tsv ttl txt txz vcf vhdr vmrk wav webm webp xls xlsx xml xpt \
+    xyz xz yaml yml zip zst";
 
 /// `name` without its last part after a dot, when that is a known file type. a name whose only
 /// dot starts it, as `.hidden`, has none.
@@ -752,6 +754,10 @@ mod tests {
             ("1706.03762v7", "1706.03762v7", "1706-03762v7"),
             ("1706.03762v7.pdf", "1706.03762v7", "1706-03762v7"),
             ("2024.05.csv", "2024.05", "2024-05"),
+            ("sub-RAT123.nwb", "sub-RAT123", "sub-rat123"),
+            ("manifest.ttl", "manifest", "manifest"),
+            ("events.root", "events", "events"),
+            ("survey.sav", "survey", "survey"),
             ("report.final.pdf", "report.final", "report-final"),
             ("python3.11", "python3.11", "python3-11"),
             ("notes.tar", "notes", "notes"),
