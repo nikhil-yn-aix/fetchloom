@@ -274,6 +274,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/output/progress.rs` | progress while work runs: byte bars, waits, the steps before a command's work and item counts, as bars on a terminal a person watches and plain lines now and then anywhere else | `Bar`, `Ticker` | `Wait`, `Setup`, `start`, `advance`, `sized` |
 | `src/output/picker.rs` | the arrow-key dataset choice and its cancellation, and the numbered choice of accessible output | `choose` | `numbered`, `selection_key`, `row` |
 | `src/output/fit.rs` | lines wrapped to the terminal, and help examples continued as a shell reads them | `fit` | `example`, `MARK` |
+| `src/output/raw.rs` | a question's hold on its terminal: raw from before the prompt until the answer, so no typed key is echoed, and put back on every way out | `question` | `release` |
 | `src/output/warning.rs` | each warning's `kind`, which `--json` names so a script can act without reading words, held to the JSON reference by a test | `Warning` | `Warning::name` |
 
 ## primitives

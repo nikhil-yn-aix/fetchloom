@@ -55,6 +55,8 @@ pub fn main() -> std::process::ExitCode {
     HOOK.call_once(|| {
         let rust = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
+            // a release build aborts at once, so a question's hold on the terminal goes first
+            output::release_terminal();
             eprintln!(
                 "fetchloom stopped on a bug of its own, not anything you did. please report it at \
                  {} with the command you ran and the output of `fetchloom --version -v`. what it \

@@ -3,6 +3,7 @@
 mod fit;
 mod picker;
 mod progress;
+mod raw;
 #[cfg(test)]
 pub(crate) mod screen;
 mod style;
@@ -911,6 +912,11 @@ impl Output {
     /// no pipe brings it. a person sees `prompt`, then the masked key once enter ends it; `--json`
     /// writes nothing on stderr.
     pub(crate) fn read_hidden(&self, prompt: &str) -> Result<String, Error> {
+        raw::question(|| self.hidden(prompt))
+    }
+
+    /// [`Output::read_hidden`] at a terminal held for it.
+    fn hidden(&self, prompt: &str) -> Result<String, Error> {
         let terminal = console::Term::stderr();
         let tone = paint(self.style.color, accent().bold());
         let label = format!("{tone}{prompt:>11}{tone:#} ");
@@ -1143,7 +1149,7 @@ impl Output {
             let _ = bars.clear();
             bars.set_draw_target(ProgressDrawTarget::hidden());
         }
-        let answer = ask();
+        let answer = raw::question(ask);
         if let Some(bars) = &self.bars {
             bars.set_draw_target(progress::terminal());
         }
@@ -1222,9 +1228,11 @@ impl Output {
         }
     }
 
-    /// clears the bars and shows the cursor again, for a run that ends at once, as at a second
-    /// ctrl-c, so it leaves the terminal as it found it.
+    /// puts back the mode a question holds the terminal in, clears the bars and shows the cursor
+    /// again, for a run that ends at once, as at a second ctrl-c, so it leaves the terminal as it
+    /// found it.
     pub(crate) fn abandon(&self) {
+        raw::release();
         if let Some(bars) = &self.bars {
             let _ = bars.clear();
             bars.set_draw_target(ProgressDrawTarget::hidden());
@@ -1366,6 +1374,12 @@ pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
             .replace('\u{203a}', ">")
             .replace('\u{2501}', "-"),
     )
+}
+
+/// puts the terminal back as a question found it, for a crash, which ends the run before the
+/// question lets go of it.
+pub(crate) fn release_terminal() {
+    raw::release();
 }
 
 /// the width of the terminal stderr goes to, which a line told there wraps at between words, or
