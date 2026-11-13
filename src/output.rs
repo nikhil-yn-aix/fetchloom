@@ -1050,12 +1050,13 @@ impl Output {
         // encoding can fail on a non-unicode path; stdout cannot retract a partial document
         let encoded = if self.indented {
             serde_json::to_vec_pretty(&document)
+                .map(|bytes| Pieces::from(escaped_for_terminal(bytes)))
         } else {
-            serde_json::to_vec(&document)
+            let mut pieces = Pieces::default();
+            serde_json::to_writer(&mut pieces, &document).map(|()| pieces)
         };
-        let bytes = match encoded {
-            Ok(bytes) if self.indented => escaped_for_terminal(bytes),
-            Ok(bytes) => bytes,
+        let pieces = match encoded {
+            Ok(pieces) => pieces,
             Err(cause) => {
                 let error = Error::new(
                     crate::error::Kind::LocalIo,
@@ -1073,7 +1074,9 @@ impl Output {
             }
         };
         stdout(|out| {
-            out.write_all(&bytes)?;
+            for slice in pieces.slices() {
+                out.write_all(slice)?;
+            }
             out.write_all(b"\n")
         })
         .inspect_err(|error| {
@@ -1929,6 +1932,76 @@ fn plain(text: &str) -> Cow<'_, str> {
 
 /// `json` as it goes to a terminal, with c1 and bidi controls, which a terminal may act on or show
 /// out of order, written as `\u` escapes, which json holds only in strings and reads back alike.
+/// a JSON document in pieces of at most 1 MiB: one growing buffer copies itself at each doubling,
+/// and the musl build's allocator keeps freed memory for a second, so the copies add to the peak.
+#[derive(Default)]
+struct Pieces {
+    full: Vec<Vec<u8>>,
+    current: Vec<u8>,
+}
+
+impl Pieces {
+    #[cold]
+    fn spill(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let room = self.current.capacity() - self.current.len();
+            if room == 0 {
+                let size = if self.current.capacity() == 0 {
+                    8 << 10
+                } else {
+                    1 << 20
+                };
+                let done = std::mem::replace(&mut self.current, Vec::with_capacity(size));
+                if !done.is_empty() {
+                    self.full.push(done);
+                }
+                continue;
+            }
+            let take = room.min(bytes.len());
+            self.current.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+        }
+    }
+
+    fn slices(&self) -> impl Iterator<Item = &[u8]> {
+        self.full
+            .iter()
+            .chain(std::iter::once(&self.current))
+            .map(Vec::as_slice)
+    }
+}
+
+impl From<Vec<u8>> for Pieces {
+    fn from(whole: Vec<u8>) -> Pieces {
+        Pieces {
+            full: Vec::new(),
+            current: whole,
+        }
+    }
+}
+
+impl Write for Pieces {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+
+    #[inline]
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if bytes.len() <= self.current.capacity() - self.current.len() {
+            self.current.extend_from_slice(bytes);
+        } else {
+            self.spill(bytes);
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn escaped_for_terminal(json: Vec<u8>) -> Vec<u8> {
     let steers = |c: char| matches!(c, '\u{80}'..='\u{9f}') || crate::name::is_bidi_control(c);
     let text = match String::from_utf8(json) {
@@ -1954,9 +2027,60 @@ mod tests {
 
     use anstyle::Style as Paint;
 
-    use super::{Level, Output, Style, accented, masked, plain, subject, write_answer};
+    use super::{Level, Output, Pieces, Style, accented, masked, plain, subject, write_answer};
     use crate::cli::judged;
     use crate::work::Counts;
+
+    #[test]
+    fn a_document_in_pieces_keeps_its_bytes_and_no_piece_outgrows_its_first_size() {
+        let mut pieces = Pieces::default();
+        let mut expected = Vec::new();
+        let mut seed = 7_u32;
+        // writes of 1 to 4,000 bytes, and one of 3 MiB, end at every place in a piece
+        for round in 0..3_000_u32 {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let len = if round == 1_500 {
+                3 << 20
+            } else {
+                1 + (seed >> 16) as usize % 4_000
+            };
+            let low = round.to_le_bytes()[0];
+            let bytes: Vec<u8> = (0..len)
+                .map(|i| u8::try_from(i % 251).unwrap() ^ low)
+                .collect();
+            pieces.write_all(&bytes).unwrap();
+            expected.extend_from_slice(&bytes);
+        }
+        let joined: Vec<u8> = pieces.slices().flatten().copied().collect();
+        assert!(
+            joined == expected,
+            "the pieces hold {} bytes, not the {} written",
+            joined.len(),
+            expected.len()
+        );
+        let capacities: Vec<usize> = pieces
+            .full
+            .iter()
+            .chain([&pieces.current])
+            .map(Vec::capacity)
+            .collect();
+        assert_eq!(
+            capacities[0],
+            8 << 10,
+            "a small document takes one small piece"
+        );
+        assert!(
+            capacities[1..].iter().all(|&capacity| capacity == 1 << 20),
+            "a piece that grew copied itself: {capacities:?}"
+        );
+    }
+
+    #[test]
+    fn a_document_from_one_buffer_is_that_buffer() {
+        let pieces = Pieces::from(b"{\"schema\":1}".to_vec());
+        let joined: Vec<u8> = pieces.slices().flatten().copied().collect();
+        assert_eq!(joined, b"{\"schema\":1}");
+    }
 
     #[test]
     fn answer_writes_and_flushes_propagate_failures_except_broken_pipes() {

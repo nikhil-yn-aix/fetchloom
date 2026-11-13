@@ -88,6 +88,7 @@ every change measured with the current harness, one row each: what it gained whe
 | lock and names | a merge's data.toml edits made on one reading of each side | merge of 2,000 datasets 18.0 to 0.33 s, of 1,000 4.0 to 0.10 s; 1 and 10 flat | kept | [merge](#a-merge-of-many-datasets-2026-11-12) |
 | lock and names | a drop across datasets written in one edit, its planned files counted once | drop of a file from each of 2,000 datasets 8.8 to 0.07 s; 1 and 10 flat | kept | [drop](#a-drop-across-many-datasets-2026-11-12) |
 | lock and names | `list` builds only the view it shows | `--json list <name>` of 100,000 files 0.815, peak memory 0.746; `list` of them 0.899; 1 and 10 flat | kept | [list](#listing-only-what-is-shown-2026-11-12) |
+| lock and names | a `--json` document encoded into pieces of at most 1 MiB, not one buffer that doubles | `--json export` of 100,000 files: peak memory 178.2 to 122.2 MiB on musl, 0.686 [0.685, 0.687], time 0.967; glibc 0.924, time 0.974; `--json list` 0.905 musl, 0.943 glibc; small documents flat | kept | [json pieces](#a-json-document-in-pieces-2026-11-13) |
 | cache | bounded name discovery and checked-open metadata during verification | 100,000 objects up to 22% faster, but retry at 1,000 objects 1.343 ext4 / 1.323 xfs | dropped, control time | [verification pipeline](#pipelining-cache-verification-2026-11-12) |
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
@@ -662,6 +663,26 @@ on xfs a reflink of a small file costs far more than a hardlink. read-only place
 a musl release build of df4d2a5b with the switch, interleaved rounds after a warmup under the measure lock on cores 12-23, xfs loop-mounted on the nvme disk and shared with other work, which flagged most rounds as loaded; the clean rounds alone give 0.767 [0.751, 0.781] in 9 pairs and 0.484 [0.409, 0.539] in 6.
 
 the speed is the isolation. a reflink shares blocks until either side writes, so an edit to a placed file, after a chmod or by a program that ignores the read-only bit, leaves the cache and every other project as they were. a hardlink is the cache's object, so the same edit changes the object and every project's link to it at once, and fetchloom can only find it on the next run, put the pinned bytes back and keep the changed copy beside them. ext4, which has no reflinks, already works this way, and xfs would join it. the [placement order](../decisions.md) puts reflinks first for that isolation, so a speed rule cannot trade it away: not adopted, a placement decision to make with these numbers.
+
+## a json document in pieces, 2026-11-13
+
+the scale map found `--json export` of 100,000 files holding far more memory than plain `export`. its document, 34.2 MB here, was encoded into one buffer that doubled as it grew, a copy at each doubling, and the musl build's allocator keeps freed memory for its [purge delay](#a-shorter-purge-delay-for-lean-on-musl-2026-11-12), longer than an export runs: on musl `--json export` peaked at 178.2 MiB against 111.9 for plain `export`, on glibc 105.8 against 87.6. the document now goes into pieces of at most 1 MiB, the first 8 KiB, so nothing is copied or freed as it grows. it is still whole before its first byte goes out, since stdout cannot take back half a document when encoding fails.
+
+| run | libc | pairs | time [95%] | peak memory [95%] |
+|---|---|---:|---|---|
+| `--json export` of 100,000 files | musl | 20 | 0.967 [0.961, 0.969] | 0.686 [0.685, 0.687], 178.2 to 122.2 MiB |
+| | glibc | 20 | 0.974 [0.968, 0.978] | 0.924 [0.922, 0.926], 105.8 to 97.8 MiB |
+| `--json list` of 100,000 files | musl | 15 | 0.988 [0.986, 0.990] | 0.905 [0.905, 0.908] |
+| | glibc | 15 | 0.980 [0.974, 0.992] | 0.943 [0.938, 0.947] |
+| `--json status` of 10,000 datasets | musl | 15 | 0.999 [0.989, 1.005] | 1.000 [1.000, 1.000] |
+| | glibc | 15 | 1.001 [0.994, 1.010] | 1.001 [0.988, 1.004] |
+| `--json status` of a project of 3 files | musl | 30 | 1.004 [0.990, 1.016] | 1.000 [1.000, 1.000] |
+| | glibc | 30 | 1.003 [0.986, 1.016] | 1.004 [0.996, 1.013] |
+| plain `export` of 100,000 files, a control | musl | 15 | 1.004 [0.998, 1.008] | 1.000 [1.000, 1.002] |
+
+one experiment build per libc of df4d2a5b chose the encoding at run time, `FETCHLOOM_EXP_JSON_CHUNKS`; interleaved rounds after a warmup under the measure lock on cores 12-23, the projects on tmpfs. the 56 MiB musl saves is about what the freed copies come to: a buffer doubles only when it is full, so the 34.2 MB document left copies of 32, 16, 8 MiB and less behind, nearly 64 MiB in all. a first version, whose writer looped over the pieces on every write, cost time, 1.064 for the export and 1.084 for the list on musl; writing straight into the current piece, with a new piece only on a cold path, made it faster than the one buffer. the final build printed the same bytes as before and peaked at 122.7 MiB, as the experiment did.
+
+`a_document_in_pieces_keeps_its_bytes_and_no_piece_outgrows_its_first_size` writes 3,000 runs of 1 to 4,000 bytes and one of 3 MiB, then checks the bytes and that no piece grew. a writer that ignored a piece's room failed it with a 16 MiB piece, and one that dropped the last piece failed it and `a_document_from_one_buffer_is_that_buffer`.
 
 ## small leftovers from the perf maps, 2026-11-13
 
