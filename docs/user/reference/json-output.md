@@ -152,7 +152,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.restored` | a changed file was put back as data.lock pins it |
 | `place.unportable` | files have names windows and fat disks cannot store |
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
-| `search.partial` | a catalog did not answer a search in time, or its search failed |
+| `search.partial` | a search site did not answer in time, or its search failed |
 | `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |
 | `settings.switch_unread` | `FETCHLOOM_ACCESSIBLE` or `FETCHLOOM_NO_HINTS` holds neither true nor false, so it stays off rather than stopping the run |
 | `settings.unknown_variable` | a variable set is one typo from one fetchloom reads, so it changes nothing; `details` names it |
@@ -199,13 +199,13 @@ the work counters still count metadata requests a dry run makes to resolve chang
 | field | value |
 |---|---|
 | `reference` | canonical reference string to pass to add or get |
-| `title` | catalog title, or the repository id for hugging face |
+| `title` | the title the site gives, or the repository id for hugging face |
 | `source` | `hugging face`, `kaggle`, `zenodo`, `ENA`, `GEO`, `dandi` or `openneuro` |
 | `size` | byte count as the site lists it: for kaggle the zipped download, for dandi the version's assets and for openneuro the snapshot; null when unknown, as always for ENA and GEO |
-| `downloads` | catalog download count, or null, as always for ENA, GEO and dandi |
+| `downloads` | the download count the site gives, or null, as always for ENA, GEO and dandi |
 | `note` | access note, or null |
 
-[catalog search](../commands/search.md) defines ordering and interactive selection. `list.datasets` instead reflects the manifest and lock, with null lock-derived values when a dataset has no lock entry; a stale entry can still supply values.
+[search](../commands/search.md) defines ordering and interactive selection. `list.datasets` instead reflects the manifest and lock, with null lock-derived values when a dataset has no lock entry; a stale entry can still supply values.
 
 ## work counters
 

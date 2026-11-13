@@ -10,7 +10,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | cloud copying, and web mirrors | [`fetchloom push`](commands/push.md) fills a folder [mirror](mirrors.md); copy that folder to a server or a bucket with a transfer application such as rclone |
 | requester-pays buckets, AWS keys from an instance's or a container's role, and google credentials from a metadata server, federation or impersonation | use the provider's own tools, or export the keys; fetchloom reads [private S3 buckets](sources/buckets.md#private-s3-buckets) with keys from the environment or `~/.aws`, including a `credential_process` and, through the AWS CLI, sign-ins and roles, [private cloud storage buckets](sources/buckets.md#private-cloud-storage-buckets) with a service account's key or a gcloud login, and [private drive files and folders](sources/google-drive.md#private-files-and-folders) with a service account's key or a login through an oauth client of your own |
 | a private github repository's release files, gitlab servers other than gitlab.com, and the source archives a gitlab release makes on request | download them with the gh or glab command, then [`fetchloom add`](commands/add.md#files-on-this-machine) the folder to pin them by their bytes |
-| search beyond hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro | choose a reference from the source's own catalog |
+| search beyond hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro | find the dataset on its source's own site, then give fetchloom its link or id |
 | plugins | source adapters live in the fetchloom crate |
 | fetchloom accounts, hosting and telemetry | fetchloom is a local command |
 | controlled-data access approval | request access from the institution or owner |
