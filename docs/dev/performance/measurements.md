@@ -63,6 +63,7 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | reuse an intact racy hash within one survey | `status --verify` of 32 MiB: musl 0.544, glibc 0.563; controls and memory within noise | kept | [racy hashes](#reusing-racy-hashes-within-a-survey-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| project state | each scanned file's path made at its final length rather than grown by `format!` | `--json status` of 100,000 files 0.986 [0.970, 0.998], settled sync 0.991 [0.979, 1.004]; peak memory flat | dropped, below the bar | [small leftovers](#small-leftovers-from-the-perf-maps-2026-11-13) |
 | project state | the state's map built in one pass | settled sync of 100,000 files 0.784, but peak memory 1.148 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | the same map built in merged chunks | 0.85, but on musl peak memory 1.05 to 1.06 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | project state | project state written as a stream | no measured win | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -646,6 +647,12 @@ so the rebalanced corpus turned the manifest's regression into the largest gain,
 the release builds each binary so that rebuilding the commit gives the same bytes, and a profile trained in the release job would break that. a second training of the same corpus, by the same binary on the same inputs, merged to another profile, 99.957% of its edge counts overlapping the first, since threads and randomly seeded maps move the counts; the binary built from it differed from the first in 13,666,826 bytes. a committed profile for each of the six release targets, trained on each and redone as the code moves, would be the only way to keep the release reproducible. that was not built: dropped, below the bar, with that cost on top.
 
 three musl release builds of df4d2a5b from one source tree, control, instrumented and optimized, the flags passed through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS` as the release workflow passes its own; rustc 1.99.1 with llvm 23.1.1. interleaved rounds after a warmup under the measure lock on cores 12-23, projects and caches on tmpfs, the copied projects synced once by the control build first, so both builds read the indexed state. `lock --check` and `list` lost most rounds to other users' load; their rows keep all 20, and the clean rounds alone give 0.910 for both.
+
+## small leftovers from the perf maps, 2026-11-13
+
+ideas the perf maps left open whose a/b took one build, each kept or dropped by the ledger's rule.
+
+- the data folder walk built each file's path with `format!`, which grows the string about twice a file, some 200,000 growth calls at 100,000 files. making it at its final length, one experiment build switched by `FETCHLOOM_EXP_PRESIZE`, gave `--json status` of 100,000 files on tmpfs 0.986 [0.970, 0.998] and the settled sync 0.991 [0.979, 1.004], 19 and 20 pairs on glibc, peak memory flat. dropped, below the bar.
 
 ## pending archive reader budgets, 2026-11-12
 
