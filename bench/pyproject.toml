@@ -10,7 +10,6 @@ dependencies = [
     "zenodo_get==3.1.0",
     "huggingface_hub[hf_xet]==0.35.3",
     "kagglehub==0.3.13",
-    "gdown==5.2.2",
     "datahugger==0.13",
     "requests==2.33.0",
     # pinned for dvc's gitignore parser and for requests compatibility
