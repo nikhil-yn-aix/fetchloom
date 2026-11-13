@@ -1,13 +1,9 @@
 //! `.fetchloom/state`: every file fetchloom placed and how it looked right after, so `status` and
-//! `sync` notice hand edits without hashing, except for a file as new as the state itself, whose
-//! size and time a coarse clock cannot vouch for. it also keeps each rebuild of a recipe that
-//! differs from data.lock until a person accepts it or data.toml drops the recipe.
+//! `sync` notice hand edits without hashing, but for a file as new as the state, which a coarse
+//! clock cannot vouch for. it also keeps each rebuild of a recipe that differs from data.lock.
 //!
-//! the state is one json document. its records come in path order, in blocks of about
-//! [`BLOCK`] bytes, and the document ends with each block's first path and byte range. its first
-//! bytes say where the records end, so a command that names a dataset reads those bytes, what
-//! follows the records and the blocks that can hold paths in the dataset's folder, not the whole
-//! file.
+//! its records come in path order, in blocks of about [`BLOCK`] bytes indexed at its end, so a
+//! command that names a dataset reads only the blocks that can hold its folder's paths.
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;
@@ -50,16 +46,14 @@ pub(crate) struct State {
     /// data.toml and data.lock as the last sync left them.
     #[serde(default)]
     pub(crate) synced: Option<Synced>,
-    /// the rebuild of each recipe that made other files than data.lock pins for its key, kept
-    /// until `fetchloom build --accept` pins it, a build pins something else or data.toml no
-    /// longer has the recipe.
+    /// the rebuild of each recipe that made other files than data.lock pins for its key, kept until
+    /// `fetchloom build --accept` pins it, a build pins another or data.toml drops the recipe.
     #[serde(default)]
     pub(crate) candidates: BTreeMap<String, Candidate>,
 }
 
-/// a rebuild of a recipe that made other files than data.lock pins for the same key. its files
-/// are in the cache, but it is no result a build may reuse: only a person pins it, with
-/// `fetchloom build --accept`.
+/// a rebuild of a recipe that made other files than data.lock pins for the same key. its files are
+/// cached, but no build may reuse it: only a person pins it, with `fetchloom build --accept`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Candidate {
     pub(crate) key: Sha256,
@@ -142,12 +136,8 @@ impl State {
     }
 
     /// [`State::parse_only`] of `file`, reading only the parts that can hold a record at or below
-    /// `folders`, paths in the project, and keeping those `keep` accepts, with how many bytes it
-    /// read. a state whose index does not fit it is read whole instead, so the records are always
-    /// those a whole read would keep.
-    ///
-    /// # Errors
-    /// fails when `file` cannot be read.
+    /// `folders`, with how many bytes it read; a state whose index does not fit is read whole, so
+    /// the records are always a whole read's. fails when `file` cannot be read.
     pub(crate) fn read_within(
         file: &mut (impl Read + Seek),
         folders: &[String],
@@ -392,9 +382,8 @@ impl<R: Read + Seek> Reading<'_, R> {
     }
 }
 
-/// the records at or below `folders` that `keep` accepts, read through the state's index: its
-/// first bytes, what follows the records, and the blocks that can hold such a path. it declines,
-/// with the reason, when anything it reads does not fit the index, which a whole read ignores.
+/// the records at or below `folders` that `keep` accepts, read through the state's index, or why
+/// it declines when anything it reads does not fit the index, which a whole read ignores.
 fn indexed(
     reading: &mut Reading<'_, impl Read + Seek>,
     folders: &[String],
@@ -523,9 +512,8 @@ fn runs(blocks: &[Block], folders: &[String]) -> Vec<Range<usize>> {
     runs
 }
 
-/// the records of a run of blocks that `keep` accepts, the paths checked against the index: the
-/// first is the run's first block's, and each is past the one before and before `next`, the
-/// first path of the block after the run.
+/// the records of a run of blocks that `keep` accepts, checked against the index: the first is the
+/// run's first block's, each past the one before and before `next`, the block after's first path.
 struct Run<'a> {
     first: &'a str,
     next: Option<&'a str>,
@@ -632,8 +620,7 @@ mod tests {
         }
     }
 
-    /// a read of one small dataset's folder beside a large one reads its own records and little
-    /// else, however large the state.
+    /// one small dataset's folder beside a large one, however large the state.
     #[test]
     fn a_read_within_a_folder_reads_little_beyond_its_records() {
         let mut state = State::default();
@@ -730,7 +717,6 @@ mod tests {
         assert!(State::parse(unrecorded.as_bytes()).files.is_empty());
     }
 
-    /// a read of some records keeps them, and the rest of the state, as a read of all would.
     #[test]
     fn a_read_of_some_records_matches_a_read_of_all() {
         let mut state = State::default();
@@ -930,8 +916,7 @@ mod tests {
         }
     }
 
-    /// a read within folders answers through the index, at any block size, exactly as a whole
-    /// read does.
+    /// through the index, at any block size.
     #[test]
     fn a_read_within_folders_answers_as_a_whole_read() {
         let state = crowded();
@@ -964,8 +949,7 @@ mod tests {
         mangled
     }
 
-    /// a read within folders of a state whose index was changed, or whose `at` was, answers as
-    /// a whole read does, which ignores both.
+    /// or whose `at` was changed, since a whole read ignores both.
     #[test]
     fn a_read_within_a_changed_index_answers_as_a_whole_read() {
         let bytes = crowded().render_in(300);

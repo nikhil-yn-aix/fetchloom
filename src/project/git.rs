@@ -1,12 +1,6 @@
-//! git, run as a reader of a project's repository: data.toml and data.lock whole as each side of
-//! a merge git left unfinished has them, with their merge base, so `fetchloom lock` takes no line
-//! git merged from the other side for a side's, and which of the files in `data.lock.d` and of
-//! a recipe's code git has, so a file a commit would leave out is named. apart from the steps
-//! `fetchloom build` runs, git is the one program fetchloom runs: found by an absolute path
-//! outside the project, with no shell, no input, no transport to fetch with, and bounded output
-//! and time. reading objects also takes `--no-lazy-fetch` where git knows it, so a partial clone
-//! never reaches the network; listing the index reads no object. any failure, a folder outside a
-//! repository among them, means no answer.
+//! git, run as a reader of a project's repository: each side of an unfinished merge of data.toml
+//! and data.lock whole, and which files git has. it runs from an absolute path outside the
+//! project with no shell, input or transport, within bounds, and any failure means no answer.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -44,9 +38,8 @@ pub(crate) struct Stages {
     pub(crate) base: Option<String>,
 }
 
-/// `file`, a file in `root` that git could not merge, whole as git's index holds each side:
-/// stage 2 ours, stage 3 theirs and stage 1 their base, which git lacks when both sides added the
-/// file. none when git does not hold both sides, as once `git add` marks the file resolved.
+/// `file` in `root`, which git could not merge, whole as git's index holds each side: stage 2
+/// ours, 3 theirs and 1 their base. none when git lacks either side, as once `git add` resolves it.
 pub(crate) fn stages(git: &Path, root: &Path, file: &str) -> Option<Stages> {
     let listed = run(
         git,
@@ -79,10 +72,8 @@ pub(crate) fn stages(git: &Path, root: &Path, file: &str) -> Option<Stages> {
     })
 }
 
-/// `file`, a file in `root` that git merged by itself, whole as each side of the merge, rebase,
-/// cherry-pick or revert git left unfinished there has it in its commit: ours from `HEAD`, theirs
-/// from the commit the operation brings in, as git's index would give them for a file it could
-/// not merge. none when no such operation is under way, or a side lacks the file.
+/// `file` in `root`, which git merged by itself, whole as each side of the unfinished merge,
+/// rebase, cherry-pick or revert has it in its commit. none when none is under way or one lacks it.
 pub(crate) fn committed(git: &Path, root: &Path, file: &str) -> Option<[String; 2]> {
     let read = |commit: &str| {
         let blob = format!("{commit}:./{file}");
@@ -104,9 +95,8 @@ fn text(bytes: Vec<u8>) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their
-/// paths from `root` with `/` between folders. it reads only git's index. none when git cannot
-/// tell, as outside a repository.
+/// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their paths
+/// from `root`. it reads only git's index. none when git cannot tell, as outside a repository.
 pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<String>> {
     let listed = run(
         git,
@@ -135,8 +125,7 @@ pub(crate) struct Known {
 }
 
 /// what git knows of the files below `paths` in the work tree at `root`, each path taken as
-/// written, never as a pattern. it reads git's index and ignore rules, no object. none when git
-/// cannot tell, as outside a repository.
+/// written, never as a pattern, from its index and ignore rules. none when git cannot tell.
 pub(crate) fn known(git: &Path, root: &Path, paths: &[&str]) -> Option<Known> {
     let specs: Vec<String> = paths.iter().map(|path| format!("./{path}")).collect();
     let mut arguments = vec![
@@ -169,9 +158,8 @@ pub(crate) fn known(git: &Path, root: &Path, paths: &[&str]) -> Option<Known> {
     Some(known)
 }
 
-/// what git prints for `arguments`, which read objects: with `--no-lazy-fetch` where git knows
-/// the option, else again without it. either way git has no transport, so a missing object fails
-/// the read instead of being fetched.
+/// what git prints for `arguments`, which read objects: with `--no-lazy-fetch` where git knows the
+/// option, else without it. either way git has no transport, so a missing object is never fetched.
 fn read_objects(git: &Path, root: &Path, arguments: &[&str]) -> Option<Vec<u8>> {
     let mut unfetched = vec!["--no-lazy-fetch"];
     unfetched.extend_from_slice(arguments);
@@ -395,8 +383,7 @@ mod tests {
         assert_eq!(stages(&git, &root, "data.toml"), Some(merged));
     }
 
-    /// a file git merged by itself has no stages; its sides come from the commits the merge or
-    /// rebase put together.
+    /// a file git merged by itself has no stages, so its sides come from the merged commits.
     #[test]
     fn the_sides_of_a_file_git_merged_come_from_the_commits() {
         let Some(git) = git() else {

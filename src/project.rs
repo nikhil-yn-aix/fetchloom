@@ -70,12 +70,12 @@ impl Held {
             }
         };
         let published = (|| {
-            // flushed before it gets its name, so a power cut leaves a whole record, which the
-            // next command reads and takes over, never an empty one, which only a person can
-            // tell from another OS's paused writer
+            // flushed before it gets its name, so a power cut leaves a whole record for the next
+            // command to take over, never an empty one, which only a person can tell from another
+            // OS's paused writer
             fill(file, record)?;
             // windows and WSL do not share OS locks, so an empty reservation could be
-            // reclaimed while its writer is still publishing.
+            // reclaimed while its writer is still publishing
             match fs::hard_link(&temporary, path) {
                 Ok(()) => self.owner = Some(path.to_path_buf()),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Err(err),
@@ -109,9 +109,8 @@ impl Held {
             match self.publish_owner(path, &record) {
                 Ok(()) => return Ok(Hold::Held(self)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                // the OS lock keeps out every command of this OS, and the record only tells them
-                // who holds it, so a full disk need not stop a command. without OS locks the
-                // record is the lock itself
+                // with the OS lock held the record only tells others who holds it, so a full disk
+                // need not stop a command. without OS locks the record is the lock itself
                 Err(err) if self.lock.is_some() => {
                     tracing::debug!(%err, "could not write the project owner record");
                     return Ok(Hold::Held(self));
@@ -124,7 +123,7 @@ impl Held {
                 Err(err) => return Err(err),
             };
             let owner = serde_json::from_slice::<Owner>(&bytes).ok();
-            // an empty reservation may belong to a paused writer on another OS.
+            // an empty reservation may belong to a paused writer on another OS
             let stale = self.lock.is_some()
                 && owner
                     .as_ref()
@@ -152,7 +151,7 @@ impl Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        // remove the owner before the OS lock is released with the guard's fields.
+        // remove the owner before the OS lock is released with the guard's fields
         if let Some(path) = &self.owner
             && let Err(err) = fs::remove_file(path)
             && err.kind() != io::ErrorKind::NotFound
@@ -162,9 +161,8 @@ impl Drop for Held {
     }
 }
 
-/// a project fetchloom could not lock, named as the project. a file that tells who holds it but
-/// that fetchloom cannot read as its own is named, so a person can delete it once no other
-/// fetchloom works there.
+/// a project fetchloom could not lock, named as the project. an owner record fetchloom cannot read
+/// as its own is named, so a person can delete it once no other fetchloom works there.
 fn not_locked(owner: &Path, err: &io::Error) -> Error {
     let error = Error::io("could not lock the project", err);
     if err.kind() == io::ErrorKind::InvalidData {
@@ -219,11 +217,9 @@ fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
 }
 
 impl Project {
-    /// the nearest folder at or above `start` that holds a data.toml, inside the git repository
-    /// `start` is in: a data.toml above the repository belongs to another history, so `-C` must
-    /// name it. each folder's data.toml is looked for before its `.git`. any entry named data.toml
-    /// marks the project, so one that is no file, as a folder, is told as such when read rather
-    /// than passed over for a folder above it or no project at all.
+    /// the nearest folder at or above `start` holding a data.toml, inside `start`'s git repository,
+    /// since a data.toml above it belongs to another history. any entry named data.toml marks the
+    /// project, so one that is no file is told as such when read rather than passed over.
     pub(crate) fn find(start: &Path) -> Option<Project> {
         for folder in start.ancestors() {
             if fs::symlink_metadata(folder.join(manifest::FILE)).is_ok() {
@@ -326,9 +322,8 @@ impl Project {
         self.state_by(State::parse)
     }
 
-    /// [`Project::state`] with only the records at or below `folders`, paths in the project, that
-    /// `keep` accepts. `keep` must accept no path outside `folders`, since a read passes over the
-    /// parts of the state that cannot hold such a path.
+    /// [`Project::state`] with only the records at or below `folders` that `keep` accepts. `keep`
+    /// must accept no path outside `folders`, since a read passes over parts that cannot hold one.
     pub(crate) fn state_within(
         &self,
         folders: &[String],
@@ -378,9 +373,8 @@ impl Project {
             .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
     }
 
-    /// writes the parts of the file lists `lock` keeps beside data.lock that are not there yet,
-    /// and returns their paths below the project. a part's name changes with its list, so one
-    /// already there holds the same list.
+    /// writes the parts of `lock`'s file lists not yet beside data.lock, returning their paths
+    /// below the project. a part's name changes with its list, so one there already holds the same.
     pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
         let parts = lock.lists();
         if parts.is_empty() {
@@ -428,9 +422,8 @@ impl Project {
         let _ = fs::remove_dir(&folder);
     }
 
-    /// fails, naming the folder, when the project folder is read-only for this user, so a
-    /// command finds out before it does work it could not record. elsewhere than unix the first
-    /// write finds out instead.
+    /// fails, naming the folder, when the project folder is read-only for this user, so a command
+    /// finds out before work it could not record. elsewhere than unix the first write finds out.
     #[cfg_attr(
         not(unix),
         expect(
@@ -473,11 +466,8 @@ impl Project {
         Error::io(doing, err)
     }
 
-    /// saves exact metadata before a command changes it, without exposing recovery text in logs.
-    /// on unix only the owner may read the new file; elsewhere it inherits the folder's access.
-    ///
-    /// # Errors
-    /// fails before the caller changes metadata if the recovery copy cannot be written and flushed.
+    /// saves exact metadata before a command changes it, never in logs, readable on unix by its
+    /// owner alone. fails before the caller changes anything if it cannot be written and flushed.
     pub(crate) fn backup(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, Error> {
         let folder = self.inner()?;
         let mut options = OpenOptions::new();
@@ -536,8 +526,7 @@ impl Project {
     }
 
     /// [`Project::hold_at`], with `named` telling whether `.fetchloom/lock` still names the file
-    /// locked. a lock that loses its name is opened again, a few times at most, since only a
-    /// command that set out to start the project and did not removes it, and only once.
+    /// locked. one that lost its name, as [`Project::unstart`] removes it, is opened again.
     fn hold_with(
         &self,
         command: &str,
@@ -597,11 +586,9 @@ impl Project {
         .help("check that nothing but fetchloom changes the .fetchloom folder, then run the command again"))
     }
 
-    /// ends `held`, the hold of a command that set out to start this project and did not, so its
-    /// folder is as it was. `data`, the data folder it did not find there, goes when it holds only
-    /// empty folders. `.fetchloom` goes when `own` says the command made it and it holds only
-    /// fetchloom's own records, the state among them only once no data folder is left for it to
-    /// describe. a folder holding anything else stays, with all it holds.
+    /// ends `held`, the hold of a command that set out to start this project and did not, leaving
+    /// its folder as it was: `data` goes when it holds only empty folders, and `.fetchloom` when
+    /// `own` says the command made it and it holds only fetchloom's records. anything else stays.
     pub(crate) fn unstart(&self, mut held: Held, data: Option<&Path>, own: bool) {
         if self.remove_start(data, own, &mut held.owner) {
             drop(held);
@@ -812,9 +799,8 @@ fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
 }
 
-/// the error for project file `name` when git left a merge it could not finish in its `text`:
-/// both sides between conflict lines at the start of a line, `<<<<<<<`, `|||||||`, `=======`
-/// and `>>>>>>>`. none when no such line is there.
+/// the error for project file `name` when its `text` holds git's conflict lines at a line start,
+/// `<<<<<<<`, `|||||||`, `=======` or `>>>>>>>`. none when no such line is there.
 fn unmerged(name: &str, text: &str) -> Option<Error> {
     let line = lock::merge::markers::first(text)?;
     Some(
@@ -917,10 +903,7 @@ fn write_atomically_with(
 }
 
 /// flushes directory entries on unix, where flushing a file does not publish its name durably.
-/// other platforms keep their existing publication behavior.
-///
-/// # Errors
-/// returns an error when the directory cannot be opened or flushed.
+/// other platforms keep their own publication behavior.
 #[cfg_attr(
     not(unix),
     expect(
@@ -973,8 +956,7 @@ mod tests {
         FILE_FLUSHES.set(FILE_FLUSHES.get() + 1);
     }
 
-    /// a power cut must leave the owner record whole, so the next command can read it and take
-    /// it over: its bytes are flushed once, before it gets its name, and its folder is not.
+    /// so a power cut leaves it whole for the next command to take over. its folder is not flushed.
     #[test]
     fn the_owner_record_is_flushed_once_before_it_is_named() {
         let (_dir, project) = project(&[]);
@@ -1021,9 +1003,8 @@ mod tests {
         assert!(Project::find(&tempfile::tempdir().unwrap().path().join("x")).is_none());
     }
 
-    /// data.toml belongs to the git repository that commits it, so the search ends at the first
-    /// folder holding `.git`, as a folder or as the file a submodule or worktree has, once that
-    /// folder's own data.toml is checked.
+    /// at the first folder holding `.git`, a folder or a submodule's or worktree's file, once its
+    /// own data.toml is checked.
     #[test]
     fn a_git_repository_ends_the_search_for_data_toml() {
         let (dir, _) = project(&[
@@ -1069,7 +1050,7 @@ mod tests {
         );
     }
 
-    /// a command that waits names the one holding the project, so a forgotten terminal is found.
+    /// so a forgotten terminal is found.
     #[test]
     fn a_waiting_command_learns_which_command_holds_the_project() {
         let (_dir, project) = project(&[("data.toml", "")]);
@@ -1319,7 +1300,6 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"{}");
     }
 
-    /// a link at `.fetchloom/lock`, which fetchloom never makes, is refused rather than followed,
     /// whether it names a file or nothing: no lock on what it names would keep anyone out.
     #[test]
     fn a_linked_project_lock_is_refused_and_never_followed() {
@@ -1359,8 +1339,7 @@ mod tests {
         assert!(!folder.join("owner").exists());
     }
 
-    /// a lock whose name never seems to hold it, as on a filesystem whose names and open files
-    /// disagree, ends the hold with an error rather than trying forever.
+    /// as on a filesystem whose names and open files disagree, rather than trying forever.
     #[test]
     fn a_lock_that_never_keeps_its_name_is_given_up() {
         let (_dir, project) = project(&[]);
@@ -1418,7 +1397,7 @@ mod tests {
         let (_dir, project) = project(&[]);
         let path = project.inner().unwrap().join("owner");
         let now = std::time::UNIX_EPOCH + Duration::from_secs(1234);
-        // a forked test child can retain an OS lock until exec; owner cleanup needs no OS lock.
+        // a forked test child can retain an OS lock until exec; owner cleanup needs no OS lock
         let claim = || {
             Held {
                 lock: None,
@@ -1444,7 +1423,7 @@ mod tests {
     #[test]
     fn metadata_links_cannot_redirect_writes() {
         let (_dir, project) = project(&[("data.toml", "")]);
-        // FAT32 and exFAT can make neither a hardlink nor a junction.
+        // FAT32 and exFAT can make neither a hardlink nor a junction
         if fs::hard_link(project.manifest_path(), project.root.join("link-probe")).is_err() {
             return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
         }
@@ -1607,7 +1586,6 @@ mod tests {
         }
     }
 
-    /// a command that set out to start a project and did not leaves the folder as it found it,
     /// but never removes what it did not make.
     #[test]
     fn a_project_never_started_leaves_its_folder_as_it_was() {
@@ -1642,8 +1620,8 @@ mod tests {
         assert!(matches!(project.hold("add").unwrap(), Hold::Held(_)));
     }
 
-    /// a lock taken on a file that lost its name keeps nobody out, as when a command that started
-    /// no project removed `.fetchloom` while another waited, so the name is opened again.
+    /// a lock on it keeps nobody out, as when a command that started no project removed
+    /// `.fetchloom` while another waited, so the name is opened again.
     #[test]
     fn a_lock_file_that_lost_its_name_is_not_taken() {
         let (_dir, project) = project(&[]);
@@ -1684,9 +1662,8 @@ mod tests {
         assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
     }
 
-    /// git leaves both sides of a merge it could not finish in the file, between its conflict
-    /// lines. fetchloom names that, and how to finish it, rather than the TOML mistake those
-    /// lines make, in either of git's conflict styles and either line ending.
+    /// rather than the TOML mistake its conflict lines make, in either of git's conflict styles
+    /// and either line ending.
     #[test]
     fn an_unfinished_merge_in_data_toml_or_data_lock_says_how_to_finish_it() {
         let both = "[datasets.core]\nref = \"zenodo:1\"\n<<<<<<< HEAD\n\n[datasets.alpha]\nref = \"zenodo:2\"\n=======\n\n[datasets.beta]\nref = \"zenodo:3\"\n>>>>>>> beta\n";
@@ -1773,8 +1750,7 @@ mod tests {
         assert_eq!(read.synced, None);
     }
 
-    /// a read of the state within a folder answers as a whole read does, also once its index was
-    /// changed by hand, which the whole read ignores.
+    /// also once its index was changed by hand, which the whole read ignores.
     #[test]
     fn a_state_read_within_a_folder_answers_as_a_whole_read() {
         use crate::place::Method;
