@@ -517,17 +517,30 @@ async fn near_miss(
     let Some(near) = near else {
         return error;
     };
+    // a public dataset one typo away makes a typo likelier than a missing sign-in
+    error.kind = Kind::ReferenceUnresolved;
+    error.need = None;
+    error.help(near_help(link, &near))
+}
+
+/// the help for a `link` a source would not show, whose owner has the public dataset `near` one
+/// typo away: the command meant, quoted for a shell, or only the dataset's name when the link may
+/// hold a secret, which no command repeats.
+fn near_help(link: &str, near: &crate::source::search::Near) -> String {
     // the link as typed, with the name fixed, keeps a link's file or folder
     let fixed = if link.contains(&near.given) {
         link.replacen(&near.given, &near.id, 1)
     } else {
         near.reference.to_string()
     };
-    let meant = super::meant(&[link], &[&fixed], format!("fetchloom add {fixed}"));
-    // a public dataset one typo away makes a typo likelier than a missing sign-in
-    error.kind = Kind::ReferenceUnresolved;
-    error.need = None;
-    error.help(format!("did you mean `{meant}`?"))
+    let alone = ["add", fixed.as_str()].map(std::ffi::OsString::from);
+    match super::command_line(alone.into_iter()) {
+        Some(instead) => format!(
+            "did you mean `{}`?",
+            super::meant(&[link], &[&fixed], instead)
+        ),
+        None => format!("did you mean {}?", near.reference.shown()),
+    }
 }
 
 async fn add_held(
@@ -1683,6 +1696,51 @@ mod tests {
                 format!("\"{shown}\" is not a valid dataset name")
             );
         }
+    }
+
+    /// a near miss's link is what a person typed, often pasted from a page, so the add it names
+    /// reads back as a shell reads it, and a link that may hold a secret is in no command at all.
+    #[test]
+    fn a_near_miss_names_a_quoted_add_and_never_a_secret() {
+        let near = crate::source::search::Near {
+            given: "scikit-learn/irsi".to_owned(),
+            id: "scikit-learn/iris".to_owned(),
+            reference: Reference::parse("hf:datasets/scikit-learn/iris")
+                .unwrap()
+                .reference,
+        };
+        assert_eq!(
+            near_help("hf:datasets/scikit-learn/irsi", &near),
+            "did you mean `fetchloom add hf:datasets/scikit-learn/iris`?"
+        );
+        let help = near_help(
+            "https://huggingface.co/datasets/scikit-learn/irsi/tree/main/a&b$(id)",
+            &near,
+        );
+        let meant = help
+            .strip_prefix("did you mean `")
+            .and_then(|rest| rest.strip_suffix("`?"))
+            .unwrap_or_default();
+        assert_eq!(
+            crate::suggested::command_words(meant, cfg!(windows)),
+            Some(
+                [
+                    "fetchloom",
+                    "add",
+                    "https://huggingface.co/datasets/scikit-learn/iris/tree/main/a&b$(id)",
+                ]
+                .map(str::to_owned)
+                .to_vec()
+            ),
+            "{help}"
+        );
+        assert_eq!(
+            near_help(
+                "https://huggingface.co/datasets/scikit-learn/irsi?rlkey=hunter2",
+                &near
+            ),
+            "did you mean hf:datasets/scikit-learn/iris?"
+        );
     }
 
     /// an add that failed before changing anything claims no rollback and keeps no recovery copy.
