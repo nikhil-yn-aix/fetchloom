@@ -1415,11 +1415,11 @@ mod tests {
                     panic!("{name}: `{example}` does not parse: {err}");
                 }
             }
-            let disk: Vec<&str> = help
+            let disk = help
                 .lines()
                 .filter(|line| line.starts_with("on disk: "))
-                .collect();
-            assert_eq!(disk.len(), 1, "{name}\n{help}");
+                .count();
+            assert_eq!(disk, 1, "{name}\n{help}");
         }
     }
 }
