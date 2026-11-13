@@ -66,7 +66,9 @@ impl Held {
         let mut raw = mode.clone();
         raw.make_raw();
         raw.output_modes = mode.output_modes;
-        if tcsetattr(terminal, OptionalActions::Drain, &raw).is_err() {
+        // at once rather than after output drains: a bsd pty waits until its reader takes what is
+        // pending, and the output modes stay as they were, so nothing written reads differently
+        if tcsetattr(terminal, OptionalActions::Now, &raw).is_err() {
             return Held(false);
         }
         *found = Some((kept, mode));
@@ -89,8 +91,7 @@ impl Drop for Held {
 pub(crate) fn release() {
     let found = FOUND.lock().unwrap_or_else(PoisonError::into_inner).take();
     if let Some((terminal, mode)) = found {
-        let _ =
-            rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Drain, &mode);
+        let _ = rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &mode);
     }
 }
 
