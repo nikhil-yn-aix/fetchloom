@@ -92,7 +92,7 @@ flag help initializes the same palette as the `help` command. both apply `FETCHL
 
 | files | cargo filter |
 |---|---|
-| [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs), [progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/progress.rs), [style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) | `cargo test --locked --lib output::` |
+| [output/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/tests.rs), [progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/progress.rs), [style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) | `cargo test --locked --lib output::` |
 | [logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs), [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs), [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | `cargo test --locked --lib cli::logs::`; `cargo test --locked --lib error::`; `cargo test --locked --lib units::` |
 | [progress.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/progress.rs), [hints.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/hints.rs), [basics.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/basics.rs) | `cargo test --locked --test cli progress::`; `cargo test --locked --test cli hints::`; `cargo test --locked --test cli basics::` |
 | [get.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/get.rs), [snapshots](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/cli/snapshots) | `cargo test --locked --test cli get::` |
