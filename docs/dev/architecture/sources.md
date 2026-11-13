@@ -10,7 +10,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Access`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `may_wrap`, `refused` |
+| [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | reference routing, listing checks, the guard every paged listing shares and transfer customization | `Reference`, `Parsed`, `Listing`, `Access`, `Remote`, `Unavailable`, `Pages`, `parse`, `resolve`, `fetch_plan`, `may_wrap`, `refused` |
 | [local.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/local.rs) | paths on this machine, which are never searched, and the ref of files imported from them | `is_path`, `here`, `refused`, `IMPORTED`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere` |
 | [search.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/search.rs), [search/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/search/tests.rs) | public catalog queries and interleaved candidates, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `Candidate`, `Search`, `search`, `is_search`, `Near`, `near` |
 | [recorded.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/recorded.rs) | in-memory answers for adapter tests | `Recorded`, `on`, `fixture`, `next`, `total`, `asked`, `block_on` |
