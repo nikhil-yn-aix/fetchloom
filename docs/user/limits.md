@@ -35,7 +35,7 @@ a stopped download keeps what it fetched and goes on from there in the next run,
 
 ## commands and integrations not implemented
 
-`cite`, archive-service fallbacks and lab administration are not implemented. buckets and containers are read anonymously over HTTPS, or with your keys for those you list, and private google drive items through drive's api for the folders and files you list, as [signing in](signing-in.md#private-buckets-and-folders) says. AWS keys from an instance or container metadata service, google credentials from a metadata server, and azure credentials from the az cli, a managed identity or an account key, are not implemented. the python module provides [`path()`, `sync()` and `get()`](scripting.md); there is no R wrapper or other language or workflow wrapper.
+`cite`, archive-service fallbacks and lab administration are not implemented. buckets and containers are read anonymously over HTTPS, or with your keys or sign-in for those you list, and private google drive items through drive's api for the folders and files you list, as [signing in](signing-in.md#private-buckets-and-folders) says. AWS keys from an instance or container metadata service and google credentials from a metadata server are not implemented. the python module provides [`path()`, `sync()` and `get()`](scripting.md); there is no R wrapper or other language or workflow wrapper.
 
 see the [developer roadmap](../dev/roadmap.md) for future work. current commands are listed in the [command guide](commands/README.md).
 

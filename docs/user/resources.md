@@ -22,7 +22,7 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 |---|---|---|---|
 | `jobs`, requests at once | 2 | 8 | 32 |
 | `host_jobs`, requests at once to one host | 2 | 4 | 16 |
-| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | on linux a quarter of the memory available, from 256 MiB to 4 GiB; 256 MiB on macos and windows | as `default` |
+| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | on linux a quarter of the memory available, or of what a cgroup's limit leaves, from 256 MiB to 4 GiB but never more than half of it; 256 MiB on macos and windows | as `default` |
 | local workers, as `FETCHLOOM_THREADS` caps them | 2, or 1 on a machine with one processor | up to the processors | as `default` |
 
 `max` leaves memory and local workers at the default. checking placed files spreads a few large files over the local workers, as it does many small ones, but a ceiling of one or two workers keeps each file on one, so lean adds no hashing buffers.
