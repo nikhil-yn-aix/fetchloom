@@ -306,7 +306,9 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupted_member_read_resumes_without_losing_bytes() {
+    fn an_interrupted_read_resumes_without_losing_bytes() {
+        /// hands out two bytes a read, whatever the buffer, and is interrupted once after the
+        /// first two.
         struct Interrupted {
             inner: io::Cursor<&'static [u8]>,
             interrupted: bool,
@@ -317,7 +319,8 @@ mod tests {
                     self.interrupted = true;
                     return Err(io::ErrorKind::Interrupted.into());
                 }
-                self.inner.read(buffer)
+                let end = buffer.len().min(2);
+                self.inner.read(&mut buffer[..end])
             }
         }
         guarded(Limits::default(), |guard, meter| {
@@ -332,6 +335,13 @@ mod tests {
                 .unwrap();
             assert!(reader.interrupted);
             assert_eq!(bytes, b"good");
+            let mut reader = Interrupted {
+                inner: io::Cursor::new(b"skip"),
+                interrupted: false,
+            };
+            guard.pass("y", &mut reader).unwrap();
+            assert!(reader.interrupted);
+            assert_eq!(guard.skipped, 4);
         });
     }
 
@@ -412,9 +422,17 @@ mod tests {
 
     #[test]
     fn a_failed_read_is_a_damaged_archive_and_a_failed_write_is_local() {
-        struct Failing;
+        /// fails its first read as a damaged archive does, then ends, so a retried failure
+        /// finishes rather than hanging the test.
+        #[derive(Default)]
+        struct Failing {
+            failed: bool,
+        }
         impl Read for Failing {
             fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                if std::mem::replace(&mut self.failed, true) {
+                    return Ok(0);
+                }
                 Err(io::Error::new(io::ErrorKind::InvalidData, "bad crc"))
             }
         }
@@ -429,12 +447,25 @@ mod tests {
         guarded(Limits::default(), |guard, _| {
             let mut buffer = [0; 16];
             let err = guard
-                .copy("a.csv", &mut Failing, &mut Vec::new(), &mut buffer)
+                .copy(
+                    "a.csv",
+                    &mut Failing::default(),
+                    &mut Vec::new(),
+                    &mut buffer,
+                )
                 .unwrap_err();
             assert_eq!(err.kind, Kind::SourceInvalid);
             assert!(err.message.contains("\"a.csv\""), "{}", err.message);
+            let err = guard.pass("b.csv", &mut Failing::default()).unwrap_err();
+            assert_eq!(err.kind, Kind::SourceInvalid);
+            assert!(err.message.contains("\"b.csv\""), "{}", err.message);
             let err = guard
-                .copy("a.csv", &mut &b"abc"[..], &mut Failing, &mut buffer)
+                .copy(
+                    "a.csv",
+                    &mut &b"abc"[..],
+                    &mut Failing::default(),
+                    &mut buffer,
+                )
                 .unwrap_err();
             assert_eq!(err.kind, Kind::LocalIo);
         });
