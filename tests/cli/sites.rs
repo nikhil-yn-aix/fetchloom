@@ -356,3 +356,98 @@ fn expired_cookies_are_named_with_the_command_that_takes_them_again() -> Result 
     assert_eq!(heard(&site, "cookie"), [None]);
     Ok(())
 }
+
+/// a firefox profile where firefox keeps one on this system, in the sandbox's home, holding
+/// `rows` of name, host, expiry in milliseconds and origin attributes, as schema 17 does.
+fn firefox_profile(sandbox: &Sandbox, rows: &[(&str, &str, i64, &str)]) -> Result {
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    let root = if cfg!(windows) {
+        home.join("Mozilla/Firefox")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Firefox")
+    } else {
+        home.join(".mozilla/firefox")
+    };
+    let folder = root.join("Profiles/q1w2e3r4.default-release");
+    std::fs::create_dir_all(&folder)?;
+    let db = rusqlite::Connection::open(folder.join("cookies.sqlite"))?;
+    db.execute_batch(
+        "PRAGMA journal_mode = WAL; PRAGMA user_version = 17; \
+         CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes TEXT NOT NULL DEFAULT '', \
+         name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER, \
+         creationTime INTEGER, isSecure INTEGER, isHttpOnly INTEGER, inBrowserElement INTEGER DEFAULT 0, \
+         sameSite INTEGER DEFAULT 0, schemeMap INTEGER DEFAULT 0, isPartitionedAttributeSet INTEGER DEFAULT 0, \
+         updateTime INTEGER, CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes))",
+    )?;
+    for (name, host, expiry, attributes) in rows {
+        db.execute(
+            "INSERT INTO moz_cookies (originAttributes, name, value, host, path, expiry, isSecure) \
+             VALUES (?1, ?2, ?3, ?4, '/', ?5, 0)",
+            rusqlite::params![attributes, name, format!("{name}-value"), host, expiry],
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn cookies_from_firefox_are_shown_and_saved_only_with_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let later = 4_000_000_000_000;
+    firefox_profile(
+        &sandbox,
+        &[
+            ("session", "127.0.0.1", later, ""),
+            ("work", "127.0.0.1", later, "^userContextId=1"),
+            ("sid", "sso.example.org", later, ""),
+        ],
+    )?;
+    let asked = sandbox.run(&["auth", "login", &host, "--browser", "firefox"])?;
+    let stderr = text(&asked.stderr)?;
+    assert_eq!(asked.status.code(), Some(1), "{stderr}");
+    let profile = std::path::Path::new("~").join(if cfg!(windows) {
+        "Mozilla/Firefox/Profiles/q1w2e3r4.default-release"
+    } else if cfg!(target_os = "macos") {
+        "Library/Application Support/Firefox/Profiles/q1w2e3r4.default-release"
+    } else {
+        ".mozilla/firefox/Profiles/q1w2e3r4.default-release"
+    });
+    for told in [
+        format!(
+            "Found 1 cookie for {host} in firefox's profile {}\n",
+            profile.display()
+        ),
+        "session · 127.0.0.1 · expires 2096-10-02\n".to_owned(),
+        "Left out 1 cookie the browser keeps apart, for a container, a private window or another site's frames: work of 127.0.0.1\n".to_owned(),
+        "help: run it again with --yes".to_owned(),
+    ] {
+        assert!(stderr.contains(&told), "{told}: {stderr}");
+    }
+    assert!(
+        !stderr.contains("sid"),
+        "another site's cookie is not named: {stderr}"
+    );
+    assert!(!stderr.contains("-value"), "{stderr}");
+    let before = json(&sandbox.run(&["auth", "--json", "--offline"])?)?;
+    assert!(
+        !before.to_string().contains("site:"),
+        "a no saves nothing: {before}"
+    );
+    let saved = sandbox.run(&["auth", "login", &host, "--browser", "firefox", "--yes"])?;
+    assert!(saved.status.success(), "{}", text(&saved.stderr)?);
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        heard(&site, "cookie"),
+        [Some("session=session-value".to_owned())]
+    );
+    let lines = text(&sandbox.run(&["auth", "--offline"])?.stderr)?;
+    assert!(
+        lines.contains(&format!(
+            "Signed in to {host} with 1 cookie from firefox, the soonest expiring 2096-10-02 ·"
+        )),
+        "{lines}"
+    );
+    Ok(())
+}

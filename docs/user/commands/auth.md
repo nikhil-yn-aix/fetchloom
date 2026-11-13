@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. with `--token`, `--header` or `--cookies`, the host may carry its port, as `data.example.edu:8443` or `localhost:8080`. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. with `--token`, `--header`, `--cookies` or `--browser`, the host may carry its port, as `data.example.edu:8443` or `localhost:8080`. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 
@@ -57,6 +57,7 @@ a website fetchloom has no account for takes its own credential, saved for its h
 ```sh
 fetchloom auth login data.example.org --token
 fetchloom auth login api.example.org --header X-API-Key
+fetchloom auth login data.example.org --browser firefox
 fetchloom auth login data.example.org --cookies cookies.txt
 echo "$LAB_TOKEN" | fetchloom auth login data.example.org --token --with-token
 ```
@@ -76,6 +77,8 @@ warning: this machine has no credential store, so they went in /home/ada/.config
 ```
 
 a file with no cookie for the host fails with `usage` and names the domains it holds cookies for; one whose cookies for the host all expired fails with `auth.required`.
+
+`--browser <name>` reads the cookies from your browser's profile once you signed in to the site there, so a single sign-on page, a second step or a captcha the site asked of you counts. `firefox` reads the profile firefox used last, in its folder on linux, the XDG one firefox 147 moved new installs to, flatpak's, snap's, `~/Library/Application Support/Firefox` on macos and `%APPDATA%\Mozilla\Firefox` on windows; `firefox:<profile>` names another, by its name in `profiles.ini`, its folder's name, as `default-release`, or its folder. fetchloom reads `cookies.sqlite` and the log beside it without opening the database or locking it, so firefox may keep running, and leaves out the cookies firefox keeps apart for a container, a private window or another site's frames. it shows the host's cookies as `--cookies` does, never another site's, then asks before saving them; `--yes` answers, and where nobody can answer the run exits 1 with `unconfirmed`.
 
 a key the host refuses with 401 or 403 ends the command with `auth.required`, exit 40, naming what was refused and the command that saves a new one, as `fetchloom auth login data.example.org --token`; saved cookies that expired are named so.
 

@@ -1,11 +1,17 @@
-//! cookies a person signed in with, from a cookies.txt file, and which of them a website's host
-//! takes: those whose domain covers it, unexpired, and that a request header can hold. the rest
-//! are named, by name and domain only, with why they were left out.
+//! cookies a person signed in with, from a cookies.txt file or a browser's profile, and which of
+//! them a website's host takes: those whose domain covers it, unexpired, and that a request
+//! header can hold. the rest are named, by name and domain only, with why they were left out.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::site::{Cookie, without_port};
+use crate::error::{Error, Kind};
+use crate::source::Var;
+
+mod firefox;
+mod sqlite;
 
 /// why a cookie was left out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,6 +21,128 @@ pub(crate) enum Why {
     Expired,
     /// a request header cannot hold its name or value.
     Unsendable,
+    /// the browser keeps it apart: for a container, a private window or another site's frames.
+    Apart,
+}
+
+/// what a browser's profile holds: its cookies, and those it keeps apart or cannot open.
+#[derive(Debug, Default)]
+pub(crate) struct Read {
+    pub(crate) found: Vec<Cookie>,
+    pub(crate) left: Vec<Left>,
+}
+
+/// a browser whose profile fetchloom reads cookies from, and the profile a person named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Browser {
+    named: Named,
+    profile: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Named {
+    Firefox,
+}
+
+/// the browsers `--browser` takes, as its help lists them.
+pub(crate) const BROWSERS: &str = "firefox";
+
+impl Browser {
+    /// the browser `typed` names, with a profile after a `:`, as `firefox:work` or a profile's
+    /// folder.
+    ///
+    /// # Errors
+    ///
+    /// for a browser fetchloom does not read.
+    pub(crate) fn parse(typed: &str) -> Result<Browser, Error> {
+        let (name, profile) = match typed.split_once(':') {
+            Some((name, profile)) if !profile.is_empty() => (name, Some(profile.to_owned())),
+            _ => (typed.trim_end_matches(':'), None),
+        };
+        let named = match name.trim().to_ascii_lowercase().as_str() {
+            "firefox" => Named::Firefox,
+            _ => {
+                return Err(Error::new(
+                    Kind::Usage,
+                    format!(
+                        "fetchloom does not read cookies from \"{}\"",
+                        name.escape_debug()
+                    ),
+                )
+                .help(format!(
+                    "name one of {BROWSERS}, or export the site's cookies as cookies.txt with a browser extension and use --cookies <file>"
+                )));
+            }
+        };
+        Ok(Browser { named, profile })
+    }
+
+    /// the browser as people name it.
+    pub(crate) fn name(&self) -> &'static str {
+        match self.named {
+            Named::Firefox => "firefox",
+        }
+    }
+
+    /// the cookies `host` takes at `now` from the profile this browser used last, or the one a
+    /// person named, with those left out, and the file they came from.
+    ///
+    /// # Errors
+    ///
+    /// when no profile has cookies, or its file cannot be read.
+    pub(crate) fn cookies(
+        &self,
+        var: Var<'_>,
+        host: &str,
+        now: SystemTime,
+    ) -> Result<(Picked, PathBuf), Error> {
+        let roots = firefox::roots(var);
+        let file = firefox::file(&roots, self.profile.as_deref()).ok_or_else(|| {
+            let looked: Vec<String> = roots.iter().map(|root| crate::units::path(root)).collect();
+            Error::new(
+                Kind::Usage,
+                format!("found no {} profile with cookies", self.name()),
+            )
+            .detail(format!("looked in {}", looked.join(", ")))
+            .help(format!(
+                "sign in to {} in {} first, or name the profile's folder, as `--browser {}:<folder>`",
+                without_port(host),
+                self.name(),
+                self.name()
+            ))
+        })?;
+        let read = firefox::read(&file).map_err(|err| {
+            Error::io(
+                format!(
+                    "could not read {}'s cookies in {}",
+                    self.name(),
+                    crate::units::path(&file)
+                ),
+                &err,
+            )
+        })?;
+        let mut picked = pick(read.found, host, now);
+        picked.left.extend(
+            read.left
+                .into_iter()
+                .filter(|left| covers(&left.domain, host)),
+        );
+        Ok((picked, file))
+    }
+}
+
+/// the newest of `files` by when it last changed, as the profile a browser used last.
+fn newest(files: Vec<PathBuf>) -> Option<PathBuf> {
+    files
+        .into_iter()
+        .filter_map(|file| {
+            let changed = std::fs::metadata(&file)
+                .and_then(|meta| meta.modified())
+                .ok()?;
+            Some((changed, file))
+        })
+        .max_by_key(|(changed, _)| *changed)
+        .map(|(_, file)| file)
 }
 
 /// a cookie left out, named without its value.

@@ -31,7 +31,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [drop](docs/user/commands/drop.md): how to leave files out of a dataset for good: `fetchloom drop` writes patterns to data.toml; `-n` previews
 - [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, `-n` previews; `cache verify` hashes every cached file
 - [settings](docs/user/commands/settings.md): which value each setting has and where it came from
-- [auth](docs/user/commands/auth.md): how to sign in once: `auth login`, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; for any website, `--token`, `--header <name>` or `--cookies <file>` save its own key or session cookies for its host alone; `auth logout` signs out, with `--host` too
+- [auth](docs/user/commands/auth.md): how to sign in once: `auth login`, with keys shared with each source's own tools, `--host` naming a dataverse site and `--with-token` reading a key from stdin; for any website, `--token`, `--header <name>`, `--browser firefox` or `--cookies <file>` save its own key or session cookies for its host alone; `auth logout` signs out, with `--host` too
 - [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish, dataset names included
 
 ## guides

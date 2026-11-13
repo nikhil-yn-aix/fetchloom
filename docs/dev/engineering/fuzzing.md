@@ -14,6 +14,7 @@ bolero exercises parsers inside their modules without exposing a separate public
 | `source::drive::folder::tests::fuzz_drive_pages` | `src/source/drive/folder.rs` | folder and download-page parsing remains safe for arbitrary text |
 | `net::headers::tests::fuzz_response_headers` | `src/net/headers.rs` | response headers and suggested filenames remain valid when accepted |
 | `source::xml::tests::fuzz_object_listings` | `src/source/xml.rs` | the XML reader never panics, and accepted elements have valid names |
+| `auth::cookies::sqlite::tests::fuzz_cookie_databases` | `src/auth/cookies/sqlite/tests.rs` | a browser's cookie database with any bytes changed, beside any log, never panics the reader |
 
 all targets must avoid panics. where a writer exists, round trips must preserve the accepted value. the test body remains beside the parser so a minimized failing input can become a nearby regression case.
 
@@ -42,6 +43,6 @@ cargo bolero test --toolchain nightly-2026-11-03 --target x86_64-unknown-linux-g
 
 when a crash appears, preserve the input, minimize it, and add a deterministic regression test that fails before fixing the parser. run that test and the parser's module after the fix, then repeat the fuzz target. keep only inputs needed to explain and reproduce the behavior.
 
-[weekly deep checks](ci.md#scheduled-deep-checks) run all eight targets, including the joined-input property whose name lacks `fuzz_`, one after another from one build. each gets five minutes, one worker, a 10-second input timeout and a 64 KiB input cap. logs and crashes survive a failure for fourteen days; a timeout fails. the scheduled corpus starts fresh, without a growing cache. the ordinary short properties remain part of every native CI run.
+[weekly deep checks](ci.md#scheduled-deep-checks) run the eight targets above the cookie database reader, including the joined-input property whose name lacks `fuzz_`, one after another from one build. each gets five minutes, one worker, a 10-second input timeout and a 64 KiB input cap. logs and crashes survive a failure for fourteen days; a timeout fails. the scheduled corpus starts fresh, without a growing cache. the ordinary short properties remain part of every native CI run. the cookie database reader's runs in that short pass alone, since a ninth five-minute target would take the job past its 80-minute cap.
 
 related: [building and testing](building-and-testing.md), [sources](../architecture/sources.md), [archives](../architecture/archives.md), [project](../architecture/project.md).

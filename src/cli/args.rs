@@ -151,7 +151,7 @@ on disk: a key is saved where the source's own tools read it, so one key works i
     pub(super) const LOGIN: &str = "examples:
   fetchloom auth login hf
   fetchloom auth login dataverse --host demo.dataverse.org
-  fetchloom auth login data.example.org --token
+  fetchloom auth login data.example.org --browser firefox
   fetchloom auth login hf --with-token
 
 on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in .netrc for curl and wget too, and other keys in the system's credential store. asks before saving";
@@ -788,6 +788,16 @@ pub(crate) struct Login {
         conflicts_with_all = ["token", "header", "with_token"]
     )]
     pub(crate) cookies: Option<std::path::PathBuf>,
+
+    /// for any website: save its cookies from your browser once you signed in there:
+    /// firefox, or firefox:<profile>
+    #[arg(
+        long,
+        value_name = "name",
+        help_heading = "options",
+        conflicts_with_all = ["token", "header", "cookies", "with_token"]
+    )]
+    pub(crate) browser: Option<String>,
 }
 
 /// options of `auth logout`.

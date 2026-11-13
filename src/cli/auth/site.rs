@@ -18,7 +18,7 @@ use crate::output::{Output, Warning};
 
 /// whether `login` saves a website's own credential rather than an account's key.
 pub(super) fn wanted(login: &Login) -> bool {
-    login.token || login.header.is_some() || login.cookies.is_some()
+    login.token || login.header.is_some() || login.cookies.is_some() || login.browser.is_some()
 }
 
 /// the most of a cookies.txt file read: a browser's whole jar takes a few MiB.
@@ -65,7 +65,7 @@ fn site_host(typed: &str) -> Result<String, Error> {
             format!("{typed} has an account of its own, which takes its own kind of key"),
         )
         .help(format!(
-            "run `{}`. --token, --header and --cookies are for websites fetchloom has no account for",
+            "run `{}`. --token, --header, --cookies and --browser are for websites fetchloom has no account for",
             account.command()
         ))),
         Err(error) => site::host(typed).ok_or(error),
@@ -94,6 +94,10 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
     let run = || -> Result<Origin, Error> {
         let saved = if let Some(path) = &login.cookies {
             let saved = from_file(context, &host, path)?;
+            replacing(context, &host)?;
+            saved
+        } else if let Some(typed) = &login.browser {
+            let saved = from_browser(context, &host, typed)?;
             replacing(context, &host)?;
             saved
         } else {
@@ -171,7 +175,18 @@ fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error>
     let picked = cookies::pick(found, host, SystemTime::now());
     tell(&context.output, host, &picked, &format!("in {shown}"));
     if picked.kept.is_empty() {
-        return Err(none_kept(host, &picked, &shown));
+        let bare = site::without_port(host);
+        let again = format!(
+            "sign in at {bare} in your browser again and export its cookies, then run the same command again"
+        );
+        let error = none_kept(host, &picked, &shown, &again);
+        return Err(if error.kind == Kind::Usage {
+            error.help(format!(
+                "export the cookies while you are signed in at {bare}, or name the host they were set for"
+            ))
+        } else {
+            error
+        });
     }
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     Ok(Saved::Cookies {
@@ -180,8 +195,9 @@ fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error>
     })
 }
 
-/// the error for cookies of which `host` takes none, from `place`.
-fn none_kept(host: &str, picked: &Picked, place: &str) -> Error {
+/// the error for cookies of which `host` takes none, from `place`: expired ones, with `again`
+/// for help, or none at all, whose domains it names.
+fn none_kept(host: &str, picked: &Picked, place: &str, again: &str) -> Error {
     let expired = picked
         .left
         .iter()
@@ -191,10 +207,7 @@ fn none_kept(host: &str, picked: &Picked, place: &str) -> Error {
             Kind::AuthRequired,
             format!("the cookies for {host} in {place} have expired"),
         )
-        .help(format!(
-            "sign in at {} in your browser again and export its cookies, then run the same command again",
-            site::without_port(host)
-        ));
+        .help(again);
     }
     let mut domains: Vec<&str> = Vec::new();
     for left in &picked.left {
@@ -202,12 +215,65 @@ fn none_kept(host: &str, picked: &Picked, place: &str) -> Error {
             domains.push(&left.domain);
         }
     }
-    Error::new(Kind::Usage, format!("{place} holds no cookies for {host}"))
-        .details_up_to(&[format!("it holds cookies for {}", domains.join(", "))], 1)
-        .help(format!(
-            "export the cookies while you are signed in at {}, or name the host they were set for",
-            site::without_port(host)
-        ))
+    let error = Error::new(Kind::Usage, format!("{place} holds no cookies for {host}"));
+    if domains.is_empty() {
+        return error;
+    }
+    let named: Vec<&str> = domains.into_iter().take(10).collect();
+    error.detail(format!("it holds cookies for {}", named.join(", ")))
+}
+
+/// the cookies for `host` in the profile of the browser `typed` names, once they are shown, by
+/// name, domain and expiry, with those left out that a person might have expected.
+fn from_browser(context: &Context, host: &str, typed: &str) -> Result<Saved, Error> {
+    let browser = cookies::Browser::parse(typed)?;
+    let (mut picked, file) = browser.cookies(&auth::env, host, SystemTime::now())?;
+    // a profile holds every site's cookies; only those of the host's own site are worth a word
+    picked
+        .left
+        .retain(|left| left.why != Why::Elsewhere || same_site(&left.domain, host));
+    let profile = file.parent().unwrap_or(&file);
+    let place = format!(
+        "{}'s profile {}",
+        browser.name(),
+        crate::units::path(profile)
+    );
+    tell(&context.output, host, &picked, &format!("in {place}"));
+    let bare = site::without_port(host);
+    if picked.kept.is_empty() {
+        let name = browser.name();
+        let again = format!("sign in to {bare} in {name} again, then run the same command again");
+        let error = none_kept(host, &picked, &place, &again);
+        return Err(if error.kind == Kind::Usage {
+            error.help(format!(
+                "sign in to {bare} in {name}, then run the same command again. a profile other than the one it used last is named as `--browser {name}:<profile>`"
+            ))
+        } else {
+            error
+        });
+    }
+    Ok(Saved::Cookies {
+        from: Taken::Browser(typed.trim().to_owned()),
+        cookies: picked.kept,
+    })
+}
+
+/// whether a cookie for `domain` belongs to the same site as `host`: both end in its last two
+/// labels, or three where the second to last is short, as in `example.co.uk`.
+fn same_site(domain: &str, host: &str) -> bool {
+    let host = site::without_port(host).to_ascii_lowercase();
+    if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
+        return domain.eq_ignore_ascii_case(&host);
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    let keep = if labels.len() > 2 && labels[labels.len() - 2].len() <= 3 {
+        3
+    } else {
+        2
+    };
+    let base = labels[labels.len().saturating_sub(keep)..].join(".");
+    let domain = domain.trim_start_matches('.').to_ascii_lowercase();
+    domain == base || domain.ends_with(&format!(".{base}"))
 }
 
 /// tells which cookies `from` holds for `host`, by name, domain and expiry, never by value, and
@@ -234,6 +300,10 @@ fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
         (Why::Elsewhere, "for other hosts"),
         (Why::Expired, "that expired"),
         (Why::Unsendable, "no request can carry"),
+        (
+            Why::Apart,
+            "the browser keeps apart, for a container, a private window or another site's frames",
+        ),
     ] {
         let mut domains: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut order: Vec<&str> = Vec::new();
