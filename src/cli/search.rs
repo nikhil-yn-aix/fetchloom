@@ -247,9 +247,8 @@ async fn find(
             &format!("searching for \"{words}\" asks sites such as hugging face"),
         ));
     }
-    let asked: Vec<&str> = Catalog::ALL
+    let asked: Vec<&str> = Catalog::asked(catalogs)
         .into_iter()
-        .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
         .map(Catalog::label)
         .collect();
     let named = units::listed(&asked, "and");

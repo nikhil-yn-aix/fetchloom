@@ -767,7 +767,7 @@ pub(crate) struct Search {
     pub(crate) words: Vec<String>,
 
     /// search only this site: hf, kaggle, zenodo, ena, geo, dandi or openneuro. repeat it or use
-    /// commas for more
+    /// commas for more. without it, every site but ena and dandi, searched only when named
     #[arg(
         long,
         value_name = "source",

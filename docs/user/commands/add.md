@@ -29,7 +29,7 @@ fetchloom add [options] -i <file>
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
-[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro; quote several words, as in `fetchloom add "fashion mnist"`. data.toml records the id you chose, not the search words.
+[global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`; quote several words, as in `fetchloom add "fashion mnist"`. data.toml records the id you chose, not the search words.
 
 ## what happens
 

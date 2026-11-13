@@ -63,6 +63,21 @@ impl Catalog {
         Catalog::OpenNeuro,
     ];
 
+    /// the sites a search asks, in turn order: those `named` with `--source`, else all but ENA
+    /// and dandi, specialist archives slow to answer, so a search without `--source` stays quick.
+    pub(crate) fn asked(named: &[Catalog]) -> Vec<Catalog> {
+        Catalog::ALL
+            .into_iter()
+            .filter(|catalog| {
+                if named.is_empty() {
+                    !matches!(catalog, Catalog::Ena | Catalog::Dandi)
+                } else {
+                    named.contains(catalog)
+                }
+            })
+            .collect()
+    }
+
     /// the catalog's name in the story and in `source`.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -127,8 +142,9 @@ const GRACE: Duration = Duration::from_secs(3);
 /// to 7 s, and a failing one retried for 76 s.
 const NAMED_GRACE: Duration = Duration::from_secs(10);
 
-/// asks the `catalogs` together for `limit` matches each, taking turns in rank order, with exact
-/// names moved to the front; with no `limit`, each gives [`LIMIT`] and [`MOST`] of them are shown.
+/// asks the sites [`Catalog::asked`] picks for `catalogs` together for `limit` matches each,
+/// taking turns in rank order, with exact names moved to the front; with no `limit`, each gives
+/// [`LIMIT`] and [`MOST`] of them are shown.
 pub(crate) async fn search(
     api: &impl Api,
     words: &str,
@@ -136,10 +152,7 @@ pub(crate) async fn search(
     limit: Option<usize>,
 ) -> Result<Search, Error> {
     let (limit, most) = limit.map_or((LIMIT, Some(MOST)), |limit| (limit, None));
-    let asked: Vec<Catalog> = Catalog::ALL
-        .into_iter()
-        .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
-        .collect();
+    let asked = Catalog::asked(catalogs);
     let mut asking: Vec<Asking<'_>> = asked
         .iter()
         .enumerate()

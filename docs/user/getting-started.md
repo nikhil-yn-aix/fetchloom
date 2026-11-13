@@ -71,7 +71,7 @@ cd iris-study
 fetchloom add iris
 ```
 
-fetchloom searches hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for iris and shows a list. move to `hf:datasets/scikit-learn/iris` with the arrow keys and press enter. to skip the list, give the dataset's link instead:
+fetchloom searches hugging face, kaggle, zenodo, GEO and openneuro for iris and shows a list. move to `hf:datasets/scikit-learn/iris` with the arrow keys and press enter. to skip the list, give the dataset's link instead:
 
 ```sh
 fetchloom add https://huggingface.co/datasets/scikit-learn/iris

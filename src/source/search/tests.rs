@@ -42,6 +42,38 @@ fn recorded() -> Recorded {
         .fixture(&openneuro("iris", 3), "search/openneuro.json")
 }
 
+/// a search without `--source` leaves out ENA and dandi, whose specialist archives answer slowly,
+/// and asks each of them once it is named.
+#[test]
+fn ena_and_dandi_are_searched_only_when_named() {
+    let hosts = |catalogs: &[Catalog]| {
+        let recorded = recorded();
+        block_on(search(&recorded, "iris", catalogs, Some(LIMIT))).unwrap();
+        let mut hosts: Vec<String> = recorded
+            .asked()
+            .iter()
+            .map(|asked| Url::parse(asked).unwrap().host_str().unwrap().to_owned())
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        hosts
+    };
+    assert_eq!(
+        hosts(&[]),
+        [
+            "api.kaggle.com",
+            "eutils.ncbi.nlm.nih.gov",
+            "huggingface.co",
+            "openneuro.org",
+            "zenodo.org"
+        ]
+    );
+    assert_eq!(
+        hosts(&[Catalog::Ena, Catalog::Dandi]),
+        ["api.dandiarchive.org", "www.ebi.ac.uk"]
+    );
+}
+
 #[test]
 fn words_search_but_links_ids_dois_and_punctuation_do_not() {
     for text in [
@@ -71,7 +103,7 @@ fn words_search_but_links_ids_dois_and_punctuation_do_not() {
 
 #[test]
 fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
-    let result = block_on(search(&recorded(), "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&recorded(), "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     let references: Vec<_> = result
         .candidates
         .iter()
@@ -167,7 +199,7 @@ fn private_repositories_are_skipped_and_gated_ones_marked() {
 #[test]
 fn a_failed_source_warns_without_discarding_the_others() {
     let api = recorded().on(KAGGLE, 403, b"denied".to_vec());
-    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 14);
     assert_eq!(result.candidates[1].source, "zenodo");
     assert_eq!(result.warnings.len(), 1);
@@ -199,7 +231,7 @@ fn empty_success_is_not_an_all_sources_failure() {
         .on(GEO, 403, Vec::new())
         .on(DANDI, 403, Vec::new())
         .on(&openneuro("iris", 3), 403, Vec::new());
-    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings.len(), 6);
 }
@@ -207,7 +239,7 @@ fn empty_success_is_not_an_all_sources_failure() {
 #[test]
 fn invalid_json_warns_instead_of_hiding_successful_catalogs() {
     let api = recorded().on(HF, 200, b"not json".to_vec());
-    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 14);
     assert!(result.warnings[0].starts_with("hugging face search failed: "));
 }
@@ -223,7 +255,13 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=fashion+mnist+AND+gse%5BETYP%5D&retmax=3&retmode=json&tool=fetchloom", 200, br#"{"esearchresult":{"idlist":[]}}"#.to_vec())
         .on("https://api.dandiarchive.org/api/dandisets/?search=fashion+%28mnist%29%3A*%26&page_size=3&ordering=-stars", 200, br#"{"results":[]}"#.to_vec())
         .on(&openneuro("fashion (mnist):*&", 3), 200, br#"{"data":{"advancedSearch":{"edges":[]}}}"#.to_vec());
-    let result = block_on(search(&api, "fashion (mnist):*&", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(
+        &api,
+        "fashion (mnist):*&",
+        &Catalog::ALL,
+        Some(LIMIT),
+    ))
+    .unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
     // GEO, having found no series, asks for no summaries
@@ -237,7 +275,7 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     let extra = kaggle[0].clone();
     kaggle.as_array_mut().unwrap().push(extra);
     let api = recorded().on(KAGGLE, 200, serde_json::to_vec(&kaggle).unwrap());
-    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 17);
 }
 
@@ -300,8 +338,8 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
     // zenodo's answer a second before each grace ends
     let (every_soon, named_soon) = (Duration::from_secs(2), Duration::from_secs(9));
     for (catalogs, zenodo, others, found, took) in [
-        (&[][..], None, Duration::ZERO, 14, every),
-        (&[][..], Some(every_soon), Duration::ZERO, 17, every_soon),
+        (&[][..], None, Duration::ZERO, 11, every),
+        (&[][..], Some(every_soon), Duration::ZERO, 14, every_soon),
         (&Catalog::ALL[..], None, Duration::ZERO, 14, named),
         (
             &Catalog::ALL[..],
@@ -310,7 +348,7 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
             17,
             named_soon,
         ),
-        (&[][..], Some(minute), minute, 17, minute),
+        (&[][..], Some(minute), minute, 14, minute),
     ] {
         let api = Late {
             recorded: recorded(),
@@ -339,7 +377,7 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
             (found, took),
             "{catalogs:?} {zenodo:?}"
         );
-        if found == 14 {
+        if zenodo.is_none() {
             assert_eq!(
                 result.warnings,
                 [format!(
@@ -386,7 +424,7 @@ fn sources_are_asked_concurrently() {
         can_answer: AtomicBool::new(false),
     };
     let result = block_on(async {
-        let mut pending = pin!(search(&api, "iris", &[], Some(LIMIT)));
+        let mut pending = pin!(search(&api, "iris", &Catalog::ALL, Some(LIMIT)));
         assert!(
             pending
                 .as_mut()
@@ -447,7 +485,7 @@ fn invalid_catalog_ids_never_become_candidates() {
         200,
         br#"[{"ref":"not a reference","title":"bad"}]"#.to_vec(),
     );
-    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 14);
     assert!(result.warnings[0].contains("invalid dataset id"));
 }
@@ -503,7 +541,7 @@ fn a_limit_asks_each_catalog_for_that_many() {
             "search/dandi.json",
         )
         .fixture(&openneuro("iris", 1), "search/openneuro.json");
-    let result = block_on(search(&api, "iris", &[], Some(1))).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, Some(1))).unwrap();
     assert_eq!(result.candidates.len(), 7);
 }
 
@@ -673,7 +711,7 @@ fn a_search_without_a_limit_keeps_each_catalogs_best_then_names_then_ranks() {
         serde_json::from_slice(&fixture_bytes("search/zenodo.json")).unwrap();
     zenodo["hits"]["hits"][2]["metadata"]["title"] = "Iris".into();
     let api = recorded().on(ZENODO, 200, serde_json::to_vec(&zenodo).unwrap());
-    let result = block_on(search(&api, "iris", &[], None)).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, None)).unwrap();
     let references: Vec<_> = result
         .candidates
         .iter()
@@ -748,7 +786,7 @@ fn every_catalogs_best_stays_however_many_others_are_named_as_the_words() {
                 }
             }),
         );
-    let result = block_on(search(&api, "iris", &[], None)).unwrap();
+    let result = block_on(search(&api, "iris", &Catalog::ALL, None)).unwrap();
     let references: Vec<_> = result
         .candidates
         .iter()

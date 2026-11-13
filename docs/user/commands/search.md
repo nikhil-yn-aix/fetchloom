@@ -19,14 +19,14 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 
 | option | meaning |
 |---|---|
-| `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi` or `openneuro`. repeat it or separate names with commas. any other name is a usage error |
+| `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi` or `openneuro`. repeat it or separate names with commas. without it, every site but `ena` and `dandi`, which are searched only when named. any other name is a usage error |
 | `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives up to 3 and at most 12 show, as [results](#results) says; any other value is a usage error, exit 2 |
 
 [global options](README.md#global-options) apply.
 
 ## results
 
-fetchloom asks hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. it interleaves the sites by rank: each site's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
+fetchloom asks hugging face, kaggle, zenodo, GEO and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. ENA and dandi, specialist archives slow to answer, are searched only when `--source` names them, as `--source ena` for sequencing studies or `--source dandi` for neurophysiology, so a search without it stays quick. it interleaves the sites by rank: each site's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
 
 without `--limit`, at most 12 matches show, so the list and the picker fit a terminal 24 rows high: each site's best, then matches named as the search words, then each site's next by rank, as interleaved. a hint says when some were left out, and `--limit` shows every match it asks for. JSON keeps the same 12.
 
@@ -36,9 +36,9 @@ at a terminal, each match is one row with its reference, then title, size, downl
 
 ```text
       Found 12 datasets for "iris"
-            hf:datasets/scikit-learn/iris                                  18.1 KiB   11k downloads
-            kaggle:uciml/iris                    Iris Species               3.6 KiB  964k downloads
-            zenodo:23233774                      IRIS: ICESat-2 River…      1.1 GiB  2.4k downloads
+            hf:datasets/scikit-learn/iris                                    18.1 KiB
+            kaggle:uciml/iris                            Iris Species         3.6 KiB
+            zenodo:23233774                              IRIS: ICESat-2…      1.1 GiB
   hint: each site's best matches are shown, 12 in all; `--limit 20` shows up to 20 from each
 ```
 
@@ -66,7 +66,7 @@ with interactive stdin and stderr, an arrow-key picker asks which dataset you me
 with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same rows come once, numbered, and nothing on the screen moves: type the number of a row and press enter. a number not on the list asks again, and q cancels, as above. from a real run at a 100-column terminal, shortened:
 
 ```text
-  Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
+  Searching hugging face, kaggle, zenodo, GEO and openneuro for "iris"
   which one?
      1 hf:datasets/scikit-learn/iris                                         18.1 KiB
      2 kaggle:uciml/iris                            Iris Species              3.6 KiB
@@ -79,7 +79,7 @@ with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same ro
 without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 100-column terminal with `TERM=dumb`, shortened:
 
 ```text
-  Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
+  Searching hugging face, kaggle, zenodo, GEO and openneuro for "iris"
       Found 12 datasets for "iris"; add one by its id:
             hf:datasets/scikit-learn/iris                                    18.1 KiB
             kaggle:uciml/iris                            Iris Species         3.6 KiB

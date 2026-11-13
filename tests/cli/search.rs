@@ -258,7 +258,7 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
             assert_eq!(stderr, "");
         } else {
             assert!(stderr.contains(
-                "Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for \"iris\""
+                "Searching hugging face, kaggle, zenodo, GEO and openneuro for \"iris\""
             ));
             assert!(stderr.contains("Found"));
             for hint in [
@@ -322,55 +322,44 @@ fn finding() -> Result<Vec<(&'static str, Server)>> {
     ])
 }
 
-/// ENA, GEO, dandi and openneuro are searched with the others, each through its own API: GEO
-/// finds series, then asks for their titles, and openneuro gets the header its API asks of a
-/// query sent by GET.
+/// GEO and openneuro are searched with the others, and ENA and dandi, slow specialist archives,
+/// only when `--source` names them, each through its own API: GEO finds series, then asks for
+/// their titles, and openneuro gets the header its API asks of a query sent by GET.
 #[test]
-fn ena_geo_dandi_and_openneuro_are_searched_with_the_others() -> Result {
+fn ena_and_dandi_are_searched_when_named_and_geo_and_openneuro_with_the_others() -> Result {
     let sandbox = Sandbox::new()?;
     let catalogs = Catalogs {
         others: finding()?,
         ..Catalogs::new(b"[]", b"[]", br#"{"hits":{"hits":[]}}"#)?
     };
+    let references = |output: &std::process::Output| -> Result<Vec<String>> {
+        Ok(text(&output.stdout)?
+            .lines()
+            .filter_map(|line| line.split('\t').next())
+            .map(str::to_owned)
+            .collect())
+    };
     let output = catalogs.command(&sandbox, &["search", "iris"]).output()?;
     let stderr = text(&output.stderr)?;
     assert!(output.status.success(), "{stderr}");
     assert!(
-        stderr.contains(
-            "Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for \"iris\""
-        ),
+        stderr.contains("Searching hugging face, kaggle, zenodo, GEO and openneuro for \"iris\""),
         "{stderr}"
     );
-    let stdout = text(&output.stdout)?;
-    let references: Vec<&str> = stdout
-        .lines()
-        .filter_map(|line| line.split('\t').next())
-        .collect();
     assert_eq!(
-        references,
+        references(&output)?,
         [
-            "ena:SRP455996",
             "geo:GSE318345",
-            "dandi:000623",
             "openneuro:ds001037",
-            "ena:SRP630995",
             "geo:GSE311178",
-            "dandi:000044",
             "openneuro:ds007046",
-            "ena:SRP266745",
             "geo:GSE320313",
-            "dandi:001361",
         ],
         "{stderr}"
     );
     let asked = |at: usize| catalogs.others[at].1.requests();
-    assert!(
-        asked(0)[0].starts_with(
-            "get /ebisearch/ws/rest/sra-study?query=iris&size=3&format=json&fields=name%2cdescription "
-        ),
-        "{:?}",
-        asked(0)
-    );
+    assert!(asked(0).is_empty(), "ENA: {:?}", asked(0));
+    assert!(asked(2).is_empty(), "dandi: {:?}", asked(2));
     let geo = asked(1);
     assert_eq!(geo.len(), 2, "{geo:?}");
     assert!(
@@ -383,11 +372,6 @@ fn ena_geo_dandi_and_openneuro_are_searched_with_the_others() -> Result {
         ),
         "{geo:?}"
     );
-    assert!(
-        asked(2)[0].starts_with("get /api/dandisets/?search=iris&page_size=3&ordering=-stars "),
-        "{:?}",
-        asked(2)
-    );
     let openneuro = asked(3);
     assert!(
         openneuro[0].starts_with("get /crn/graphql?query="),
@@ -396,6 +380,39 @@ fn ena_geo_dandi_and_openneuro_are_searched_with_the_others() -> Result {
     assert!(
         openneuro[0].contains("\r\napollo-require-preflight: true\r\n"),
         "{openneuro:?}"
+    );
+    let output = catalogs
+        .command(&sandbox, &["search", "iris", "--source", "ena,dandi"])
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Searching ENA and dandi for \"iris\""),
+        "{stderr}"
+    );
+    assert_eq!(
+        references(&output)?,
+        [
+            "ena:SRP455996",
+            "dandi:000623",
+            "ena:SRP630995",
+            "dandi:000044",
+            "ena:SRP266745",
+            "dandi:001361",
+        ],
+        "{stderr}"
+    );
+    assert!(
+        asked(0)[0].starts_with(
+            "get /ebisearch/ws/rest/sra-study?query=iris&size=3&format=json&fields=name%2cdescription "
+        ),
+        "{:?}",
+        asked(0)
+    );
+    assert!(
+        asked(2)[0].starts_with("get /api/dandisets/?search=iris&page_size=3&ordering=-stars "),
+        "{:?}",
+        asked(2)
     );
     Ok(())
 }
@@ -485,20 +502,20 @@ fn a_search_without_a_limit_shows_twelve_matches_and_each_sites_best() -> Result
             "hf:datasets/scikit-learn/iris",
             "kaggle:uciml/iris",
             "zenodo:23233774",
-            "ena:SRP455996",
             "geo:GSE318345",
-            "dandi:000623",
             "openneuro:ds001037",
             "hf:datasets/fatdove/Iris_Database",
             "kaggle:himanshunakrani/iris-dataset",
             "zenodo:1319069",
-            "ena:SRP630995",
             "geo:GSE311178",
+            "openneuro:ds007046",
+            "hf:datasets/irisreto/HAL",
+            "kaggle:arshid/iris-flower-dataset",
         ]
     );
     assert_eq!(
         found(&["search", "iris", "--limit", "3", "--json"])?.len(),
-        20
+        14
     );
     let output = every()?.command(&sandbox, &["search", "iris"]).output()?;
     let stderr = text(&output.stderr)?;
