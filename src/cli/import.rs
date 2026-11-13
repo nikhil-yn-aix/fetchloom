@@ -12,7 +12,6 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 
 use super::add::{AS, AddProject, free_name, from_here, render_add, sync_add, usable};
 use super::args::Add;
-use super::import;
 use super::project::{Report, dry_run_done, ignore_data};
 use super::sync::place::Changes;
 use super::sync::{Given, Loop};
@@ -46,7 +45,7 @@ pub(super) async fn import_held(
     let adding = &*adding;
     let project = &adding.project;
     let manifest = &adding.manifest;
-    let start = import::located(shown, here, std::env::home_dir().as_deref())?;
+    let start = located(shown, here, std::env::home_dir().as_deref())?;
     if !dry_run {
         project.check_writable()?;
     }
@@ -55,7 +54,7 @@ pub(super) async fn import_held(
     } else {
         open_cache()?
     };
-    import::refuse_overlap(
+    refuse_overlap(
         &start,
         shown,
         &project.root,
@@ -67,7 +66,7 @@ pub(super) async fn import_held(
         .as_ref()
         .and_then(|name| current(old.as_ref(), name, &manifest.datasets[name.as_str()]));
     if let (Some(name), Some(pinned)) = (&supplied, pinned)
-        && let Some(difference) = import::first_difference(&walked.files, &pinned.files)
+        && let Some(difference) = first_difference(&walked.files, &pinned.files)
     {
         return Err(other_files(shown, name, difference));
     }
@@ -75,7 +74,7 @@ pub(super) async fn import_held(
         (Some(name), _) => name.clone(),
         (None, Some(asked)) => asked.to_owned(),
         (None, None) => {
-            import::dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
+            dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
         }
     };
     let net = Arc::new(context.net());
@@ -95,8 +94,8 @@ pub(super) async fn import_held(
         let found = (&walked, shown, supplying);
         return Ok(preview_import(&work, manifest, found, &name, here));
     }
-    import::room(context, &cache, &walked, shown)?;
-    let copied = import::into_cache(context, &cache, &walked)?;
+    room(context, &cache, &walked, shown)?;
+    let copied = into_cache(context, &cache, &walked)?;
     let how = if copied.cloned { "cloned" } else { "copied" };
     let told = format!(
         "{} · {}, {how} into the cache; {shown} is unchanged",
@@ -266,7 +265,7 @@ async fn import_new(
         source.extract,
     )?;
     let manifest = Manifest::parse(&updated)?;
-    let pinned = import::pinned(name, import_source(&manifest.datasets[name], name)?, files);
+    let pinned = pinned(name, import_source(&manifest.datasets[name], name)?, files);
     let names = [name.to_owned()];
     let outcome = sync_add(
         work,
@@ -335,12 +334,12 @@ async fn supply(
     let manifest = &adding.manifest;
     let given = match current(old.as_ref(), name, &manifest.datasets[name]) {
         Some(pinned) => {
-            if let Some(difference) = import::first_other_bytes(&files, &pinned.files) {
+            if let Some(difference) = first_other_bytes(&files, &pinned.files) {
                 return Err(other_files(shown, name, difference));
             }
             Vec::new()
         }
-        None => vec![Given::Locked(import::pinned(name, source, files))],
+        None => vec![Given::Locked(pinned(name, source, files))],
     };
     let pins = !given.is_empty();
     let output = &work.context.output;
@@ -444,7 +443,7 @@ fn walk_import(
         })
         .map(str::to_owned);
     let source = import_entry(manifest, supplied.as_deref(), args)?;
-    let walked = import::walk(start, shown, &source, &context.stop)?;
+    let walked = walk(start, shown, &source, &context.stop)?;
     let output = &context.output;
     tell_skipped(output, shown, &walked.skipped);
     tell_system(output, shown, &walked.system);
@@ -455,7 +454,7 @@ fn walk_import(
     {
         // a name data.toml has already takes a number once the files are in, so it is not told
         let named = args.name.clone().unwrap_or_else(|| {
-            import::dataset_name(start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
+            dataset_name(start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
         });
         let dataset = if args.name.is_none() && manifest.datasets.contains_key(&named) {
             "<name>"
