@@ -105,7 +105,7 @@ class Fetchloom(Tool):
 
     def populate(self, scenario, workdir):
         for name in ("data.toml", "data.lock"):
-            shutil.copyfile(Path(scenario["prepared"]) / self.name / name, workdir / "project" / name)
+            shutil.copyfile(Path(scenario["prepared"]) / self.prepared_as / name, workdir / "project" / name)
 
     def cwd(self, workdir):
         return workdir / "project"
@@ -132,10 +132,6 @@ class Variant(Fetchloom):
     @property
     def prepared_as(self):
         return Fetchloom.name
-
-    def populate(self, scenario, workdir):
-        for name in ("data.toml", "data.lock"):
-            shutil.copyfile(Path(scenario["prepared"]) / Fetchloom.name / name, workdir / "project" / name)
 
     def env(self, workdir):
         return {**super().env(workdir), **self.settings}
