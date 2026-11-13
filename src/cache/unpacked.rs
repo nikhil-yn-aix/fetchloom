@@ -1,8 +1,6 @@
-//! what each archive unpacked to, kept under `unpacked/` by the archive's SHA-256, or for an
-//! archive split into parts, by the key [`parts_key`] gives. a record is the archive's tree: one
-//! line per file, sorted by path, holding the path, a tab, the size, a tab and the SHA-256 in
-//! hex. the record's own SHA-256 is the tree hash `data.lock` keeps as `unpacks_to`, so a record
-//! proves itself against the lock.
+//! what each archive unpacked to, under `unpacked/` by its SHA-256 or a split archive's
+//! [`parts_key`]. a record is the archive's tree in data.lock's tree encoding, so its SHA-256
+//! is the `unpacks_to` data.lock keeps and a record proves itself against the lock.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -39,10 +37,9 @@ pub(crate) fn tree_hash(members: &[Member]) -> Sha256 {
     digest::sha256(tree(members).as_bytes())
 }
 
-/// the key the record of an archive split into `parts` goes by: the SHA-256 of `fetchloom parts`
-/// and a line, then a line of each part's SHA-256 in hex, a space and its size, in order. never
-/// the first part's own hash, or a later part that changed would find the files its old bytes
-/// unpacked to.
+/// the key a split archive's record goes by: the SHA-256 of a `fetchloom parts` line, then a line
+/// per part of its hex SHA-256, a space and its size. never the first part's own hash, or a
+/// changed later part would find the files its old bytes unpacked to.
 pub(crate) fn parts_key(parts: impl IntoIterator<Item = (Sha256, u64)>) -> Sha256 {
     let mut text = String::from("fetchloom parts\n");
     for (sha256, size) in parts {
@@ -63,10 +60,8 @@ impl Cache {
         Ok(digest::sha256(text.as_bytes()))
     }
 
-    /// records `bytes`, a tree from elsewhere such as a mirror, as what `archive` unpacks to, when
-    /// they hash to `tree`, the tree data.lock pins, and every path in them stays in its folder.
-    /// the bytes are kept as they are, so the record still hashes to `tree`. says whether they
-    /// were recorded.
+    /// records `bytes`, a tree from elsewhere such as a mirror, as what `archive` unpacks to, kept
+    /// as they are, when they hash to `tree` and every path stays in its folder; true if recorded.
     pub(crate) fn record_tree_bytes(
         &self,
         archive: &Sha256,

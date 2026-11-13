@@ -1,9 +1,6 @@
 //! downloads finished but not yet on disk. on linux one flush of the cache's filesystem covers a
-//! group of downloads, where a flush per file cost more than downloading many small files. a
-//! group is flushed once it is full, once its first download waited a second, when the run waits
-//! on another run's download, or when the batch ends. a download takes its name in the cache
-//! only after a flush that covers it, so a power cut can never leave a damaged object under a
-//! hash.
+//! group of them, as a flush per file cost more than downloading many small files, and each takes
+//! its name only after a flush that covers it, so a power cut never leaves damage under a hash.
 
 use std::collections::HashSet;
 use std::fs;
@@ -19,9 +16,8 @@ use crate::digest::{Md5, Sha256};
 /// its claim's file open until then, and linux lets a process open 1,024 files by default.
 const GROUP: usize = 256;
 
-/// how long the first download waiting in a group waits for the group to fill before the group
-/// is flushed and named anyway, so another run that wants one of them does not wait for the
-/// longest download of this run.
+/// how long the first download in a group waits for it to fill before it is flushed and named
+/// anyway, so another run that wants one of them does not wait for this run's longest download.
 pub(crate) const PUBLISH_WITHIN: Duration = Duration::from_secs(1);
 
 /// a download written in full, read-only, still at its partial name and still claimed.
@@ -128,9 +124,8 @@ impl Group {
     }
 }
 
-/// how many finished downloads wait for one flush in a process that may hold `open_files` files
-/// open: a quarter of them, at most [`GROUP`], which leaves the rest to the downloads still
-/// running, the cache's own files and placing.
+/// how many finished downloads wait for one flush: a quarter of `open_files`, at most [`GROUP`],
+/// leaving the rest to the downloads still running, the cache's own files and placing.
 #[cfg_attr(
     not(target_os = "linux"),
     expect(dead_code, reason = "only linux flushes a group of downloads at once")
@@ -146,9 +141,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Cache {
-    /// from now until [`Cache::publish_downloads`], finished downloads wait to be flushed
-    /// together, a group at a time. false where the filesystem cannot report a failed batch
-    /// flush, so each download flushes on its own as before.
+    /// from now until [`Cache::publish_downloads`], finished downloads wait to be flushed a group
+    /// at a time. false where the filesystem cannot report a failed batch flush.
     #[cfg_attr(
         not(target_os = "linux"),
         expect(
@@ -187,9 +181,8 @@ impl Cache {
         });
     }
 
-    /// keeps a finished download for the batch flush, answering as if it were in place, or
-    /// hands it back when no batch is open. once a group of downloads waits, they are flushed and
-    /// put in place before this one returns.
+    /// keeps a finished download for the batch flush, answering as if it were in place, or hands
+    /// it back when no batch covers it. a full group is flushed and named before this returns.
     pub(super) fn defer(
         &self,
         finished: Finished,

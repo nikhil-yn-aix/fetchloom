@@ -1,7 +1,5 @@
-//! objects found changed, remembered after replacement so projects can check their old hardlinks.
-//! marked objects stay at their names until a verified copy replaces them. lookup hashes objects
-//! written since they were sealed, and objects no newer than their marks, or newer by less than a
-//! coarse clock's two second step.
+//! objects found changed, remembered after repair so projects can check their old hardlinks. a
+//! marked object keeps its name until a verified copy replaces it.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -27,11 +25,9 @@ pub(crate) struct Doubt {
 }
 
 impl Cache {
-    /// the object for `digest` when the cache holds it, with `size` when one is known, and its
-    /// bytes can be trusted. a mark in `marks`, from [`Cache::doubts`], at least as new as the
-    /// object puts it in doubt, as do a writable flag and a time moved since sealing. intact
-    /// objects are sealed and dated again; changed ones are marked and left at their names until
-    /// a fetched copy replaces them.
+    /// the object for `digest`, of `size` when known, when its bytes can be trusted. one in doubt,
+    /// as `doubted` says with `marks` from [`Cache::doubts`], is hashed: an intact one is sealed
+    /// and dated again, a changed one marked and left at its name until a fetched copy replaces it.
     pub(crate) fn trusted(
         &self,
         digest: &Sha256,
@@ -91,9 +87,8 @@ impl Cache {
         }
     }
 
-    /// remembers that the object for `digest` no longer held its bytes, as of now, and which copy
-    /// it was: the file at its name, which projects that placed it as a link still name after a
-    /// repair gives the object a new copy.
+    /// remembers that the object for `digest` no longer held its bytes, as of now, and the copy at
+    /// its name, which projects' links still name after a repair gives the object a new one.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
         let mut copies = self.marked_copies(digest);
         if let Ok(found) = Identity::of(&self.object_path(digest))
@@ -106,12 +101,9 @@ impl Cache {
         self.write_mark(digest, None, &copies)
     }
 
-    /// remembers that `copy`, a file other projects may link that once was the object for
-    /// `digest` and now is not, was found changed, so their links to it are checked. a copy the
-    /// mark records already changes nothing. a mark already there keeps what it says of the
-    /// object at the name: changed, while it holds no replacement time, or replaced then. with no
-    /// mark yet, the object at the name, if the cache holds one, is another file, and its time
-    /// keeps it out of the doubt.
+    /// remembers that `copy`, once the object for `digest` and maybe linked by other projects, was
+    /// found changed, so their links are checked. a mark already there keeps what it says of the
+    /// object at the name; with none, that object is another file, kept out of doubt by its time.
     pub(crate) fn mark_copy_changed(&self, digest: &Sha256, copy: Identity) -> io::Result<()> {
         let path = self.changed_folder().join(digest.hex());
         let marked = match fs::symlink_metadata(&path).and_then(|found| Mark::read(&path, &found)) {
@@ -139,10 +131,9 @@ impl Cache {
         self.write_mark(digest, replacement, &copies)
     }
 
-    /// refreshes the mark so projects checked after an earlier repair see this corruption too.
-    /// the mark's time stays when the change was found, and it holds `written`, when the copy
-    /// that replaced the object was written, which stays out of doubt. only a finished
-    /// replacement may record it.
+    /// records `written`, when the copy that replaced the object was written, which keeps that copy
+    /// out of doubt while projects checked after an earlier repair still see this change. only a
+    /// finished replacement may record it.
     pub(super) fn mark_replaced(&self, digest: &Sha256, written: SystemTime) -> io::Result<()> {
         let copies = self.marked_copies(digest);
         self.write_mark(digest, Some(nanos(written)), &copies)
@@ -168,8 +159,7 @@ impl Cache {
         self.write_atomically(&folder.join(digest.hex()), text.as_bytes())
     }
 
-    /// the copies an earlier mark for `digest` names, which a new mark keeps. a mark that cannot
-    /// be read names none.
+    /// the copies an earlier mark for `digest` names, none when it cannot be read.
     fn marked_copies(&self, digest: &Sha256) -> Vec<Identity> {
         let path = self.changed_folder().join(digest.hex());
         fs::symlink_metadata(&path)
@@ -178,8 +168,7 @@ impl Cache {
             .unwrap_or_default()
     }
 
-    /// every object found changed, with when it was found, in nanoseconds since 1970 like the
-    /// times a project records for its files.
+    /// every object found changed, with when it was found, in nanoseconds since 1970.
     #[cfg(test)]
     pub(crate) fn changed(&self) -> HashMap<Sha256, u64> {
         self.marks()
@@ -337,11 +326,9 @@ impl Mark {
 /// how many changed copies a mark remembers. each repair leaves one behind at most.
 const COPIES: usize = 16;
 
-/// a file apart from its names: its device and inode on unix, its volume and file index on
-/// windows, with its size and time. a mark keeps the copies the cache found changed, so a
-/// project can tell that its link is that very copy. the size and time keep a file made later
-/// under a number a removed copy freed from passing for it, and a copy edited again since the
-/// cache found it changed from passing for what the cache found.
+/// a file apart from its names: device and inode on unix, volume and file index on windows, with
+/// its size and time, so neither a file reusing a freed number nor a copy edited again passes for
+/// the copy a mark records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
     device: u64,
@@ -416,9 +403,8 @@ fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
     .help("check the cache storage and permissions, then run `fetchloom cache verify` and retry")
 }
 
-/// whether the object at `path`, which `seen` describes, holds `digest`'s bytes, by hashing it.
-/// an intact object whose time moved since sealing is dated again through the same handle, so
-/// the next use need not hash it.
+/// hashes the object at `path`, which `seen` describes, against `digest`. an intact one whose time
+/// moved since sealing is dated again through the same handle, so the next use need not hash it.
 pub(super) fn vouch(path: &Path, seen: &fs::Metadata, digest: &Sha256) -> io::Result<bool> {
     let file = super::partial::open_to_redate(path)?;
     let intact = Sha256::of_reader(&file, Block::sized(seen.len().saturating_add(1)))? == *digest;
@@ -438,9 +424,8 @@ pub(super) fn doubted(object: &Path, metadata: &fs::Metadata, marked: Option<u64
         })
 }
 
-/// whether a mark dated `marked` may have been written after `known`, a time read from the disk
-/// or the system clock. hfs+ cuts a file's time down to the second and fat to two, so a mark
-/// written just after `known` can carry an earlier time.
+/// whether a mark dated `marked` may have been written after `known`: hfs+ cuts a file's time down
+/// to the second and fat to two, so a mark written just after can carry an earlier time.
 pub(crate) fn may_follow(marked: u64, known: u64) -> bool {
     marked.saturating_add(COARSE) > known
 }
@@ -510,9 +495,8 @@ mod tests {
         }
     }
 
-    /// an editor that saves in place through a placed hardlink, then puts the read-only flag back,
-    /// as vim's `:w!` does, changes the cache's own copy and leaves it looking sealed. its time
-    /// moved, so the cache hashes it before trusting it, finds the change and marks it.
+    /// vim's `:w!` through a placed hardlink changes the cache's copy and puts the read-only flag
+    /// back, but its time moved, so the cache hashes it before trusting it and marks the change.
     #[test]
     fn an_object_written_through_a_link_and_sealed_again_is_not_trusted() {
         let (_dir, cache) = cache();

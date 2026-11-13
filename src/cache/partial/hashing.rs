@@ -208,7 +208,7 @@ impl HashPipe {
         if let Some(inline) = self.inline.take() {
             return Ok((inline.hasher, inline.received));
         }
-        // closing the queue lets the worker drain it before its file handle and claim go away.
+        // closing the queue lets the worker drain it before its file handle and claim go away
         drop(self.sender.take());
         let worker = self.worker.take().ok_or_else(stopped)?;
         worker.join().map_err(|_| stopped())?

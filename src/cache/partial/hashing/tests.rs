@@ -9,10 +9,9 @@ pub(super) fn wait_for_release(ready: &SyncSender<()>, release: &Receiver<()>) {
     release.recv().unwrap();
 }
 
-/// holds the writer's hash worker until the returned sender is used. a writer records its
-/// progress every second, and a record waits for that worker, so the next one is put off past
-/// the test: on a slow disk a test's writes took a second, and the record waited on the held
-/// worker while the worker waited on the test.
+/// holds the writer's hash worker until the returned sender is used, and puts the writer's next
+/// record past the test: a record waits for that worker, so on a slow disk, where writes took a
+/// second, the record and the held worker waited on each other.
 fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
     writer.saved = Instant::now() + Duration::from_secs(3600);
     let (release, paused) = mpsc::sync_channel(1);

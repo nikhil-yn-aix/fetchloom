@@ -1,7 +1,5 @@
-//! where a cache's space goes: what registered projects need and how much of it they link, what
-//! gc frees now or once it is a day old, and the copies of cached files projects hold.
-//! `fetchloom cache` reports it, and the weekly reminder tells what gc frees from the same
-//! numbers, so the two cannot disagree.
+//! where a cache's space goes, which `fetchloom cache` reports and the weekly reminder reads, so
+//! the two cannot disagree.
 
 use std::collections::HashSet;
 use std::fs;
@@ -57,10 +55,9 @@ pub(crate) struct Usage {
 }
 
 impl Usage {
-    /// what `scan`'s objects hold, against what `needed` keeps, as gc would count them at `now`,
-    /// and the copies of them the files placed in `projects` are, looked at on up to `threads`
-    /// threads. a windows listing does not count an object's names, so there each object is
-    /// opened once.
+    /// what `scan`'s objects hold against what `needed` keeps, as gc would count them at `now`,
+    /// and which files placed in `projects` are copies of them, looked at on `threads`. a windows
+    /// listing counts no names, so there each object is opened once.
     pub(crate) fn measure(
         scan: &Scan,
         needed: &Needed,
@@ -115,9 +112,8 @@ impl Usage {
         Ok(usage)
     }
 
-    /// adds the files placed in the project at `root` that are copies of objects in `held`,
-    /// with one look at each file, on a few threads when there are many, since each look waits
-    /// on the disk.
+    /// adds the files placed in the project at `root` that copy objects in `held`, one look each,
+    /// on a few threads when there are many, since each look waits on the disk.
     fn count_copies(
         &mut self,
         root: &Path,
@@ -160,9 +156,8 @@ impl Usage {
     }
 }
 
-/// how the file at `path`, placed as `placed` records, is a copy of its cached object, if it is
-/// one: a copy or a clone, or a hardlink that has lost its other name. it must still look as it
-/// did when placed, so an edit, the person's own file now, is never counted.
+/// how the file at `path` is a copy of its cached object, if it is: a copy, a clone or a hardlink
+/// that lost its other name, still looking as `placed` records, so an edit is never counted.
 fn copied(path: &Path, placed: &Placed) -> Option<Method> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || Look::of(&metadata) != placed.look {
@@ -286,10 +281,9 @@ mod tests {
         assert_eq!(usage.inputs_only, Some(1));
     }
 
-    /// a cache holding each of `held`, and a project whose state records each of `placed`: its
-    /// path, how it was placed, its bytes, and whether it is still linked to the cache's copy,
-    /// which it can only be where the drive makes links, or a file of its own. returns the folder
-    /// holding both and what `measure` finds.
+    /// a cache holding each of `held`, and a project whose state records each of `placed` by path,
+    /// method, bytes and whether it still links the cache's copy, where the drive makes links.
+    /// returns the folder holding both and what `measure` finds.
     fn report(
         placed: &[(&str, Method, &[u8], bool)],
         held: &[&[u8]],

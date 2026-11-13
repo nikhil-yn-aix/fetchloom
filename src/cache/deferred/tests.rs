@@ -29,7 +29,7 @@ fn finished(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
 fn a_failed_batch_flush_never_names_its_downloads() {
     let (_dir, cache) = cache();
     deferring(&cache);
-    // syncfs rejects an O_PATH handle, so this exercises a real flush error without disk faults.
+    // syncfs rejects an O_PATH handle, so this exercises a real flush error without disk faults
     let file = rustix::fs::open(
         cache.root.join("tmp"),
         rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
@@ -352,9 +352,8 @@ fn a_download_outside_the_batch_filesystem_flushes_itself() {
     cache.publish_downloads().unwrap();
 }
 
-/// a group that waits for more downloads than come takes its names once its first download
-/// waited [`PUBLISH_WITHIN`], so another run that wants one of them does not wait for this run's
-/// longest download, and not a moment before.
+/// a group short of downloads takes its names once its first download waited [`PUBLISH_WITHIN`],
+/// and not a moment before.
 #[test]
 fn a_group_takes_its_names_once_its_first_download_waited_long_enough() {
     let (_dir, cache) = cache();
@@ -393,9 +392,8 @@ fn a_group_takes_its_names_once_its_first_download_waited_long_enough() {
     assert!(cache.object_path(&third.digest).is_file());
 }
 
-/// each download waiting for its group's flush keeps its claim's file open, so a process that
-/// may open few files waits in smaller groups: a group of 256 ran out of files under a limit of
-/// 256, as `add -i` of 1,000 links did.
+/// a process allowed few open files waits in smaller groups, as each waiting download keeps one
+/// open: a group of 256 ran out under a limit of 256, as `add -i` of 1,000 links did.
 #[cfg(target_os = "linux")]
 #[test]
 fn downloads_wait_in_groups_a_low_open_file_limit_can_hold() {

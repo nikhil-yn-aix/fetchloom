@@ -1,6 +1,5 @@
-//! unfinished downloads: the bytes so far, a record of what they are, and a lock so that two
-//! processes never write the same download. anyone who can write to the cache could plant a link
-//! among them, so none of them is ever opened through one.
+//! unfinished downloads: the bytes so far, a record of them, and a lock keeping each to one
+//! process. none is ever opened through a link, which anyone who can write the cache could plant.
 
 use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
 use std::io::{self, Write};
@@ -50,10 +49,8 @@ pub(crate) struct Partial {
     lock: Option<Arc<Claimed>>,
 }
 
-/// the locked file that keeps a download to one process, held by every clone of its claim. the
-/// last one removes it when the download left nothing to resume, while it still holds the lock,
-/// so `partial/` does not keep a file for every link ever fetched. a run that opened the name
-/// before it went locks a file with no name, which [`take_lock`] notices.
+/// the locked file keeping a download to one process. the last clone removes it, still locked,
+/// when nothing is left to resume; a run that opened it before then notices in [`take_lock`].
 #[derive(Debug)]
 pub(super) struct Claimed {
     file: File,
@@ -80,7 +77,7 @@ impl Drop for Claimed {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Record {
-    // deferred publication still needs the original URL in memory.
+    // deferred publication still needs the original URL in memory
     #[serde(serialize_with = "super::serialize_url")]
     url: String,
     received: u64,
@@ -168,9 +165,8 @@ pub(super) fn take_lock(path: &Path, mut opened: File) -> Result<File, TryLockEr
     }
 }
 
-/// opens the claim file at `path`, creating it when missing. windows keeps the name of a file
-/// another run removed until that run closes it, as fat and exfat do, and refuses to open it
-/// meanwhile as if access were denied, so on windows a refusal is tried again for half a second.
+/// opens the claim file at `path`, creating it. windows denies opening a removed file until its
+/// last handle closes, keeping its name meanwhile, so there a refusal is retried for half a second.
 fn open_claim(path: &Path) -> io::Result<File> {
     let retries = if cfg!(windows) { 50 } else { 0 };
     retry_denied(retries, Duration::from_millis(10), || {
@@ -198,8 +194,7 @@ fn retry_denied(
 }
 
 /// the lock file `opened` from `path`, locked, when no download holds it and `path` still names
-/// it: one gc may remove with what it guarded. a file that lost its name since it was opened
-/// belongs to nobody, and the name to the run that took it with a new file.
+/// it, rather than a new file another run made: one gc may remove with what it guarded.
 pub(super) fn unheld(path: &Path, opened: File) -> Option<File> {
     opened.try_lock().ok()?;
     names(path, &opened).ok()?.then_some(opened)
@@ -241,12 +236,10 @@ impl Partial {
             .then_some((record.received, record.validators))
     }
 
-    /// writes from byte `offset` on. the record is the truth: the bytes before `offset` are
-    /// hashed again so the final hash covers the whole file, and bytes past it are cut off,
-    /// unless `keep` keeps the ranges a split download finished there whose bytes still hash to
-    /// what the record says. bytes before `offset` that no longer hash to what the record says,
-    /// as after a power cut, or that this process may not continue, fail with
-    /// [`io::ErrorKind::InvalidData`]. `md5` also computes the MD5, to check one a source stated.
+    /// writes from byte `offset` on, after hashing the bytes before it again, which fail with
+    /// [`io::ErrorKind::InvalidData`] when they no longer hash as recorded or may not be continued.
+    /// bytes past it are cut unless `keep` keeps a split download's ranges that still hash as
+    /// recorded. `md5` also computes the MD5, to check one a source stated.
     pub(crate) fn writer(
         &self,
         offset: u64,
@@ -332,21 +325,17 @@ impl Partial {
         let _ = fs::remove_file(&self.record);
     }
 
-    /// forgets a download that kept no byte, as one refused at its question or failed before its
-    /// first byte arrived. a later run could continue nothing, so `partial/` keeps nothing of it,
-    /// and its lock goes once the claim ends.
+    /// forgets a download that kept no byte, as one refused at its question, since a later run
+    /// could continue nothing. its lock goes once the claim ends.
     pub(crate) fn discard_unstarted(&self) {
         if !fs::symlink_metadata(&self.bytes).is_ok_and(|kept| kept.len() > 0) {
             self.discard();
         }
     }
 
-    /// the file for the bytes, cut to their first `offset` unless `keep` keeps what lies past
-    /// them, and when this run made it, its [`super::object::begun`] time. bytes an earlier run
-    /// kept are used only when this process may continue them.
-    /// otherwise a download from the first byte removes their name and makes a new file there: a
-    /// read-only one was sealed by a run that did not finish publishing, and may already be a
-    /// second name of the object, which must never become writable.
+    /// the file for the bytes, cut to `offset` unless `keep`, with its [`super::object::begun`]
+    /// time when this run made it. from the first byte, kept bytes it may not continue get a new
+    /// file, as a read-only one may be a name of the object, which must never become writable.
     fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<(File, Option<SystemTime>)> {
         if lean
             && let Ok(file) = OpenOptions::new()
@@ -479,9 +468,8 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     }
 }
 
-/// whether this process may write on into the file `metadata` describes: a plain file, still
-/// writable, and on unix this user's own with no other name, so that writing into it can change
-/// nothing outside the download.
+/// whether this process may write on into the file `metadata` describes: a writable plain file,
+/// on unix this user's own with no other name, so writing changes nothing outside the download.
 fn continuable(metadata: &Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -498,7 +486,7 @@ pub(crate) struct PartialWriter {
     cache: Cache,
     file: Arc<File>,
     hasher: HashPipe,
-    // the worker must stop before another writer can claim the download.
+    // the worker must stop before another writer can claim the download
     _lock: Option<Arc<Claimed>>,
     prefix: u64,
     /// the end of the prefix, not yet in the file.
@@ -685,9 +673,8 @@ impl PartialWriter {
         self.absorb()
     }
 
-    /// waits for hashing so the recorded hash covers exactly the prefix written to the file.
-    /// skips a durable flush to avoid stalling every second; a resume rechecks the saved hashes
-    /// in case a power cut kept the record but lost some bytes.
+    /// records the prefix written so far with its hash, without a durable flush, which would stall
+    /// every second; a resume rechecks the hashes in case a power cut lost bytes the record counts.
     pub(crate) fn save(&mut self) -> io::Result<()> {
         self.checkpoint()
             .map_err(|err| self.cache.explained(folder_of(&self.record_path), err))
@@ -751,7 +738,7 @@ impl PartialWriter {
             _lock: lock,
             ..
         } = self;
-        // read-back must finish before resizing could hide a short read.
+        // read-back must finish before resizing could hide a short read
         let (digest, md5) = hasher.finish(prefix)?;
         // bytes past the prefix are not in the hash, such as the end of an earlier version
         let metadata = file.metadata()?;
@@ -795,14 +782,12 @@ impl PartialWriter {
     }
 }
 
-/// the folder `path` is in.
 fn folder_of(path: &Path) -> &Path {
     path.parent().unwrap_or(path)
 }
 
-/// when a download starts the disk writing what it wrote, rather than leave every byte waiting
-/// for the flush after its last one: once it has written `after` bytes, and each time it has
-/// written `every` more.
+/// when a download starts the disk writing, rather than leave every byte for the final flush:
+/// once it has written `after` bytes, then each time it has written `every` more.
 #[derive(Debug)]
 struct Writeback {
     after: u64,
@@ -845,11 +830,9 @@ impl Writeback {
     }
 }
 
-/// starts the disk writing the bytes of `file` from `start` up to `end`, without waiting for it.
-/// `fadvise` with `DONTNEED` starts write-back of a range's dirty pages as `sync_file_range` with
-/// `SYNC_FILE_RANGE_WRITE` does, which neither rustix nor std offers without unsafe code. pages
-/// just written are still dirty or being written, which it keeps in memory; one whose write
-/// already finished may leave.
+/// starts the disk writing `file` from `start` up to `end`, without waiting: `fadvise` with
+/// `DONTNEED` starts write-back as `sync_file_range` would, which needs unsafe code. pages still
+/// dirty or being written stay in memory; one already written may leave.
 #[cfg(target_os = "linux")]
 fn start_writeback(file: &File, start: u64, end: u64) {
     // no length would mean the rest of the file
@@ -875,7 +858,6 @@ impl Write for PartialWriter {
     }
 }
 
-/// hashes the bytes of `file` from `start` up to `end`.
 fn hash_range(file: &File, hasher: &mut Hasher, start: u64, end: u64) -> io::Result<()> {
     let mut buffer = vec![0; usize::try_from(end - start).map_or(BUFFER, |left| left.min(BUFFER))];
     let mut at = start;

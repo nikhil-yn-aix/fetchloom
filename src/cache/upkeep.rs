@@ -25,10 +25,9 @@ pub(crate) struct Object {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
     pub(crate) path: PathBuf,
-    /// when the object last changed, which gc ages it from: its modification time, or on unix
-    /// the later time its details changed, as by its seal, its publishing or a link. a seal dates
-    /// the modification time back to when the download began, a day before for one a later run
-    /// finished.
+    /// when the object last changed, which gc ages it from: its modification time, or on unix its
+    /// ctime when later, which a seal, publishing or a link moves, as a seal dates the modification
+    /// time back to when the download began.
     pub(crate) changed: SystemTime,
     /// how many names its file has, more than one while a hardlink, such as a project's, shares
     /// it. none where a folder's listing does not tell, as on windows.
@@ -36,9 +35,8 @@ pub(crate) struct Object {
 }
 
 impl Object {
-    /// whether a name outside the cache keeps the object's bytes too, as a project's hardlink
-    /// does, so removing it frees nothing. a windows listing does not count names, so there the
-    /// object is opened to count them.
+    /// whether a name outside the cache, as a project's hardlink, keeps the object's bytes, so
+    /// removing it frees nothing. windows listings count no names, so there the object is opened.
     pub(crate) fn has_other_names(&self) -> bool {
         self.names.map_or_else(
             || crate::place::has_other_names(&self.path),
@@ -82,9 +80,8 @@ impl Needed {
     }
 }
 
-/// how a project uses an object it needs, which tells what only builds read. gc keeps every
-/// object a project needs; a later `cache gc --inputs` may free one whose every use is an input,
-/// where it can come back from.
+/// how a project uses an object it needs. gc keeps every one; `cache gc --inputs` may free one
+/// whose every use is an input, where it can come back from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Use {
     /// a file of a fetched dataset in the data folder, or of one with `place = false` no recipe
@@ -169,9 +166,8 @@ struct Registration {
 
 impl Cache {
     /// remembers that the project at `root` uses this cache, so gc keeps what it needs. a
-    /// registration turns read-only once its folder is flushed, so a run that finds it read-only
-    /// and unchanged writes and flushes nothing. a writable one may be a write whose folder flush
-    /// failed, so its folder is flushed again before it is sealed.
+    /// registration turns read-only once its folder is flushed, so an unchanged read-only one costs
+    /// nothing, and a writable one, whose flush may have failed, has its folder flushed again.
     pub(crate) fn register(&self, root: &Path) -> io::Result<()> {
         let path = self.registration(root);
         let text = serde_json::to_vec(&Registration {
@@ -264,10 +260,8 @@ impl Cache {
         Ok(())
     }
 
-    /// removes the object `digest`, which a project needs though only its builds read it, once
-    /// `cache gc --inputs` found a copy elsewhere, recording a refused removal in `not_removed`.
-    /// says whether it went. a folder swapped for a link since the cache opened stops the
-    /// removal, as it stops a sweep's.
+    /// removes the object `digest`, an input `cache gc --inputs` found elsewhere, and says whether
+    /// it went, recording a refusal, as of a folder swapped for a link, in `not_removed`.
     pub(crate) fn free_input(&self, digest: &Sha256, not_removed: &mut Vec<Failure>) -> bool {
         let path = self.object_path(digest);
         removed(&path, self.remove_inside(&path), not_removed)
@@ -344,11 +338,9 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes stale registrations, unneeded objects older than `grace`, the records of results
-    /// no project pins once they are as old, and the downloads no run holds, recording each
-    /// refused removal. an unfinished download keeps a day, so a run tomorrow can continue it,
-    /// unless `grace` is zero, as `--now` asks. a download in progress keeps its bytes either way,
-    /// since its run holds its lock.
+    /// removes stale registrations, unneeded objects and unpinned result records older than
+    /// `grace`, and downloads no run holds, which keep a day unless `grace` is zero, recording each
+    /// refused removal. a download in progress keeps its bytes, as its run holds its lock.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
@@ -487,9 +479,8 @@ impl Cache {
         Ok(())
     }
 
-    /// drops what the cache remembers about a link whose bytes it no longer holds, which would
-    /// only grow: the next download of that link writes a new record. an archive's own bytes go
-    /// once it is unpacked, and while its unpack record stays, the link's record still serves it.
+    /// drops the record of each link whose object and unpack record are both gone, which would
+    /// otherwise only grow; the next download of that link writes a new one.
     fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<Failure>) -> Result<(), Error> {
         for entry in scan_entries(&self.root.join("urls"), not_removed, stop)? {
             stop.check()?;
@@ -513,9 +504,8 @@ impl Cache {
         Ok(())
     }
 
-    /// removes abandoned downloads, and the lock files of downloads nobody holds, while holding
-    /// each lock. a run that opened a lock file before it went locks a file with no name, which
-    /// `claim` notices before it trusts the lock.
+    /// removes abandoned downloads and the lock files nobody holds, holding each lock; a run that
+    /// opened one before it went locks a file with no name, which `claim` notices.
     fn sweep_partials(
         &self,
         abandoned: &dyn Fn(SystemTime) -> bool,
@@ -712,10 +702,8 @@ fn unreadable(path: &Path, error: &io::Error) -> Error {
     Error::io(format!("cannot read {}", path.display()), error)
 }
 
-/// what the file `metadata` describes takes on its disk. a split download writes each part where
-/// it belongs, so until it finishes its file has holes the disk does not hold, and its length
-/// says more than the disk gives up when it goes. windows makes no holes in these files, so there
-/// the length is what the disk holds.
+/// what the file `metadata` describes takes on its disk, which for a split download with holes is
+/// less than its length; windows makes no holes in these files, so there it is the length.
 pub(super) fn on_disk(metadata: &fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
@@ -1082,9 +1070,8 @@ mod tests {
         assert!(leftover.exists());
     }
 
-    /// a download a later run finished is dated back to its first run's start, so a sweep ages
-    /// an object from when it last changed, as on unix its ctime tells: its seal, its publishing
-    /// or a link to it.
+    /// a download a later run finished is dated back to its first run's start, so a sweep ages an
+    /// object by its ctime, which its seal, publishing or a link moves.
     #[cfg(unix)]
     #[test]
     fn an_object_dated_back_to_its_birth_still_gets_a_day() {
@@ -1211,9 +1198,8 @@ mod tests {
         assert_eq!(cache.unfinished().downloads, 0);
     }
 
-    /// a split download writes each part where it belongs, so its file has holes the disk does
-    /// not hold. what unfinished downloads hold, and what gc frees of them, is what the disk
-    /// holds, not the length of their files.
+    /// a split download's file has holes, so what unfinished downloads hold, and what gc frees of
+    /// them, is what the disk holds, not their files' length.
     #[test]
     fn unfinished_downloads_count_what_the_disk_holds() {
         let (_dir, cache) = cache();
@@ -1247,9 +1233,8 @@ mod tests {
         );
     }
 
-    /// unfinished downloads sit only in the 16 folders under `partial/`, so what lies at its top,
-    /// in a folder there that is no shard, or behind a link in place of a shard, is not counted
-    /// and not freed.
+    /// only the 16 shards under `partial/` count, so a file at its top, in a folder that is no
+    /// shard or behind a link in a shard's place, is neither counted nor freed.
     #[test]
     fn only_the_shards_under_partial_hold_unfinished_downloads() {
         let (_dir, cache) = cache();
@@ -1378,9 +1363,8 @@ mod tests {
         assert_eq!(cache.unpacked_archives(), [used]);
     }
 
-    /// a result's record stays while a project pins it, or for a day, as one a build left when it
-    /// failed before writing data.lock does; others go, and with a key's last record its lock
-    /// and its folder.
+    /// a result's record stays while pinned or for a day, as a failed build's does; others go, and
+    /// with a key's last record its lock and its folder.
     #[test]
     fn a_sweep_removes_old_records_no_project_pins() {
         let (_dir, cache) = cache();

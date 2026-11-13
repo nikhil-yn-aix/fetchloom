@@ -1,6 +1,5 @@
-//! per-archive staging folders, and the folders recipes' steps run in. a held lock distinguishes
-//! live writers from killed runs; a filesystem without locks keeps the age rule used for other
-//! temporary files.
+//! per-archive staging folders and the folders recipes' steps run in. a held lock tells a live
+//! writer from a killed run; without locks, the age rule of other temporary files holds.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
@@ -74,10 +73,8 @@ impl Cache {
         Ok(Arc::new(staging))
     }
 
-    /// makes a folder for one step of a build, `tmp/<16 hex>.build`, that only its owner may enter
-    /// on unix, after clearing those of builds that ended without clearing theirs. the lock it
-    /// holds inside tells a sweep that the build still runs, and it takes its name only once
-    /// held, as an archive's staging does.
+    /// makes `tmp/<16 hex>.build` for one step of a build, only its owner's on unix, after clearing
+    /// those of ended builds. its lock, named once held, tells a sweep the build still runs.
     pub(crate) fn build_folder(&self) -> io::Result<(PathBuf, Option<File>)> {
         self.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
         let folder = loop {
@@ -239,7 +236,7 @@ impl Cache {
             }
         }
         // no writer reuses a staging folder. closing its lock before deleting it lets windows
-        // remove the folder too, without an open child waiting for deletion.
+        // remove the folder too, without an open child waiting for deletion
         drop(lock);
         if cleared {
             for name in ["lock", "unlocked"] {
@@ -347,10 +344,9 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
     })
 }
 
-/// removes the folder at `root` and everything in it, never following a link: a link goes as
-/// itself. a step may leave a folder it took its owner's write access from, which gets it back
-/// first, and read-only files, which windows removes only once writable. it goes on past a
-/// failure and returns the first.
+/// removes the folder at `root` and everything in it, a link as itself, first giving back the
+/// write access a step may have taken from a folder, or for windows from a read-only file. it goes
+/// on past a failure and returns the first.
 pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
     let mut first = None;
     let mut todo = vec![(root.to_path_buf(), false)];

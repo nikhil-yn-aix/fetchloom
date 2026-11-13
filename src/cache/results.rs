@@ -1,8 +1,6 @@
-//! what recipes made, kept under `builds/` by the key of each result: `builds/<key>/<tree>` is a
-//! result's tree, in the encoding of the records of unpacked archives, so a record proves itself
-//! against the tree data.lock pins. a key may have several trees, as a step that is not
-//! reproducible gives. `builds/<key>/lock` lets one build of a key run at a time, and a file a
-//! step wrote enters `objects/` here, moved when it has no other name and copied otherwise.
+//! what recipes made, under `builds/<key>/<tree>`: a result's tree in the encoding of unpacked
+//! archives' records, so a record proves itself against the tree data.lock pins. a key may hold
+//! several trees, as a step that is not reproducible gives.
 
 use std::fs::{self, File, TryLockError};
 use std::io;
@@ -82,10 +80,9 @@ impl Cache {
         Ok(tree)
     }
 
-    /// the results of `key` this machine holds whole, newest first: each record whose bytes hash
-    /// to its name, that this user wrote and no one else may write, and whose every object is
-    /// here. a record another user of a shared cache wrote, or could rewrite and rename to its new
-    /// hash, could pair a key with any files, so it is never used.
+    /// the results of `key` this machine holds whole, newest first: records that hash to their
+    /// names, whose objects are all here, and that no other user wrote or may write, since such a
+    /// record could pair the key with any files.
     pub(crate) fn results(&self, key: &Sha256) -> Vec<Built> {
         let folder = self.root.join("builds").join(key.hex());
         let Ok(entries) = fs::read_dir(&folder) else {
@@ -130,8 +127,7 @@ impl Cache {
     }
 
     /// takes the lock of `key`, waiting while another build of it runs, after `waiting` says so
-    /// once. a disk that keeps no locks lets builds of one key run at once, which costs only the
-    /// time of the second.
+    /// once. without locks, builds of one key run at once, costing only the second's time.
     ///
     /// # Errors
     ///
@@ -175,9 +171,8 @@ impl Cache {
         Ok(folder)
     }
 
-    /// moves the sealed file at `path` into the cache as the object `digest`: a hardlink, else a
-    /// rename, never replacing an intact object, then drops its name at `path`. a new object
-    /// must be that very file, or something swapped it since it was sealed.
+    /// moves the sealed file at `path` into the cache as the object `digest`, never replacing an
+    /// intact one, and drops its name at `path`. a new object must be that very file.
     ///
     /// # Errors
     ///
@@ -202,9 +197,8 @@ impl Cache {
     }
 }
 
-/// readies the file a step wrote at `path` to become the object of its bytes, where it is:
-/// read-only, dated by its birth and, with `flush`, on disk. a file that no longer looks as
-/// `seen` when it was hashed changed since, and is refused with `InvalidData`.
+/// readies the file a step wrote at `path` to become its bytes' object where it is: read-only,
+/// dated by its birth and, with `flush`, on disk. one that changed since `seen` is refused.
 ///
 /// # Errors
 ///

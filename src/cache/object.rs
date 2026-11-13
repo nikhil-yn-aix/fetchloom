@@ -1,6 +1,5 @@
-//! new objects written in one go, such as the members of an archive or a mirror's copies. each is
-//! created read-only in `tmp/`, written and hashed in one pass, dated by its birth, flushed and
-//! closed, then published through the cache's hardlink-or-rename policy.
+//! new objects written in one go, as an archive's members or a mirror's copies: each is made
+//! read-only in `tmp/`, hashed as it is written, dated by its birth and flushed before publishing.
 
 use std::fs::{File, FileTimes, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
@@ -87,11 +86,8 @@ impl Cache {
     }
 
     /// a new object holding the file at `source`, which another program keeps, when its bytes are
-    /// the ones `digest` and `size` pin. it is cloned where the disk makes reflinks, else read
-    /// while hashed, never more than one byte past `size`; a link or a special file is never
-    /// opened, and a file of another size never read. `source` is never linked or renamed, so a
-    /// later change to it cannot reach the cache. with `flush` the object is on the disk once
-    /// sealed; without, the caller flushes a [`Batch`] before publishing it.
+    /// the ones `digest` and `size` pin, cloned or copied, never linked. without `flush` the caller
+    /// flushes a [`Batch`] before publishing it.
     ///
     /// # Errors
     ///
@@ -187,10 +183,8 @@ fn opened(source: &Path, size: u64) -> Result<File, Copied> {
     }
 }
 
-/// whether the file at `source`, which another program keeps, holds the bytes `digest` and
-/// `size` pin, found as [`Cache::copy_in`] finds it before it keeps a copy, but writing nothing:
-/// a link or a special file is never opened, a file of another size never read, and at most one
-/// byte past `size` is read, a block at a time. a file that cannot be read holds nothing.
+/// whether the file at `source` holds the bytes `digest` and `size` pin, read as
+/// [`Cache::copy_in`] reads it but writing nothing. a file that cannot be read holds nothing.
 ///
 /// # Errors
 ///
@@ -224,12 +218,9 @@ pub(crate) fn holds_pinned(
 /// 3 to 9 ms more one by one, and one large file the same either way.
 pub(crate) const MOST_FLUSHED_ALONE: usize = 64;
 
-/// starts a batch of new files in `folder` that [`Batch::flush`] flushes with one call, as git's
-/// batch mode does: on linux one flush per small file costs far more than writing it. `None`
-/// means each file must be flushed on its own. the batch holds the folder's filesystem open from
-/// before its first write, because linux reports a failed write-back only to descriptors opened
-/// before the failure, and to syncfs only from 5.8. the cache's new objects take it, and so do
-/// the files a push writes into a mirror.
+/// starts a batch of new files in `folder` that [`Batch::flush`] flushes with one call, or `None`
+/// when each must flush alone. it opens the filesystem before the first write, as linux reports a
+/// failed write-back only to descriptors opened before it, and to syncfs only from 5.8.
 #[cfg(target_os = "linux")]
 pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
     let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
@@ -239,9 +230,8 @@ pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
     Ok(Some(Batch::open(folder)?))
 }
 
-/// on macos fsync only hands a file to the drive, and only `F_FULLFSYNC` empties the drive's
-/// cache, for every file at once. each file gets the cheap fsync as it is sealed, and the batch
-/// one `F_FULLFSYNC` in `folder`, as git's batch mode does, instead of a full flush per file.
+/// on macos fsync only hands a file to the drive and `F_FULLFSYNC` empties the drive's cache for
+/// every file at once, so each file gets fsync as it is sealed and the batch one `F_FULLFSYNC`.
 #[cfg(target_os = "macos")]
 #[expect(clippy::unnecessary_wraps, reason = "linux may fail to open the batch")]
 pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
@@ -274,8 +264,7 @@ impl Batch {
         Batch { file, device }
     }
 
-    /// whether the batch's flush reaches the file `metadata` describes: it is on the batch's
-    /// filesystem.
+    /// whether the batch's flush reaches the file `metadata` describes, on its filesystem.
     pub(crate) fn covers(&self, metadata: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
 
@@ -352,9 +341,8 @@ impl NewObject {
         })
     }
 
-    /// makes the object a clone of `source`, sharing its blocks, and hashes the clone itself, at
-    /// most `most` bytes of it, through a buffer for about `expected` bytes. says whether the disk
-    /// made the clone; one that makes none leaves the object empty.
+    /// clones `source` into the object and hashes the clone itself, at most `most` bytes, through a
+    /// buffer for about `expected`. false when the disk makes no clone, leaving the object empty.
     #[cfg(target_os = "linux")]
     pub(super) fn clone_from(
         &mut self,
@@ -481,17 +469,9 @@ const SEALED_WITHIN: Duration = Duration::from_secs(2);
 /// how far past its start a seal dates an object, the least step a time takes.
 const PAST_BIRTH: Duration = Duration::from_nanos(1);
 
-/// dates a sealed object by its birth: its modification time becomes just past the time the
-/// file was made, which no later write moves. a write through any link to the object moves the
-/// modification time alone, so [`rewritten`] puts the object in doubt, as pnpm finds a changed
-/// store file by its time. a filesystem that keeps no birth time leaves the object undated.
-///
-/// `begun` is the [`begun`] time of a file this process made. an nfs 4.2 server that lets its
-/// client hold a file's times through a write delegation keeps the times the client hands back
-/// only if they are newer than the ones the file had when the delegation began (RFC 9754), and
-/// otherwise dates a written file to when the delegation ends, seconds or minutes later. making
-/// a file there sets its times once more, a few milliseconds past its birth, so the seal dates
-/// the object past that too.
+/// dates a sealed object by its birth: its modification time becomes just past the time the file
+/// was made, or past `begun`, its [`begun`] time, as an nfs 4.2 server keeps only times newer than
+/// those at a write delegation's start. a filesystem that keeps no birth time leaves it undated.
 pub(super) fn date_by_birth(file: &File, begun: Option<SystemTime>) -> io::Result<()> {
     let found = file.metadata()?;
     let born = found.created().ok();
@@ -531,10 +511,8 @@ pub(super) fn changed(metadata: &Metadata) -> Option<SystemTime> {
     }
 }
 
-/// whether bytes may have been written into the object at `path` since it was sealed: its
-/// modification time moved past its birth time, as any write moves it. a time moved back, as a
-/// copy that keeps times gives, is no write. a filesystem that keeps no birth time cannot tell,
-/// and the answer is no.
+/// whether the object at `path` may have been written since sealing: its modification time moved
+/// past its birth, as any write moves it. a time moved back, or no birth time, says no.
 pub(crate) fn rewritten(path: &Path, metadata: &Metadata) -> bool {
     let (Some(born), Ok(modified)) = (birth(path, metadata), metadata.modified()) else {
         return false;
@@ -545,9 +523,8 @@ pub(crate) fn rewritten(path: &Path, metadata: &Metadata) -> bool {
 }
 
 /// dates `file`, an object a hash just vouched for, by its birth again, so the next use need not
-/// hash it. a write since `seen` was read of it is no longer vouched for and keeps its time. so
-/// does an object a project placed as a hardlink: its time is that project's file's, and moving
-/// it would look like an edit there.
+/// hash it, unless it changed since `seen` or has another name: a placed hardlink's time is the
+/// project's file's, which moving would make look edited.
 pub(super) fn redate(file: &File, seen: &Metadata) {
     let unchanged = file
         .metadata()
@@ -630,9 +607,8 @@ mod tests {
         assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
     }
 
-    /// an nfs 4.2 server that lets its client hold a new file's times keeps the time the client
-    /// hands back only if it is newer than the birth the file began with, so a seal dates an
-    /// object just past its birth.
+    /// an nfs 4.2 server keeps a time its client sets under a write delegation only if it is newer
+    /// than the file's birth.
     #[test]
     fn sealing_dates_an_object_just_past_its_birth() {
         let (_dir, cache) = cache();

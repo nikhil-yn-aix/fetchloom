@@ -1,6 +1,5 @@
-//! the cache-wide lock. every run that uses the cache holds it shared, and `cache gc` holds it
-//! exclusive, so gc never removes an object a run has found and is about to place, as cargo and
-//! uv lock their caches.
+//! the cache-wide lock: runs that use the cache hold it shared and `cache gc` exclusive, so gc
+//! never removes an object a run has found and is about to place.
 
 use std::fs::{File, TryLockError};
 use std::io;
@@ -26,11 +25,9 @@ pub(crate) enum Access {
 }
 
 impl Cache {
-    /// this cache, held for `access` until its last clone is dropped. while another run holds
-    /// it in a way that conflicts, `waiting` is called once and the lock is asked for again until
-    /// it is free, or until `stop` is asked, which fails with [`io::ErrorKind::Interrupted`].
-    /// unsupported locking permits unheld shared access only. exclusive access fails on every
-    /// lock error, and unexpected shared-lock errors also fail.
+    /// this cache, held for `access` until its last clone is dropped, waiting out a conflicting
+    /// run: `waiting` is called once, and `stop` gives [`io::ErrorKind::Interrupted`]. shared
+    /// access goes on unheld where locking is unsupported; every other lock error fails.
     pub(crate) fn hold(self, access: Access, stop: &Stop, waiting: &dyn Fn()) -> io::Result<Cache> {
         self.hold_with(
             access,
@@ -174,7 +171,7 @@ mod tests {
         assert!(held.upgrade().is_some());
         waits_until_stopped(&cache, Access::Exclusive);
         drop(other);
-        // a forked test helper may still hold the fd until exec, independently of these arcs.
+        // a forked test helper may still hold the fd until exec, independently of these arcs
         assert!(held.upgrade().is_none());
     }
 

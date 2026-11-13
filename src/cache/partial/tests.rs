@@ -183,9 +183,8 @@ fn a_published_object_can_be_read_while_its_download_is_still_claimed() {
     assert_eq!(store(&cache, b"abc").digest, stored.digest);
 }
 
-/// a download that stops partway keeps its lock file beside its bytes, which gc finds them by.
-/// once a later run finishes it and lets go of it, nothing of it stays in `partial/`, so the
-/// cache does not keep a file for every link it ever fetched.
+/// a stopped download keeps its lock file beside its bytes, where gc finds them, and once a later
+/// run finishes it, nothing of it stays in `partial/`.
 #[test]
 fn a_finished_download_leaves_no_lock_file() {
     let (_dir, cache) = cache();
@@ -244,9 +243,8 @@ fn a_finished_download_leaves_a_lock_file_another_run_holds() {
     drop(second);
 }
 
-/// gc removes a lock file only while it holds the very file the name still names. a file it
-/// opened that lost its name meanwhile is nobody's, and the name now belongs to the run that
-/// took it with a new file.
+/// a lock file that lost its name to another run's new file is nobody's, and the name stays with
+/// that run.
 #[test]
 fn a_sweep_takes_only_a_lock_file_nobody_holds_under_its_own_name() {
     let (_dir, cache) = cache();

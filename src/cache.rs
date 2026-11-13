@@ -56,8 +56,7 @@ const FOLDERS: [&str; 8] = [
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
     root: PathBuf,
-    /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
-    /// real folders.
+    /// the folders under `objects/`, by their hashes' first byte, this run saw to be real folders.
     checked: Arc<[AtomicBool; 256]>,
     volume: Arc<Volume>,
     /// downloads waiting for a flush that covers them, shared by every clone.
@@ -164,9 +163,8 @@ impl Cache {
         }
     }
 
-    /// opens the cache at `root`, creating its folders the first time. a cache fetchloom makes
-    /// itself is readable by this user only on unix, since gated and private datasets land in it;
-    /// a folder that already exists, such as a team's shared cache, keeps its permissions.
+    /// opens the cache at `root`, creating its folders. a cache folder it makes is this user's
+    /// alone on unix, as gated datasets land in it; one that exists, as a team's, keeps its own.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
         let _span = tracing::debug_span!("open_cache").entered();
         #[cfg(unix)]
@@ -197,10 +195,8 @@ impl Cache {
         Ok(cache)
     }
 
-    /// marks the cache for backup tools, writing its tag with `write` unless a tag is there. runs
-    /// opening a new cache at once each write one, and FAT and exFAT on windows refuse to rename
-    /// over a file another run has open, as each run opens the tag to look for it, so a write
-    /// that fails with a tag in place leaves the cache tagged.
+    /// writes the tag backup tools look for with `write`, unless one is there. a failed write with
+    /// a tag in place passes: fat on windows refuses a rename over another run's open tag.
     fn tag(&self, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<()> {
         let tag = self.root.join("CACHEDIR.TAG");
         if tag.exists() {
@@ -214,9 +210,8 @@ impl Cache {
         }
     }
 
-    /// the cache at `root` as it is, with nothing created, for a dry run that only reads it. a
-    /// cache or cache folder that does not exist yet holds nothing, and what [`Cache::open`]
-    /// refuses is refused here too.
+    /// the cache at `root` as it is, creating nothing, for a dry run: a missing cache or folder
+    /// holds nothing, and what [`Cache::open`] refuses is refused here too.
     pub(crate) fn unopened(root: PathBuf) -> io::Result<Cache> {
         match fs::metadata(&root) {
             Ok(metadata) if !metadata.is_dir() => {
@@ -245,9 +240,8 @@ impl Cache {
         })
     }
 
-    /// the folder an unfinished download of a link whose key is `key` sits in: one of 16 under
-    /// `partial/`, by the key's first character, so downloads running at once do not all wait
-    /// on one folder.
+    /// the folder an unfinished download keyed `key` sits in: one of 16 under `partial/`, by the
+    /// key's first character, so downloads running at once do not all wait on one folder.
     pub(super) fn partial_folder(&self, key: &str) -> PathBuf {
         self.root
             .join("partial")
@@ -315,12 +309,9 @@ impl Cache {
         Some(path)
     }
 
-    /// a new object in `staging` holding the bytes of `source`, a plain file a person opened
-    /// without following a link, as many as it had when this began: a clone where the disk shares
-    /// blocks between files, else a copy, hashed as it is read. the file is only read, never
-    /// linked, moved or changed, since a link would make the person's file the cache's read-only
-    /// object. the object is sealed, flushed to disk when `flush`, and waits for
-    /// [`Sealed::publish`].
+    /// a new object in `staging` with the bytes `source`, a person's file opened without following
+    /// a link, had at the start: cloned where the disk can, else copied, never linked, which would
+    /// seal their file read-only. sealed, and flushed if `flush`, it waits for [`Sealed::publish`].
     ///
     /// # Errors
     ///
@@ -370,9 +361,8 @@ impl Cache {
         }
     }
 
-    /// `err`, from writing in `folder` of this cache, in words that say what to fix. the system
-    /// names no path, and "the cache" alone says neither which folder refused the write nor
-    /// that unfinished downloads may be what fills its disk.
+    /// `err`, from writing in `folder`, in words that say what to fix: which folder refused, or
+    /// what unfinished downloads hold of a full disk, neither of which the system says.
     pub(crate) fn explained(&self, folder: &Path, err: io::Error) -> io::Error {
         // an error fetchloom built already says what it concerns
         if err.raw_os_error().is_none() {
@@ -406,9 +396,8 @@ impl Cache {
         })
     }
 
-    /// hashes an object again. changed bytes are marked for replacement and kept until a good
-    /// copy arrives. the mark also tells projects to check their placed hardlinks. a read error
-    /// leaves the object and its change mark untouched.
+    /// hashes an object again, marking changed bytes, which stay until a good copy arrives and
+    /// make projects check their placed hardlinks. a read error changes nothing.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
         match hash_object(&path, None) {
@@ -488,7 +477,7 @@ impl Cache {
             .join(format!("{}-{link}", &hex[2..]))
     }
 
-    /// replaces `path` in one step, so a reader sees the old file or the new one, never half of one.
+    /// replaces `path` in one step, so a reader sees the old file or the new, never half of one.
     fn write_atomically(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.replace_file(path, bytes, true, false)
     }
@@ -565,12 +554,9 @@ impl Cache {
         })
     }
 
-    /// publishes `source` at `path` unless the object is there already, then removes `source`.
-    /// says whether the object is new. a file at `path` that does not hold these bytes, such as one an
-    /// edit through a writable hardlink changed, is marked as changed and replaced, since keeping
-    /// it would place the edit in every project instead of these bytes. one that cannot be read
-    /// stays: nothing shows it changed. a disk that makes no hardlinks takes a rename that refuses
-    /// a name already taken, and one without that rename either takes a plain rename.
+    /// publishes `source` at `path` unless the object is there, then removes `source`; true when
+    /// new. a file there with other bytes, as an edit through a hardlink leaves, is marked and
+    /// replaced, lest every project place the edit; one that cannot be read stays.
     fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
         let volume = &self.volume;
         let new = match volume.hard_link(source, path) {
@@ -677,11 +663,11 @@ fn hash_object(path: &Path, size: Option<u64>) -> io::Result<Sha256> {
 
 /// what is at an object's path when a new copy of its bytes arrives.
 enum Existing {
-    /// these bytes, or a file that cannot be read, which is no proof that it changed
+    /// these bytes, or a file that cannot be read, which is no proof that it changed.
     Keep,
-    /// something else: other bytes, another size or not a file
+    /// something else: other bytes, another size or not a file.
     Changed,
-    /// nothing, since another process took it away
+    /// nothing, since another process took it away.
     Gone,
 }
 
@@ -705,8 +691,7 @@ fn existing(
     }
 }
 
-/// writes `bytes` into the new file at `temporary`, flushes them to disk when `durable` and moves
-/// the file to `path`.
+/// writes `bytes` to the new file at `temporary`, flushed when `durable`, and renames it to `path`.
 fn fill_and_rename(
     file: File,
     bytes: &[u8],
@@ -747,7 +732,7 @@ fn fill_and_rename_with(
     Ok(())
 }
 
-/// flushes a published name before the source name's removal, when its folder differs.
+/// flushes the published name's folder, and the source's when it differs, before the source goes.
 fn sync_publication(
     source: &Path,
     path: &Path,
@@ -1373,8 +1358,7 @@ pub(crate) mod tests {
         assert_eq!(leftovers, 0, "nothing is left behind in tmp");
     }
 
-    /// a disk that can neither hardlink nor rename without replacing still takes objects: an
-    /// object's name is its verified sha-256, so the rename that replaces swaps identical bytes.
+    /// an object's name is its verified sha-256, so a rename that replaces swaps identical bytes.
     #[test]
     fn a_disk_that_renames_only_by_replacing_still_takes_objects() {
         let (_dir, mut cache) = cache();
@@ -1412,8 +1396,7 @@ pub(crate) mod tests {
         fs::write(path, bytes).unwrap();
     }
 
-    /// bytes stored again replace an object whose bytes changed, whether its size changed, which
-    /// the size alone shows, or only its bytes did, which only hashing it shows.
+    /// a changed size shows without hashing, while changed bytes of the same size need the hash.
     #[test]
     fn bytes_stored_again_replace_an_object_whose_bytes_changed() {
         for (rewritten, how) in [
@@ -1503,7 +1486,7 @@ pub(crate) mod tests {
                 assert!(marked < fs::metadata(&object).unwrap().modified().unwrap());
                 marked
             };
-            // fixed write times keep the two repairs distinct even on coarse clocks.
+            // fixed write times keep the two repairs distinct even on coarse clocks
             let first = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
             let second = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_010));
             assert!(second > first, "another corruption needs a fresh mark");
