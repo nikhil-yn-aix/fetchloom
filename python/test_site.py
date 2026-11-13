@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import build_site
-from build_site import add_mermaid, export_agents, page_url, redirects, write_redirects
+from build_site import add_mermaid, add_wordmark, export_agents, page_url, redirects, write_redirects
 
 PAGES = "https://nikhil-yn-aix.github.io/fetchloom/"
 
@@ -163,10 +163,28 @@ class Mermaid(Folder):
         self.assertFalse((site / "assets/javascripts/mermaid.tiny.js").exists())
 
 
+class Wordmark(Folder):
+    def test_the_home_page_shows_the_wordmark_the_cli_prints(self):
+        root, site = self.folder(), self.folder()
+        self.write(root / "src/output.rs", 'const WORDMARK: &str = r"\n /\\_<\n|_ _|\n";\n')
+        self.write(site / "index.html", f"<article>{build_site.WORDMARK}<h1>docs</h1></article>")
+        add_wordmark(root, site)
+        self.assertEqual((site / "index.html").read_text(encoding="utf-8"),
+                         '<article><pre class="fl-wordmark" role="img" aria-label="fetchloom">'
+                         ' /\\_&lt;\n|_ _|</pre><h1>docs</h1></article>')
+
+    def test_a_home_page_without_its_place_is_refused(self):
+        root, site = self.folder(), self.folder()
+        self.write(root / "src/output.rs", 'const WORDMARK: &str = r"\nmark\n";\n')
+        self.write(site / "index.html", "<h1>docs</h1>")
+        with self.assertRaisesRegex(ValueError, "no place for the wordmark"):
+            add_wordmark(root, site)
+
+
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
-        names = ("color_transcripts", "add_mermaid", "write_redirects", "export_agents")
+        names = ("color_transcripts", "add_wordmark", "add_mermaid", "write_redirects", "export_agents")
         with patch.object(build_site.subprocess, "run", side_effect=lambda *a, **k: steps.append("zensical")) as run, \
              patch.object(build_site.shutil, "rmtree", side_effect=lambda *a, **k: steps.append("clean")), \
              patch.object(build_site, "redirects", return_value=[]), \

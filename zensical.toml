@@ -14,6 +14,7 @@ use_directory_urls = true
 exclude_docs = """
 /SUMMARY.md
 """
+extra_css = ["assets/stylesheets/fetchloom.css"]
 
 [project.extra]
 generator = false

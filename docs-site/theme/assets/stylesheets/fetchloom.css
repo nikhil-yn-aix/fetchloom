@@ -1,0 +1,561 @@
+/* fetchloom's site: the cli's palette (src/output/style.rs) on the paper and ink of the benchmark
+   charts (bench/render.py), set like a printed manual for a terminal tool */
+
+/* geist mono and instrument serif are the files of bench/fonts, which the charts use; source serif 4
+   4.004 is the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes. the OFL file
+   beside each carries its licence and copyright. */
+
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("../fonts/source-serif-4-latin-wght-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/InstrumentSerif.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/GeistMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-weight: 500;
+  font-display: swap;
+  src: url("../fonts/GeistMono-Medium.woff2") format("woff2");
+}
+
+[data-md-color-scheme="default"] {
+  --fl-paper: #faf9f5;
+  --fl-ink: #141413;
+  --fl-stone: #75726a;
+  --fl-hair: #e6e3d9;
+  --fl-track: #efece4;
+  --fl-clay: #b44f26;
+  --fl-sage: #3c7a37;
+  --fl-amber: #8f6200;
+  --fl-red: #bf213a;
+}
+
+[data-md-color-scheme="slate"] {
+  --fl-paper: #1b1a17;
+  --fl-ink: #f2efe7;
+  --fl-stone: #9b978c;
+  --fl-hair: #34322c;
+  --fl-track: #24231f;
+  --fl-clay: #ee7a4c;
+  --fl-sage: #8fc086;
+  --fl-amber: #e8b65a;
+  --fl-red: #f25c6a;
+  color-scheme: dark;
+}
+
+[data-md-color-scheme] {
+  --fl-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --fl-display: "Instrument Serif", var(--fl-serif);
+  --fl-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --md-text-font: "Source Serif 4";
+  --md-code-font: "Geist Mono";
+  --md-default-bg-color: var(--fl-paper);
+  --md-default-bg-color--light: var(--fl-paper);
+  --md-default-bg-color--lighter: var(--fl-paper);
+  --md-default-bg-color--lightest: var(--fl-paper);
+  --md-default-fg-color: var(--fl-ink);
+  --md-default-fg-color--light: var(--fl-stone);
+  --md-default-fg-color--lighter: var(--fl-stone);
+  --md-default-fg-color--lightest: var(--fl-hair);
+  --md-primary-fg-color: var(--fl-paper);
+  --md-primary-fg-color--light: var(--fl-paper);
+  --md-primary-fg-color--dark: var(--fl-paper);
+  --md-primary-bg-color: var(--fl-ink);
+  --md-primary-bg-color--light: var(--fl-stone);
+  --md-accent-fg-color: var(--fl-clay);
+  --md-accent-fg-color--transparent: transparent;
+  --md-accent-bg-color: var(--fl-paper);
+  --md-typeset-color: var(--fl-ink);
+  --md-typeset-a-color: var(--fl-clay);
+  --md-typeset-table-color: var(--fl-hair);
+  --md-typeset-table-color--light: transparent;
+  --md-typeset-mark-color: var(--fl-track);
+  --md-code-fg-color: var(--fl-ink);
+  --md-code-bg-color: transparent;
+  --md-code-bg-color--light: transparent;
+  --md-code-bg-color--lighter: transparent;
+  --md-code-hl-color: var(--fl-track);
+  --md-code-hl-color--light: var(--fl-track);
+  --md-code-hl-number-color: currentColor;
+  --md-code-hl-special-color: currentColor;
+  --md-code-hl-function-color: currentColor;
+  --md-code-hl-constant-color: currentColor;
+  --md-code-hl-keyword-color: currentColor;
+  --md-code-hl-string-color: currentColor;
+  --md-code-hl-name-color: currentColor;
+  --md-code-hl-operator-color: currentColor;
+  --md-code-hl-punctuation-color: currentColor;
+  --md-code-hl-variable-color: currentColor;
+  --md-code-hl-generic-color: currentColor;
+  --md-code-hl-comment-color: var(--fl-stone);
+  --md-footer-fg-color: var(--fl-ink);
+  --md-footer-fg-color--light: var(--fl-stone);
+  --md-footer-fg-color--lighter: var(--fl-stone);
+  --md-footer-bg-color: var(--fl-paper);
+  --md-footer-bg-color--dark: var(--fl-paper);
+  --md-shadow-z1: none;
+  --md-shadow-z2: none;
+  --md-shadow-z3: none;
+  --md-mermaid-font-family: var(--fl-mono);
+  --md-mermaid-edge-color: var(--fl-stone);
+  --md-mermaid-node-bg-color: var(--fl-paper);
+  --md-mermaid-node-fg-color: var(--fl-ink);
+  --md-mermaid-label-bg-color: var(--fl-paper);
+  --md-mermaid-label-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-actor-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-actor-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-actor-border-color: var(--fl-ink);
+  --md-mermaid-sequence-actor-line-color: var(--fl-stone);
+  --md-mermaid-sequence-actorman-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-actorman-line-color: var(--fl-ink);
+  --md-mermaid-sequence-box-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-box-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-label-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-label-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-loop-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-loop-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-loop-border-color: var(--fl-stone);
+  --md-mermaid-sequence-message-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-message-line-color: var(--fl-stone);
+  --md-mermaid-sequence-note-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-note-fg-color: var(--fl-ink);
+  --md-mermaid-sequence-note-border-color: var(--fl-stone);
+  --md-mermaid-sequence-number-bg-color: var(--fl-ink);
+  --md-mermaid-sequence-number-fg-color: var(--fl-paper);
+}
+
+body {
+  font-family: var(--fl-serif);
+  font-feature-settings: "kern";
+}
+
+/* no rounded corners, shadows, blur or gradients anywhere */
+*, *::before, *::after {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--fl-clay) !important;
+  outline-offset: 2px;
+}
+
+/* the header, tabs and sidebars: quiet, small and in the text's own serif */
+.md-header {
+  background-color: var(--fl-paper);
+  color: var(--fl-ink);
+  border-bottom: 1px solid var(--fl-hair);
+}
+.md-header__title {
+  font-family: var(--fl-mono);
+  font-size: .8rem;
+  letter-spacing: 0;
+}
+.md-header__button.md-logo,
+.md-nav__title .md-nav__button.md-logo {
+  display: none;
+}
+.md-header__button:not(.md-logo) {
+  color: var(--fl-stone);
+}
+.md-header__button:hover {
+  color: var(--fl-ink);
+  opacity: 1;
+}
+.md-source {
+  font-family: var(--fl-mono);
+  font-size: .6rem;
+  color: var(--fl-stone);
+  padding: 0 .6rem;
+  line-height: 2.4rem;
+}
+.md-source:hover {
+  color: var(--fl-clay);
+  opacity: 1;
+}
+.md-tabs {
+  background-color: var(--fl-paper);
+  color: var(--fl-stone);
+  border-bottom: 1px solid var(--fl-hair);
+}
+.md-tabs__link {
+  font-size: .7rem;
+  opacity: 1;
+  color: var(--fl-stone);
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__link:hover {
+  color: var(--fl-ink);
+}
+.md-tabs__item--active .md-tabs__link {
+  text-decoration: underline;
+  text-decoration-color: var(--fl-clay);
+  text-decoration-thickness: 2px;
+  text-underline-offset: .45em;
+}
+.md-nav {
+  font-size: .7rem;
+  line-height: 1.35;
+}
+.md-nav__link {
+  color: var(--fl-stone);
+  background: none !important;
+  padding: .2rem .4rem;
+}
+.md-nav__link:hover,
+.md-nav__link:focus {
+  color: var(--fl-ink);
+}
+.md-nav--primary .md-nav__item .md-nav__link--active,
+.md-nav__item .md-nav__link--active,
+.md-nav__item .md-nav__link--active code {
+  color: var(--fl-ink);
+  background: none;
+  font-weight: 600;
+}
+.md-nav__item--section > .md-nav__link,
+.md-nav__item--nested > .md-nav__link {
+  color: var(--fl-ink);
+}
+.md-path {
+  font-size: .65rem;
+  color: var(--fl-stone);
+}
+.md-path__link {
+  color: var(--fl-stone);
+}
+.md-path__link:hover {
+  color: var(--fl-clay);
+}
+
+/* the search box and its results */
+.md-search__button,
+.md-search__button:focus,
+.md-search__button:hover {
+  font-family: var(--fl-serif);
+  color: var(--fl-stone);
+  background-color: var(--fl-paper);
+  border: 1px solid var(--fl-hair);
+}
+.md-search__button:hover {
+  color: var(--fl-ink);
+  border-color: var(--fl-stone);
+}
+.md-search__button::before {
+  background-color: var(--fl-stone);
+}
+.md-search__button::after {
+  font-family: var(--fl-mono);
+  color: var(--fl-stone);
+  background: none;
+}
+.md-search__input {
+  font-family: var(--fl-serif);
+  color: var(--fl-ink);
+}
+.md-search__input::placeholder {
+  color: var(--fl-stone);
+}
+.md-search__output,
+.md-search__scrollwrap,
+.md-search-result {
+  background-color: var(--fl-paper);
+}
+.md-search-result mark {
+  color: var(--fl-clay);
+  background: none;
+}
+
+/* the text: a serif for reading, about 66 characters a line */
+.md-typeset {
+  font-family: var(--fl-serif);
+  font-size: .9rem;
+  line-height: 1.6;
+  letter-spacing: 0;
+  color: var(--fl-ink);
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  font-variant-numeric: lining-nums;
+}
+.md-typeset :is(p, li) {
+  text-wrap: pretty;
+}
+.md-content__inner > :is(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6, hr) {
+  max-width: 32em;
+}
+.md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--fl-display);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fl-ink);
+  hyphens: manual;
+  text-wrap: balance;
+}
+.md-typeset h1 {
+  font-size: 2.6em;
+  line-height: 1.1;
+  margin: .2em 0 .6em;
+}
+.md-typeset h2 {
+  font-size: 1.75em;
+  line-height: 1.2;
+  margin: 1.8em 0 .5em;
+  padding-top: .5em;
+  border-top: 1px solid var(--fl-hair);
+}
+.md-typeset :is(h3, h4, h5, h6) {
+  font-family: var(--fl-serif);
+  font-weight: 600;
+}
+.md-typeset h3 {
+  font-size: 1.12em;
+  line-height: 1.35;
+  margin: 1.6em 0 .35em;
+}
+.md-typeset :is(h4, h5, h6) {
+  font-size: 1em;
+  margin: 1.4em 0 .3em;
+}
+.md-typeset .headerlink {
+  font-family: var(--fl-mono);
+  font-size: .6em;
+  color: var(--fl-stone);
+}
+.md-typeset .headerlink:hover,
+.md-typeset .headerlink:focus {
+  color: var(--fl-clay);
+}
+.md-typeset a {
+  color: var(--fl-clay);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  text-decoration-color: color-mix(in srgb, var(--fl-clay) 45%, transparent);
+}
+.md-typeset a:hover,
+.md-typeset a:focus {
+  color: var(--fl-clay);
+  text-decoration-color: var(--fl-clay);
+}
+.md-typeset strong {
+  font-weight: 600;
+}
+.md-typeset hr {
+  border-bottom: 1px solid var(--fl-hair);
+}
+.md-content__button {
+  background: none;
+  color: var(--fl-stone);
+}
+.md-content__button:hover {
+  color: var(--fl-clay);
+}
+
+/* code: geist mono, as the benchmark charts set their numbers */
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-family: var(--fl-mono);
+  font-variant-ligatures: none;
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+.md-typeset code {
+  font-size: .8em;
+  padding: 0 .1em;
+  background: none;
+  color: var(--fl-ink);
+}
+.md-typeset a code {
+  color: inherit;
+}
+.md-typeset pre {
+  margin: 1.2em 0;
+}
+.md-typeset pre > code {
+  font-size: .68rem;
+  line-height: 1.6;
+  padding: .15em 0 .15em 1.1em;
+  background: none;
+  border-left: 2px solid var(--fl-hair);
+  scrollbar-color: var(--fl-hair) transparent;
+}
+.md-typeset .highlight {
+  background: none;
+}
+/* what a person types: commands in the accent, as fetchloom's help shows its examples */
+.md-typeset :is(.language-sh, .language-bash, .language-shell, .language-powershell) code {
+  color: var(--fl-clay);
+}
+.md-typeset .language-console code .gp {
+  color: var(--fl-stone);
+}
+.md-typeset .language-console code {
+  color: var(--fl-clay);
+}
+.md-typeset .language-console code .go {
+  color: var(--fl-ink);
+}
+.md-clipboard {
+  color: var(--fl-stone);
+  background-color: var(--fl-paper);
+}
+.md-clipboard:hover,
+.md-clipboard:focus {
+  color: var(--fl-clay);
+}
+
+/* transcripts in the colors fetchloom gives each line; bold is geist mono's medium */
+.fl-transcript code {
+  color: var(--fl-ink);
+}
+.fl-done,
+.fl-work,
+.fl-warn,
+.fl-fail,
+.fl-accent,
+.fl-bold {
+  font-weight: 500;
+}
+.fl-done {
+  color: var(--fl-sage);
+}
+.fl-work,
+.fl-accent,
+.fl-typed {
+  color: var(--fl-clay);
+}
+.fl-warn {
+  color: var(--fl-amber);
+}
+.fl-fail {
+  color: var(--fl-red);
+}
+.fl-dim,
+.fl-dim .fl-bold {
+  color: var(--fl-stone);
+}
+
+/* tables in the booktabs manner: rules above and below, one under the head, none between rows */
+.md-typeset__scrollwrap {
+  margin: 1.4em 0;
+  overflow-x: auto;
+  scrollbar-color: var(--fl-hair) transparent;
+}
+.md-typeset__table {
+  display: block;
+  padding: 0;
+  margin: 0;
+}
+.md-typeset table:not([class]) {
+  display: table;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  font-size: .8rem;
+  line-height: 1.45;
+  hyphens: manual;
+  font-variant-numeric: tabular-nums lining-nums;
+  background: none;
+  border: 0;
+  border-top: 1.5px solid var(--fl-ink);
+  border-bottom: 1.5px solid var(--fl-ink);
+  border-collapse: collapse;
+}
+.md-typeset table:not([class]) th {
+  font-weight: 600;
+  text-align: left;
+  vertical-align: bottom;
+  padding: .55em 1.4em .45em 0;
+  border-bottom: 1px solid var(--fl-ink);
+  background: none;
+  min-width: 0;
+}
+.md-typeset table:not([class]) td {
+  vertical-align: top;
+  padding: .4em 1.4em .4em 0;
+  border: 0;
+}
+.md-typeset table:not([class]) :is(th, td):last-child {
+  padding-right: 0;
+}
+.md-typeset table:not([class]) tbody tr:first-child td {
+  padding-top: .6em;
+}
+.md-typeset table:not([class]) tbody tr:last-child td {
+  padding-bottom: .6em;
+}
+.md-typeset table:not([class]) tr:hover {
+  background: none;
+  box-shadow: none;
+}
+
+/* diagrams take the column's width, scrolling in their own box when they need more */
+.md-typeset .mermaid {
+  overflow-x: auto;
+  margin: 1.4em 0;
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+
+/* the wordmark the cli prints on a wide terminal, scaled to the column: 98 columns of 0.6em */
+.md-content__inner {
+  container-type: inline-size;
+}
+.md-typeset .fl-wordmark {
+  margin: .4em 0 1.6em;
+  color: var(--fl-clay);
+  font-family: var(--fl-mono);
+  font-size: min(.8rem, 1.7cqi);
+  line-height: 1.2;
+  white-space: pre;
+  overflow: hidden;
+}
+
+/* prev and next at the foot of each page, as plain words */
+.md-footer {
+  background-color: var(--fl-paper);
+  color: var(--fl-ink);
+  border-top: 1px solid var(--fl-hair);
+}
+.md-footer__link {
+  opacity: 1;
+}
+.md-footer__link:hover .md-footer__title,
+.md-footer__link:focus .md-footer__title {
+  color: var(--fl-clay);
+}
+.md-footer__direction {
+  color: var(--fl-stone);
+  opacity: 1;
+}
+.md-footer-meta {
+  background-color: var(--fl-paper);
+}
+
+@media screen and (max-width: 44.984375em) {
+  .md-typeset {
+    font-size: .85rem;
+  }
+  .md-content__inner > pre,
+  .md-content__inner > .highlight > pre {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}

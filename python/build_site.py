@@ -24,6 +24,7 @@ BLOB = "https://github.com/nikhil-yn-aix/fetchloom/blob/main/"
 # loads it from unpkg on any page with a diagram unless the page brings it first
 MERMAID = ("https://registry.npmjs.org/@mermaid-js/tiny/-/tiny-12.3.0.tgz",
            "sha512-90BO2kQvmQWj9YjBX2IsLHCw61rN69dPTn5wFfDu+b9aT7qtzfzTA3wpKWeaRAKK85refSo9How5EOeY39DWfA==")
+WORDMARK = '<pre class="fl-wordmark" role="img" aria-label="fetchloom"></pre>'
 MOVED = """<!doctype html>
 <html lang="en">
 <head>
@@ -137,6 +138,20 @@ def add_mermaid(site, cache):
     (folder / "mermaid.LICENSE.txt").write_bytes(licence)
 
 
+def add_wordmark(root, site):
+    """the wordmark the cli prints on its welcome, from src/output.rs, at the top of the home page."""
+    source = (root / "src/output.rs").read_text(encoding="utf-8")
+    found = re.search(r'const WORDMARK: &str = r"(.*?)";', source, re.S)
+    if not found:
+        raise ValueError("src/output.rs has no WORDMARK")
+    home = site / "index.html"
+    page = home.read_text(encoding="utf-8")
+    if WORDMARK not in page:
+        raise ValueError("the home page has no place for the wordmark")
+    drawn = WORDMARK.replace("></pre>", f">{html.escape(found[1].strip(chr(10)))}</pre>")
+    home.write_text(page.replace(WORDMARK, drawn), encoding="utf-8")
+
+
 def color_transcripts(site):
     """every page with fetchloom's output drawn in the colors the cli gives it."""
     for page in site.rglob("*.html"):
@@ -150,6 +165,7 @@ def main():
     shutil.rmtree(SITE, ignore_errors=True)
     subprocess.run([sys.executable, "-m", "zensical", "build", "--clean", "--strict"], cwd=ROOT, check=True)
     color_transcripts(SITE)
+    add_wordmark(ROOT, SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")
     write_redirects(SITE, redirects(ROOT))
     export_agents(ROOT, SITE)

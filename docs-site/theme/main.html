@@ -1,4 +1,13 @@
 {% extends "base.html" %}
+{% block extrahead %}
+  <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-wght-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
+{% endblock %}
+{% block content %}
+  {% if page and page.url == "" %}
+    <pre class="fl-wordmark" role="img" aria-label="fetchloom"></pre>
+  {% endif %}
+  {{ super() }}
+{% endblock %}
 {% block scripts %}
   {% if page and page.content and 'class="mermaid"' in page.content %}
     <script src="{{ 'assets/javascripts/mermaid.tiny.js' | url }}"></script>
