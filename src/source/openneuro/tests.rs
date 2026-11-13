@@ -315,6 +315,40 @@ fn a_listing_that_cannot_be_trusted_says_why() {
     );
 }
 
+/// git names a folder by what it holds, so two folders with the same files share an id, as two
+/// subjects' `tmp` folders do in openneuro:ds004194@3.0.0. that is no loop: each is listed.
+#[test]
+fn folders_that_hold_the_same_files_are_each_listed() {
+    let folder_entry = |name: &str| {
+        format!(
+            r#"{{"id":"{ANAT}","filename":"{name}","size":0,"directory":true,"annexed":false,"urls":[]}}"#
+        )
+    };
+    let recorded = Recorded::default()
+        .on(
+            &top("ds000001", "1.0.0"),
+            200,
+            format!(
+                r#"{{"data":{{"snapshot":{{"tag":"1.0.0","deprecated":null,"description":null,"files":[{},{}]}}}}}}"#,
+                folder_entry("sub-01"),
+                folder_entry("sub-02")
+            ),
+        )
+        .on(
+            &folder("ds000001", "1.0.0", ANAT),
+            200,
+            r#"{"data":{"snapshot":{"files":[{"id":"b6aff27bdd11bd66b06f01339be7cd794c56f586","filename":"notes.txt","size":5,"directory":false,"annexed":false,"urls":[]}]}}}"#,
+        );
+    let listing = listed("openneuro:ds000001@1.0.0", &recorded).unwrap();
+    let mut paths: Vec<&str> = listing
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["sub-01/notes.txt", "sub-02/notes.txt"]);
+}
+
 /// a snapshot its owners deprecated is still read, and the listing says why they did.
 #[test]
 fn a_deprecated_snapshot_is_read_and_says_so() {

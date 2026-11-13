@@ -2,7 +2,7 @@
 //! snapshot, a request per folder. large files come from its S3 bucket at the snapshot's version,
 //! checked against the SHA-256 or MD5 their git-annex keys state; no key goes to openneuro.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use serde::Deserialize;
@@ -172,12 +172,15 @@ impl Dataset {
             ..Found::default()
         };
         found.add(self, "", entries)?;
-        let mut asked = HashSet::new();
+        // git names a folder by what it holds, so two folders with the same files share an id;
+        // only a folder with the id of one it lies in is a loop
+        let mut trees = HashMap::new();
         while let Some((tree, path)) = found.folders.pop_front() {
-            if !asked.insert(tree.clone()) {
+            if parents(&path).any(|parent| trees.get(parent) == Some(&tree)) {
                 return Err(self.invalid("a folder lies in itself"));
             }
-            if asked.len() + found.files.len() > super::most_files() {
+            trees.insert(path.clone(), tree.clone());
+            if trees.len() + found.files.len() > super::most_files() {
                 return Err(self.too_many());
             }
             let folder: Folder = self
@@ -448,6 +451,11 @@ impl Found {
         }
         Ok(())
     }
+}
+
+/// the folders `path` lies in, from the top: `a` and `a/b` for `a/b/c`.
+fn parents(path: &str) -> impl Iterator<Item = &str> {
+    path.match_indices('/').map(|(at, _)| &path[..at])
 }
 
 /// a file of the listing: one git-annex keeps, by its key, from openneuro's S3 bucket at the
