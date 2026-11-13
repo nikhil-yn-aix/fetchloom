@@ -24,6 +24,8 @@ class RenderTests(unittest.TestCase):
         import render
         self.assertEqual(render.story("s4", 10000, 4096),
                          "a zip of 10,000 files of 4 KiB each, downloaded, checked and unpacked")
+        self.assertEqual(render.story("s8", 100, 1 << 20),
+                         "a tar.gz of 100 files of csv, about 1 MiB each, downloaded, checked and unpacked")
 
     def test_resume_note_covers_cpu_and_memory_of_both_attempts(self):
         import json

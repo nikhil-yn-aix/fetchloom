@@ -5,7 +5,11 @@ import shlex
 import shutil
 import subprocess
 
+import fixtures
 import lab
+
+# the scenarios that run again over files already in place, each with its tool's own way to skip work
+NOOP = ("s6", "s9")
 
 
 def shell(argv):
@@ -25,7 +29,7 @@ def reset(path):
 
 class Tool:
     name = ""
-    scenarios = {f"s{i}" for i in range(1, 8)}
+    scenarios = set(fixtures.ALL_SCENARIOS)
 
     def __init__(self, fetchloom):
         self.fetchloom = str(fetchloom)
@@ -60,8 +64,8 @@ class Tool:
         workdir.mkdir(parents=True, exist_ok=True)
         for folder in ("home", "cache", "project", "scratch"):
             (workdir / folder).mkdir(exist_ok=True)
-        if scenario["id"] in ("s5", "s6"):
-            base = dict(scenario, id="s2")
+        if scenario["id"] in fixtures.WARM:
+            base = dict(scenario, id=fixtures.WARM[scenario["id"]])
             self.populate(base, workdir)
             self.untimed(base, workdir)
             if scenario["id"] == "s5":
@@ -94,6 +98,8 @@ class Tool:
     def unpack(self, scenario):
         if scenario["id"] == "s4":
             return [shell(["unzip", "-q", "data/members.zip", "-d", "data"])]
+        if scenario["id"] == "s8":
+            return [shell(["tar", "-xzf", "data/members.tar.gz", "-C", "data"])]
         return []
 
 
@@ -163,7 +169,7 @@ class Curl(Tool):
         for i, item in enumerate(scenario["files"]):
             if i:
                 argv.append("--next")
-            if scenario["id"] == "s6":
+            if scenario["id"] in NOOP:
                 argv.extend(["-z", "data/" + item["name"]])
             if scenario["id"] == "s7":
                 argv.extend(["-C", "-"])
@@ -196,7 +202,7 @@ class Wget(Tool):
         urls = workdir / "urls.txt"
         urls.write_text("".join(item["url"] + "\n" for item in scenario["files"]))
         argv = ["wget", "--no-config", "-i", urls, "-P", "data"]
-        if scenario["id"] == "s6":
+        if scenario["id"] in NOOP:
             argv.append("-nc")
         if scenario["id"] == "s7":
             argv.append("-c")
@@ -213,7 +219,7 @@ class Aria2c(Tool):
         urls.write_text("".join(f'{item["url"]}\n  out={item["name"]}\n  checksum=sha-256={item["sha256"]}\n'
                                 for item in scenario["files"]))
         argv = ["aria2c", "-j", "4", "-x", "4", "-i", urls, "-d", "data"]
-        if scenario["id"] == "s6":
+        if scenario["id"] in NOOP:
             argv.append("--check-integrity=true")
         return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), shell(argv),
                                                *self.unpack(scenario)])
@@ -229,7 +235,8 @@ class Pooch(Tool):
     def command(self, scenario, workdir):
         registry = workdir / "registry.json"
         registry.write_text(json.dumps(scenario["files"]))
-        processor = "pooch.Unzip(extract_dir='unpacked')" if scenario["id"] == "s4" else "None"
+        processor = {"s4": "pooch.Unzip(extract_dir='unpacked')",
+                     "s8": "pooch.Untar(extract_dir='unpacked')"}.get(scenario["id"], "None")
         source = workdir / "retrieve.py"
         source.write_text("import json, os, pooch\n"
                           f"for item in json.load(open({str(registry)!r})):\n"
@@ -247,7 +254,8 @@ class Pooch(Tool):
 
 class Dvc(Tool):
     name = "dvc"
-    scenarios = Tool.scenarios - {"s4"}
+    # dvc and datalad track files, not archives
+    scenarios = Tool.scenarios - {"s4", "s8"}
 
     def populate(self, scenario, workdir):
         shutil.copytree(Path(scenario["prepared"]) / self.name, workdir / "project", dirs_exist_ok=True)

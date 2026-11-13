@@ -63,7 +63,7 @@ full lab and live runs. ext4 runs every scenario on every profile it applies to.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" \
-  --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7 \
+  --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7,s8,s9 \
   --fs ext4 --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-ext4"
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan --scenarios s5,s6 \
@@ -74,7 +74,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" \
 
 there are 5 measured rounds on lan and home and 7 on far and poor, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
-smoke tests use 12 files per set, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
+smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --quick \
@@ -85,7 +85,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 - every invocation needs a new output directory. a campaign may run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice.
 - `--only-tools fetchloom,curl` narrows the lab clients and `--services zenodo,huggingface` the live services. `curl+sync` is curl followed by a flush of what it wrote, to compare with fetchloom's durable writes. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks.
-- unsupported combinations are left out: s3 to s6 use lan, and s7 uses home.
+- unsupported combinations are left out: s3 to s6, s8 and s9 use lan, and s7 uses home.
 - each measured command has a 20-minute timeout by default. `--timeout` must be finite and positive, and invalid settings are refused before a client starts. interruption and timeout deadlines include process startup, and a timer that fails to start kills and reaps the started group.
 - a failed command, timeout or wrong hash is a failed record, not a short timing.
 
@@ -101,7 +101,7 @@ python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/split" --threshold .03 \
 
 the bootstrap uses 20,000 resamples and seed 1729 by default; `--resamples` and `--seed` change those analysis settings. seeds are separate per case, variant and metric, so adding a variant does not change another interval. a win requires the entire interval below `1 - threshold`, at least 10 positive pairs (`--min-pairs`), and no failed, unmatched or excluded metric pairs. `--threshold .03` means an upper bound strictly below 0.97. increase `--rounds` to the noise-floor recommendation; bootstrap draws do not replace measured rounds. a quick run cannot establish a win. duplicate round identities and mixed workload sizes, quick modes or CPU masks are rejected; unmatched round numbers remain explicit in the results. intervals are per comparison, without a multiple-comparison correction; confirm selected winners independently.
 
-s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs. fixture manifests record their dimensions, seed and generator digest; preparation markers record fixture inputs, harness/lock digests and the fetchloom executable digest where applicable. a mismatch or incomplete marker rebuilds the owned preparation outside the clock.
+s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing, and s9 the s3 workflow. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs. fixture manifests record their dimensions, seed and generator digest; preparation markers record fixture inputs, harness/lock digests and the fetchloom executable digest where applicable. a mismatch or incomplete marker rebuilds the owned preparation outside the clock.
 
 live runs check a separately downloaded reference against the public manifest, then compare the clients' file SHA-256s and layouts. metadata is atomically saved and flushed before each measured command, so interrupted campaigns retain their inputs, orders and command wrappers. preparation and checker exceptions become failed rows rather than disappearing from the record. quick inputs are zenodo's iris record, one hugging face iris CSV, kaggle's iris dataset, the two sub-KiB figshare files and the sub-KiB dataverse file. inaccessible services and anonymous kaggle refusals have recorded skip reasons. the hugging face and kaggle commands include the expected SHA-256 check because their download APIs have no such option. live results have no speed ratios.
 

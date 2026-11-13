@@ -333,7 +333,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
     log = out / (label + ".log")
     try:
         tools.reset(workdir)
-        cold = case["id"] not in ("s5", "s6")
+        cold = case["id"] not in fixtures.WARM
         tool.prepare(case, workdir)
         argv = tool.command(case, workdir)
         row["command"] = exact_command(argv, workdir)

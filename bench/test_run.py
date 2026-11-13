@@ -145,6 +145,37 @@ class MetadataWriteTests(unittest.TestCase):
             self.assertEqual(list(root.iterdir()), [path])
 
 
+class WarmTests(unittest.TestCase):
+    def test_only_cold_scenarios_drop_the_page_cache(self):
+        import tools
+
+        class Stub(tools.Tool):
+            name = "stub"
+
+            def prepare(self, scenario, workdir):
+                workdir.mkdir(parents=True, exist_ok=True)
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        measured = dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+        dropped = {}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "www").mkdir()
+            for scenario in ("s3", "s6", "s9"):
+                case = dict(id=scenario, profile="lan", quick=True, count=1, size=1, files=[], members=[],
+                            key="key", server_dir=str(root / "www"))
+                with mock.patch.object(lab, "ROOT", root), mock.patch.object(lab, "forget_connections"), \
+                     mock.patch.object(lab, "drop_caches") as drop, mock.patch.object(lab, "flush"), \
+                     mock.patch.object(run, "measure", return_value=measured), \
+                     mock.patch.object(run, "settled_free_bytes", return_value=1), \
+                     mock.patch.object(run, "free_bytes", return_value=1), mock.patch.object(run.time, "sleep"):
+                    run.one_run(Stub("unused"), case, root / "fs" / "ext4" / "work", root, 1, False, 30)
+                dropped[scenario] = drop.called
+        self.assertEqual(dropped, {"s3": True, "s6": False, "s9": False})
+
+
 class ManyVariantTests(unittest.TestCase):
     def test_twelve_variants_keep_order_and_record_distinct_environments(self):
         with tempfile.TemporaryDirectory() as folder:

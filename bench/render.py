@@ -8,7 +8,7 @@ from statistics import median
 
 TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
-          "s7": "resume after an interruption"}
+          "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files"}
 
 
 def summarize(rows):
@@ -77,7 +77,9 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s4": "a zip of {files} of {size} each, downloaded, checked and unpacked",
            "s5": "{files} already in the cache, placed into a new project",
            "s6": "{files} already in place, each tool confirms nothing changed",
-           "s7": "a {size} download stopped at 10 s, then run again to finish"}
+           "s7": "a {size} download stopped at 10 s, then run again to finish",
+           "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
+           "s9": "{files} already in place, each tool confirms nothing changed"}
 
 # warm paper and ink, with one clay accent for fetchloom and quiet stone for everyone else
 PALETTES = {

@@ -68,6 +68,12 @@ class FixtureTests(unittest.TestCase):
                          [("lan", "s1"), ("lan", "s3"), ("home", "s1"), ("home", "s7")])
         self.assertEqual(cases[0]["size"], 1073741824)
         self.assertEqual(cases[1]["count"], 10000)
+
+    def test_the_compressed_archive_and_the_large_no_op_run_on_lan(self):
+        cases = fixtures.case_specs(["lan", "home"], ["s8", "s9"], False)
+        self.assertEqual([(c["profile"], c["id"], c["base"]) for c in cases], [("lan", "s8", "s8"), ("lan", "s9", "s3")])
+        [tiny] = fixtures.case_specs(["lan"], ["s3"], False)
+        self.assertEqual((cases[1]["count"], cases[1]["size"]), (tiny["count"], tiny["size"]))
         self.assertEqual(cases[1]["size"], 4096)
 
     def test_shaping_splits_roundtrip_and_limits_server(self):
@@ -395,6 +401,44 @@ class ToolSelectionTests(unittest.TestCase):
             return "3.1.0\n"
         with mock.patch.object(live.subprocess, "check_output", version):
             self.assertEqual(live.versions(["zenodo"]), {"zenodo_get": "3.1.0"})
+
+
+class ScenarioTests(unittest.TestCase):
+    def test_the_downloaders_and_pooch_unpack_the_compressed_archive(self):
+        from pathlib import Path
+        import tools
+        case = dict(id="s8", members=[], files=[dict(name="members.tar.gz", sha256="0" * 64, size=1,
+                                                     url="https://lab.flb/key/members.tar.gz")])
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            for adapter in (tools.Curl, tools.Wget, tools.Aria2c):
+                adapter("unused").command(case, work)
+                self.assertEqual((work / "command.sh").read_text().splitlines()[-1],
+                                 "tar -xzf data/members.tar.gz -C data", adapter.name)
+            tools.Pooch("unused").command(case, work)
+            self.assertIn("processor=pooch.Untar(extract_dir='unpacked')", (work / "retrieve.py").read_text())
+        self.assertEqual([adapter.name for adapter in tools.CLASSES if not adapter("unused").supports(case)],
+                         ["dvc", "datalad"])
+
+    def test_the_large_no_op_skips_work_as_the_small_one_does(self):
+        from pathlib import Path
+        from unittest import mock
+        import tools
+        files = [dict(name="file-00000.bin", sha256="0" * 64, size=1, url="https://lab.flb/key/file-00000.bin")]
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            for adapter, flag in ((tools.Curl, "-z"), (tools.Wget, "-nc"), (tools.Aria2c, "--check-integrity=true")):
+                adapter("unused").command(dict(id="s9", files=files, members=[]), work)
+                self.assertIn(flag, (work / "command.sh").read_text().split(), adapter.name)
+            seen = []
+            class Probe(tools.Tool):
+                name = "probe"
+                def command(self, scenario, workdir):
+                    seen.append(scenario["id"])
+                    return ["true"]
+            with mock.patch.object(tools.lab, "run_group"):
+                Probe("unused").prepare(dict(id="s9"), work / "work")
+            self.assertEqual(seen, ["s3"])
 
 
 class VariantTests(unittest.TestCase):

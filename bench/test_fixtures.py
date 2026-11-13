@@ -40,6 +40,26 @@ class CacheIdentityTests(unittest.TestCase):
             manifest.write_text("{")
             self.assertEqual(fixtures.build(spec, 17)["files"], first["files"])
 
+    def test_the_compressed_archive_holds_csv_tables_that_shrink_and_repeat(self):
+        import hashlib
+        import tarfile
+        [spec] = fixtures.case_specs(["lan"], ["s8"], True)
+        archives = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+                case = fixtures.build(spec, 17)
+                [archive] = case["files"]
+                with tarfile.open(Path(case["server_dir"]) / archive["name"], "r:gz") as tar:
+                    members = {info.name: tar.extractfile(info).read() for info in tar.getmembers()}
+            archives.append(archive)
+        self.assertEqual(archive["name"], "members.tar.gz")
+        self.assertEqual(len(members), spec["count"])
+        self.assertEqual({item["name"]: item["sha256"] for item in case["members"]},
+                         {name: hashlib.sha256(data).hexdigest() for name, data in members.items()})
+        self.assertTrue(all(data.startswith(b"id,date,site,") for data in members.values()))
+        self.assertLess(archive["size"], sum(map(len, members.values())) / 2)
+        self.assertEqual(archives[0]["sha256"], archives[1]["sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

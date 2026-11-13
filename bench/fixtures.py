@@ -1,19 +1,47 @@
-"""deterministic high-entropy fixtures and native prepared projects."""
+"""deterministic fixtures, high-entropy or csv tables, and native prepared projects."""
+from datetime import date, timedelta
+import gzip
 import hashlib
+import itertools
 import json
 from pathlib import Path
+import random
 import shutil
 import subprocess
+import tarfile
 import zipfile
 
 import lab
 
 
-ALL_SCENARIOS = tuple(f"s{i}" for i in range(1, 8))
+ALL_SCENARIOS = tuple(f"s{i}" for i in range(1, 10))
+# scenarios measured after an untimed run of another scenario's files, and that scenario
+WARM = {"s5": "s2", "s6": "s2", "s9": "s3"}
+# every member written on 2020-01-01, so an archive's bytes depend only on its members
+EPOCH = 1577836800
 
 
 def content(seed, name, size):
     return hashlib.shake_256(f"{seed}:{name}".encode()).digest(size)
+
+
+def table(seed, name, size):
+    """a csv table of at most `size` bytes, rows a field survey might log, so it compresses as
+    research tables do."""
+    rng = random.Random(f"{seed}:{name}")
+    sites = ("north ridge", "creek", "meadow", "pine stand", "delta", "south slope")
+    species = ("Abies alba", "Betula pendula", "Carpinus betulus", "Fagus sylvatica", "Picea abies", "Quercus robur")
+    out = [b"id,date,site,species,count,mass_g,length_mm,flag\n"]
+    total = len(out[0])
+    for row in itertools.count():
+        day = date(2019, 1, 1) + timedelta(days=row // 40)
+        line = (f"{row},{day.isoformat()},{rng.choice(sites)},{rng.choice(species)},{rng.randint(0, 40)},"
+                f"{rng.uniform(.5, 900):.2f},{rng.gauss(120, 30):.1f},{'check' if rng.random() < .05 else 'ok'}\n").encode()
+        if total + len(line) > size:
+            break
+        out.append(line)
+        total += len(line)
+    return b"".join(out)
 
 
 def sha256(path):
@@ -25,15 +53,16 @@ def case_specs(profiles, scenarios, quick):
     cases = []
     for profile in profiles:
         for scenario in scenarios:
-            if scenario in ("s3", "s4", "s5", "s6") and profile != "lan":
+            if scenario not in ("s1", "s2", "s7") and profile != "lan":
                 continue
             if scenario == "s7" and profile != "home":
                 continue
-            base = "s1" if scenario == "s7" else "s2" if scenario in ("s5", "s6") else scenario
-            size = lab.PROFILES[profile][3] if base == "s1" else 102400 if base == "s2" else 4096
-            count = 1 if base == "s1" else lab.PROFILES[profile][4] if base == "s2" else 10000
+            base = "s1" if scenario == "s7" else WARM.get(scenario, scenario)
+            size = (lab.PROFILES[profile][3] if base == "s1" else 102400 if base == "s2"
+                    else 1024 * 1024 if base == "s8" else 4096)
+            count = 1 if base == "s1" else lab.PROFILES[profile][4] if base == "s2" else 100 if base == "s8" else 10000
             if quick:
-                size = 2 * 1024 * 1024 if base == "s1" else size
+                size = 2 * 1024 * 1024 if base == "s1" else 64 * 1024 if base == "s8" else size
                 count = min(count, 12)
                 # keep the prescribed ten-second interruption meaningful at 100 mbit/s
                 if scenario == "s7":
@@ -78,19 +107,33 @@ def build(case, seed):
     target.mkdir(parents=True, exist_ok=True)
     files = []
     for index in range(case["count"]):
-        name = f"file-{index:05}.bin"
+        name = f"table-{index:05}.csv" if case["base"] == "s8" else f"file-{index:05}.bin"
         path = target / name
         with path.open("wb") as f:
-            remaining = case["size"]
+            if case["base"] == "s8":
+                f.write(table(seed, f"{key}/{name}", case["size"]))
+            remaining = 0 if case["base"] == "s8" else case["size"]
             chunk = 0
             while remaining:
                 length = min(1024 * 1024, remaining)
                 f.write(content(seed, f"{key}/{name}/{chunk}", length))
                 remaining -= length
                 chunk += 1
-        files.append(dict(name=name, sha256=sha256(path), size=case["size"],
+        files.append(dict(name=name, sha256=sha256(path), size=path.stat().st_size,
                           url=f"https://lab.flb/{key}/{name}"))
     members = []
+    if case["base"] == "s8":
+        members = files
+        archive = target / "members.tar.gz"
+        with archive.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as packed, \
+                tarfile.open(fileobj=packed, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+            for item in members:
+                info = tarfile.TarInfo(item["name"])
+                info.size, info.mtime, info.mode = item["size"], EPOCH, 0o644
+                with (target / item["name"]).open("rb") as body:
+                    tar.addfile(info, body)
+        files = [dict(name=archive.name, sha256=sha256(archive), size=archive.stat().st_size,
+                      url=f"https://lab.flb/{key}/{archive.name}")]
     if case["base"] == "s4":
         members = files
         archive = target / "members.zip"

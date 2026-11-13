@@ -15,7 +15,7 @@ the benchmark suite compares the time and resources needed to retrieve checked r
 ## fairness rules
 
 1. same job. every tool starts from the same fixture bytes, through its URLs or prepared project, with an expected SHA-256 for every required output. layouts follow each client's native workflow, including pooch returning paths in its cache. a run counts only when a checker finds every expected file with the right SHA-256; a run with a missing or wrong file is reported as failed, never as fast.
-2. same checking. each client uses its native integrity check on downloaded bytes (aria2c `--checksum`, pooch `known_hash`, DVC remote verification and git-annex SHA-256 keys). fetchloom verifies every downloaded byte. on a no-op it trusts recorded size and modification time, like git, unless a racy timestamp or change mark requires hashing; pooch rehashes its cached file. this difference is part of what s5 and s6 measure. a client without a hash option, such as curl or wget, runs `sha256sum -c` in the same timed command. every run also gets the independent SHA-256 checker outside the clock.
+2. same checking. each client uses its native integrity check on downloaded bytes (aria2c `--checksum`, pooch `known_hash`, DVC remote verification and git-annex SHA-256 keys). fetchloom verifies every downloaded byte. on a no-op it trusts recorded size and modification time, like git, unless a racy timestamp or change mark requires hashing; pooch rehashes its cached file. this difference is part of what s5, s6 and s9 measure. a client without a hash option, such as curl or wget, runs `sha256sum -c` in the same timed command. every run also gets the independent SHA-256 checker outside the clock.
 3. each tool's own way. a tool runs the workflow its documentation recommends for the job, not an imitation of fetchloom: DVC pulls a tracked folder from an HTTP remote, datalad clones a dataset and gets its files, pooch retrieves files by known hash.
 4. each tool's own speed settings. a tool runs with the parallelism its documentation offers (curl `--parallel --parallel-max 4`, aria2c `-j 4 -x 4`, DVC `-j 4` and datalad `-J 4`) and defaults for everything else. wget and pooch have no parallel mode and run as they are. every flag is in the results.
 5. same machine, same network. all tools run one at a time on a dedicated idle machine, against the same local server, through the same shaped link.
@@ -34,8 +34,10 @@ the benchmark suite compares the time and resources needed to retrieve checked r
 | s5 | s2 again in a second project | the tool's cache filled by s2 | reuse on one machine |
 | s6 | the same command again | everything in place | the cost of a no-op, paid by a notebook on every run |
 | s7 | s1 interrupted after 10 s, then run again | a partial download | bytes downloaded twice |
+| s8 | one tar.gz of 100 csv tables of about 1 MiB | empty caches | download plus decompressing and unpacking |
+| s9 | s3 again in the same project | everything in place | the no-op where checking each file adds up |
 
-cold runs empty every tool's cache, write out the lab's own filesystems and drop the machine's page cache; the server's files are read once after the drop, so the server is warm like a real one. every run, cold or warm, also starts without what linux kept from earlier connections between client and server, such as its estimate of packet reordering, which the next connection's loss recovery would start from: the lab clears the server namespace's TCP metrics and the host's entry for the server, so a run on a lossy link does not inherit the previous run's. warm runs keep caches and page cache. s5 and s6 first populate each client using s2 outside the clock. s5 gives fetchloom and DVC a new project and datalad a clone of the first one, all made before the clock starts; pooch returns paths in its shared cache. datalad then gets its files inside the timed command.
+cold runs empty every tool's cache, write out the lab's own filesystems and drop the machine's page cache; the server's files are read once after the drop, so the server is warm like a real one. every run, cold or warm, also starts without what linux kept from earlier connections between client and server, such as its estimate of packet reordering, which the next connection's loss recovery would start from: the lab clears the server namespace's TCP metrics and the host's entry for the server, so a run on a lossy link does not inherit the previous run's. warm runs keep caches and page cache. s5 and s6 first populate each client using s2, and s9 using s3, outside the clock. s5 gives fetchloom and DVC a new project and datalad a clone of the first one, all made before the clock starts; pooch returns paths in its shared cache. datalad then gets its files inside the timed command.
 
 in s7 every tool gets ctrl-c (SIGINT) at the same moment, 10 seconds into a download on the home profile; tools still running after 5 more seconds get SIGKILL. the metric is the bytes the server sent for that file across both runs, divided by its size. curl and wget use their documented resume switches; wget otherwise writes a second filename and leaves the required output partial. quick mode keeps the 256 MiB home file for this case, since a tiny file would finish before the signal.
 
@@ -46,17 +48,17 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | tool | how it runs | scenarios |
 |---|---|---|
 | fetchloom | `fetchloom sync` in a project with `data.toml` and `data.lock` | all |
-| curl | `curl --parallel --parallel-max 4`, then `sha256sum -c`; `-C -` in s7 | s1 to s4, s6, s7 |
-| curl+sync | curl as above, then `sync -f data`, which flushes the filesystem it wrote, as fetchloom flushes what it places; the difference from curl is the cost of surviving a power cut | s1 to s4, s6, s7 |
-| aria2c | `aria2c -j 4 -x 4` with `--checksum` per file | s1 to s4, s6, s7 |
-| wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6, s7 |
-| pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |
-| DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
-| datalad | `datalad get -J 4` from URLs registered with git-annex, in a `datalad clone` made before the clock starts, like DVC's project copy: of the prepared dataset, or for s5 of the first project | s1 to s3, s5 to s7 |
+| curl | `curl --parallel --parallel-max 4`, then `sha256sum -c`; `-C -` in s7 | s1 to s4, s6 to s9 |
+| curl+sync | curl as above, then `sync -f data`, which flushes the filesystem it wrote, as fetchloom flushes what it places; the difference from curl is the cost of surviving a power cut | s1 to s4, s6 to s9 |
+| aria2c | `aria2c -j 4 -x 4` with `--checksum` per file | s1 to s4, s6 to s9 |
+| wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6 to s9 |
+| pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 and `Untar` for s8 | all |
+| DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7, s9 |
+| datalad | `datalad get -J 4` from URLs registered with git-annex, in a `datalad clone` made before the clock starts, like DVC's project copy: of the prepared dataset, or for s5 of the first project | s1 to s3, s5 to s7, s9 |
 
 cache locations and the system CA bundle are set explicitly. DVC analytics and hugging face telemetry are disabled explicitly. use a clean benchmark environment so unrelated credentials and settings do not affect clients. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
-for s4 the downloaders run `unzip -q` after the check, in the same timed command. DVC and datalad track files rather than archives, so they sit s4 out. s6 uses each tool's own way to skip work: curl `-z` asks the server whether each file changed since the local copy was written, and nginx runs with `if_modified_since before` so any later date gets a 304, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
+for s4 the downloaders run `unzip -q` after the check, in the same timed command, and for s8 `tar -xzf`. DVC and datalad track files rather than archives, so they sit s4 and s8 out. s8's members are csv tables from a seeded generator, rows a field survey might log, which gzip shrinks to about a fifth as it does real tables; every other fixture is random bytes no compressor shrinks, so s4's zip stores its members and only s8 times decompression. s6 and s9 use each tool's own way to skip work: curl `-z` asks the server whether each file changed since the local copy was written, and nginx runs with `if_modified_since before` so any later date gets a 304, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
 
 live runs fetch real public datasets, 5 interleaved rounds each with empty caches, against each service's own tool:
 
@@ -91,7 +93,7 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 | far | 150 ms | 1% | 50 Mbit/s | 4 MiB | 50 |
 | poor | 300 ms | 3% | 10 Mbit/s | 1 MiB | 20 |
 
-ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the full-run recipe uses xfs only for s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
+ext4 runs s1 and s2 on every profile, s3 to s6, s8 and s9 on lan, and s7 on home. the full-run recipe uses xfs only for s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
 
 ## platforms
 
@@ -127,6 +129,8 @@ each run writes `meta.json` and `runs.jsonl` under `$FL_BENCH_ROOT/results/` (de
 - macos; the lab runs on linux.
 - services that need an account the lab cannot reproduce, beyond the live runs above.
 - private remotes such as S3 buckets behind credentials.
+- resolution. `fetchloom lock` and the other tools' setup run while preparing, so the lab times no lookup of a record and no dataset of many files from one record, fetchloom's commonest shape; the live runs time both against the services. a local stand-in for a repository's api, a zenodo- or hugging face-shaped listing beside nginx's files, would time them offline.
+- public buckets through the S3 api against `aws s3 sync`, s5cmd or rclone. that needs an S3-compatible server in the lab's namespace.
 
 ## prior art
 
