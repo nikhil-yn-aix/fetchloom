@@ -23,10 +23,14 @@ every change measured with the current harness, one row each: what it gained whe
 | network | an unchanged bucket object reused by its listed ETag and size | `lock --upgrade` of a prefix: 7 to 2 requests, 12.2 to 2.0 MB | kept | [bucket prefix](#upgrading-a-bucket-prefix-2026-11-12) |
 | network | fast large files split into ranges from a link-rate probe | live hugging face 5.6 to 3.7 s, but lan 1 GiB 1.075 and 1.5 to 1.6 times the cpu | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | network | shorter download queues | xfs s1 1.108 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| network | lean against default: 2 requests at once, 2 to one host | 100 links from a server that waits 50 ms: time 2.006, peak memory 0.998; `add -i` of 1,000 local links 1.081 and 0.887 glibc, 1.085 and 0.679 musl; 1 GiB `get` 0.977 and 0.862 glibc, 0.997 and 0.991 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| network | max against default: 32 requests at once, 16 to one host | 100 links at 50 ms: time 0.281, peak memory 1.077; `add -i` of 1,000 local links 1.046 and 1.274 glibc, 1.040 and 1.141 musl; 1 GiB `get` 1.005 and 1.069 glibc, 0.999 and 1.074 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | SHA-256 and a required MD5 on separate workers | 512 MiB 0.776 glibc, 0.767 musl; musl median RSS 106.3 to 120.3 MiB, maximum 168.6 to 154.3 MiB | kept | [paired checksums](#overlapping-required-checksums-2026-11-12) |
 | hashing | placed-file verification scheduled by bytes as well as file count | 8 × 64 MiB warm 0.163 glibc, 0.151 musl; cold 0.263 and 0.262; median RSS +6.1 and +10.3 MiB, lean unchanged | kept | [verification](#byte-aware-placed-file-verification-2026-11-12) |
+| hashing | lean against default: 2 local workers | `status --verify` of 8 × 64 MiB: time 6.608, peak memory 0.673; `cache verify` of 100,000 objects 1.961 and 0.985, glibc | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| hashing | max against default: default's workers and memory | `status --verify` of 8 × 64 MiB 0.958 and 0.998; `cache verify` of 100,000 objects 1.010 and 1.006, glibc | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -40,6 +44,8 @@ every change measured with the current harness, one row each: what it gained whe
 | archives | short memory moves in the musl bzip2 decoder | 64 MiB 2.843 s musl, 2.211 s glibc; 31.47% of musl user samples in `memmove` | upstream note, no change | [bzip2](#musl-bzip2-short-memory-moves-2026-11-12) |
 | archives | stream every member above 1 MiB to an existing writer | large gzip 0.717 glibc, 0.774 musl; 1.0625 MiB-member control 1.021 [1.005, 1.044] on glibc | dropped | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
 | archives | stream declared large members with spare writer budget | large gzip 0.754 glibc, 0.759 musl; 4.0625 MiB-member control 0.856 and 0.885; highest musl RSS 88.6 MiB | kept | [archive handoffs](#overlapping-archive-decoding-and-storage-2026-11-12) |
+| archives | lean against default: 2 local workers | sync of a zip of 10,000 files: time 2.095 glibc, 2.031 musl; peak memory 0.934 glibc, 0.870 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| archives | max against default: default's workers and memory | the same zip: time 1.018 glibc, 0.992 musl; peak memory 0.934 glibc, 1.000 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | placement | placement workers limited by parent folder, one on exfat | wall flat; cpu 0.79 to 0.81, on exfat 85% lower | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | a hardlink's details taken from its object | xfs s4 0.933 | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | placement work per file cut | 100,000 files 0.840 | kept | [placement](#ab-passes-on-placement-and-startup-2026-11) |
@@ -48,6 +54,8 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
+| placement | lean against default: 2 local workers | settled sync of 100,000 files: time 1.112, peak memory 0.999, glibc; sync of 40,000 one-file datasets 1.115 and 0.998 glibc, 1.144 and 0.901 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| placement | max against default: default's workers and memory | settled sync of 100,000 files 1.000 and 1.000, glibc; sync of 40,000 datasets 0.999 and 1.001 glibc, 1.000 and 0.990 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | project state | indexed selected-folder ranges | 40,000 named datasets: ratios 0.1312 glibc and 0.0687 musl; musl stress peak +0.75 MiB | kept | [folder ranges](#searching-selected-folder-ranges-2026-11-12) |
 | project state | the data folder walk looks at the run's stop before each folder | a stop asked before the walk ends it at once; status of 100,000 files on ext4 0.996 glibc, 1.003 musl, peak memory +0.5 and +0.6 MiB | kept, for stopping | [stop during the walk](#a-stop-during-the-data-folder-walk-2026-11-12) |
 | project state | the state indexed by blocks of records, so a command that names datasets reads only theirs | `path` of 1 file beside 100,000 records 0.090 glibc, 0.144 musl; beside 1,000,000 0.013 and 0.021; peak memory 0.04 to 0.40; whole reads flat, a sync that writes the state +0.7% on musl | kept | [state index](#an-indexed-project-state-2026-11-12) |
@@ -567,6 +575,31 @@ the perf-io2 branch left a half-built change that asks the file system less whil
 | `add -i` of 1,000 links of 90 to 110 kB on tmpfs | 20 | 0.997 [0.975, 1.022] | 1.009 [0.986, 1.018] | 1.007 [0.990, 1.018] |
 
 one glibc release build of the [scans](#scans-inside-per-file-loops-2026-11-12) change with this one behind a run-time switch, `FETCHLOOM_EXP_CHECKED_IO`, against itself without it; rounds interleaved after a warmup under the measure lock on cores 12-23, on ext4 over nvme and on xfs loop-mounted there. one xfs import round had a load burst and is left out. nothing nears the 10% bar, so the change and its two tests were dropped; the patch stays outside the repository.
+
+## resources levels against default, 2026-11-13
+
+what each [level](../../user/resources.md) trades, on the eight workloads of the perf audit's level pass, four of them on musl too. lean sets 2 requests at once, 2 to one host, a 128 MiB buffer budget and 2 local workers; max sets 32 and 16 requests and keeps default's workers and memory. every arm ran the same binary with only `FETCHLOOM_RESOURCES` changed. a ratio is level over default, the median of paired rounds with its 95% bootstrap interval.
+
+| workload | libc | pairs | default | lean: time, peak memory | max: time, peak memory |
+|---|---|---:|---|---|---|
+| `add -i` of 100 links of 4 KiB from a server that waits 50 ms an answer | glibc | 12 | 2.264 s, 16.3 MiB | 2.006 [2.005, 2.011], 0.998 [0.971, 1.007] | 0.281 [0.279, 0.284], 1.077 [1.055, 1.087] |
+| `add -i` of 1,000 links of 90 to 110 kB from a local server | glibc | 10 | 343.1 ms, 26.5 MiB | 1.081 [1.027, 1.098], 0.887 [0.869, 0.899] | 1.046 [1.005, 1.073], 1.274 [1.239, 1.294] |
+| | musl | 15 | 342.5 ms, 96.4 MiB | 1.085 [1.022, 1.141], 0.679 [0.652, 0.712] | 1.040 [1.017, 1.130], 1.141 [1.099, 1.227] |
+| `get -o` of 1 GiB from a local server | glibc | 10 | 771.3 ms, 67.9 MiB | 0.977 [0.961, 0.994], 0.862 [0.792, 0.935] | 1.005 [0.995, 1.033], 1.069 [0.967, 1.160] |
+| | musl | 10 | 730.2 ms, 94.7 MiB | 0.997 [0.991, 1.001], 0.991 [0.745, 1.154] | 0.999 [0.993, 1.004], 1.074 [0.991, 1.107] |
+| `status --verify` of 8 × 64 MiB | glibc | 19 | 74.3 ms, 17.7 MiB | 6.608 [5.667, 6.960], 0.673 [0.657, 0.678] | 0.958 [0.870, 0.997], 0.998 [0.990, 1.009] |
+| `cache verify` of 100,000 objects | glibc | 15 | 408.3 ms, 32.1 MiB | 1.961 [1.921, 2.014], 0.985 [0.978, 0.992] | 1.010 [0.981, 1.025], 1.006 [0.988, 1.012] |
+| sync of a zip of 10,000 files | glibc | 12 | 299.3 ms, 39.6 MiB | 2.095 [2.043, 2.145], 0.934 [0.824, 1.137] | 1.018 [0.993, 1.030], 0.934 [0.847, 1.080] |
+| | musl | 15 | 314.0 ms, 128.5 MiB | 2.031 [1.970, 2.051], 0.870 [0.784, 0.894] | 0.992 [0.958, 0.996], 1.000 [0.986, 1.016] |
+| settled sync of 100,000 files | glibc | 8 | 409.8 ms, 79.7 MiB | 1.112 [1.078, 1.167], 0.999 [0.994, 1.004] | 1.000 [0.978, 1.007], 1.000 [0.995, 1.004] |
+| sync of 40,000 one-file datasets into an empty folder | glibc | 10 | 1.208 s, 145.0 MiB | 1.115 [1.102, 1.137], 0.998 [0.997, 1.001] | 0.999 [0.988, 1.007], 1.001 [0.998, 1.002] |
+| | musl | 14 | 1.000 s, 203.6 MiB | 1.144 [1.131, 1.147], 0.901 [0.898, 0.909] | 1.000 [0.987, 1.024], 0.990 [0.981, 1.000] |
+
+so lean pays 1.08 to 1.15 times on most local work and about 2 to 6.6 times where the work spreads over workers: a zip, `cache verify`, the large files' verification and the far server. it saves memory where buffers or workers hold it: big files hashed on fewer workers, 1,000 downloads (0.887 glibc, 0.679 musl), and on musl the zip and the many datasets. max is its target's 0.281 for 7.7% more memory; with 1,000 links from a local server it is 4 to 5% slower for 14 to 27% more, and on local work it changes nothing, since it sets only requests. its 0.958 on the 74 ms `status --verify` has no setting behind it.
+
+glibc and musl release builds of bec45367, interleaved rounds after a warmup under the measure lock on cores 12-23. projects and caches on tmpfs, so flushes cost nothing; links from a local server on tmpfs, the zip and the 1 GiB file from the nvme disk's page cache. the copied 100,000-file and large projects were synced once by this build before the runs, since a state from before the [indexed format](#an-indexed-project-state-2026-11-12) reads as empty, and every file would be hashed. rounds with more than 12 other cores busy are left out; the settled sync and `cache verify` lost most rounds to load, and all 40 of each give the same answer: lean 1.095 [1.062, 1.122] and 1.963 [1.927, 1.987], max 1.003 and 1.009.
+
+every level's folders had names of one length. in a first pass they did not, and a project path five letters longer alone cost 3.3 MiB at the peak of the sync of 40,000 datasets, 1.023 [1.022, 1.026] for the same build without a level, enough to fake a 2 to 3% memory saving for both other levels. against the audit's pass on efbf3adf, whose levels shared one folder, every time ratio here is within its interval or at most 5% from it. the memory ratios overlap its intervals but three: max's on 1,000 local links on glibc, 1.318 then and 1.274 now; lean's on `cache verify`, 1.000 and 0.985; and lean's on the large files' verification, 0.621 and 0.673, where both levels' peaks rose by about 2 MiB. so nothing since has moved what the levels trade by more than that.
 
 ## pending archive reader budgets, 2026-11-12
 
