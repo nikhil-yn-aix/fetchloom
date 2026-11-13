@@ -40,8 +40,8 @@ def check(binary):
         require(all((project / 'data' / path).read_bytes() == body for path, body in first.items()),
                 'sync did not restore the public dataset bytes')
         require(run('get', 'zenodo:3608990', '--dir', str(root / 'got'))['files'], 'get placed no files')
-        # every site, ENA and dandi among them, which a search asks only when named
-        every = 'hf,kaggle,zenodo,ena,geo,dandi,openneuro'
+        # every site, ENA, dandi and arXiv among them, which a search asks only when named
+        every = 'hf,kaggle,zenodo,ena,geo,dandi,openneuro,arxiv'
         require(run('search', 'iris', '--source', every)['candidates'], 'search found no candidates')
 
 

@@ -17,10 +17,10 @@ arguments:
 
 options:
       --source <source>  search only this site: hf, kaggle, zenodo, ena, geo,
-                         dandi or openneuro. repeat it or use commas for more.
-                         without it, every site but ena and dandi, searched only
-                         when named [possible values: hf, kaggle, zenodo, ena,
-                         geo, dandi, openneuro]
+                         dandi, openneuro or arxiv. repeat it or use commas for
+                         more. without it, every site but ena, dandi and arxiv,
+                         searched only when named [possible values: hf, kaggle,
+                         zenodo, ena, geo, dandi, openneuro, arxiv]
       --limit <n>        keep up to this many matches from each site, 1 to 20.
                          without it, 12 in all, each site's best among them
   [global options]

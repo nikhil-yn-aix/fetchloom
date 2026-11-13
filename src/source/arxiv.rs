@@ -247,6 +247,11 @@ impl Paper {
             version: Some(version),
         }
     }
+
+    /// the paper's newest version, as a search offers it.
+    fn newest(id: Id) -> Paper {
+        Paper { id, version: None }
+    }
 }
 
 impl fmt::Display for Paper {
@@ -257,6 +262,43 @@ impl fmt::Display for Paper {
         }
         Ok(())
     }
+}
+
+/// a paper a search found, with what a person tells it by.
+pub(crate) struct Found {
+    pub(crate) reference: Reference,
+    pub(crate) title: String,
+    /// its first author and the year of its first version, as `Vaswani et al. 2017`.
+    pub(crate) note: Option<String>,
+}
+
+/// the papers whose titles hold `words` as a phrase, the most relevant first, and when fewer than
+/// `limit` do, those that hold it anywhere: a title is how people know a paper.
+pub(crate) async fn search(
+    api: &impl Api,
+    words: &[String],
+    limit: usize,
+) -> Result<Vec<Found>, Error> {
+    let phrase = words.join(" ");
+    if phrase.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut found = feed::search(api, &format!("ti:\"{phrase}\""), limit).await?;
+    if found.len() < limit {
+        for entry in feed::search(api, &format!("all:\"{phrase}\""), limit).await? {
+            if found.len() < limit && !found.iter().any(|known| known.id == entry.id) {
+                found.push(entry);
+            }
+        }
+    }
+    Ok(found
+        .into_iter()
+        .map(|entry| Found {
+            note: entry.byline(),
+            reference: Reference::Arxiv(Paper::newest(entry.id)),
+            title: entry.title,
+        })
+        .collect())
 }
 
 #[cfg(test)]

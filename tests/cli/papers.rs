@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, text};
 
 /// the bytes of a paper's pdf, as far as the tests care.
 const PDF: &[u8] = b"%PDF-1.5 attention\n";
@@ -279,5 +279,33 @@ fn an_arxiv_category_month_lists_through_the_api_and_downloads_from_the_mirror()
     let data = sandbox.work().join("data/cs-lg-2401");
     assert_eq!(fs::read(data.join("2401.00001v1.pdf"))?, PDF);
     assert_eq!(fs::read(data.join("2401.00002v3.pdf"))?, OTHER);
+    Ok(())
+}
+
+/// arXiv is searched only when named, its papers by title first, each with its first author and
+/// year.
+#[test]
+fn arxiv_is_searched_by_title_when_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    let api = Server::start("/", vec![xml(PAPER), xml(NONE)])?;
+    let output = sandbox
+        .command(&["search", "attention is all you need", "--source", "arxiv"])
+        .env("FETCHLOOM_TEST_ARXIV_API", &api.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Searching arXiv for \"attention is all you need\""),
+        "{stderr}"
+    );
+    assert_eq!(
+        text(&output.stdout)?,
+        "arxiv:1706.03762\tAttention Is All You Need\n"
+    );
+    let asked = api.requests();
+    assert!(
+        asked[0].contains("search_query=ti%3a%22attention+is+all+you+need%22"),
+        "{asked:?}"
+    );
     Ok(())
 }

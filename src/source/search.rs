@@ -50,10 +50,11 @@ pub(crate) enum Catalog {
     Dandi,
     #[value(name = "openneuro")]
     OpenNeuro,
+    Arxiv,
 }
 
 impl Catalog {
-    pub(crate) const ALL: [Catalog; 7] = [
+    pub(crate) const ALL: [Catalog; 8] = [
         Catalog::Hf,
         Catalog::Kaggle,
         Catalog::Zenodo,
@@ -61,16 +62,18 @@ impl Catalog {
         Catalog::Geo,
         Catalog::Dandi,
         Catalog::OpenNeuro,
+        Catalog::Arxiv,
     ];
 
     /// the sites a search asks, in turn order: those `named` with `--source`, else all but ENA
-    /// and dandi, specialist archives slow to answer, so a search without `--source` stays quick.
+    /// and dandi, specialist archives slow to answer, so a search without `--source` stays quick,
+    /// and arXiv, whose papers are no datasets.
     pub(crate) fn asked(named: &[Catalog]) -> Vec<Catalog> {
         Catalog::ALL
             .into_iter()
             .filter(|catalog| {
                 if named.is_empty() {
-                    !matches!(catalog, Catalog::Ena | Catalog::Dandi)
+                    !matches!(catalog, Catalog::Ena | Catalog::Dandi | Catalog::Arxiv)
                 } else {
                     named.contains(catalog)
                 }
@@ -88,6 +91,7 @@ impl Catalog {
             Catalog::Geo => "GEO",
             Catalog::Dandi => "dandi",
             Catalog::OpenNeuro => "openneuro",
+            Catalog::Arxiv => "arXiv",
         }
     }
 
@@ -101,6 +105,7 @@ impl Catalog {
             Catalog::Geo => "geo",
             Catalog::Dandi => "dandi",
             Catalog::OpenNeuro => "openneuro",
+            Catalog::Arxiv => "arxiv",
         }
     }
 
@@ -119,6 +124,7 @@ impl Catalog {
             Catalog::Geo => geo(api, words, limit).await,
             Catalog::Dandi => dandi(api, words, limit).await,
             Catalog::OpenNeuro => openneuro(api, words, limit).await,
+            Catalog::Arxiv => arxiv(api, words, limit).await,
         }
     }
 }
@@ -583,6 +589,23 @@ fn plain_words(words: &str) -> Vec<String> {
         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '-' | '_'))
         .collect();
     words.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// arXiv's papers whose titles hold the words, then those that hold them anywhere, as
+/// `super::arxiv::search` asks; arXiv states no size or downloads.
+async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    Ok(super::arxiv::search(api, &plain_words(words), limit)
+        .await?
+        .into_iter()
+        .map(|found| Candidate {
+            reference: found.reference,
+            title: found.title,
+            source: Catalog::Arxiv.label(),
+            size: None,
+            downloads: None,
+            note: found.note,
+        })
+        .collect())
 }
 
 async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {

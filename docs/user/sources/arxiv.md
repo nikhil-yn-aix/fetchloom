@@ -5,6 +5,7 @@ arXiv references list the pdfs of papers on arXiv: one paper, at a version or it
 ```sh
 fetchloom add arxiv:1706.03762
 fetchloom add arxiv:cs.LG/2401
+fetchloom search attention is all you need --source arxiv
 ```
 
 ## references
@@ -90,6 +91,17 @@ each paper keeps the license its authors chose for it. most choose arXiv's own, 
 ## arXiv's terms
 
 arXiv asks a program to send no more than one request every three seconds, on one connection at a time, to its API and its OAI-PMH interface, as [its API terms](https://info.arxiv.org/help/api/tou.html) say, and to use export.arxiv.org rather than arxiv.org. fetchloom sends every request to arxiv.org and its hosts, pdfs included, one at a time and three seconds apart; the mirror on google's storage is not paced. it never reads arXiv's list pages, and it does not fetch a paper's latex source: arXiv's robots.txt keeps programs out of `/e-print` and `/src`, and its terms ask tools to send people to arXiv for source files. download a paper's source from its page, or many from arXiv's [bulk data on S3](https://info.arxiv.org/help/bulk_data_s3.html), whose bucket bills the reader, which fetchloom [never agrees to](buckets.md).
+
+## search
+
+`fetchloom search <words> --source arxiv` asks arXiv's API for papers whose titles hold the words as a phrase, the most relevant first, then, when fewer than the limit do, for papers that hold them anywhere. arXiv is searched only when `--source` names it, since its papers are not datasets. stdout from a real run:
+
+```text
+$ fetchloom search attention is all you need --source arxiv
+arxiv:1706.03762	Attention Is All You Need
+arxiv:2104.04692	Not All Attention Is All You Need
+arxiv:2501.05730	Element-wise Attention Is All You Need
+```
 
 ## other scholarly data
 

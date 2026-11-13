@@ -562,9 +562,61 @@ fn a_category_month_that_lists_nothing_or_stops_early_is_refused() {
     );
 }
 
+/// a search finds titles first, then fills up from papers that hold the words anywhere.
+#[test]
+fn a_search_asks_titles_first_then_everywhere() {
+    let titles = "https://export.arxiv.org/api/query?search_query=ti%3A%22attention+is+all+you+need%22&start=0&max_results=3&sortBy=relevance";
+    let anywhere = "https://export.arxiv.org/api/query?search_query=all%3A%22attention+is+all+you+need%22&start=0&max_results=3&sortBy=relevance";
+    let recorded = Recorded::default().fixture(titles, "arxiv/paper.xml").on(
+        anywhere,
+        200,
+        feed(
+            47,
+            &[
+                ("2604.21816v1".to_owned(), "2026-04-02T00:00:00Z".to_owned()),
+                ("1706.03762v7".to_owned(), "2017-06-12T17:57:34Z".to_owned()),
+                ("2104.04692v3".to_owned(), "2021-04-10T00:00:00Z".to_owned()),
+            ],
+        ),
+    );
+    let words = ["attention", "is", "all", "you", "need"].map(str::to_owned);
+    let found = block_on(search(&recorded, &words, 3)).unwrap();
+    let shown: Vec<(String, &str, Option<&str>)> = found
+        .iter()
+        .map(|found| {
+            (
+                found.reference.to_string(),
+                found.title.as_str(),
+                found.note.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (
+                "arxiv:1706.03762".to_owned(),
+                "Attention Is All You Need",
+                Some("Vaswani et al. 2017")
+            ),
+            (
+                "arxiv:2604.21816".to_owned(),
+                "Paper 2604.21816v1",
+                Some("Lovelace 2026")
+            ),
+            (
+                "arxiv:2104.04692".to_owned(),
+                "Paper 2104.04692v3",
+                Some("Lovelace 2021")
+            ),
+        ]
+    );
+    assert!(block_on(search(&recorded, &[], 3)).unwrap().is_empty());
+}
+
 #[test]
 #[ignore = "live: talks to export.arxiv.org, oaipmh.arxiv.org and storage.googleapis.com, paced"]
-fn live_arxiv_paper_and_category_page() {
+fn live_arxiv_paper_category_page_and_search() {
     let (net, _work) = crate::source::recorded::live(Vec::new());
     let paper = Reference::parse("arxiv:1706.03762").unwrap().reference;
     let listing = block_on(paper.resolve(&net)).unwrap();
@@ -597,4 +649,7 @@ fn live_arxiv_paper_and_category_page() {
             Some("storage.googleapis.com" | "export.arxiv.org")
         )
     }));
+    let words = ["attention", "is", "all", "you", "need"].map(str::to_owned);
+    let found = block_on(search(&net, &words, 1)).unwrap();
+    assert_eq!(found[0].reference.to_string(), "arxiv:1706.03762");
 }

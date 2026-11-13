@@ -15,8 +15,30 @@ pub(super) struct Entry {
     pub(super) id: Id,
     pub(super) version: u32,
     pub(super) title: String,
+    pub(super) authors: Vec<String>,
     /// when its first version was submitted, as `2017-06-12T17:57:34Z`.
     pub(super) published: String,
+}
+
+impl Entry {
+    /// its first author's last name and the year of its first version, as `Vaswani et al. 2017`.
+    pub(super) fn byline(&self) -> Option<String> {
+        let first = self.authors.first()?;
+        let surname = first.rsplit(' ').next().unwrap_or(first);
+        let who = if self.authors.len() > 1 {
+            format!("{surname} et al.")
+        } else {
+            surname.to_owned()
+        };
+        let year = self
+            .published
+            .get(..4)
+            .filter(|year| year.bytes().all(|byte| byte.is_ascii_digit()));
+        Some(match year {
+            Some(year) => format!("{who} {year}"),
+            None => who,
+        })
+    }
 }
 
 /// one page of the feed: its papers, and how many the query matches in all.
@@ -51,6 +73,20 @@ pub(super) async fn ask(
         .help("run the same command again later"));
     }
     page(&response.text()).map_err(|reason| unusable(about, &reason))
+}
+
+/// the papers a query of arXiv's API finds, the most relevant first.
+pub(super) async fn search(api: &impl Api, query: &str, limit: usize) -> Result<Vec<Entry>, Error> {
+    let most = limit.to_string();
+    let pairs = [
+        ("search_query", query),
+        ("start", "0"),
+        ("max_results", most.as_str()),
+        ("sortBy", "relevance"),
+    ];
+    Ok(ask(api, &pairs, &format!("the search {query}"))
+        .await?
+        .entries)
 }
 
 /// the error for an answer from arXiv that fetchloom cannot read.
@@ -98,10 +134,17 @@ fn entry(entry: &xml::Element) -> Result<Entry, String> {
     if title.is_empty() {
         return Err(format!("{id} has no title"));
     }
+    let authors = entry
+        .children("author")
+        .filter_map(|author| author.text_of("name"))
+        .map(words)
+        .filter(|name| !name.is_empty())
+        .collect();
     Ok(Entry {
         id,
         version,
         title,
+        authors,
         published: entry
             .text_of("published")
             .unwrap_or_default()

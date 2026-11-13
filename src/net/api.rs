@@ -478,6 +478,7 @@ fn test_endpoint(url: &Url) -> Option<Url> {
         "eutils.ncbi.nlm.nih.gov" => "FETCHLOOM_TEST_GEO_API",
         "api.dandiarchive.org" => "FETCHLOOM_TEST_DANDI_API",
         "openneuro.org" => "FETCHLOOM_TEST_OPENNEURO_API",
+        "export.arxiv.org" => "FETCHLOOM_TEST_ARXIV_API",
         _ => return None,
     };
     let mut local = local_test_server(variable)?;

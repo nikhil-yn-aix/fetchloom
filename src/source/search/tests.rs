@@ -15,6 +15,23 @@ const GEO_SUMMARIES: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esumm
 const DANDI: &str =
     "https://api.dandiarchive.org/api/dandisets/?search=iris&page_size=3&ordering=-stars";
 
+/// arXiv's search for `words` in titles, then, when that finds fewer than `limit`, anywhere.
+fn arxiv(words: &str, limit: usize) -> [String; 2] {
+    ["ti", "all"].map(|field| {
+        let mut url = Url::parse("https://export.arxiv.org/api/query").unwrap();
+        url.query_pairs_mut()
+            .append_pair("search_query", &format!("{field}:\"{words}\""))
+            .append_pair("start", "0")
+            .append_pair("max_results", &limit.to_string())
+            .append_pair("sortBy", "relevance");
+        url.to_string()
+    })
+}
+
+/// arXiv's answer when it finds no paper.
+const NO_PAPERS: &[u8] =
+    b"<feed xmlns=\"http://www.w3.org/2005/Atom\"><totalResults>0</totalResults></feed>";
+
 /// openneuro's search for `words`, a GraphQL query sent by GET with the words as a variable.
 fn openneuro(words: &str, first: usize) -> String {
     let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
@@ -60,6 +77,8 @@ fn recorded() -> Recorded {
         // dandi has no dandiset for iris
         .on(DANDI, 200, br#"{"results":[]}"#.to_vec())
         .fixture(&openneuro("iris", 3), "search/openneuro.json")
+        .on(&arxiv("iris", 3)[0], 200, NO_PAPERS.to_vec())
+        .on(&arxiv("iris", 3)[1], 200, NO_PAPERS.to_vec())
 }
 
 /// EBI's search also finds studies add cannot add as they are, so the first runs of each in ENA's
@@ -412,7 +431,9 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=fashion+mnist&size=3&format=json&fields=name%2Cdescription", 200, br#"{"entries":[]}"#.to_vec())
         .on("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=fashion+mnist+AND+gse%5BETYP%5D&retmax=3&retmode=json&tool=fetchloom", 200, br#"{"esearchresult":{"idlist":[]}}"#.to_vec())
         .on("https://api.dandiarchive.org/api/dandisets/?search=fashion+%28mnist%29%3A*%26&page_size=3&ordering=-stars", 200, br#"{"results":[]}"#.to_vec())
-        .on(&openneuro("fashion (mnist):*&", 3), 200, br#"{"data":{"advancedSearch":{"edges":[]}}}"#.to_vec());
+        .on(&openneuro("fashion (mnist):*&", 3), 200, br#"{"data":{"advancedSearch":{"edges":[]}}}"#.to_vec())
+        .on(&arxiv("fashion mnist", 3)[0], 200, NO_PAPERS.to_vec())
+        .on(&arxiv("fashion mnist", 3)[1], 200, NO_PAPERS.to_vec());
     let result = block_on(search(
         &api,
         "fashion (mnist):*&",
@@ -422,8 +443,8 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
     .unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
-    // GEO, having found no series, asks for no summaries
-    assert_eq!(api.asked().len(), 8);
+    // GEO, having found no series, asks for no summaries, and arXiv asks titles, then anywhere
+    assert_eq!(api.asked().len(), 10);
 }
 
 #[test]
@@ -589,7 +610,7 @@ fn sources_are_asked_concurrently() {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_pending()
         );
-        assert_eq!(api.started.load(Ordering::Relaxed), 7);
+        assert_eq!(api.started.load(Ordering::Relaxed), 8);
         api.can_answer.store(true, Ordering::Relaxed);
         pending.await
     })
@@ -648,6 +669,23 @@ fn invalid_catalog_ids_never_become_candidates() {
     assert!(result.warnings[0].contains("invalid dataset id"));
 }
 
+/// arXiv's papers are no datasets, so a search asks arXiv only when `--source` names it, as it
+/// asks ENA and dandi.
+#[test]
+fn arxiv_is_asked_only_by_name() {
+    assert_eq!(
+        Catalog::asked(&[]),
+        [
+            Catalog::Hf,
+            Catalog::Kaggle,
+            Catalog::Zenodo,
+            Catalog::Geo,
+            Catalog::OpenNeuro
+        ]
+    );
+    assert_eq!(Catalog::asked(&[Catalog::Arxiv]), [Catalog::Arxiv]);
+}
+
 #[test]
 fn chosen_catalogs_alone_are_asked() {
     let api = recorded();
@@ -698,9 +736,10 @@ fn a_limit_asks_each_catalog_for_that_many() {
             "https://api.dandiarchive.org/api/dandisets/?search=iris&page_size=1&ordering=-stars",
             "search/dandi.json",
         )
-        .fixture(&openneuro("iris", 1), "search/openneuro.json");
+        .fixture(&openneuro("iris", 1), "search/openneuro.json")
+        .fixture(&arxiv("iris", 1)[0], "arxiv/paper.xml");
     let result = block_on(search(&api, "iris", &Catalog::ALL, Some(1))).unwrap();
-    assert_eq!(result.candidates.len(), 7);
+    assert_eq!(result.candidates.len(), 8);
 }
 
 #[test]
