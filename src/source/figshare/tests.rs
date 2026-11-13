@@ -187,8 +187,7 @@ fn access_refusals_require_authorization() {
     }
 }
 
-/// figshare's public api calls a published article public, and one whose files it keeps
-/// confidential is not, so neither of those, nor an answer that does not say, counts as public.
+/// one whose files figshare keeps confidential, or an answer that does not say, is not.
 #[test]
 fn only_a_published_article_with_open_files_is_public() {
     for (published, confidential, access) in [

@@ -1,7 +1,6 @@
-//! dryad: datasets by DOI or datadryad.org link, listed through dryad's API at one published
-//! version, with the MD5 or SHA-256 dryad states for each file. anyone may list a dataset, but
-//! dryad downloads files only for an API account: the key goes with requests to datadryad.org,
-//! and never to the storage a download is sent on to.
+//! dryad: datasets by DOI or link, listed at one published version with the MD5 or SHA-256 dryad
+//! states. anyone may list a dataset, but downloads need an API account, whose key goes to
+//! datadryad.org and never to the storage a download is sent on to.
 
 use std::fmt;
 

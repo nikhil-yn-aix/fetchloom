@@ -71,7 +71,7 @@ impl Node {
             .append_pair("related_counts", "children");
         let mut response = api.get(&url).await?;
         if response.status == 404 {
-            // file GUIDs are not nodes; the GUID endpoint redirects to their file metadata.
+            // file GUIDs are not nodes; the GUID endpoint redirects to their file metadata
             response = api.get(&self.endpoint("guids")?).await?;
         }
         let answer: Document<Resource> = super::json(self, &response)?;
@@ -227,8 +227,7 @@ fn asks_for_version(url: &Url) -> bool {
 
 /// an osf.io link to one file or folder in a project's storage, such as
 /// `https://osf.io/ezcuj/files/osfstorage/553e69248c5e4a219919ea54`, is refused: its last part is
-/// a storage id, not a path a selection could match, and the whole project is more than was asked
-/// for.
+/// a storage id no selection could match, and the whole project is more than was asked for.
 pub(super) fn stored_item(url: &Url) -> Option<Error> {
     if !is_osf(url) {
         return None;
@@ -258,9 +257,8 @@ pub(super) fn stored_item(url: &Url) -> Option<Error> {
     )
 }
 
-/// an osf.io link that asks for one version of a file. its download link fetches that version
-/// as a plain link, pinned to those bytes, while any other such link is refused, since an OSF
-/// reference follows the file's current version.
+/// an osf.io link that asks for one version of a file, fetched as a plain link pinned to those
+/// bytes. any other is refused, since an OSF reference follows the file's current version.
 pub(super) fn versioned(url: &Url) -> Option<Result<Url, Error>> {
     if !is_osf(url) || !asks_for_version(url) {
         return None;

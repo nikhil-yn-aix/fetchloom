@@ -165,9 +165,8 @@ impl Dataset {
         })
     }
 
-    /// `/api/datasets/:persistentId/versions/<version>`. without a version it names the newest
-    /// published one, since the dataset alone answers with the newest version the key may see,
-    /// a draft for its curators.
+    /// `/api/datasets/:persistentId/versions/<version>`, else the newest published version, since
+    /// the dataset alone answers with the newest one the key may see, a draft for its curators.
     fn url(&self) -> Result<Url, Error> {
         let Item::Dataset(pid) = &self.item else {
             return Err(self.invalid("a file has no dataset listing URL"));
@@ -189,7 +188,7 @@ impl Dataset {
     fn file_url(&self, id: u64) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("https://{}/api/access/datafile/{id}", self.host))
             .map_err(|_| self.invalid("the file URL is invalid"))?;
-        // dataverse checksums describe the upload, not the ingested tabular conversion.
+        // dataverse checksums describe the upload, not the ingested tabular conversion
         url.query_pairs_mut().append_pair("format", "original");
         Ok(url)
     }

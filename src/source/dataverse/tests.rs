@@ -129,9 +129,8 @@ fn restricted_files_are_all_named_instead_of_skipped() {
     assert_eq!(listing.files.len(), 3);
 }
 
-/// a listing fetchloom cannot trust is refused for its reason. a draft's help says to choose a
-/// published version, which the person can; the rest are dataverse's answers, so their help goes
-/// to fetchloom's issues.
+/// a draft's help says to choose a published version, which the person can; the rest are
+/// dataverse's answers, so their help goes to fetchloom's issues.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);

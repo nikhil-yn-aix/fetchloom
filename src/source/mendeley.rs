@@ -1,7 +1,6 @@
-//! mendeley data: datasets by id, DOI or data.mendeley.com link, listed at one published version
-//! with the SHA-256 mendeley states for each file. the API mendeley documents wants an OAuth
-//! client for every caller, so fetchloom reads the public one mendeley's own site reads, which
-//! lists published versions to anyone. no key goes to mendeley.
+//! mendeley data: datasets by id, DOI or link, at one published version with the SHA-256 mendeley
+//! states. its documented API wants an OAuth client for every caller, so fetchloom reads the
+//! public one mendeley's own site reads, and no key goes to mendeley.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;

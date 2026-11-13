@@ -66,9 +66,8 @@ fn server_pages_control_the_walk_and_folders_keep_their_names() {
     );
 }
 
-/// a page the files API sends that would make the walk repeat itself, leave the OSF API or a
-/// project's folders, or go on with nothing to read, is refused for its reason before the walk
-/// asks for anything it points to.
+/// as one that would make the walk repeat itself, leave the OSF API or a project's folders, or go
+/// on with nothing to read; each is refused for its reason.
 #[test]
 fn a_page_that_would_mislead_the_walk_is_refused_before_another_request() {
     type Change = fn(&mut serde_json::Value);

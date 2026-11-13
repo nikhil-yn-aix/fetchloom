@@ -282,7 +282,6 @@ fn refusals_name_the_dryad_account() {
     }
 }
 
-/// an answer fetchloom cannot trust is refused for its reason, with help.
 #[test]
 fn an_answer_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);

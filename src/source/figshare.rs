@@ -70,7 +70,7 @@ impl Article {
             }
             other => other,
         };
-        // modern links add a type before the title; a numeric title is still a title.
+        // modern links add a type before the title; a numeric title is still a title
         let (id, version) = match article {
             [_, id, version] => (*id, Some(version.parse().ok()?)),
             [_, id] | [id] => (*id, None),
@@ -106,7 +106,7 @@ impl Article {
             version: Some(answer.version),
         };
         // the schema promises only ten embedded files, though some articles return more.
-        // a shorter list is complete; longer lists need the version's files endpoint.
+        // a shorter list is complete; longer lists need the version's files endpoint
         let entries = if answer.files.len() < 10 {
             answer.files
         } else {

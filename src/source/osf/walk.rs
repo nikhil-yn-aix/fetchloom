@@ -158,7 +158,7 @@ impl Walk {
                     .files
                     .ok_or_else(|| node.invalid("a folder has no files relationship"))?;
                 let mut url = api_url(node, page, &related.links.related.href)?;
-                // OSF caps page[size] at 100, even when a caller asks for 1,000.
+                // OSF caps page[size] at 100, even when a caller asks for 1,000
                 url.query_pairs_mut()
                     .clear()
                     .append_pair("page[size]", "100");

@@ -97,7 +97,7 @@ impl Record {
         };
         let resolved = Record { id: answer.id };
         // the records API embeds all files, including the 1,123 in record 7793716.
-        // its separate files endpoint is unpaged, so another request adds no files.
+        // its separate files endpoint is unpaged, so another request adds no files
         let files = answer
             .files
             .into_iter()
@@ -360,8 +360,7 @@ mod tests {
         }
     }
 
-    /// a record answer fetchloom cannot trust is refused for its reason, and the help sends it to
-    /// fetchloom's issues, since the record's owner cannot change zenodo's answers.
+    /// its help goes to fetchloom's issues, since the record's owner cannot change zenodo's answer.
     #[test]
     fn a_record_that_cannot_be_trusted_says_why() {
         type Change = fn(&mut serde_json::Value);
