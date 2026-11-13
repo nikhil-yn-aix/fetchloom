@@ -38,6 +38,9 @@ struct Listed {
     /// whether its files are placed in `folder`: false for a dataset with `place = false`, which
     /// is pinned and cached for the recipes that read it.
     placed: bool,
+    /// whether `folder` is the usual `data/<name>`, which a narrow table leaves to the name.
+    #[serde(skip)]
+    usual_folder: bool,
     title: Option<String>,
     license: Option<String>,
     doi: Option<String>,
@@ -122,6 +125,7 @@ fn one(output: &crate::output::Output, dataset: &Listed) {
 
 fn heading(dataset: &Listed) -> String {
     let mut facts = vec![dataset.name.clone()];
+    facts.extend(Some(source(dataset)).filter(|source| !source.is_empty()));
     facts.extend(dataset.title.clone());
     if let (Some(files), Some(bytes)) = (dataset.files, dataset.bytes) {
         facts.push(format!(
@@ -322,6 +326,8 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 bytes: totals.map(|(_, bytes)| bytes),
                 folder: plan::folder(manifest, name),
                 placed: entry.place,
+                usual_folder: plan::folder(manifest, name)
+                    == format!("{}/{name}", manifest.data_dir),
                 title: locked.and_then(|locked| locked.title.clone()),
                 license: locked.and_then(|locked| locked.license.clone()),
                 doi: locked.and_then(|locked| locked.doi.clone()),
@@ -429,20 +435,52 @@ struct Marks {
     more: &'static str,
 }
 
+/// the narrowest a cut source gets before it gives way whole.
+const SOURCE: usize = 16;
+
+/// which folders a row shows. a dataset kept out of the data folder always says so.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Folders {
+    All,
+    /// all but the usual `data/<name>`, which the name tells.
+    Unusual,
+    None,
+}
+
 /// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
-/// the source gives way, then the license, since `--json` and `list <name>` keep them, and then a
-/// row still too wide goes on below, as [`folded`] lays it out.
+/// a folder that is the usual `data/<name>` gives way first, then the source is cut in the middle,
+/// down to [`SOURCE`] columns, then the license gives way, since `--json` and `list <name>` keep
+/// it, then every folder, and only then the source. a row still too wide goes on below, as
+/// [`folded`] lays it out.
 fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
-    let full = columns(datasets, true, true, marks);
+    let full = columns(datasets, Some(usize::MAX), (Folders::All, true), marks);
     let Some(width) = width.filter(|width| widest(&full) > *width) else {
         return full;
     };
-    let licensed = columns(datasets, false, true, marks);
-    if widest(&licensed) <= width {
-        return licensed;
+    let sources = datasets
+        .iter()
+        .map(|dataset| units::columns(&source(dataset)))
+        .max()
+        .unwrap_or_default();
+    for shown in [
+        (Folders::Unusual, true),
+        (Folders::Unusual, false),
+        (Folders::None, false),
+    ] {
+        let whole = columns(datasets, Some(usize::MAX), shown, marks);
+        let over = widest(&whole).saturating_sub(width);
+        if over == 0 {
+            return whole;
+        }
+        if sources.saturating_sub(over) >= SOURCE {
+            let cut = columns(datasets, Some(sources - over), shown, marks);
+            if widest(&cut) <= width {
+                return cut;
+            }
+        }
     }
-    let plain = columns(datasets, false, false, marks);
+    let plain = columns(datasets, None, (Folders::Unusual, false), marks);
     if widest(&plain) <= width {
         return plain;
     }
@@ -450,9 +488,9 @@ fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
 }
 
 /// the datasets for a terminal `width` columns wide, as search puts facts that do not fit below:
-/// each name beside its contents, aligned, and its folder beside them where the row fits, else
-/// on an indented line of its own. a name too wide to stand beside the contents takes a line of
-/// its own, whole, with the rest below it.
+/// each name beside its contents, aligned, and a folder other than the usual one beside them
+/// where the row fits, else on an indented line of its own. a name too wide to stand beside the
+/// contents takes a line of its own, whole, with the rest below it.
 fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
     let rows: Vec<(&str, String, String)> = datasets
         .iter()
@@ -460,7 +498,7 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
             (
                 dataset.name.as_str(),
                 contents(dataset, marks),
-                folder(dataset),
+                folder(dataset, Folders::Unusual),
             )
         })
         .collect();
@@ -485,7 +523,9 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
                 "{head}{}  {folder}",
                 spaces(contents_width - units::columns(contents))
             );
-            if units::columns(&line) <= width {
+            if folder.is_empty() {
+                lines.push(head);
+            } else if units::columns(&line) <= width {
                 lines.push(line);
             } else {
                 lines.extend([head, format!("  {folder}")]);
@@ -493,7 +533,9 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
         } else {
             lines.push((*name).to_owned());
             let rest = format!("  {contents}  {folder}");
-            if units::columns(&rest) <= width {
+            if folder.is_empty() {
+                lines.push(format!("  {contents}"));
+            } else if units::columns(&rest) <= width {
                 lines.push(rest);
             } else {
                 lines.extend([format!("  {contents}"), format!("  {folder}")]);
@@ -517,29 +559,43 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
     }
 }
 
-/// where a dataset's files are, as its row says it.
-fn folder(dataset: &Listed) -> String {
-    if dataset.placed {
+/// where a dataset's files are, as its row says it, when `folders` shows that folder.
+fn folder(dataset: &Listed, folders: Folders) -> String {
+    if !dataset.placed {
+        "not placed".to_owned()
+    } else if folders == Folders::All || (folders == Folders::Unusual && !dataset.usual_folder) {
         dataset.folder.clone()
     } else {
-        "not placed".to_owned()
+        String::new()
     }
 }
 
-fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Marks) -> String {
+/// where a dataset comes from: its reference, what a recipe makes it from, or nothing.
+fn source(dataset: &Listed) -> String {
+    match (&dataset.reference, &dataset.from) {
+        (Some(reference), _) => reference.clone(),
+        (None, Some(from)) => format!("made from {}", from.join(", ")),
+        (None, None) => String::new(),
+    }
+}
+
+/// the rows, aligned: the source cut in the middle to `source` columns, or left out with none,
+/// then the folders and whether the license shows.
+fn columns(
+    datasets: &[Listed],
+    source: Option<usize>,
+    (folders, with_license): (Folders, bool),
+    marks: Marks,
+) -> String {
     let licensed = with_license && datasets.iter().any(|dataset| dataset.license.is_some());
-    let rows: Vec<Vec<String>> = datasets
+    let mut rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
             let mut row = vec![dataset.name.clone()];
-            if with_source {
-                row.push(match (&dataset.reference, &dataset.from) {
-                    (Some(reference), _) => reference.clone(),
-                    (None, Some(from)) => format!("made from {}", from.join(", ")),
-                    (None, None) => String::new(),
-                });
+            if let Some(most) = source {
+                row.push(units::clip_middle(&self::source(dataset), most, marks.more));
             }
-            row.extend([contents(dataset, marks), folder(dataset)]);
+            row.extend([contents(dataset, marks), folder(dataset, folders)]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
                 row.push(units::clip(&license_shown(license), LICENSE, marks.more));
@@ -547,6 +603,15 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Ma
             row
         })
         .collect();
+    // a column every row leaves empty, as the folders once each is the usual one, goes
+    let width = rows.first().map_or(0, Vec::len);
+    for column in (0..width).rev() {
+        if rows.iter().all(|row| row[column].is_empty()) {
+            for row in &mut rows {
+                row.remove(column);
+            }
+        }
+    }
     let last = rows.first().map_or(0, Vec::len).saturating_sub(1);
     let widths: Vec<usize> = (0..last)
         .map(|column| {
@@ -615,6 +680,7 @@ mod tests {
             bytes: Some(18_534),
             folder: "data/iris".to_owned(),
             placed: true,
+            usual_folder: true,
             title: None,
             license: Some("cc0-1.0".to_owned()),
             doi: None,
@@ -624,13 +690,19 @@ mod tests {
         };
         assert_eq!(
             heading(&dataset),
-            "iris · 4 files · 18.1 KiB · license cc0-1.0"
+            "iris · hf:datasets/scikit-learn/iris · 4 files · 18.1 KiB · license cc0-1.0"
         );
         dataset.title = Some("Iris Species".to_owned());
         dataset.doi = Some("10.5281/zenodo.1".to_owned());
         assert_eq!(
             heading(&dataset),
-            "iris · Iris Species · 4 files · 18.1 KiB · license cc0-1.0 · doi 10.5281/zenodo.1"
+            "iris · hf:datasets/scikit-learn/iris · Iris Species · 4 files · 18.1 KiB · license cc0-1.0 · doi 10.5281/zenodo.1"
+        );
+        dataset.reference = None;
+        dataset.from = Some(vec!["raw".to_owned(), "labels".to_owned()]);
+        assert!(
+            heading(&dataset).starts_with("iris · made from raw, labels · Iris Species"),
+            "a recipe's result names what it is made from"
         );
     }
 
@@ -648,9 +720,9 @@ mod tests {
         );
         assert_eq!(
             table(&report.datasets, Some(50), UNICODE),
-            "iris          not locked yet  data/iris\n\
-             mnist-digits  not locked yet  data/mnist-digits",
-            "a narrow terminal drops the source"
+            "iris          zenodo:3608990        not locked yet\n\
+             mnist-digits  hf:datase…ecun/mnist  not locked yet",
+            "a narrow terminal drops the usual folder, then cuts the source in the middle"
         );
     }
 
@@ -674,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn the_license_comes_last_and_gives_way_after_the_source() {
+    fn the_license_comes_last_and_gives_way_after_the_folder() {
         let listed = |name: &str, license: Option<&str>| Listed {
             name: name.to_owned(),
             reference: Some(format!("zenodo:{}", name.len())),
@@ -684,6 +756,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            usual_folder: true,
             title: None,
             license: license.map(str::to_owned),
             doi: None,
@@ -707,16 +780,16 @@ mod tests {
         );
         assert_eq!(
             table(&datasets, Some(70), UNICODE),
-            "iris    1 file · 4.4 KiB  data/iris    cc-by-4.0\n\
-             tweets  1 file · 4.4 KiB  data/tweets  Data files © Original Authors…\n\
-             wine    1 file · 4.4 KiB  data/wine",
-            "the source gives way first"
+            "iris    zenodo:4  1 file · 4.4 KiB  cc-by-4.0\n\
+             tweets  zenodo:6  1 file · 4.4 KiB  Data files © Original Authors…\n\
+             wine    zenodo:4  1 file · 4.4 KiB",
+            "the usual folder, data/<name>, gives way first"
         );
         assert_eq!(
             table(&datasets, Some(40), UNICODE),
-            "iris    1 file · 4.4 KiB  data/iris\n\
-             tweets  1 file · 4.4 KiB  data/tweets\n\
-             wine    1 file · 4.4 KiB  data/wine",
+            "iris    zenodo:4  1 file · 4.4 KiB\n\
+             tweets  zenodo:6  1 file · 4.4 KiB\n\
+             wine    zenodo:4  1 file · 4.4 KiB",
             "then the license"
         );
         let ascii = Marks {
@@ -730,6 +803,7 @@ mod tests {
         );
         let mut wide = listed("iris", Some("cc-by-4.0"));
         wide.folder = "data/鸢尾花".to_owned();
+        wide.usual_folder = false;
         let datasets = [wide, listed("wine", Some("cc-by-4.0"))];
         let shown = table(&datasets, None, UNICODE);
         let starts: Vec<usize> = shown
@@ -739,6 +813,70 @@ mod tests {
         assert_eq!(
             starts[0], starts[1],
             "a wide character takes two columns:\n{shown}"
+        );
+    }
+
+    /// one long link cuts its own column in the middle, keeping the source of every row, before
+    /// the license gives way; the source keeps at least 16 columns.
+    #[test]
+    fn a_long_source_is_cut_in_the_middle() {
+        let listed = |name: &str, reference: &str, license: Option<&str>| Listed {
+            name: name.to_owned(),
+            reference: Some(reference.to_owned()),
+            from: None,
+            resolved: None,
+            files: Some(1),
+            bytes: Some(4551),
+            folder: format!("data/{name}"),
+            placed: true,
+            usual_folder: true,
+            title: None,
+            license: license.map(str::to_owned),
+            doi: None,
+            access: None,
+            locked_files: None,
+            held: Some(Vec::new()),
+        };
+        let datasets = [
+            listed(
+                "iris",
+                "https://zenodo.org/records/3608990/files/iris-measurements.csv",
+                Some("cc0-1.0"),
+            ),
+            listed("wine", "zenodo:1", None),
+        ];
+        assert_eq!(
+            table(&datasets, Some(80), UNICODE),
+            "iris  https://zenodo.org/reco…s/iris-measurements.csv  1 file · 4.4 KiB  cc0-1.0\n\
+             wine  zenodo:1                                         1 file · 4.4 KiB"
+        );
+        assert_eq!(
+            table(&datasets, Some(40), UNICODE),
+            "iris  https:/…ents.csv  1 file · 4.4 KiB\n\
+             wine  zenodo:1          1 file · 4.4 KiB"
+        );
+        let ascii = Marks {
+            dot: "-",
+            more: "...",
+        };
+        assert_eq!(
+            table(&datasets[..1], Some(40), ascii),
+            "iris  https:...nts.csv  1 file - 4.4 KiB",
+            "a terminal that shows only ascii gets three dots"
+        );
+        let mut tiny = listed("tiny", "zenodo:1", None);
+        tiny.folder = "data/small/tiny".to_owned();
+        tiny.usual_folder = false;
+        let long = listed(
+            "a-very-long-dataset-name-for-testing",
+            "https://zenodo.org/records/3608990/files/iris-measurements.csv",
+            None,
+        );
+        assert_eq!(
+            table(&[long, tiny], Some(80), UNICODE),
+            "a-very-long-dataset-name-for-testing  https://zen…urements.csv  1 file · 4.4 KiB\n\
+             tiny                                  zenodo:1                  1 file · 4.4 KiB",
+            "every folder gives way before the source does"
         );
     }
 
@@ -756,6 +894,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            usual_folder: true,
             title: None,
             license: Some(license.to_owned()),
             doi: None,
@@ -790,7 +929,7 @@ mod tests {
         );
         assert_eq!(
             heading(&datasets[0]),
-            "a \u{b7} 1 file \u{b7} 4.4 KiB \u{b7} license CC-BY-NC-ND-4.0"
+            "a \u{b7} arxiv:a \u{b7} 1 file \u{b7} 4.4 KiB \u{b7} license CC-BY-NC-ND-4.0"
         );
         let value = serde_json::to_value(&datasets[0]).unwrap();
         assert_eq!(
@@ -814,6 +953,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            usual_folder: true,
             title: None,
             license: None,
             doi: None,
@@ -821,18 +961,21 @@ mod tests {
             locked_files: Some(Vec::new()),
             held: Some(Vec::new()),
         };
-        let datasets = [listed("field-station-measurements"), listed("iris")];
+        let mut stations = listed("field-station-measurements");
+        stations.folder = "data/field-station".to_owned();
+        stations.usual_folder = false;
+        let datasets = [stations, listed("iris")];
         assert_eq!(
-            table(&datasets, Some(60), UNICODE),
-            "field-station-measurements  1 file · 4.4 KiB\n  data/field-station-measurements\n\
-             iris                        1 file · 4.4 KiB  data/iris"
+            table(&datasets, Some(50), UNICODE),
+            "field-station-measurements  1 file · 4.4 KiB\n  data/field-station\n\
+             iris                        1 file · 4.4 KiB"
         );
         assert_eq!(
             table(&datasets, Some(40), UNICODE),
-            "field-station-measurements\n  1 file · 4.4 KiB\n  data/field-station-measurements\n\
-             iris  1 file · 4.4 KiB  data/iris"
+            "field-station-measurements\n  1 file · 4.4 KiB  data/field-station\n\
+             iris  1 file · 4.4 KiB"
         );
-        for width in [40, 60] {
+        for width in [40, 50] {
             let shown = table(&datasets, Some(width), UNICODE);
             assert!(
                 shown.lines().all(|line| units::columns(line) <= width),
@@ -1050,30 +1193,30 @@ mod tests {
         let views: [(&str, &str, Option<&str>); 6] = [
             (
                 "clean",
-                "clean · 1 file · 700 B",
+                "clean · made from iris · 1 file · 700 B",
                 Some("iris-clean.csv  700 B"),
             ),
             (
                 "hidden",
-                "hidden · the hidden set · 1 file · 9 B · license cc-by-4.0",
+                "hidden · zenodo:4 · the hidden set · 1 file · 9 B · license cc-by-4.0",
                 Some("h.bin  9 B"),
             ),
             (
                 "iris",
-                "iris · the iris set · 2 files · 4.5 KiB · license cc-by-4.0",
+                "iris · https://example.org/iris.csv?token=*** · the iris set · 2 files · 4.5 KiB · license cc-by-4.0",
                 Some("iris.csv    4.4 KiB\nreadme.txt     12 B"),
             ),
-            ("later", "later", None),
+            ("later", "later · zenodo:3", None),
             (
                 "pets",
-                "pets · the pets set · 3 files · 7.8 KiB · license cc-by-4.0",
+                "pets · zenodo:2 · the pets set · 3 files · 7.8 KiB · license cc-by-4.0",
                 Some(
                     "labels.csv              30 B\npets/images/cat.jpg  2.9 KiB\npets/images/dog.jpg  4.9 KiB",
                 ),
             ),
             (
                 "scans",
-                "scans · the scans set · 1 file · 58.6 KiB · license cc-by-4.0",
+                "scans · zenodo:5 · the scans set · 1 file · 58.6 KiB · license cc-by-4.0",
                 Some("scans.zip  58.6 KiB"),
             ),
         ];

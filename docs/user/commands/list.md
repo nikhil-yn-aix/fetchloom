@@ -18,14 +18,22 @@ fetchloom list [options] [name]
 
 ## what it reads
 
-`list` reads `data.toml`, `data.lock` and what the cache recorded of each archive, prints a table on stdout, ordered by dataset name, and changes nothing. it does not download, sync or look at placed files. the license comes last, cut at 32 columns, where a chinese, japanese or korean character takes two; a creative commons license's link, as arXiv states a paper's, shows as its id, whole, as `CC-BY-NC-ND-4.0` for `http://creativecommons.org/licenses/by-nc-nd/4.0/`, here and in the line that names a dataset; on a narrow terminal the reference is left out first, then the license, and a row still too wide puts its folder on an indented line of its own, as `search` puts facts below. a name too long to stand beside its size takes a line of its own, whole, with the size and the folder below it. a script reading `list` through a pipe, or a coding agent, always gets one line per dataset.
+`list` reads `data.toml`, `data.lock` and what the cache recorded of each archive, prints a table on stdout, ordered by dataset name, and changes nothing. it does not download, sync or look at placed files. the license comes last, cut at 32 columns, where a chinese, japanese or korean character takes two; a creative commons license's link, as arXiv states a paper's, shows as its id, whole, as `CC-BY-NC-ND-4.0` for `http://creativecommons.org/licenses/by-nc-nd/4.0/`, here and in the line that names a dataset; on a narrow terminal a folder that is the usual `data/<name>`, which the name tells, is left out first, then the reference is cut in the middle with `…`, down to 16 columns, then the license is left out, then every folder, and only then the reference, and a row still too wide puts its folder on an indented line of its own, as `search` puts facts below. at an 80-column terminal, stdout from a real run:
+
+```text
+a-very-long-dataset-name-for-testing  https://zeno…y-flowers.csv  not locked yet
+iris                                  hf:datasets/…it-learn/iris  not locked yet
+tiny                                  zenodo:1                    not locked yet
+```
+
+a wider terminal shows each reference whole and `data/small/tiny`, the one folder that is not the usual one. a name too long to stand beside its size takes a line of its own, whole, with the size and the folder below it. a script reading `list` through a pipe, or a coding agent, always gets one line per dataset.
 
 a dataset without a lock entry says it is not locked yet. a [recipe](../recipes.md) shows what it is made from in place of a reference, and says it is not built yet until data.lock pins its result. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) shows `not placed` in place of its folder. counts and sizes are of the files a dataset puts in its folder: an archive counts as the files it unpacked to here, less those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and as itself until a sync unpacks it. a stale lock can still supply these values; [lock --check](lock.md) checks the lock and [status](status.md) the placed files.
 
-with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its title, how many files and bytes it holds, and its license and DOI when the lock has them:
+with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its reference, or what a recipe makes it from, its title, how many files and bytes it holds, and its license and DOI when the lock has them:
 
 ```text
-  iris · 4 files · 18.1 KiB · license cc0-1.0
+  iris · hf:datasets/scikit-learn/iris · 4 files · 18.1 KiB · license cc0-1.0
 .gitattributes    1.5 KiB
 Iris.csv          5.0 KiB
 README.md         1.6 KiB

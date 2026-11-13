@@ -244,6 +244,25 @@ pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
     format!("{kept}{more}")
 }
 
+/// `text` at most `most` columns wide, with its middle cut out for `more`, so both ends stay, as
+/// a link's site and its file do.
+pub(crate) fn clip_middle(text: &str, most: usize, more: &str) -> String {
+    if columns(text) <= most {
+        return text.to_owned();
+    }
+    let room = most.saturating_sub(columns(more));
+    let head = within(text, room / 2);
+    let wanted = room - columns(head);
+    let mut tail = "";
+    for (at, _) in text.char_indices().rev() {
+        if columns(&text[at..]) > wanted {
+            break;
+        }
+        tail = &text[at..];
+    }
+    format!("{head}{more}{tail}")
+}
+
 /// a compact decimal count for catalog popularity.
 pub(crate) fn compact(n: u64) -> String {
     const UNITS: [&str; 6] = ["k", "M", "B", "T", "P", "E"];
