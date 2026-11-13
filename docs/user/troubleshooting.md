@@ -7,7 +7,7 @@ fetchloom status
 fetchloom -v sync
 ```
 
-verbose output adds error kinds and work counters. use `--json` for [structured failures](reference/json-output.md), including every failed file in a download batch.
+verbose output adds [what the run spends](resources.md#see-what-a-run-uses), error kinds and work counters. use `--json` for [structured failures](reference/json-output.md), including every failed file in a download batch.
 
 ## collect a debug report
 
