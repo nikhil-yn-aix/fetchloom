@@ -236,14 +236,20 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
-        // no download brings a SHA-256's bytes at another size than the cache holds them
-        for (dataset, file) in &files {
-            if let Some(actual) = place::cached_other_size(&self.cache, &file.sha256, file.size) {
+        let cached = crate::place::run_all(&files, self.context.threads, |(_, file)| {
+            place::cached_at(&self.cache, &file.sha256, file.size)
+        });
+        let mut available = Vec::with_capacity(files.len());
+        for ((dataset, file), cached) in files.iter().zip(cached) {
+            // no download brings a SHA-256's bytes at another size than the cache holds them
+            if let place::Cached::Other(actual) = cached {
                 let label = format!("{dataset}/{}", file.path);
                 return Err(place::mispinned(&label, file.size, actual));
             }
+            available.push(cached == place::Cached::Here);
         }
-        self.download_prepared(manifest, lock, &files).await?;
+        self.download_prepared(manifest, lock, &files, Some(&available))
+            .await?;
         self.unpack_locked(manifest, lock, &archives::of(lock, unpacking))
             .await?;
         Ok(placing)
@@ -403,7 +409,8 @@ impl<'a> Loop<'a> {
                 )),
             );
         }
-        self.download_prepared(manifest, &sources, &files).await?;
+        self.download_prepared(manifest, &sources, &files, None)
+            .await?;
         self.unpack_locked(manifest, &sources, &unpacking).await
     }
 
@@ -1075,21 +1082,31 @@ impl<'a> Loop<'a> {
         }
     }
 
+    /// downloads `files`, of which `available` says, when known, which the cache holds already.
     async fn download_prepared(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         files: &[(String, &LockedFile)],
+        available: Option<&[bool]>,
     ) -> Result<Vec<Fetched>, Error> {
         if files.is_empty() {
             return Ok(Vec::new());
         }
-        let available =
-            |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_some();
+        let looked;
+        let available = if let Some(available) = available {
+            available
+        } else {
+            looked = crate::place::run_all(files, self.context.threads, |(_, file)| {
+                self.cache.find(&file.sha256, Some(file.size)).is_some()
+            });
+            &looked
+        };
         let lacking: Vec<(&str, &LockedFile)> = files
             .iter()
-            .filter(|(_, file)| !available(file))
-            .map(|(dataset, file)| (dataset.as_str(), *file))
+            .zip(available)
+            .filter(|(_, available)| !**available)
+            .map(|((dataset, file), _)| (dataset.as_str(), *file))
             .collect();
         self.refuse_unfetchable(manifest, &lacking)?;
         let mut descriptions = Vec::with_capacity(files.len());
@@ -1101,20 +1118,20 @@ impl<'a> Loop<'a> {
         }
         crate::space::cache_holds(
             self.cache.root(),
-            files
+            descriptions
                 .iter()
-                .zip(&descriptions)
-                .filter(|((_, file), _)| !available(file))
-                .filter_map(|(_, description)| {
+                .zip(available)
+                .filter(|(_, available)| !**available)
+                .filter_map(|(description, _)| {
                     Some((description.label.as_str(), description.size?))
                 }),
         )
         .map_err(|error| self.as_left(error))?;
-        let size = files
+        let size = descriptions
             .iter()
-            .zip(&descriptions)
-            .filter(|((_, file), _)| !available(file))
-            .filter_map(|(_, description)| description.size)
+            .zip(available)
+            .filter(|(_, available)| !**available)
+            .filter_map(|(description, _)| description.size)
             .fold(0, u64::saturating_add);
         let roomy = super::confirm(
             &self.context.output,

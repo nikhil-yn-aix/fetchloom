@@ -1964,12 +1964,40 @@ pub(crate) fn placed_other_size(
 /// the size of the bytes `sha256` names when the cache holds them at another size than `size`,
 /// hashed to be sure, since a damaged copy proves nothing.
 pub(crate) fn cached_other_size(cache: &Cache, sha256: &Sha256, size: u64) -> Option<u64> {
-    let path = cache.find(sha256, None)?;
-    let found = fs::symlink_metadata(&path).ok()?.len();
-    (found != size
-        && Sha256::of_file(&path, Block::sized(found.saturating_add(1)))
-            .is_ok_and(|digest| digest == *sha256))
-    .then_some(found)
+    match cached_at(cache, sha256, size) {
+        Cached::Other(found) => Some(found),
+        Cached::Absent | Cached::Here => None,
+    }
+}
+
+/// what the cache holds of a SHA-256 pinned at `size`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cached {
+    Absent,
+    /// the object, at `size`, as [`Cache::find`] finds it.
+    Here,
+    /// the object at another size, hashed to be sure, which no download could fix.
+    Other(u64),
+}
+
+/// what [`Cache::find`] with `size` and [`cached_other_size`] would say, from one look.
+pub(crate) fn cached_at(cache: &Cache, sha256: &Sha256, size: u64) -> Cached {
+    let Some(found) = cache
+        .find(sha256, None)
+        .and_then(|path| Some((fs::symlink_metadata(&path).ok()?.len(), path)))
+    else {
+        return Cached::Absent;
+    };
+    match found {
+        (found, _) if found == size => Cached::Here,
+        (found, path)
+            if Sha256::of_file(&path, Block::sized(found.saturating_add(1)))
+                .is_ok_and(|digest| digest == *sha256) =>
+        {
+            Cached::Other(found)
+        }
+        _ => Cached::Absent,
+    }
 }
 
 /// the error for `label`, pinned at `size` bytes though its SHA-256 names `actual` bytes: no source
@@ -2641,6 +2669,10 @@ mod tests {
         let digest = crate::cache::tests::store(&cache, b"twelve bytes").digest;
         assert_eq!(cached_other_size(&cache, &digest, 13), Some(12));
         assert_eq!(cached_other_size(&cache, &digest, 12), None);
+        assert_eq!(cached_at(&cache, &digest, 12), Cached::Here);
+        assert_eq!(cached_at(&cache, &digest, 13), Cached::Other(12));
+        let absent = crate::digest::sha256(b"never stored");
+        assert_eq!(cached_at(&cache, &absent, 12), Cached::Absent);
         let object = cache.object_path(&digest);
         let sealed = fs::metadata(&object).unwrap();
         let mut permissions = sealed.permissions();
@@ -2661,6 +2693,12 @@ mod tests {
         fs::set_permissions(&object, permissions).unwrap();
         assert!(cache.find(&digest, None).is_some(), "trusted unread");
         assert_eq!(cached_other_size(&cache, &digest, 13), None);
+        assert_eq!(cached_at(&cache, &digest, 13), Cached::Absent);
+        assert_eq!(
+            cached_at(&cache, &digest, 11),
+            Cached::Here,
+            "as find trusts it at its size"
+        );
     }
 
     /// kept, vouched and adopted files lend their bytes, and only to a file placed or replaced;

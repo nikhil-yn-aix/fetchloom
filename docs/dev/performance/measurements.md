@@ -26,6 +26,7 @@ every change measured with the current harness, one row each: what it gained whe
 | network | a split download's later streams written in batches, and its read-back buffer kept between ranges | 96 MiB split from a server holding each connection to 0.8 MB/s: 36.8 s for 0.27 s of cpu, 0.7%, hashing every byte and reading three quarters back | dropped: the network sets a split download's pace | [small leftovers](#small-leftovers-from-the-perf-maps-2026-11-13) |
 | network | lean against default: 2 requests at once, 2 to one host | 100 links from a server that waits 50 ms: time 2.006, peak memory 0.998; `add -i` of 1,000 local links 1.081 and 0.887 glibc, 1.085 and 0.679 musl; 1 GiB `get` 0.977 and 0.862 glibc, 0.997 and 0.991 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
 | network | max against default: 32 requests at once, 16 to one host | 100 links at 50 ms: time 0.281, peak memory 1.077; `add -i` of 1,000 local links 1.046 and 1.274 glibc, 1.040 and 1.141 musl; 1 GiB `get` 1.005 and 1.069 glibc, 0.999 and 1.074 musl | max's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
+| network | a cold sync asks the cache about each pinned file once, on the workers, where it asked up to three times in turn | 10,000 small files 0.877 [0.868, 0.905], 100,000 0.876 [0.841, 0.883], beside a/a arms at 1.005 and 0.990; on ext4 0.947 [0.934, 0.971]; `add`, no-op and zip flat; peak memory flat | kept | [pinnacle pass](#the-pinnacle-pass-2026-11-13) |
 | search | a 3 s grace for the sites still searching once one has answered a search of every site, 10 s when `--source` names them | 12 pairs of new search words: wall 0.307 [0.306, 0.420], 10.08 to 3.08 s at the median; peak memory 1.002 [0.972, 1.033]; dandi left out in 7 of 12, openneuro in 1, ENA in 11 against 8 | kept, a site later than 3 s left out with its warning | [search grace](#a-shorter-search-grace-2026-11-13) |
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -1504,3 +1505,24 @@ three arms in the same rounds, each case one batch after a warmup round, the arm
 | `help` | 150 | 1.027 [1.019, 1.034] | 1.039 [1.031, 1.049] | 11.4, 5.9, 4.6 |
 
 the cost is page faults: with 4 KiB pages the same memory faults far more often. `perf stat` over 10 runs of the shipped binary, huge pages on and then off by the variable: the no-op over 1,000 datasets 204 to 1,595 faults and 18.1 to 21.6 ms of cpu, the status of 100,000 files 707 to 15,564 faults and 673 to 735 ms. the two switches behave alike here; the build's small extra on the shortest commands is its own binary, another commit's layout. on a system set to `always`, the feature would leave the kernel's huge pages on where the variable turns them off. huge pages stay on. turning them off would not bring the two musl peaks above [the 150 MB budget](budgets.md) under it either: placing 100,001 files, 203.6 to 169.3 MiB, and the sync of 40,000 datasets, 209.0 to 183.5 MiB.
+
+## the pinnacle pass, 2026-11-13
+
+a pass that measured the busiest commands whole, cores and disk and network sampled over time beside fetchloom's own trace, and chased each stretch where work waited on a resource that sat idle. each change ran behind a run-time switch, `FETCHLOOM_EXP_<name>`, read once, in one musl release build of 8580a81e (x86_64-unknown-linux-musl, as ci builds it).
+
+setup: every arm, a/a included, once a round in a seeded shuffled order after a warmup round, under the measure lock on cores 12–23, on tmpfs unless a row says ext4 (over nvme). the a/a arm runs the base arm's binary and switches again in the same rounds, so its interval is the spread the a/b has to clear. a ratio is the median of paired ratios, new over old, with its 95% bootstrap interval; peak memory is gnu time's `%M` of the child. the downloads came from a local server, a small std-only rust program writing each file from memory, with no pacing: one stream carries 2.1 GB/s, four carry 6 GB/s, and it answers over 17,000 requests a second, so the client sets the pace. the small-file fixtures hold 10,000 or 100,000 files of 4.6 KB on average, 46 MB and 462 MB. measured beside 4 busy training processes, about one core each, which the scheduler moved across all 24 cores; the rounds' other load, read from `/proc/stat` around each run, was about 1 to 2 cores.
+
+### a cold sync's questions to the cache
+
+before downloading, a cold sync asked the cache about each pinned file four times, one after another: whether it held the bytes at another size, which would mean data.lock is wrong, three `lstat`s; then whether it held them at the pinned size, two `lstat`s, once for the files lacking and again for the space check and for the prompt's total. at 10,000 files that was about 90,000 system calls on one thread before the first download could start. now one pass on the workers asks once per file, both questions from one look, and the answers are kept for the rest of the step.
+
+| case | pairs | wall | a/a wall | cpu | peak memory |
+|---|---:|---|---|---|---|
+| cold sync, 10,000 small files | 12 | 0.877 [0.868, 0.905] | 1.005 [0.964, 1.036] | 0.991 | 1.005 [0.984, 1.034] |
+| cold sync, 100,000 small files | 8 | 0.876 [0.841, 0.883] | 0.990 [0.956, 1.009] | 1.002 | 1.020 [0.986, 1.139] |
+| cold sync, 10,000 small files, ext4 | 10 | 0.947 [0.934, 0.971] | 1.021 [1.003, 1.040] | 0.986 | 0.990 [0.974, 1.086] |
+| `add` of a 10,000-file listing | 12 | 0.986 [0.963, 1.012] | 0.985 [0.973, 1.025] | 0.996 | 0.983 |
+| no-op sync of 10,000 files | 12 | 0.999 [0.994, 1.029] | 0.997 [0.983, 1.021] | 1.000 | 0.996 |
+| a zip of 10,000 files | 12 | 1.015 [0.993, 1.088] | 1.019 [0.958, 1.059] | 1.000 | 1.016 |
+
+kept: the 100,000-file interval clears the 10% bar and the a/a spread, and the 10,000-file median does too. the zip's wide interval is its own a/a's. `add` asks the cache through another path, which this does not change.
