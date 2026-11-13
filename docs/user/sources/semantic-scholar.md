@@ -77,12 +77,13 @@ error: semantic scholar gives the files of s2:tldrs@2026-11-10 only for an API k
   help: get a free key at https://www.semanticscholar.org/product/api#api-key-form, then sign in with `fetchloom auth login s2`, or set S2_API_KEY
 ```
 
-with a key, the same dry run listed the 30 files in 3.4 s, its first request refused once for load:
+with a key, the same dry run listed the 30 files in 5.0 s, its first two requests refused once each for load:
 
 ```text
 $ fetchloom add s2:tldrs --dry-run
   Resolving s2:tldrs
-warning: api.semanticscholar.org answered 429. trying again in 1.9 s (try 2 of 5)
+warning: api.semanticscholar.org answered 429. trying again in 2.0 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying again in 1.5 s (try 2 of 4)
    Resolved s2:tldrs@2026-11-10 · A short natural-language summary of the contents… · 30 files · ODC-By-1.0
       Would pin tldrs, new in data.lock: s2:tldrs@2026-11-10 · A short natural-language summary of the contents… · 30 files · size unknown
 ```
@@ -92,10 +93,10 @@ the API states no file's size, so a size is known once the file has downloaded. 
 ```text
 $ fetchloom add s2:publication-venues
   Resolving s2:publication-venues
-warning: api.semanticscholar.org answered 429. trying again in 1.3 s (try 2 of 5)
+warning: api.semanticscholar.org answered 429. trying again in 1.9 s (try 2 of 4)
    Resolved s2:publication-venues@2026-11-10 · Details about the venues in which papers are… · 1 file · ODC-By-1.0
 Downloading publication-venues/20261113_123241_00043_gief7_83d699d7-c621-48bd-809a-7e4064a0a6e0.gz · 15.3 MiB
- Downloaded 1 file · 15.3 MiB in 882 ms
+ Downloaded 1 file · 15.3 MiB in 599 ms
 ```
 
 the links semantic scholar gives are signed and last a week, or less, since they carry a session token that may end first, so data.toml and data.lock never keep one. data.lock keeps the API's listing of the release's dataset, with each file's name after `#`:
@@ -123,11 +124,13 @@ every download asks that listing for a fresh signed link, once a run, and takes 
 | a dataset's files | no | yes |
 | requests to `api.semanticscholar.org` | one at a time, 3 s apart | one at a time, 1 s apart, the rate a new key gets |
 
-semantic scholar's API answers anyone, but every program without a key shares one pool of requests, and it often answers 429, too busy. fetchloom then waits longer before each next request: about 3 to 6 seconds after the first refusal, 6 to 12 after the second, 12 to 24 after the third, each wait a random share of its range so programs refused together do not come back together. after the fourth refusal in a row it stops and asks semantic scholar nothing more in that run. the last lines of stderr from a real run without a key:
+semantic scholar's API answers anyone, but every program without a key shares one pool of requests, and it often answers 429, too busy. fetchloom then waits longer before each next request: about 3 to 6 seconds after the first refusal, 6 to 12 after the second, 12 to 24 after the third, each wait a random share of its range so programs refused together do not come back together. after the fourth refusal in a row it stops and asks semantic scholar nothing more in that run, so each retry is numbered of four. the last lines of stderr from a real run without a key:
 
 ```text
 $ fetchloom add s2:CorpusId:2180281 --dry-run
-warning: api.semanticscholar.org answered 429. trying again in 5.0 s (try 2 of 5)
+warning: api.semanticscholar.org answered 429. trying again in 5.3 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying again in 11.5 s (try 3 of 4)
+warning: api.semanticscholar.org answered 429. trying again in 12.7 s (try 4 of 4)
 error: api.semanticscholar.org refused one request after another because it is busy, so this run asks it nothing more
   help: every program without a key shares one pool of semantic scholar's requests: run `fetchloom add s2:CorpusId:2180281 --dry-run` again later, or get a free key at https://www.semanticscholar.org/product/api#api-key-form and sign in with `fetchloom auth login s2`, for a rate of your own
 ```
