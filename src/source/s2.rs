@@ -69,11 +69,26 @@ pub(super) fn parse(text: &str) -> Result<Reference, Error> {
         return Ok(Reference::S2Paper(paper));
     }
     if text.contains(':') {
-        return Err(bad());
+        return Err(match arxiv_version(text) {
+            Some(paper) => bad().help(format!(
+                "semantic scholar knows an arXiv paper by its id without a version, as s2:ARXIV:{}; add that version from arXiv as {paper}",
+                paper.id()
+            )),
+            None => bad(),
+        });
     }
     Dataset::parse(text)
         .map(Reference::S2Dataset)
         .ok_or_else(bad)
+}
+
+/// the arXiv paper at a version an `ARXIV:` id names with one, as `ARXIV:1706.03762v7`.
+fn arxiv_version(text: &str) -> Option<super::arxiv::Paper> {
+    let (prefix, rest) = text.split_once(':')?;
+    if !prefix.trim().eq_ignore_ascii_case("ARXIV") {
+        return None;
+    }
+    super::arxiv::Paper::at_version(rest.trim())
 }
 
 /// a pasted link to a paper's page on semanticscholar.org, or to a paper or a release's dataset

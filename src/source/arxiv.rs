@@ -264,6 +264,17 @@ impl Paper {
         }
     }
 
+    /// the paper at the version an id names with one, as a citation writes `1706.03762v7`.
+    pub(super) fn at_version(text: &str) -> Option<Paper> {
+        match Id::versioned(text)? {
+            (id, Some(version)) => Some(Paper {
+                id,
+                version: Some(version),
+            }),
+            (_, None) => None,
+        }
+    }
+
     /// its id, without a version.
     pub(super) fn id(&self) -> &Id {
         &self.id

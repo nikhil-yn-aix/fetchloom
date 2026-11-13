@@ -79,6 +79,14 @@ fn malformed_ids_and_unknown_links_are_refused() {
     }
     let error = Reference::parse("s2:DOI:abc").unwrap_err();
     assert!(error.help.unwrap().contains("s2:DOI:<doi>"));
+    // a citation's arXiv id holds its version, which semantic scholar does not take
+    let error = Reference::parse("s2:arxiv:1706.03762v7").unwrap_err();
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "semantic scholar knows an arXiv paper by its id without a version, as s2:ARXIV:1706.03762; add that version from arXiv as arxiv:1706.03762@v7"
+        )
+    );
     let error = Reference::parse("https://www.semanticscholar.org/search?q=attention").unwrap_err();
     assert_eq!(
         error.help.as_deref(),
