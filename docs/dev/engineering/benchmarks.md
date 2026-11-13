@@ -15,6 +15,7 @@ the lab needs linux x86_64 with root; WSL works, a native windows runner does no
 | check runner changes without downloads | `python3 -m unittest discover -s bench -p 'test_*.py'` |
 | small lab smoke | `python3 bench/run.py --fetchloom "$benchmark_binary" --quick --profiles lan --fs ext4 --out "$FL_BENCH_ROOT/results/quick/lab"` |
 | small service smoke | `python3 bench/live.py --fetchloom "$benchmark_binary" --quick --out "$FL_BENCH_ROOT/results/quick/live"` |
+| a release candidate against the last release, without the lab | `python3 bench/recheck.py --baseline <last release> --candidate <build> --root <folder>`, as [release recheck](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#release-recheck) describes |
 | full comparison | [full run commands](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run): ext4 for all scenarios, then xfs for s5 and s6 on lan, then live services |
 | publish tables and figures | [render and keep results](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#render-and-keep-results) |
 

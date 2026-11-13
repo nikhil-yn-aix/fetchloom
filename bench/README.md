@@ -2,7 +2,7 @@
 
 this suite measures time to checked files, cache reuse, no-op work and interrupted downloads. [the design](../docs/dev/performance/benchmark-design.md) defines the cases and fairness rules.
 
-to compare two fetchloom builds on windows, macos or any other filesystem without this lab, use `native.py` ([native comparison](../docs/dev/performance/native.md)). it records wall time and command success, not independent output hashes; the [native checks](../docs/dev/performance/native-checks.md) add correctness and platform probes.
+to compare two fetchloom builds on windows, macos or any other filesystem without this lab, use `native.py` ([native comparison](../docs/dev/performance/native.md)). it records wall time and command success, not independent output hashes; the [native checks](../docs/dev/performance/native-checks.md) add correctness and platform probes. to check a release candidate against the last release on linux, without the lab, use [`recheck.py`](#release-recheck).
 
 ## requirements
 
@@ -110,6 +110,19 @@ datahugger uses an explicit dataverse landing URL and an identified User-Agent b
 the full dataverse TSV/TAB representation difference is reported as a content mismatch; the quick shared file has identical bytes.
 
 client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc, and wget uses `--no-config`. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
+
+## release recheck
+
+`recheck.py` times what a release must not slow down, a build against the last release on the machine it runs on: a status, a settled sync and a cache check of 100,000 files, `path` of a small dataset beside them, `status --verify` of 512 MiB, placing 40,000 one-file datasets, `add -i` of 1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and a drop across 1,000 datasets, and `--version`, `help` and a settled sync of 3 files. it needs linux, python 3.11 or later and GNU time, but not root or the lab.
+
+each arm runs a fresh copy of its binary and makes its own projects and caches from the same generated files, so the old release never reads the new one's formats. a third arm runs the baseline's bytes again: its intervals are the a/a control, how far this machine's own noise reaches. every arm runs once a round, in a seeded shuffled order after a warmup round, and a local server on `127.0.0.1:19400` (`--port`) serves the links, the zip and the 1 GiB file. the fixtures stay under `--root` for the next run; on ext4 they took 7.7 GB and four minutes to make on a 24-core machine. `--scale 0.01` makes a smoke run.
+
+```sh
+taskset -c 0-11 python3 bench/recheck.py --baseline /path/to/fetchloom-of-the-last-release \
+  --candidate target/release/fetchloom --root /path/to/a/folder --cpus 12-23
+```
+
+`--cpus` pins the measured commands; pinning the script elsewhere keeps its preparation and file server off those CPUs. `--cases` and `--rounds` narrow a run, and `--lock` holds a lock file while each case runs, for a machine whose measurers take turns. the summary gives each case's time and peak memory ratio, arm over baseline, with its 95% bootstrap interval from `ab.py`; `runs.jsonl`, `meta.json` with each binary's SHA-256, and the command logs stay in a dated folder under `--root`/results. read the candidate's interval beside the a/a arm's: a shift both show is the machine.
 
 ## measurement island
 
