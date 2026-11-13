@@ -1,7 +1,6 @@
-//! what an earlier `get` kept from a link only its source can list, as hugging face lists a
-//! repository: the one file, by its path in the listing, its size and its SHA-256. offline, that
-//! file stands in for the listing, so the same get runs again without a network. the cache keeps
-//! it as it keeps what each URL served, and `cache gc` forgets both once the bytes are gone.
+//! what an earlier `get` kept from a link only its source can list, as hugging face's: the one
+//! file's path, size and SHA-256, which offline stands in for the listing. it is kept as a URL
+//! record is, and `cache gc` forgets it once the bytes are gone.
 
 use url::Url;
 

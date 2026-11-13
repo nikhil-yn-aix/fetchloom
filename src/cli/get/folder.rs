@@ -98,7 +98,7 @@ pub(super) fn put_all(
     }
     .with_threads(context.threads)
     .with_stop(std::sync::Arc::clone(&context.stop));
-    // an empty archive still leaves the output folder, bound before later path changes.
+    // an empty archive still leaves the output folder, bound before later path changes
     placer
         .check_folders(&folder.join(".fetchloom-root"), true)
         .map_err(|error| local(folder, &error))?;
@@ -242,9 +242,8 @@ fn occupied(destination: &Path) -> Error {
     .help("move it away to fetch this file, or choose another folder with --dir")
 }
 
-/// whether the file at `path` already holds the target's bytes. a hardlink is the cached
-/// object itself, so it needs no hash; a copy or a clone may carry the object's size and time
-/// over other bytes, so only hashing it says.
+/// whether the file at `path` holds the target's bytes. a hardlink is the cached object itself; a
+/// copy or clone may carry the object's size and time over other bytes, so only a hash says.
 fn holds(path: &Path, object: Option<&Path>, target: &Target) -> Result<bool, Error> {
     let there = fs::metadata(path).map_err(|err| local(path, &err))?;
     if !there.is_file() || there.len() != target.size {

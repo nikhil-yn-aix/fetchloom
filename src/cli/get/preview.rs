@@ -1,8 +1,6 @@
-//! `get --dry-run`: what a get would fetch and where its files would land, from what each link's
-//! source lists and what the cache already knows, without downloading a file's bytes or writing
-//! anything, not even the cache folder. a size its source does not state stays unknown, and so
-//! do the files of an archive this machine never unpacked. offline it answers from the cache
-//! alone, failing as the get would where it needs a download.
+//! `get --dry-run`: what a get would fetch and where its files would land, from the sources'
+//! listings and the cache, writing nothing, not even the cache folder. an unstated size, or an
+//! archive never unpacked here, stays unknown, and offline it fails where the get would download.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -164,9 +162,8 @@ fn plan(
     Ok(planned)
 }
 
-/// notes what `job` needs before its file is in: nothing when the cache holds its bytes, a
-/// question to its server when it holds what the link served last time, else a download, which
-/// offline is the error the get would end with.
+/// notes what `job` needs before its file is in: nothing when cached, a question to its server for
+/// what the link served last time, else a download, which offline is the get's error.
 fn fetching(
     context: &Context,
     cache: &Cache,

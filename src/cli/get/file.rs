@@ -1,7 +1,6 @@
-//! `get -o <file>`: the one file a link resolves to, written at exactly that path. the file is
-//! the person's own, writable and never unpacked, and it takes its name only once its bytes are
-//! checked, never in place of another file unless `--force` asks. bytes this run downloaded leave
-//! the cache once the file holds them, unless a project on this machine needs them.
+//! `get -o <file>`: the one file a link resolves to, at exactly that path, writable and never
+//! unpacked. it takes its name only once its bytes are checked, never over another file unless
+//! `--force`, and bytes this run downloaded leave the cache unless a project needs them.
 
 use std::fs;
 use std::io;
@@ -28,9 +27,8 @@ use crate::threads::Threads;
 use crate::volume::Volume;
 use crate::work::Work;
 
-/// refuses an `-o` that cannot name the one file to write, before anything is asked of a source:
-/// stdout, several links or a list of them, a folder, a name this machine's disks cannot store,
-/// or a path beneath a file.
+/// refuses an `-o` that cannot name the one file to write, before any request: stdout, several
+/// links or a list, a folder, a name no disk here can store, or a path beneath a file.
 pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), Error> {
     if path == Path::new("-") {
         return Err(Error::new(
@@ -219,9 +217,8 @@ struct Destination {
     path: PathBuf,
 }
 
-/// fetches the one file of `files`, what the link keeps of `listing`, and writes it at `path`,
-/// unless a file there holds its bytes already. returns the file's absolute path and what it
-/// holds. `key` remembers what the link kept, for a link only its source can list.
+/// fetches the one file of `files` and writes it at `path`, unless a file there holds its bytes
+/// already. `key` remembers what the link kept, for a link only its source can list.
 pub(super) async fn one(
     context: &Context,
     net: &Arc<Net>,
@@ -235,9 +232,8 @@ pub(super) async fn one(
     put(context, net, cache, args, path, parsed, &remote, None, key).await
 }
 
-/// `-o` offline for a link only its source can list: the file the link kept the last time this
-/// machine fetched it, `kept`, stands in for the listing, as do the bytes `--sha256` names. none
-/// when neither says what the file holds.
+/// `-o` offline for a link only its source can list: what the link kept when last fetched here, or
+/// the bytes `--sha256` names, stands in for the listing. none when neither says what it holds.
 pub(super) async fn again_offline(
     context: &Context,
     net: &Arc<Net>,
@@ -343,8 +339,7 @@ async fn put(
     Ok(done)
 }
 
-/// what a run decided before downloading: the file there kept, or what it learned for the
-/// download.
+/// what a run decided before downloading: the file there kept, or what it learned.
 enum Early {
     Kept((PathBuf, Done)),
     Download(Known),
@@ -360,11 +355,9 @@ struct Known {
     held: Option<Sha256>,
 }
 
-/// what a hash known before downloading decides about a file already at the path, with no
-/// request, or what the run learned for the download, as when the path is free or the file must
-/// go. `last`, what the link kept last time, decides offline in place of its listing. a link
-/// whose source states no hash stands for the bytes it served last time: offline they decide,
-/// and online the server is asked whether they changed.
+/// what a known hash decides about a file at the path before downloading, with no request, or what
+/// the run learned for the download. `last`, what the link kept last time, decides offline; with no
+/// hash at all, what it served last time decides offline, and online its server is asked.
 fn decided_early(
     context: &Context,
     cache: &Cache,
@@ -407,10 +400,9 @@ fn decided_early(
     }
 }
 
-/// looks, before downloading a link whose bytes no hash names, at a file already at the path: one
-/// of another size than the source states holds other bytes, so it is refused at once, and of any
-/// other only the download tells, so the person is told that it comes first. `--force` replaces
-/// it either way.
+/// looks at a file already at the path before downloading a link no hash names: one of another
+/// size than stated is refused at once, and any other waits for the download, which is told
+/// first. `--force` replaces it either way.
 fn unhashed(
     context: &Context,
     remote: &Remote,
@@ -432,10 +424,9 @@ fn unhashed(
     Ok(())
 }
 
-/// what writing `remote` at `path` would do, as a get decides it before downloading, with
-/// nothing downloaded or written: by the hash `--sha256` or its source gives, or offline by what
-/// the link served last time. a file already there that no hash speaks for is compared once the
-/// download is in. a file the get would refuse is refused the same way.
+/// what writing `remote` at `path` would do, decided as a get decides before downloading, with
+/// nothing downloaded or written: a file there that no hash speaks for is `Compare`, and one the
+/// get would refuse is refused alike.
 pub(super) fn foreseen(
     context: &Context,
     cache: &Cache,
@@ -488,9 +479,8 @@ pub(super) enum Foreseen {
     Compare,
 }
 
-/// whether a file is at the path that no hash speaks for, which only the download can compare,
-/// refusing one of another size than the source states, which holds other bytes. `--force`
-/// replaces whatever is there.
+/// whether a file no hash speaks for is at the path, which only the download can compare, refusing
+/// one of another size than stated. `--force` replaces whatever is there.
 fn there_unhashed(remote: &Remote, force: bool, destination: &Destination) -> Result<bool, Error> {
     let size = match fs::metadata(&destination.path) {
         Ok(metadata) if metadata.is_file() && !force => metadata.len(),
@@ -547,13 +537,11 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<Sha256> {
     })
 }
 
-/// how often a run waiting for another fetchloom's hold on its link asks again, as a download
-/// does.
+/// how often a run waiting for another fetchloom's hold on its link asks again.
 const WAITING: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// the link's claim, which its download takes too, once no other fetchloom on this machine
-/// holds it, and whether the run waited for it, saying so first when `tell` asks. while it is
-/// held, no download of the link starts and no `-o` run moves the link's bytes out of the cache.
+/// the link's claim, its download's too, once no other fetchloom here holds it, and whether the run
+/// waited, told when `tell` asks. while held, no download or `-o` move of the link's bytes starts.
 async fn claimed(
     context: &Context,
     cache: &Cache,
@@ -617,9 +605,8 @@ async fn download(
     Ok(fetched)
 }
 
-/// keeps, refuses or writes the file once the bytes the link serves are in the cache, or the
-/// server said those the file holds are unchanged. a file looked at before a download that took
-/// its time is looked at again.
+/// keeps, refuses or writes the file once the link's bytes are in the cache or the server said the
+/// file's are unchanged. a file looked at before a slow download is looked at again.
 fn settle(
     context: &Context,
     cache: &Cache,
@@ -923,11 +910,9 @@ fn unwritten(shown: &str, err: &io::Error) -> Error {
     Error::io(format_args!("could not write {shown}"), err)
 }
 
-/// gives `path` a writable file of its own holding `object`'s bytes: a clone or a copy, flushed
-/// under a hidden name beside it, then named in a step that fails rather than replace a file that
-/// appeared meanwhile. with `replace`, the new file takes the name of the one there in one rename,
-/// and a drive that cannot rename over a file keeps the old one aside until the new one has the
-/// name.
+/// gives `path` a writable file of its own holding `object`'s bytes, flushed under a hidden name
+/// and then named, failing rather than replace a file that appeared meanwhile. `replace` renames
+/// over the file there, or, on a drive that cannot, keeps the old one aside until the new is named.
 fn publish(
     object: &Path,
     path: &Path,
@@ -973,9 +958,8 @@ fn publish(
     Ok(method)
 }
 
-/// whether the cache's copy of `digest` is this run's alone: downloaded by it and needed by no
-/// project on this machine, so the file may take it, or the cache drop it once the file holds
-/// its bytes. a later run downloads it again if it must.
+/// whether the cache's copy of `digest` is this run's alone, downloaded by it and needed by no
+/// project here, so the file may take it or the cache drop it. a later run downloads it again.
 fn one_off(context: &Context, cache: &Cache, digest: &Sha256) -> bool {
     if context.work.cached_before(digest) {
         return false;
@@ -996,12 +980,10 @@ fn forget(cache: &Cache, digest: &Sha256) {
     }
 }
 
-/// moves `object`, a download nothing else needs, from the cache to `path`, so a file of any size
-/// costs no second copy of its bytes, and says whether it did. a folder of `path` that is not
-/// there yet is made first, as [`publish`] makes it. it does not move across disks, for an
-/// object with another name, as a project's hardlink is, which the file made writable would let
-/// an edit reach, or on windows, where fetchloom cannot count a file's names; the caller copies
-/// then. a name the file cannot take gives the object back to the cache as it was.
+/// moves `object`, a download nothing else needs, from the cache to `path`, making missing folders
+/// first, so its bytes are not written twice, and says whether it did. never across disks, for an
+/// object with another name, as a project's hardlink, which an edit would reach, or on windows,
+/// which cannot count a file's names; the caller copies then. a failed name gives it back.
 #[cfg(unix)]
 fn take(object: &Path, path: &Path, replace: bool) -> io::Result<bool> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -1151,9 +1133,7 @@ mod tests {
         }
     }
 
-    /// a file at the path whose size is not the one the source states holds other bytes, so it
-    /// is refused before any download. one of the same or an unknown size waits for the download,
-    /// and `--force` replaces whatever is there.
+    /// one of the same or no stated size waits for the download, and `--force` replaces either.
     #[test]
     fn a_file_of_another_size_than_stated_is_refused_before_downloading() {
         let dir = tempfile::tempdir().unwrap();
@@ -1329,8 +1309,7 @@ mod tests {
         object
     }
 
-    /// a download nothing else needs becomes the file itself, so its bytes are never written a
-    /// second time, and the file is the person's to edit.
+    /// so its bytes are never written a second time, and the file is the person's to edit.
     #[cfg(unix)]
     #[test]
     fn a_one_off_moves_out_of_the_cache_rather_than_being_copied() {
@@ -1348,8 +1327,7 @@ mod tests {
         assert_eq!(names_in(&dir.path().join("objects")), Vec::<String>::new());
     }
 
-    /// a folder `-o` names that is not there yet is made before the move, so the download still
-    /// moves rather than being copied once a copy has made the folder.
+    /// so the download still moves rather than being copied once a copy has made the folder.
     #[cfg(unix)]
     #[test]
     fn a_one_off_moves_into_a_folder_made_for_it() {
@@ -1378,8 +1356,7 @@ mod tests {
         assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
     }
 
-    /// an object with another name, as a project's hardlink is, stays in the cache sealed: the
-    /// file made writable would let an edit reach that project.
+    /// sealed, as a project's hardlink is: the file made writable would let an edit reach it.
     #[cfg(unix)]
     #[test]
     fn an_object_with_another_name_stays_in_the_cache() {
@@ -1392,8 +1369,7 @@ mod tests {
         assert_eq!(names_in(dir.path()), ["objects", "placed.csv"]);
     }
 
-    /// a file that appeared at the path keeps its bytes, and the object goes back sealed, so a
-    /// later run still finds the download.
+    /// the object goes back sealed, so a later run still finds the download.
     #[cfg(unix)]
     #[test]
     fn a_file_that_appeared_meanwhile_stays_and_the_object_goes_back() {
@@ -1442,9 +1418,8 @@ mod tests {
         refuse_zipped(&cache, &remote, &plain.digest).unwrap();
     }
 
-    /// another run of the same link may write the file between this run's look at the path and
-    /// its own write, taking the bytes out of the cache or not: a file holding the same bytes is
-    /// kept, as a rerun keeps it, and one holding others stays as it is.
+    /// between this run's look at the path and its write, taking the bytes out of the cache or not.
+    /// one holding other bytes stays as it is.
     #[test]
     fn a_file_another_run_wrote_meanwhile_is_kept_only_with_the_same_bytes() {
         let dir = tempfile::tempdir().unwrap();

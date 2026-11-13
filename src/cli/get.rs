@@ -1,8 +1,5 @@
-//! `fetchloom get <link>...`: datasets or files into new folders, once, through the same cache as
-//! projects. archives unpack into the folder unless `--no-extract` keeps them packed. a second run
-//! asks the server whether anything changed and moves no bytes when nothing did. several links,
-//! given on the command line or listed in `--input-file`, download together, and one that fails
-//! leaves the others to finish. `-o` writes the one file a link resolves to instead.
+//! `fetchloom get <link>...`: datasets or files into new folders, once, through the projects'
+//! cache. a second run moves no bytes when nothing changed; a failed link lets the rest finish.
 
 mod file;
 mod folder;
@@ -55,7 +52,6 @@ pub(super) struct Report {
     dry: Option<Dry>,
 }
 
-/// the part of a dry run's report that tells it is one, and what it would change.
 #[derive(Serialize)]
 struct Dry {
     dry_run: bool,
@@ -96,7 +92,6 @@ impl From<Method> for Written {
     }
 }
 
-/// one link's outcome.
 #[derive(Serialize)]
 struct Item {
     /// the link as given, a secret in it masked.
@@ -146,7 +141,6 @@ impl Item {
     }
 }
 
-/// the folder one link filled, and what is in it.
 struct Done {
     folder: PathBuf,
     files: Vec<Got>,
@@ -226,9 +220,8 @@ async fn run_links(context: &Context, args: Get) -> Result<Report, Error> {
     many(context, &net, &args, &asked).await
 }
 
-/// `error` in the words of a run that keeps no project: get was given its link on the command
-/// line or in a list and pins nothing, so no help names data.toml or a pin. `offline` says what
-/// turned offline mode on.
+/// `error` in the words of a run that keeps no project, so no help names data.toml or a pin.
+/// `offline` says what turned offline mode on.
 fn unprojected(offline: net::Offline, mut error: Error) -> Error {
     let reworded = |help: &str| -> Option<String> {
         if help == net::MOVED_HELP {
@@ -295,9 +288,8 @@ impl Expected {
     }
 }
 
-/// the links to fetch: those on the command line, then those `--input-file` lists, each with the
-/// SHA-256 its line gives. several links download together, so each names what it fetches, and
-/// only a link alone may be search words.
+/// the links to fetch: those on the command line, then those `--input-file` lists, with any SHA-256
+/// its line gives. only a link alone may be search words, as several download together.
 async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
     context.stop.check()?;
     let links = &args.links;
@@ -482,10 +474,8 @@ fn unlisted_offline(offline: net::Offline, error: Error) -> Error {
     ))
 }
 
-/// several links in one run: resolved together, their files downloaded together within the
-/// network's limits, then each placed in a folder of its own. a link that fails is kept in the
-/// report while the others go on, told at once when it fails before the downloads, and named in
-/// the run's one error.
+/// several links in one run, resolved and downloaded together, each placed in a folder of its own.
+/// a link that fails stays in the report while the others go on, and is named in the run's error.
 async fn many(
     context: &Context,
     net: &Arc<Net>,
@@ -690,7 +680,7 @@ fn prepare(
     }
     let extract = !args.no_extract;
     let (names, foreseen) = foresee(cache, &files, extract);
-    // a batch's final folder can gain a suffix or a server-provided name after downloading.
+    // a batch's final folder can gain a suffix or a server-provided name after downloading
     let lone = (args.input_file.is_none() && args.links.len() == 1).then(|| {
         folder_for(
             chosen,
@@ -730,9 +720,8 @@ fn prepare(
     })
 }
 
-/// the bytes a download that asks whether its link changed may find unchanged: what the link
-/// served last time, while the cache holds them, or the file at `placed`, where the download
-/// would go.
+/// the bytes a download that asks whether its link changed may find unchanged: what it served last
+/// time, while the cache holds them or the file at `placed`, where it would go, has them.
 fn held(cache: &Cache, job: &Job, placed: Option<&Path>) -> Option<Sha256> {
     if !job.fetch.revalidate {
         return None;
@@ -819,9 +808,8 @@ async fn settle(
     finish(context, cache, wanted, found, started, taken).await
 }
 
-/// checks what arrived, unpacks archives and puts every file in the link's folder, unless an
-/// earlier link of the run took that folder. `last` says this is the run's last link, whose
-/// placement marks the run's work as finishing.
+/// checks what arrived, unpacks archives and puts every file in the link's folder, refused when an
+/// earlier link of the run took it. the run's `last` link marks the run's work as finishing.
 async fn finish(
     context: &Context,
     cache: &Cache,
@@ -859,7 +847,6 @@ async fn finish(
         &parsed,
         &unwrapped(&files, &paths),
     );
-    // two links named alike, such as two iris.csv, each get a folder: iris, then iris-2
     let folder = if chosen.is_some() {
         folder
     } else {
@@ -960,7 +947,6 @@ fn vouch(
     Ok(())
 }
 
-/// refuses the bytes of the file at `path` when the hash `expected` names others.
 fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<(), Error> {
     if expected.sha256 == *digest {
         return Ok(());
@@ -977,9 +963,8 @@ fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<()
     .help(expected.help()))
 }
 
-/// the folders the links of one run filled. windows and macos see `Data` and `data` as one
-/// folder, so they are compared as [`name::fold`] folds them, on every system alike. a folder
-/// reached through a link or junction is the folder it leads to.
+/// the folders the links of one run filled, folded as [`name::fold`] does on every system, since
+/// windows and macos see `Data` and `data` as one, and resolved through links and junctions.
 #[derive(Default)]
 struct Taken(std::collections::HashSet<String>);
 
@@ -1020,8 +1005,7 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// `folder`, or the first of `folder-2`, `folder-3` and so on that no earlier link of the run
-/// took.
+/// `folder`, or the first of `folder-2`, `folder-3` and on that no earlier link of the run took.
 fn unclaimed(folder: PathBuf, taken: &Taken) -> PathBuf {
     if !taken.holds(&folder) {
         return folder;
@@ -1041,17 +1025,15 @@ fn shown(link: &str) -> String {
     net::mask_query(link.trim()).into_owned()
 }
 
-/// says at once that one of several links failed before the downloads, so the others' story
-/// goes on around it.
+/// says at once that one of several links failed before the downloads, as the others go on.
 fn tell_failed(context: &Context, link: &str, error: &Error) {
     context
         .output
         .step("Failed", &format!("{} · {}", shown(link), error.message));
 }
 
-/// one error for the links that failed: the first one's kind, and lines that name each link
-/// once with what happened to it, in the order given, links that failed alike under one line.
-/// every link keeps its own error in the report.
+/// one error for the links that failed, of the first one's kind, naming each link once in order,
+/// those that failed alike under one line. every link keeps its own error in the report.
 fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
     let Some((_, first)) = failed.first() else {
         return Error::new(Kind::LocalIo, "a link failed without a reason");
@@ -1105,9 +1087,8 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
     }))
 }
 
-/// asks before the run's downloads when they are large. nothing is placed yet, so a cancel there
-/// changed nothing. a download that may find its bytes unchanged asks only once its server sends
-/// them, so an unchanged rerun asks nothing.
+/// asks before the run's downloads when they are large, so a cancel changes nothing. one that may
+/// find its bytes unchanged asks only once its server sends them, so a rerun asks nothing.
 fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
     if context.offline.enabled() {
         return Ok(());
@@ -1143,10 +1124,9 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     .map_err(Error::unchanged)
 }
 
-/// what the downloads `missing` need: the bytes they move, which the question about their size
-/// counts, and the room on the cache's disk, which counts each archive they unpack once more,
-/// since its files land beside it before it can go. the room is a lower bound: an archive may
-/// unpack to more than its own size, and a size nothing stated counts nothing.
+/// the bytes the downloads `missing` move, and the room they need on the cache's disk, where an
+/// archive that unpacks counts twice, its files landing beside it. the room is a lower bound: an
+/// archive may unpack to more, and an unstated size counts nothing.
 fn needs(missing: &[&Job]) -> (u64, u64) {
     let sized = || {
         missing
@@ -1161,10 +1141,9 @@ fn needs(missing: &[&Job]) -> (u64, u64) {
     (moved, moved.saturating_add(unpacked))
 }
 
-/// the names the files will have, and the paths they will take in the folder when the cache
-/// already knows them: a file the server names keeps the name it gave last time, and an archive
-/// this machine unpacked before stands for its files. the paths are none while an archive among
-/// them was never unpacked here, since only its bytes tell what it holds.
+/// the names the files will have, and their paths in the folder when the cache knows them: a file
+/// the server names keeps last time's name, and an archive unpacked here before stands for its
+/// files. no paths while an archive among them was never unpacked here.
 fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Option<Vec<String>>) {
     let alone = files.len() == 1;
     let mut names = Vec::with_capacity(files.len());
@@ -1255,9 +1234,8 @@ struct UnpackedFiles {
     trees: Trees,
 }
 
-/// unpacks each archive among the fetched files that this machine has not unpacked before, and
-/// returns every archive whose files are now in the cache, so its own bytes can go. an archive
-/// fetchloom leaves packed is told with how to unpack it from `folder`, where it lands.
+/// unpacks each fetched archive not unpacked here before, returning every archive whose files are
+/// in the cache, so its own bytes can go. one left packed is told how to unpack it in `folder`.
 async fn unpack(
     context: &Context,
     cache: &Cache,
@@ -1381,7 +1359,7 @@ fn tell_next(context: &Context, args: &Get, link: &str) {
 }
 
 fn pin_command(args: &Get, link: &str) -> Option<String> {
-    // add refuses links holding secrets, and no hint may repeat them.
+    // add refuses links holding secrets, and no hint may repeat them
     let Cow::Borrowed(link) = net::mask_query(link.trim()) else {
         return None;
     };
@@ -1459,9 +1437,8 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     }
 }
 
-/// the error for a pasted link to `file`, which its listing lacks. it names the file the link
-/// most likely meant: one whose name differs only in case, as hugging face's `Iris.csv` from a
-/// typed `iris.csv`, else a near typo.
+/// the error for a pasted link to `file`, which its listing lacks, naming the file likely meant:
+/// one differing only in case, as hugging face's `Iris.csv` for `iris.csv`, else a near typo.
 fn missing_file(parsed: &Parsed, listing: &Listing, file: &str) -> Error {
     let error = Error::new(
         Kind::Usage,
@@ -1529,8 +1506,7 @@ fn folder_for(
     parent.map_or_else(|| PathBuf::from(&name), |parent| parent.join(&name))
 }
 
-/// tells what one link's downloads brought, as [`fetched_step`] words it, with each file's full
-/// hash for `-v`.
+/// tells one link's downloads as [`fetched_step`] words them, with a lone file's hash at `-v`.
 fn tell_fetched(
     context: &Context,
     paths: &[String],
@@ -1545,9 +1521,8 @@ fn tell_fetched(
     }
 }
 
-/// the step that tells what one link's downloads brought: downloaded, checked with the server or
-/// found in the cache, with the time since `started` their bytes took to arrive. the time a slow disk
-/// takes to keep them comes after, so it does not count against the link.
+/// the step that tells what one link's downloads brought: downloaded, checked or found, with the
+/// time since `started` their bytes took to arrive, which leaves out a slow disk's time after.
 fn fetched_step(
     paths: &[String],
     fetched: &[Fetched],
@@ -1660,8 +1635,7 @@ mod tests {
         assert_eq!(shown("zenodo:1"), "zenodo:1");
     }
 
-    /// a download is told by when its last byte arrived, so the time a slow disk takes to keep
-    /// the file, as `-o` waits for, does not count against the link.
+    /// so the time a slow disk takes to keep the file, as `-o` waits for, never counts against it.
     #[test]
     fn a_download_is_told_by_when_its_last_byte_arrived() {
         let started = Instant::now();
@@ -1693,10 +1667,8 @@ mod tests {
         );
     }
 
-    /// the room a get asks for counts each archive it unpacks once more, since the files land
-    /// beside it before it can go, while the question about the size counts the bytes moved. a
-    /// file kept packed, a file that is no archive and an archive whose size nothing stated add
-    /// nothing, and a sum too large to count stays the largest.
+    /// while the size question counts the bytes moved. a file kept packed, one that is no archive
+    /// and an archive of no stated size add nothing, and a sum too large stays the largest.
     #[test]
     fn the_room_a_get_needs_counts_each_archive_it_unpacks_once_more() {
         let job = |path: &str, size: Option<u64>, extract: bool| {
@@ -1721,8 +1693,7 @@ mod tests {
         assert_eq!(needs(&[&huge, &zip]), (u64::MAX, u64::MAX));
     }
 
-    /// links that a stop kept from their folders end the run as that stop, which says first that
-    /// it stopped, as every stop does.
+    /// which says first that it stopped, as every stop does.
     #[test]
     fn links_a_stop_kept_from_their_folders_end_as_a_stop() {
         let links = [
@@ -1739,7 +1710,6 @@ mod tests {
         assert_eq!(failed.message, "1 of 2 links could not be fetched");
     }
 
-    /// the count of links that failed has its thousands apart, as every count a person reads.
     #[test]
     fn many_failed_links_are_counted_with_thousands_apart() {
         let links: Vec<String> = (0..1200)
@@ -1825,8 +1795,7 @@ mod tests {
         );
     }
 
-    /// a large file whose bytes may turn out unchanged is asked about only once its server sends
-    /// it, so a rerun answered 304 asks nothing.
+    /// it is asked about once its server sends it, so a rerun answered 304 asks nothing.
     #[test]
     fn get_approval_leaves_a_file_that_may_be_unchanged_to_its_answer() {
         let dir = tempfile::tempdir().unwrap();
@@ -1850,8 +1819,7 @@ mod tests {
         approve(&context, &cache, &jobs).unwrap();
     }
 
-    /// a link to a file the listing lacks names the file it most likely meant, such as hugging
-    /// face's `Iris.csv` for a typed `iris.csv`, rather than a pattern nobody typed.
+    /// as hugging face's `Iris.csv` for a typed `iris.csv`, rather than a pattern nobody typed.
     #[test]
     fn a_link_to_a_missing_file_names_the_one_meant() {
         let listing = |paths: &[&str]| Listing {
