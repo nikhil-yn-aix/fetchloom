@@ -4,7 +4,9 @@
 
 use std::fs;
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, text};
+use crate::support::{
+    Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, text, without_copy_warning,
+};
 
 /// the bytes of a paper's pdf, as far as the tests care.
 const PDF: &[u8] = b"%PDF-1.5 attention\n";
@@ -356,7 +358,10 @@ fn a_semantic_scholar_paper_is_pinned_at_its_open_pdf_without_a_key() -> Result 
     .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(!stderr.contains("warning"), "{stderr}");
+    assert!(
+        !without_copy_warning(&stderr).contains("warning"),
+        "{stderr}"
+    );
     let work = sandbox.work();
     let manifest = fs::read_to_string(work.join("data.toml"))?;
     assert!(
