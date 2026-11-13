@@ -1,4 +1,5 @@
-//! answers recorded from real services, replayed in tests in place of the network.
+//! the networks source tests run against: answers recorded from real services, replayed in
+//! place of the network, and the real one the ignored `live_` tests reach.
 
 use std::collections::HashMap;
 use std::future::{Future, ready};
@@ -193,4 +194,25 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
         .build()
         .unwrap()
         .block_on(future)
+}
+
+/// the real network for a `live_` test, with counters of its own and the `credentials` it
+/// signs in with, none for a service anyone may read.
+pub(crate) fn live(
+    credentials: Vec<crate::net::Credential>,
+) -> (crate::net::Net, std::sync::Arc<crate::work::Work>) {
+    let work = std::sync::Arc::new(crate::work::Work::default());
+    let options = crate::net::Options {
+        offline: crate::net::Offline::No,
+        jobs: 4,
+        credentials,
+        split: crate::net::Splitting::WhenSlow,
+    };
+    let net = crate::net::Net::new(
+        options,
+        work.clone(),
+        std::sync::Arc::default(),
+        std::sync::Arc::new(|_| {}),
+    );
+    (net, work)
 }

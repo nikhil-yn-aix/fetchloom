@@ -374,21 +374,10 @@ fn live_private_drive() {
         eprintln!("skipped: no google application default credentials on this machine");
         return;
     }
-    let work = std::sync::Arc::new(crate::work::Work::default());
     let google = crate::net::Google::new(Vec::new(), std::sync::Arc::new(crate::auth::env))
         .with_drive(vec![DriveId::parse(&id).unwrap()]);
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        std::sync::Arc::default(),
-        std::sync::Arc::new(|_| {}),
-    )
-    .with_google(google);
+    let (net, work) = crate::source::recorded::live(Vec::new());
+    let net = net.with_google(google);
     let listing = block_on(folder(&id).resolve(&net)).unwrap();
     assert!(!listing.files.is_empty(), "{listing:?}");
     let remote = &listing.files[0];

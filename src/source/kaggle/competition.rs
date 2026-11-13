@@ -311,13 +311,9 @@ impl fmt::Display for Competition {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::glob::Glob;
-    use crate::net::{Net, Options};
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
-    use crate::work::Work;
 
     const API: &str = "https://api.kaggle.com/v1/competitions";
 
@@ -627,14 +623,8 @@ mod tests {
             eprintln!("skipped: no KAGGLE_API_TOKEN, access_token or kaggle.json on this machine");
             return;
         }
-        let work = Arc::new(Work::default());
-        let options = Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: crate::source::kaggle::credentials(&crate::auth::env),
-            split: crate::net::Splitting::WhenSlow,
-        };
-        let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
+        let (net, work) =
+            crate::source::recorded::live(crate::source::kaggle::credentials(&crate::auth::env));
         let reference = Reference::parse("kaggle:competitions/titanic")
             .unwrap()
             .reference;

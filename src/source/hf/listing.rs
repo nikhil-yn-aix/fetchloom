@@ -92,16 +92,12 @@ pub(super) fn hub(segments: &[&str]) -> Result<Url, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::digest::Sha256;
     use crate::error::Kind;
-    use crate::net::{Net, Options};
     use crate::source::hf::revision::is_commit;
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
     use crate::source::{Access, Remote};
-    use crate::work::Work;
 
     const IMDB: &str = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
     const FLEURS: &str = "70bb2e84b976b7e960aa89f1c648e09c59f894dd";
@@ -468,14 +464,7 @@ mod tests {
     #[test]
     #[ignore = "live: talks to huggingface.co"]
     fn live_imdb_resolves_to_a_commit() {
-        let work = Arc::new(Work::default());
-        let options = Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        };
-        let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
+        let (net, work) = crate::source::recorded::live(Vec::new());
         let reference = Reference::parse("hf:datasets/stanfordnlp/imdb")
             .unwrap()
             .reference;

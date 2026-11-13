@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -319,18 +318,7 @@ fn release_pages_name_releases_and_other_links_stay_as_they_were() {
 #[test]
 #[ignore = "live: talks to gitlab.com"]
 fn live_gitlab() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("gitlab:gitlab-org/gitlab-runner@v19.3.6")
         .unwrap()

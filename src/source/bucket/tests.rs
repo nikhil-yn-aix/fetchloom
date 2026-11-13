@@ -1116,18 +1116,7 @@ fn no_credential_is_kept_for_a_storage_host() {
 #[test]
 #[ignore = "live: talks to s3.amazonaws.com and storage.googleapis.com"]
 fn live_buckets() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let openneuro =
         block_on(reference("s3://openneuro.org/ds000001/participants.tsv").resolve(&net)).unwrap();

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -315,18 +314,7 @@ fn ncbi_hosts_ask_their_requests_to_start_a_third_of_a_second_apart() {
 #[test]
 #[ignore = "live: talks to ftp.ncbi.nlm.nih.gov"]
 fn live_geo() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("geo:GSE1000").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();

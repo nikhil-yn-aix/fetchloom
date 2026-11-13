@@ -259,18 +259,7 @@ fn settings_read_containers_and_sas_as_azure_gives_them() {
 #[test]
 #[ignore = "live: talks to azureopendatastorage.blob.core.windows.net"]
 fn live_azure() {
-    let work = std::sync::Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        std::sync::Arc::default(),
-        std::sync::Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = std::time::Instant::now();
     let reference = Reference::parse("azure:azureopendatastorage/mnist/")
         .unwrap()

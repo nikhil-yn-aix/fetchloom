@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -258,18 +257,7 @@ fn a_handle_cannot_route_back_to_a_doi() {
 #[test]
 #[ignore = "live: talks to doi.org and repository APIs"]
 fn live_doi() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     for (doi, target, requests) in [
         (DOI, "zenodo:3608990", 2),
         ("10.6084/m9.figshare.34744689.v1", "figshare:34744689@1", 2),

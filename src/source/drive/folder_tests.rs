@@ -280,18 +280,7 @@ fn live_drive_folder() {
     let sha256 = crate::digest::Sha256::from_hex(
         "284e3029cce3ae5ee0b05866100e300046359f53ae4c77fe6b34c05aa7a72cee",
     );
-    let work = std::sync::Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        std::sync::Arc::default(),
-        std::sync::Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = std::time::Instant::now();
     let deep = block_on(folder(DEEP).resolve(&net)).unwrap();
     assert_eq!(deep.resolved.to_string(), format!("drive:folders/{DEEP}"));

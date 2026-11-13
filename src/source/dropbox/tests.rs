@@ -101,18 +101,7 @@ fn live_dropbox() {
     let sha256 = crate::digest::Sha256::from_hex(
         "86c4de5593a6058b67cefe76ccff78d98ba20fe1606cbd7d62b11f77b39aee59",
     );
-    let work = std::sync::Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        std::sync::Arc::default(),
-        std::sync::Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = std::time::Instant::now();
     let reference = Reference::parse(link).unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();

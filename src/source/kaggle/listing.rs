@@ -258,12 +258,8 @@ impl Dataset {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::net::{Net, Options};
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
-    use crate::work::Work;
 
     const API: &str = "https://api.kaggle.com/v1/datasets";
 
@@ -593,14 +589,7 @@ mod tests {
     #[test]
     #[ignore = "live: talks to api.kaggle.com"]
     fn live_iris_resolves_to_a_version() {
-        let work = Arc::new(Work::default());
-        let options = Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        };
-        let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
+        let (net, work) = crate::source::recorded::live(Vec::new());
         let reference = Reference::parse("kaggle:uciml/iris").unwrap().reference;
         let listing = block_on(reference.resolve(&net)).unwrap();
         let Reference::Kaggle(pinned) = &listing.resolved else {

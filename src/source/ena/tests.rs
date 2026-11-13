@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -403,18 +402,7 @@ fn accessions_and_browser_pages_name_runs_and_other_forms_are_refused() {
 #[test]
 #[ignore = "live: talks to www.ebi.ac.uk"]
 fn live_ena() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("ena:ERR1160846").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();

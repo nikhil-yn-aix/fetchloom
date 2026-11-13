@@ -191,7 +191,6 @@ impl fmt::Display for Record {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::time::Instant;
 
     use super::*;
@@ -420,18 +419,7 @@ mod tests {
     #[test]
     #[ignore = "live: talks to zenodo.org"]
     fn live_zenodo() {
-        let work = Arc::new(crate::work::Work::default());
-        let net = crate::net::Net::new(
-            crate::net::Options {
-                offline: crate::net::Offline::No,
-                jobs: 4,
-                credentials: Vec::new(),
-                split: crate::net::Splitting::WhenSlow,
-            },
-            work.clone(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        );
+        let (net, work) = crate::source::recorded::live(Vec::new());
         let start = Instant::now();
         let reference = Reference::parse("zenodo:3608990").unwrap().reference;
         let listing = block_on(reference.resolve(&net)).unwrap();

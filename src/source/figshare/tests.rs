@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -254,18 +253,7 @@ fn malformed_checksums_are_refused() {
 #[test]
 #[ignore = "live: talks to api.figshare.com"]
 fn live_figshare() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("figshare:34744689@1").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();

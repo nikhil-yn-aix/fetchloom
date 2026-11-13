@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
@@ -265,18 +264,7 @@ fn hosts_cannot_carry_login_details() {
 #[test]
 #[ignore = "live: talks to dataverse.harvard.edu"]
 fn live_dataverse() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0")
         .unwrap()

@@ -236,18 +236,7 @@ fn signed_download_urls_cannot_enter_the_lock() {
 #[test]
 #[ignore = "live: talks to api.osf.io"]
 fn live_osf() {
-    let work = Arc::new(crate::work::Work::default());
-    let net = crate::net::Net::new(
-        crate::net::Options {
-            offline: crate::net::Offline::No,
-            jobs: 4,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        work.clone(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let (net, work) = crate::source::recorded::live(Vec::new());
     let start = Instant::now();
     let reference = Reference::parse("osf:ezcuj").unwrap().reference;
     let listing = block_on(reference.resolve(&net)).unwrap();
