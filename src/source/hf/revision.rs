@@ -120,9 +120,8 @@ impl Repo {
         ))
     }
 
-    /// the error for a repository the hub refused to show, which it does alike for a private one
-    /// and for one that does not exist, as after a typo. a link without `/datasets/` names a
-    /// model, so a model the hub does not show, whose name a dataset has, points to the dataset.
+    /// the error for a repository the hub refused to show, alike for a private one and a typo. a
+    /// model whose name a dataset has points to it, since a link without `/datasets/` is a model.
     async fn unseen(&self, api: &impl Api, refused: Error) -> Error {
         if let Some(dataset) = self.same_named_dataset(api).await {
             return Error::new(
@@ -205,9 +204,8 @@ impl Repo {
         }
     }
 
-    /// the hub refused the key from `origin`, which went with the request: it is old or wrong.
-    /// no sign-in is offered: the help says how to check a saved key, or what replaces a key from
-    /// a variable, which would win over one a sign-in saves.
+    /// the hub refused the key from `origin` as old or wrong. no sign-in is offered, since a
+    /// variable would win over the key it saves: the help says how to check or replace the key.
     fn refused_key(&self, origin: &Origin) -> Error {
         let help = match origin {
             Origin::Variable(name) => format!(
@@ -311,8 +309,7 @@ mod tests {
     use super::*;
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
-    /// an answer whose id or commit fetchloom cannot read is refused before its commit becomes a
-    /// pin in data.lock, with both values shown as the hub sent them.
+    /// before its commit becomes a pin in data.lock, with both values shown as the hub sent them.
     #[test]
     fn an_answer_with_an_unreadable_id_or_commit_is_refused() {
         let commit = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
@@ -335,9 +332,8 @@ mod tests {
         }
     }
 
-    /// a refused key is named by where it comes from, never by its value: a variable, whose
-    /// replacement the help names, or the file a sign-in saved it to, which `fetchloom auth`
-    /// checks. no sign-in is offered for either.
+    /// never by its value: a variable, whose replacement the help names, or the file a sign-in
+    /// saved it to, which `fetchloom auth` checks. no sign-in is offered for either.
     #[test]
     fn a_refused_key_is_named_by_where_it_comes_from() {
         let repo = Repo::parse("datasets/ILSVRC/imagenet-1k").unwrap();

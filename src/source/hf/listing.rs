@@ -296,9 +296,8 @@ mod tests {
         }
     }
 
-    /// a revision the hub does not show is named with its repository and a page to check it on.
-    /// the hub answers alike for a repository a key cannot read, so the repository is not said
-    /// to exist.
+    /// named with its repository and a page to check it on. the hub answers alike for a repository
+    /// a key cannot read, so the repository is not said to exist.
     #[test]
     fn a_missing_revision_is_unresolved() {
         let recorded = Recorded::default().on(
@@ -363,9 +362,8 @@ mod tests {
         assert_eq!(recorded.asked().len(), 1, "a dataset needs no other look");
     }
 
-    /// a link without `/datasets/` names a model. a model the hub does not show, whose name a
-    /// public dataset has, points to that dataset rather than to a sign-in; one whose name no
-    /// dataset has stays a refusal that may be a typo.
+    /// a link without `/datasets/` names a model, which then points to the dataset rather than a
+    /// sign-in; one whose name no dataset has stays a refusal that may be a typo.
     #[test]
     fn a_model_the_hub_does_not_show_points_to_a_dataset_of_its_name() {
         let revision = |name: &str| {
@@ -402,8 +400,7 @@ mod tests {
         assert!(err.need.is_some_and(|need| need.maybe_missing.is_some()));
     }
 
-    /// a gated repository needs accepted terms and a private one an account; anyone may read a
-    /// repository only when the hub says it is not private.
+    /// anyone may read a repository only when the hub says it is not private.
     #[test]
     fn the_hub_says_who_may_read_a_repository() {
         let revision = api(&format!("datasets/stanfordnlp/imdb/revision/main?{EXPAND}"));

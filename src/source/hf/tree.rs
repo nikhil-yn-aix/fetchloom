@@ -28,10 +28,8 @@ struct Lfs {
 
 impl Repo {
     /// every file in the tree at `commit`, or only those in `folders` when every file wanted lies
-    /// in one of them: a repository of many folders then takes a few requests rather than one for
-    /// each thousand files it holds. a folder the hub does not have, or one without files, has
-    /// the whole tree listed instead, so a pattern that matches nothing is told against all the
-    /// repository holds.
+    /// in one, which takes a few requests rather than one per thousand files. a missing or empty
+    /// folder has the whole tree listed, so a pattern that matches nothing is told against it all.
     pub(super) async fn tree(
         &self,
         api: &impl Api,
