@@ -1,6 +1,5 @@
-//! recipes as every command but build sees them, against servers on this machine: what sync,
-//! status and path do in each state of a pinned result, a dataset with `place = false` that a
-//! recipe reads, and what `cache` and `cache gc` keep.
+//! recipes as every command but build sees them: sync, status and path in each state of a pinned
+//! result, an input with `place = false`, and what `cache` and `cache gc` keep.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,7 +16,7 @@ pub(crate) const WRITE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"
 /// [`WRITE`], with clean.py as its code.
 const WRITE_CODE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
 
-/// sets `place = false` on the dataset `name` in the data.toml of the project at `folder`.
+/// sets `place = false` on the dataset `name` in `folder`'s data.toml.
 pub(crate) fn unplace(folder: &Path, name: &str) -> Result {
     let manifest = folder.join("data.toml");
     let table = format!("[datasets.{name}]\n");
@@ -57,8 +56,7 @@ pub(crate) fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
     cache.join("objects").join(&hex[..2]).join(&hex[2..])
 }
 
-/// a recipe data.lock pins nothing of has nothing a sync could place, so a sync of every
-/// dataset says so, while a sync that names it fails as `path` does.
+/// a sync that names the recipe fails instead, as `path` does.
 #[test]
 fn sync_warns_of_a_recipe_not_built_yet() -> Result {
     let sandbox = Sandbox::new()?;
@@ -86,8 +84,7 @@ fn sync_warns_of_a_recipe_not_built_yet() -> Result {
     Ok(())
 }
 
-/// a strict sync that fails, here for a recipe not built yet, never first says that everything
-/// is in place: its error says what is not ready. once the data is ready, it says so again.
+/// the failure here is a recipe not built yet, and once it is built the ok comes back.
 #[test]
 fn a_strict_sync_that_fails_says_no_ok_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -115,8 +112,7 @@ fn a_strict_sync_that_fails_says_no_ok_first() -> Result {
     Ok(())
 }
 
-/// a recipe whose code changed since its build keeps the result data.lock pins: sync and path
-/// place that result and say what changed and which build makes it again, once each.
+/// the warning names what changed and the build that makes the result again, once per run.
 #[test]
 fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
     let sandbox = Sandbox::new()?;
@@ -166,9 +162,8 @@ fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
     Ok(())
 }
 
-/// a recipe renamed in data.toml, the rest of its table as it was, keeps its pinned result: its
-/// key never held its name, so relocking carries the result over and nothing needs a build. a
-/// build then runs nothing, and a locked sync places the result in the new name's folder.
+/// a recipe's key never held its name, so relocking carries the result over, a build then runs
+/// nothing, and a locked sync places it in the new name's folder.
 #[test]
 fn a_renamed_recipe_keeps_its_result() -> Result {
     let sandbox = Sandbox::new()?;
@@ -207,9 +202,8 @@ fn a_renamed_recipe_keeps_its_result() -> Result {
     Ok(())
 }
 
-/// `lock` keeps a changed recipe's pin, since only a build pins one, so it still succeeds: it
-/// says what moved as sync does, with the build and commit that bring data.lock up to date, and
-/// its last line never calls data.lock up to date, dry run or not.
+/// only a build pins a recipe, so `lock` keeps the old pin and succeeds, telling what moved as
+/// sync does, and its last line never calls data.lock up to date, dry run or not.
 #[test]
 fn lock_tells_a_changed_recipe_and_claims_nothing_is_up_to_date() -> Result {
     let sandbox = Sandbox::new()?;
@@ -236,9 +230,8 @@ fn lock_tells_a_changed_recipe_and_claims_nothing_is_up_to_date() -> Result {
     Ok(())
 }
 
-/// a sync or path of a recipe alone relocks and fetches nothing of what it is made from: it
-/// reads the inputs' pins and entries to tell that one changed in data.toml, and places the
-/// result from the cache.
+/// neither sync nor `path` relocks: the inputs' pins and entries tell that one changed in
+/// data.toml, and the result is placed from the cache.
 #[test]
 fn a_named_sync_reads_its_inputs_and_fetches_none_of_them() -> Result {
     let sandbox = Sandbox::new()?;
@@ -277,9 +270,8 @@ fn a_named_sync_reads_its_inputs_and_fetches_none_of_them() -> Result {
     Ok(())
 }
 
-/// a clone whose cache lacks a pinned result that no mirror holds has nothing sync can place for
-/// it, so status names the build that makes it rather than the result's files, and names the
-/// input the build would fetch first.
+/// sync can place nothing of a result no cache or mirror holds, so status names its build, not
+/// its files, and the input the build would fetch first.
 #[test]
 fn status_lists_a_result_no_cache_or_mirror_holds_as_unbuilt() -> Result {
     let sandbox = Sandbox::new()?;
@@ -322,9 +314,8 @@ fn status_lists_a_result_no_cache_or_mirror_holds_as_unbuilt() -> Result {
     Ok(())
 }
 
-/// a project copied without `.fetchloom`, its data folder holding iris but not clean's result,
-/// to a machine whose cache is empty: status names clean's build alone, since the build copies
-/// iris from the data folder, as it does then with no request.
+/// in a copy without `.fetchloom` whose data folder holds iris but not clean's result, status
+/// names only clean's build, which then makes no request.
 #[test]
 fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -356,8 +347,7 @@ fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
     Ok(())
 }
 
-/// a file sync puts back says how to leave it out for good as drop would: a file of a recipe's
-/// result in the recipe's step, and the only file of a dataset by removing the dataset.
+/// drop cannot leave out a result's file or a dataset's only file, so the help names what can.
 #[test]
 fn a_put_back_file_names_what_leaves_it_out() -> Result {
     let sandbox = Sandbox::new()?;
@@ -387,11 +377,8 @@ fn a_put_back_file_names_what_leaves_it_out() -> Result {
     Ok(())
 }
 
-/// raw data kept out of the data folder, an archive with a file a members table leaves out, and
-/// a recipe that reads it. `cache gc --now` keeps the files the recipe reads and frees the
-/// archive and the file left out. with the result gone from the data folder and the cache too,
-/// as after a sync and a gc while another commit was checked out, status names only the build,
-/// since the cache holds all the build reads, and the build then needs no network.
+/// gc frees the archive and the file its members table leaves out but keeps what the recipe
+/// reads, so status names only the build, which then needs no network.
 #[test]
 fn status_counts_an_archive_whose_kept_files_the_cache_holds() -> Result {
     let sandbox = Sandbox::new()?;
@@ -446,8 +433,7 @@ fn status_counts_an_archive_whose_kept_files_the_cache_holds() -> Result {
     Ok(())
 }
 
-/// a clone whose cache lacks a pinned result gets it from a folder mirror that holds it, with
-/// no request to the source and no step run, and status calls its files missing until then.
+/// until the sync, status calls the result's files missing rather than the recipe unbuilt.
 #[test]
 fn a_result_only_a_folder_mirror_holds_is_synced_from_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -491,9 +477,8 @@ fn a_result_only_a_folder_mirror_holds_is_synced_from_it() -> Result {
     Ok(())
 }
 
-/// a build of a recipe made from a dataset with `place = false` places only the result and
-/// retires what was placed of the input; a clone whose cache lacks both fetches the input for
-/// its step without placing it.
+/// the build retires what was placed of the input, and a clone whose cache lacks both fetches
+/// the input for the step without placing it.
 #[test]
 fn a_build_places_only_the_result_of_an_unplaced_input() -> Result {
     let sandbox = Sandbox::new()?;
@@ -538,8 +523,7 @@ fn a_build_places_only_the_result_of_an_unplaced_input() -> Result {
     Ok(())
 }
 
-/// the cache report counts what only builds read, and gc keeps it with the results projects
-/// pin, while it frees the record of a result no project pins any more.
+/// the cache report counts what only builds read.
 #[test]
 fn gc_keeps_what_builds_read_and_frees_records_no_project_pins() -> Result {
     let sandbox = Sandbox::new()?;
