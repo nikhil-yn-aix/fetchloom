@@ -46,8 +46,7 @@ fn bytes() -> usize {
     IRIS.len() + MEMBERS.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()
 }
 
-/// data.lock of the project in the sandbox's work folder, with `access` as given for each
-/// dataset, as its source would have said.
+/// sets each given dataset's `access` in the work folder's data.lock, as its source would say.
 fn access(sandbox: &Sandbox, given: &[(&str, &str)]) -> Result {
     let path = sandbox.work().join("data.lock");
     let mut lock = fs::read_to_string(&path)?;
@@ -60,9 +59,7 @@ fn access(sandbox: &Sandbox, given: &[(&str, &str)]) -> Result {
     Ok(())
 }
 
-/// the `push_to` setting names the folder push writes to: a relative one is taken from the
-/// settings file's folder, as mirrors are, and `fetchloom settings` shows it with where it came
-/// from.
+/// a relative folder is taken from the settings file's folder, as mirrors are.
 #[test]
 fn push_to_is_shown_with_where_it_came_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -108,9 +105,8 @@ fn a_push_says_where_the_settings_file_is() -> Result {
     Ok(())
 }
 
-/// a push starts the mirror, writes each pinned file and the archive's list of files under their
-/// SHA-256, never the archive, and asks no server anything. the next push finds them after one
-/// look each, and replaces a copy someone damaged.
+/// files and the archive's list of them go under their SHA-256, never the archive, with no
+/// request; the next push looks once at each and replaces a copy someone damaged.
 #[test]
 fn a_push_writes_each_file_once_and_skips_it_next_time() -> Result {
     let sandbox = Sandbox::new()?;
@@ -160,10 +156,8 @@ fn a_push_writes_each_file_once_and_skips_it_next_time() -> Result {
     Ok(())
 }
 
-/// a push marks its work as finishing once every file has its name, before the flush that keeps
-/// them after a power cut, so a ctrl-c while a slow disk flushes lets it finish rather than say
-/// first that it stops. held at that mark, the push has its flush still to do, which a mirror
-/// moved away by then fails.
+/// the mark comes once every file has its name, so a ctrl-c during a slow disk's flush lets the
+/// push finish. held there, the push still has the flush to do, which a moved mirror fails.
 #[cfg(unix)]
 #[test]
 fn a_push_marks_its_work_as_finishing_before_its_flush() -> Result {
@@ -185,8 +179,7 @@ fn a_push_marks_its_work_as_finishing_before_its_flush() -> Result {
     Ok(())
 }
 
-/// a member a members table leaves out is not pushed: no clone places it, and gc may already
-/// have freed its bytes, which would make the push refuse for want of them.
+/// no clone places such a member, and a push needing it would fail once gc freed its bytes.
 #[test]
 fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -206,8 +199,8 @@ fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
     Ok(())
 }
 
-/// a split archive goes to the mirror as its files and the list of them, never as its parts, and
-/// a clone with an empty cache places it from there.
+/// the list of the archive's files goes with them, never its parts, and a clone with an empty
+/// cache places it from the mirror.
 #[test]
 fn a_split_archive_is_pushed_as_its_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -243,7 +236,7 @@ fn a_split_archive_is_pushed_as_its_files() -> Result {
     Ok(())
 }
 
-/// a dry run says what a push would write and what it would ask about, and writes nothing.
+/// the dry run also lists what the push would ask about.
 #[test]
 fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -281,8 +274,7 @@ fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {
     Ok(())
 }
 
-/// a folder that holds files but no marker may be anything, such as the folder a network disk
-/// mounts on, so push writes nothing there.
+/// a folder holding files but no marker may be anything, such as where a network disk mounts.
 #[test]
 fn a_folder_that_is_not_a_mirror_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -326,8 +318,7 @@ fn a_target_is_named_without_dots() -> Result {
     Ok(())
 }
 
-/// push downloads what the cache lacks, as a sync would, then pushes it: a clone that never
-/// synced fills the mirror from the sources, and its project stays as it was.
+/// a clone that never synced fills the mirror from the sources and places nothing.
 #[test]
 fn push_downloads_what_the_cache_lacks() -> Result {
     let sandbox = Sandbox::new()?;
@@ -349,9 +340,8 @@ fn push_downloads_what_the_cache_lacks() -> Result {
     Ok(())
 }
 
-/// data whose source wanted an account or accepted terms, or did not say, is pushed only once a
-/// person says yes: anyone who can read the mirror gets it without either. a script gets
-/// `unconfirmed` with no command to run, since only a person may agree.
+/// once pushed, data behind an account or terms, or of unknown access, reaches anyone who can
+/// read the mirror; a script gets `unconfirmed` with no fix, since only a person may agree.
 #[test]
 fn gated_data_asks_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -366,7 +356,6 @@ fn gated_data_asks_first() -> Result {
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "unconfirmed");
-    // nothing written, what the push set out to write, and what it asks about
     assert_eq!(document["result"]["copied"], 0);
     assert_eq!(document["result"]["copied_bytes"], 0);
     assert_eq!(document["result"]["planned"], 6);
@@ -402,8 +391,7 @@ fn gated_data_asks_first() -> Result {
     Ok(())
 }
 
-/// a push stopped while it downloads what the cache lacks, before it writes, copied nothing: its
-/// result says so, beside what it set out to write.
+/// the push is stopped while it downloads what the cache lacks, before writing anything.
 #[cfg(unix)]
 #[test]
 fn a_stopped_push_says_it_copied_nothing_of_its_plan() -> Result {
@@ -448,8 +436,7 @@ fn a_stopped_push_says_it_copied_nothing_of_its_plan() -> Result {
     Ok(())
 }
 
-/// at a terminal, the question names the data and who can read the mirror; no keeps everything
-/// as it was.
+/// the question at a terminal names the data and who can read the mirror.
 #[cfg(target_os = "linux")]
 #[test]
 fn no_at_the_question_pushes_nothing() -> Result {
@@ -471,8 +458,6 @@ fn no_at_the_question_pushes_nothing() -> Result {
     Ok(())
 }
 
-/// two pushes of one project into one new mirror at once leave every file once, each holding
-/// the bytes its name says.
 #[test]
 fn two_pushes_at_once_leave_one_good_copy() -> Result {
     let sandbox = Sandbox::new()?;
@@ -496,8 +481,7 @@ fn two_pushes_at_once_leave_one_good_copy() -> Result {
     Ok(())
 }
 
-/// push writes into a folder it is given, never to a web address: a server or a bucket gets a
-/// folder mirror through a copying tool.
+/// a server or a bucket gets a folder mirror through a copying tool, which the help names.
 #[test]
 fn a_push_needs_a_folder_and_never_a_web_address() -> Result {
     let sandbox = Sandbox::new()?;
@@ -527,8 +511,7 @@ fn a_push_needs_a_folder_and_never_a_web_address() -> Result {
     Ok(())
 }
 
-/// push sends what data.lock pins, so a dataset data.toml has that data.lock does not pin yet
-/// stops it before anything is written.
+/// push sends what data.lock pins, so it stops before writing anything.
 #[test]
 fn a_dataset_not_pinned_yet_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -550,9 +533,7 @@ fn a_dataset_not_pinned_yet_is_refused() -> Result {
     Ok(())
 }
 
-/// the lab's journey: alice pushes the files her cache holds into the folder `push_to` names; a
-/// cold clone whose settings name that folder as its only mirror then syncs with no request to
-/// anything else.
+/// alice pushes to her `push_to` folder, and bob's settings make it his only mirror.
 #[test]
 fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -583,11 +564,7 @@ fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
     Ok(())
 }
 
-/// `--inputs` adds what a recipe is made from, so a rebuild elsewhere finds it on the mirror. a
-/// result's files are pushed as data.lock pins them, and one the cache lacks names the build
-/// that makes it, which only a person may run.
-/// a plain push sends what a sync places, so a dataset with `place = false` stays off the mirror
-/// unless a name or `--inputs` asks for it.
+/// a name or `--inputs` still sends a dataset with `place = false`.
 #[test]
 fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
     let sandbox = Sandbox::new()?;
@@ -630,6 +607,8 @@ fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
     Ok(())
 }
 
+/// a rebuild elsewhere finds the inputs on the mirror. a result the cache lacks names the build
+/// that makes it, which only a person may run.
 #[test]
 fn inputs_push_what_a_recipe_is_made_from() -> Result {
     let sandbox = Sandbox::new()?;
@@ -705,9 +684,8 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
     Ok(())
 }
 
-/// a size in data.lock edited by hand: the cache holds the bytes its SHA-256 names at their
-/// real size, so push says data.lock is wrong rather than send the person to a sync that would
-/// find nothing to do.
+/// with data.lock's size edited by hand, push blames data.lock, since a sync would find nothing
+/// to do: the cache holds the SHA-256's bytes at their real size.
 #[test]
 fn a_size_the_cached_bytes_do_not_have_sends_no_one_to_sync() -> Result {
     let sandbox = Sandbox::new()?;

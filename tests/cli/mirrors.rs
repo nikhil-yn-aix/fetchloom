@@ -149,8 +149,7 @@ fn the_settings_list_each_mirror_and_refuse_what_is_no_mirror() -> Result {
     Ok(())
 }
 
-/// `settings` shows the mirrors a run asks: those `--mirror` names first, then those of the
-/// setting, with where each part came from.
+/// the origin names where each part came from, in the same order.
 #[test]
 fn settings_show_the_mirrors_a_run_asks_with_the_command_lines_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -177,10 +176,8 @@ fn settings_show_the_mirrors_a_run_asks_with_the_command_lines_first() -> Result
     Ok(())
 }
 
-/// a variable one typo from one fetchloom reads, as `FETCHLOOM_MIRROR` is from
-/// `FETCHLOOM_MIRRORS`, gets one warning from every command, naming the variable it is near and
-/// never its value, even when the command then fails, as `status` does with no project. another
-/// unknown name is left alone, since a wrapper or another version may read it.
+/// the warning names the variable it is near but never its value, even from a `status` that then
+/// fails; a name near no variable is left alone, as a wrapper or another version may read it.
 #[test]
 fn a_misspelled_variable_is_warned_about_once_by_every_command() -> Result {
     let sandbox = Sandbox::new()?;
@@ -230,9 +227,8 @@ fn a_misspelled_variable_is_warned_about_once_by_every_command() -> Result {
     Ok(())
 }
 
-/// an empty `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` and `FETCHLOOM_PUSH_TO` clear what the
-/// settings file names, so a check meant to reach the sources never takes the file's mirror, and
-/// push never writes to the file's folder.
+/// an empty variable lets a check meant to reach the sources skip the file's mirror, and keeps
+/// push out of the file's folder.
 #[test]
 fn empty_variables_clear_the_mirrors_and_push_folder_the_file_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -271,8 +267,7 @@ fn empty_variables_clear_the_mirrors_and_push_folder_the_file_names() -> Result 
     Ok(())
 }
 
-/// an empty `FETCHLOOM_ALLOWED_ORIGINS` clears the origins the settings file allows, so a sync is
-/// refused the project's private address before any request, as with no origin allowed.
+/// with the origins cleared, a sync is refused the project's private address before any request.
 #[test]
 fn an_empty_allowed_origins_variable_clears_the_origins_the_file_allows() -> Result {
     let sandbox = Sandbox::new()?;
@@ -352,8 +347,7 @@ fn offline_sync_reads_a_folder_mirror_from_the_settings() -> Result {
     Ok(())
 }
 
-/// a teammate's clone of a project that imported files from someone's folder gets their bytes
-/// from a mirror, so the folder they came from is never needed.
+/// the folder the import came from is never needed.
 #[test]
 fn a_clone_gets_the_bytes_of_an_import_from_a_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -377,10 +371,7 @@ fn a_clone_gets_the_bytes_of_an_import_from_a_mirror() -> Result {
     Ok(())
 }
 
-/// a file of an import that a mirror lacks, or holds a damaged copy of, fails a clone's sync as a
-/// missing download does in the same mode: as `network.refused` in mirror-only mode and
-/// `offline.missing` offline, each naming the file, and otherwise with what each mirror said of
-/// it. no fix is offered, since no link fetches it.
+/// a damaged copy fails the same way, and no fix is offered, since no link fetches an import.
 #[test]
 fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
     let sandbox = Sandbox::new()?;
@@ -569,8 +560,7 @@ fn a_reviewer_restores_from_a_web_mirror_when_the_source_is_gone() -> Result {
     Ok(())
 }
 
-/// a web mirror that does not answer is asked once, then skipped for the rest of the run. one on
-/// this machine, named in the settings, is reached as a typed link is.
+/// a web mirror on this machine, named in the settings, is reached as a typed link is.
 #[test]
 fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
     let sandbox = Sandbox::new()?;
@@ -600,9 +590,8 @@ fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
     Ok(())
 }
 
-/// in mirror-only mode nothing asks a source: a file no mirror holds fails before any request,
-/// naming what each mirror said, and resolving, searching, checking keys and one-off downloads
-/// are refused, each naming the setting.
+/// a file no mirror holds fails naming what each mirror said, and resolving, searching, checking
+/// keys and one-off downloads are refused, each naming the setting.
 #[test]
 fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     let sandbox = Sandbox::new()?;
@@ -667,7 +656,6 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
         let error = &document["errors"][0];
         assert_eq!(error["kind"], "network.refused", "{arguments:?}");
         assert_eq!(error["message"], said, "{arguments:?}");
-        // refused before it was sent, so no request was made
         assert_eq!(document["work"]["requests"], 0, "{arguments:?}");
     }
     // without the zip's tree on the mirror, a fresh cache wants the zip itself, which no
@@ -697,8 +685,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     Ok(())
 }
 
-/// in mirror-only mode a link data.lock does not pin yet is refused before any request, as one
-/// whose SHA-256 is not known, which no mirror can be asked for, never as a file data.lock names.
+/// the link is refused before any request as having no SHA-256 yet, so no mirror can be asked.
 #[test]
 fn a_new_link_in_mirror_only_mode_is_not_called_a_pinned_file() -> Result {
     let sandbox = Sandbox::new()?;
@@ -734,8 +721,8 @@ fn a_new_link_in_mirror_only_mode_is_not_called_a_pinned_file() -> Result {
     Ok(())
 }
 
-/// an archive a mirror holds is copied before its link in data.lock is read, so a link no
-/// machine can follow, as an imported dataset's, does not stop a mirror from giving it.
+/// the mirror's copy is taken before the link is read, so a link no machine can follow, as an
+/// import's, does not stop it.
 #[test]
 fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -764,8 +751,8 @@ fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
     Ok(())
 }
 
-/// a split archive's tree comes from a mirror by its tree hash and is kept under the key its
-/// parts give, so a clone gets the archive's files one by one, never its parts.
+/// the tree is kept under the key its parts give, so a clone gets the files one by one, never
+/// the parts.
 #[test]
 fn a_split_archive_comes_from_a_mirror_by_its_tree() -> Result {
     let sandbox = Sandbox::new()?;
