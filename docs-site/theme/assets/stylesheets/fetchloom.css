@@ -1,6 +1,5 @@
-/* fetchloom's site: the colors of the cli's light and dark themes (src/output/style.rs) and of the
-   benchmark charts (bench/render.py), indigo on drafting paper, set like a printed manual for a
-   terminal tool */
+/* fetchloom's site, set like a herbarium sheet: each dataset's data.lock entry is a specimen's
+   label, pinned */
 
 /* geist mono and instrument serif are the files of bench/fonts, which the charts use; source serif 4
    4.004 is the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes. the OFL file
@@ -32,37 +31,44 @@
   src: url("../fonts/GeistMono-Medium.woff2") format("woff2");
 }
 
+/* the palette, in one place: the cli's light and dark themes (src/output/style.rs) are held to
+   these colors by python/test_site.py, and the benchmark charts (bench/render.py) read them from
+   here. a herbarium sheet: green-grey paper, graphite ink, a fern accent for what a person types */
 [data-md-color-scheme="default"] {
-  --fl-paper: #f8f8f7;
-  --fl-ink: #121315;
-  --fl-muted: #5c6064;
-  --fl-hair: #dcdedf;
-  --fl-track: #ebeced;
-  --fl-accent: #2e3f9c;
-  --fl-done: #2e7836;
-  --fl-warn: #875a00;
-  --fl-fail: #b5202e;
+  --fl-paper: #f2f4ef;
+  --fl-surface: #fcfdfa;
+  --fl-band: #e3e8e0;
+  --fl-ink: #172019;
+  --fl-muted: #56615a;
+  --fl-hair: #dde2da;
+  --fl-track: #e6eae3;
+  --fl-accent: #1b6a54;
+  --fl-done: #3f7317;
+  --fl-warn: #895900;
+  --fl-fail: #b2263a;
   /* the search dialog's colors, as rgb triplets */
-  --color-foreground: 18 19 21;
-  --color-background: 248 248 247;
-  --color-background-subtle: 235 236 237;
-  --color-backdrop: 248 248 247;
+  --color-foreground: 23 32 25;
+  --color-background: 242 244 239;
+  --color-background-subtle: 230 234 227;
+  --color-backdrop: 242 244 239;
 }
 
 [data-md-color-scheme="slate"] {
-  --fl-paper: #141617;
-  --fl-ink: #e8e9ea;
-  --fl-muted: #999ea2;
-  --fl-hair: #2b2e31;
-  --fl-track: #1e2123;
-  --fl-accent: #9ea9f2;
-  --fl-done: #86c98b;
-  --fl-warn: #e4b25a;
-  --fl-fail: #f2736d;
-  --color-foreground: 232 233 234;
-  --color-background: 20 22 23;
-  --color-background-subtle: 30 33 35;
-  --color-backdrop: 20 22 23;
+  --fl-paper: #121613;
+  --fl-surface: #1b221d;
+  --fl-band: #232c25;
+  --fl-ink: #e4e9e4;
+  --fl-muted: #9ba69e;
+  --fl-hair: #283029;
+  --fl-track: #1f2620;
+  --fl-accent: #79c9ae;
+  --fl-done: #a6cd6c;
+  --fl-warn: #e3b257;
+  --fl-fail: #f17886;
+  --color-foreground: 228 233 228;
+  --color-background: 18 22 19;
+  --color-background-subtle: 31 38 32;
+  --color-backdrop: 18 22 19;
   color-scheme: dark;
 }
 

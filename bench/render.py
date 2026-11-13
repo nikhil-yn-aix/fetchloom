@@ -1,9 +1,11 @@
 """Render measured results as light and dark SVG cards and a markdown page."""
 import argparse
 from collections import Counter, defaultdict
+from functools import cache
 import html
 import json
 from pathlib import Path
+import re
 from statistics import median
 
 TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
@@ -88,13 +90,26 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
            "s9": "{files} already in place, each tool confirms nothing changed"}
 
-# the site's paper and ink, with its indigo accent for fetchloom and a quiet grey for everyone else
-PALETTES = {
-    False: dict(card="#f8f8f7", edge="#dcdedf", text="#121315", muted="#5c6064", track="#ebeced",
-                accent="#2e3f9c", other="#adb1b5", range="#121315"),
-    True: dict(card="#141617", edge="#2b2e31", text="#e8e9ea", muted="#999ea2", track="#1e2123",
-               accent="#9ea9f2", other="#50565b", range="#e8e9ea"),
-}
+# the site's stylesheet, whose colors the cli's themes share and the cards take
+STYLESHEET = Path(__file__).resolve().parents[1] / "docs-site/theme/assets/stylesheets/fetchloom.css"
+
+
+def mix(color, ground, share):
+    """``share`` of ``color`` laid over ``ground``, both #rrggbb."""
+    channels = [round(share * int(color[i:i + 2], 16) + (1 - share) * int(ground[i:i + 2], 16)) for i in (1, 3, 5)]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+@cache
+def palette(dark):
+    """the card's colors, from the site's light or dark scheme: a label's paper, its ink and muted
+    text, its accent for fetchloom, and for every other tool a grey between muted text and track."""
+    css = STYLESHEET.read_text(encoding="utf-8")
+    scheme = "slate" if dark else "default"
+    block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)[1]
+    site = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block))
+    return dict(card=site["surface"], edge=site["hair"], text=site["ink"], muted=site["muted"], track=site["track"],
+                accent=site["accent"], other=mix(site["muted"], site["track"], .45), range=site["ink"])
 
 WIDTH = 760
 PAD = 32
@@ -155,7 +170,7 @@ def text(x, y, value, colors, role="text", size=13, weight=400, anchor="start", 
 
 def chart(path, title, subtitle, summaries, dark=False, label=None):
     """a card of tools, fastest first. with a label it is a hero card: label, verdict, bars."""
-    colors = PALETTES[dark]
+    colors = palette(dark)
     rows = ordered(summaries)
     reach = max((s["high"] for _, s in rows if s["median"] is not None and not s["failures"]), default=1)
     left = PAD + NAMES

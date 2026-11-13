@@ -339,6 +339,21 @@ class PageTests(Quiet):
                 self.assertFalse({"rx", "ry"} & set(element.attrib), (name, element.attrib))
                 self.assertNotEqual(element.get("stroke-linecap"), "round", (name, element.attrib))
 
+    def test_cards_take_the_colors_of_the_site(self):
+        """a card's paper is the site's surface and fetchloom's bar its accent, in light and dark."""
+        import re
+        import xml.etree.ElementTree as ET
+        css = (Path(__file__).resolve().parents[1] / "docs-site/theme/assets/stylesheets/fetchloom.css").read_text()
+        self.render([lab_row(), lab_row(tool="curl", wall_seconds=3)], dict(kind="lab", quick=True))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        for name, scheme in (("s1-lan-ext4.svg", "default"), ("s1-lan-ext4-dark.svg", "slate")):
+            block = css.split(f'[data-md-color-scheme="{scheme}"] {{', 1)[1].split("}", 1)[0]
+            site = dict(re.findall(r"--fl-([a-z]+): (#[0-9a-f]{6})", block))
+            fills = [element.get("fill") for element in ET.parse(cards / name).iter() if element.tag.endswith("rect")]
+            self.assertEqual(fills[0], site["surface"], name)
+            self.assertIn(site["accent"], fills, name)
+            self.assertNotIn(site["muted"], fills, name)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)

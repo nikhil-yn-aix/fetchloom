@@ -209,18 +209,40 @@ def luminance(color):
     return .2126 * red + .7152 * green + .0722 * blue
 
 
+def schemes():
+    """the site's light colors and its dark ones, by name, from its stylesheet."""
+    css = (build_site.ROOT / build_site.STYLESHEET).read_text(encoding="utf-8")
+    found = {}
+    for scheme in ("default", "slate"):
+        block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)[1]
+        found[scheme] = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block))
+    return found
+
+
 class Colors(unittest.TestCase):
     def test_every_text_color_of_the_site_reads_on_its_paper(self):
-        """WCAG AA for small text, 4.5 to 1, in the light colors and the dark ones."""
-        css = (build_site.ROOT / build_site.STYLESHEET).read_text(encoding="utf-8")
-        for scheme in ("default", "slate"):
-            block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)[1]
-            colors = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block))
-            paper = luminance(colors["paper"])
-            for name in ("ink", "muted", "accent", "done", "warn", "fail"):
-                with self.subTest(scheme=scheme, name=name):
-                    lighter, darker = sorted((luminance(colors[name]), paper), reverse=True)
+        """WCAG AA for small text, 4.5 to 1, in the light colors and the dark ones, on the paper, on
+        the surface of labels, code and tables, and on the band of a table's head."""
+        for scheme, colors in schemes().items():
+            grounds = [("paper", name) for name in ("ink", "muted", "accent", "done", "warn", "fail")]
+            grounds += [("surface", name) for name in ("ink", "muted", "accent", "done", "warn", "fail")]
+            grounds += [("band", "ink")]
+            for ground, name in grounds:
+                with self.subTest(scheme=scheme, ground=ground, name=name):
+                    lighter, darker = sorted((luminance(colors[name]), luminance(colors[ground])), reverse=True)
                     self.assertGreaterEqual((lighter + .05) / (darker + .05), 4.5)
+
+    def test_the_cli_themes_take_the_site_colors(self):
+        """src/output/style.rs's light and dark themes are the site's colors: work and accent its
+        accent, done, warn and fail its own."""
+        style = (build_site.ROOT / "src/output/style.rs").read_text(encoding="utf-8")
+        for theme, scheme in (("Light", "default"), ("Dark", "slate")):
+            block = re.search(r"Theme::" + theme + r" => Palette \{(.*?)\}", style, re.S)[1]
+            tones = {name: f"#{red}{green}{blue}" for name, red, green, blue
+                     in re.findall(r"(\w+): rgb\(0x(\w\w), 0x(\w\w), 0x(\w\w)\)", block)}
+            colors = schemes()[scheme]
+            self.assertEqual(tones, {"done": colors["done"], "work": colors["accent"], "warn": colors["warn"],
+                                     "fail": colors["fail"], "accent": colors["accent"]}, theme)
 
 
 class Build(unittest.TestCase):
