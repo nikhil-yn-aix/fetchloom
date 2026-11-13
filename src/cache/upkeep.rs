@@ -1588,6 +1588,7 @@ mod tests {
             size: 4,
             name: None,
             validators: super::super::Validators::default(),
+            page: false,
         };
         cache
             .save_url_record(&record("https://example.org/held", held.digest))
@@ -1626,6 +1627,7 @@ mod tests {
                 size: 99,
                 name: None,
                 validators: super::super::Validators::default(),
+                page: false,
             })
             .unwrap();
         let keep = Needed {

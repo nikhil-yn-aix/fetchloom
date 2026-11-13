@@ -712,7 +712,22 @@ pub(crate) fn spec(source: &Source) -> String {
             let _ = writeln!(text, "{key}={glob}");
         }
     }
+    // only a page asked for is the data, so taking the line away asks the link again
+    if source.web_page {
+        text.push_str("web_page=true\n");
+    }
     format!("sha256:{}", digest::sha256(text.as_bytes()))
+}
+
+/// whether `locked` was pinned while data.toml asked for its link's web page, which `source` no
+/// longer does: such a pin counts for nothing then, since only a page asked for is the data.
+pub(crate) fn page_no_longer_asked(locked: &Locked, source: &Source) -> bool {
+    !source.web_page
+        && locked.spec
+            == spec(&Source {
+                web_page: true,
+                ..source.clone()
+            })
 }
 
 /// the current time as `data.lock` records it: `2026-10-27T17:30:00Z`.
@@ -1793,6 +1808,43 @@ mod tests {
             locked.drift(&entry("extract = false\nselect = \"*.csv\"\n")),
             Some(Drift::Spec)
         );
+    }
+
+    /// a dataset that asks for no web page keeps the spec it always had, so data.lock files
+    /// written before stay up to date; taking `web_page = true` away changes it, and the pin made
+    /// with it counts for nothing.
+    #[test]
+    fn web_page_joins_the_spec_only_when_asked() {
+        let entry = |extra: &str| {
+            Manifest::parse(&format!(
+                "[datasets.x]\nref = \"https://example.org/notes\"\n{extra}"
+            ))
+            .unwrap()
+            .datasets["x"]
+                .clone()
+        };
+        let plain = entry("select = \"*\"\n");
+        let plain = plain.source().unwrap();
+        assert_eq!(
+            spec(plain),
+            format!(
+                "sha256:{}",
+                digest::sha256(b"ref=https://example.org/notes\nselect=*\n")
+            )
+        );
+        let asked = entry("select = \"*\"\nweb_page = true\n");
+        let asked = asked.source().unwrap();
+        let pinned = |source: &Source| Locked {
+            spec: spec(source),
+            ..sample().datasets[1].clone()
+        };
+        assert_eq!(
+            pinned(asked).drift(&entry("select = \"*\"\n")),
+            Some(Drift::Spec)
+        );
+        assert!(page_no_longer_asked(&pinned(asked), plain));
+        assert!(!page_no_longer_asked(&pinned(asked), asked));
+        assert!(!page_no_longer_asked(&pinned(plain), plain));
     }
 
     #[test]

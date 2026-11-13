@@ -14,6 +14,7 @@ fn record() -> UrlRecord {
             etag: Some("\"v1\"".to_owned()),
             ..Validators::default()
         },
+        page: false,
     }
 }
 

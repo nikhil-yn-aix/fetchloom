@@ -63,6 +63,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 | `validators.last_modified` | `Last-Modified` string, or null |
 | `validators.date` | response `Date` string, or null; required in every record |
 | `validators.version` | the version an S3 bucket that keeps versions named for the bytes, its `x-amz-version-id`, or null |
+| `page` | `true` when the bytes came as a web page; absent otherwise. a later run that takes the bytes from the cache, offline or after the server answered that they are unchanged, refuses them unless it asks for the page, as a fresh answer would be refused |
 
 a link is named by a fingerprint, the SHA-256 of its text, so a secret in a signed link never reaches a record. a download a run stopped keeps its bytes as `partial/<digit>/<fingerprint>.part`, with a `.json` record of how many bytes arrived, their SHA-256, the file's stated length, the server's validators and any pieces finished past them, so the next run can continue it; its `.lock` keeps two runs from writing one download. gc removes an unfinished download nobody came back for after a day, or at once with `cache gc --now`. without file locks, downloads cannot continue across runs.
 

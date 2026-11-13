@@ -36,6 +36,7 @@ pub(super) fn keep(cache: &Cache, key: &str, path: &str, sha256: Sha256, size: u
         size,
         name: Some(path.to_owned()),
         validators: Validators::default(),
+        page: false,
     };
     if cache.url_record(key).as_ref() == Some(&record) {
         return;

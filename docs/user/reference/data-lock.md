@@ -138,7 +138,7 @@ for the unfiltered iris entry above, SHA-256 hashes these UTF-8 bytes, including
 ref=zenodo:3608990
 ```
 
-the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines.
+the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines. a dataset with `web_page = true` ends with the line `web_page=true`, and one without adds nothing, so taking the line out of data.toml resolves the dataset again: the link is asked once more, and its page is refused, while the pin made with the line counts for nothing.
 
 `extract`, `members`, `copy`, `path` and `project.data_dir` are excluded, since they decide what happens to the downloaded files, not which files are downloaded.
 

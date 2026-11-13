@@ -4,7 +4,7 @@
 #![cfg(debug_assertions)]
 
 use crate::auth::with_stdin;
-use crate::support::{Result, Routes, Sandbox, file, json, reply, text};
+use crate::support::{Part, Result, Routes, Running, Sandbox, Server, file, json, reply, text};
 
 /// the host and port of a server on this machine, as `auth login` takes it.
 fn host_of(server: &Routes) -> String {
@@ -663,6 +663,202 @@ fn chrome_on_windows_is_refused_with_what_works_instead() -> Result {
     assert_eq!(
         error["message"],
         "chrome on windows keeps its cookies under app-bound encryption, which only chrome itself may open"
+    );
+    Ok(())
+}
+
+/// a page an earlier `--web-page` kept in the cache is still a page: a later run without the
+/// flag is refused when the server says the page is unchanged, as a 304 does, and offline, where
+/// only the cache answers; with the flag, both take it.
+#[test]
+fn a_kept_page_is_refused_unless_asked_for_on_every_path() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the report</body></html>";
+    let length = page.len().to_string();
+    let unchanged = || reply("304 Not Modified", &[("ETag", "\"p1\"")], b"");
+    let server = Server::start(
+        "/report",
+        vec![
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    ("ETag", "\"p1\""),
+                    ("Content-Length", &length),
+                ],
+                page,
+            ),
+            unchanged(),
+            unchanged(),
+        ],
+    )?;
+    let link = server.url.clone();
+    let kept = sandbox.run(&["add", &link, "--web-page"])?;
+    assert!(kept.status.success(), "{}", text(&kept.stderr)?);
+    let refused = sandbox.run(&["get", &link, "-o", "again.html"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("answered with a web page"), "{stderr}");
+    assert!(!sandbox.work().join("again.html").exists());
+    let asked = sandbox.run(&["get", &link, "-o", "again.html", "--web-page"])?;
+    assert!(asked.status.success(), "{}", text(&asked.stderr)?);
+    assert_eq!(std::fs::read(sandbox.work().join("again.html"))?, page);
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(
+        heads[1..].iter().all(|head| head.contains("if-none-match")),
+        "{heads:?}"
+    );
+    let offline = sandbox.run(&["get", &link, "-o", "offline.html", "--offline"])?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("answered with a web page"), "{stderr}");
+    let offline = sandbox.run(&[
+        "get",
+        &link,
+        "-o",
+        "offline.html",
+        "--offline",
+        "--web-page",
+    ])?;
+    assert!(offline.status.success(), "{}", text(&offline.stderr)?);
+    Ok(())
+}
+
+/// a page pinned with `web_page = true` follows that line: sync takes it while data.toml asks
+/// for it, and once the line is gone, the link is asked again and its page refused, also when
+/// the server says the page is unchanged.
+/// a project's download that waited while another fetchloom took the same link is handed the
+/// page that run kept, without asking the server, and takes it only as the page rule allows.
+#[test]
+fn a_page_another_run_kept_is_refused_unless_asked_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the report</body></html>";
+    let mut held = reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html"),
+            ("ETag", "\"p1\""),
+            ("Content-Length", &page.len().to_string()),
+        ],
+        b"",
+    );
+    let (release, wait) = std::sync::mpsc::channel();
+    held.push(Part::Wait(wait));
+    held.push(Part::Bytes(page.to_vec()));
+    let server = Server::start("/report", vec![held])?;
+    let link = server.url.clone();
+    let first = Running::start(&mut sandbox.command(&["add", &link, "--web-page"]))?;
+    server.wait_for_requests(1)?;
+    let other = sandbox.folder("other")?;
+    let second = Running::start(
+        sandbox
+            .command_in(&other, &["add", &link])
+            .env("FETCHLOOM_TEST_TICKER", "on"),
+    )?;
+    let waiting = second.wait_for("another fetchloom is downloading it");
+    drop(release);
+    waiting?;
+    let first = first.finish()?;
+    assert!(first.status.success(), "{}", text(&first.stderr)?);
+    let second = second.finish()?;
+    let stderr = text(&second.stderr)?;
+    assert_eq!(second.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("answered with a web page"), "{stderr}");
+    assert!(!other.join("data.toml").exists());
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// an offline add of a link whose page another project kept learns the file from what the link
+/// served last, and takes that page only when asked for one.
+#[test]
+fn an_offline_add_takes_a_kept_page_only_when_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the notes</body></html>";
+    let server = Server::start(
+        "/notes",
+        vec![reply(
+            "200 OK",
+            &[
+                ("Content-Type", "text/html"),
+                ("ETag", "\"n1\""),
+                ("Content-Length", &page.len().to_string()),
+            ],
+            page,
+        )],
+    )?;
+    let kept = sandbox.run(&["add", &server.url, "--web-page"])?;
+    assert!(kept.status.success(), "{}", text(&kept.stderr)?);
+    let other = sandbox.folder("other")?;
+    let refused = sandbox
+        .command_in(&other, &["add", &server.url, "--offline"])
+        .output()?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("answered with a web page"), "{stderr}");
+    assert!(!other.join("data/notes/notes").exists());
+    let asked = sandbox
+        .command_in(&other, &["add", &server.url, "--offline", "--web-page"])
+        .output()?;
+    assert!(asked.status.success(), "{}", text(&asked.stderr)?);
+    assert_eq!(std::fs::read(other.join("data/notes/notes"))?, page);
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn a_pinned_page_follows_web_page_in_data_toml() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><body>the notes</body></html>";
+    let length = page.len().to_string();
+    let server = Server::start(
+        "/notes",
+        vec![
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    ("ETag", "\"n1\""),
+                    ("Content-Length", &length),
+                ],
+                page,
+            ),
+            reply("304 Not Modified", &[("ETag", "\"n1\"")], b""),
+        ],
+    )?;
+    let link = server.url.clone();
+    let added = sandbox.run(&["add", &link, "--web-page"])?;
+    assert!(added.status.success(), "{}", text(&added.stderr)?);
+    sandbox.allow(&link);
+    let settled = sandbox.run(&["sync"])?;
+    assert!(settled.status.success(), "{}", text(&settled.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let asked = std::fs::read_to_string(&manifest)?;
+    assert!(asked.contains("web_page = true\n"), "{asked}");
+    std::fs::write(&manifest, asked.replace("web_page = true\n", ""))?;
+    let check = sandbox.run(&["lock", "--check"])?;
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check.stderr)?);
+    let refused = sandbox.run(&["sync"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("add web_page = true to [datasets.notes] in data.toml"),
+        "{stderr}"
+    );
+    let heads = server.requests();
+    assert!(
+        heads
+            .get(1)
+            .is_some_and(|head| head.contains("if-none-match")),
+        "{heads:?}"
+    );
+    std::fs::write(&manifest, asked)?;
+    let again = sandbox.run(&["sync"])?;
+    assert!(again.status.success(), "{}", text(&again.stderr)?);
+    assert_eq!(
+        std::fs::read(sandbox.work().join("data/notes/notes"))?,
+        page
     );
     Ok(())
 }

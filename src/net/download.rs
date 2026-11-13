@@ -315,7 +315,7 @@ enum Answer {
     Stored {
         received: Received,
         validators: Validators,
-        name: Option<String>,
+        told: Told,
         resumed: bool,
     },
     /// the earlier download cannot be continued, by the server or from the bytes kept, so it
@@ -325,6 +325,13 @@ enum Answer {
     Divert(Url),
     /// the link the source gave only for a while expired, so the source is asked for a fresh one.
     Relink(Box<crate::source::Relink>),
+}
+
+/// what an answer said of the bytes it brought: the file name it gave, and whether they came as
+/// a web page.
+struct Told {
+    name: Option<String>,
+    page: bool,
 }
 
 /// what an answer asks for in place of being read as the file.
@@ -484,14 +491,13 @@ impl Net {
             None
         };
         if self.offline.enabled() {
-            return known
-                .map(|record| fetched(record, Origin::Cache))
-                .ok_or_else(|| {
-                    // a link fetched before has a record, so its bytes are the ones missing
-                    let pinned = fetch.expect.sha256.is_some()
-                        || cache.url_record(fetch.url.as_str()).is_some();
-                    failure::offline(&fetch.url, self.offline, pinned)
-                });
+            let Some(record) = known else {
+                // a link fetched before has a record, so its bytes are the ones missing
+                let pinned =
+                    fetch.expect.sha256.is_some() || cache.url_record(fetch.url.as_str()).is_some();
+                return Err(failure::offline(&fetch.url, self.offline, pinned));
+            };
+            return recalled(record, Origin::Cache, on);
         }
         // a link the source gives only for a while is asked for afresh by the stable one
         let relinked;
@@ -589,7 +595,7 @@ impl Net {
         }
         if waited && let Some(record) = fetch.revalidate.then(|| fetch.remembered(cache)).flatten()
         {
-            return Ok(fetched(record, Origin::Cache));
+            return recalled(record, Origin::Cache, on);
         }
         let done = self.transfer(fetch, cache, &partial, known, on).await;
         if done.is_err() {
@@ -649,28 +655,27 @@ impl Net {
             }
             match answer {
                 Ok(Answer::NotModified) => {
-                    return known
-                        .map(|record| fetched(record, Origin::NotModified))
-                        .ok_or_else(|| {
-                            Error::new(
-                                Kind::NetworkStatus,
-                                format!(
-                                    "{} answered 304 to a request that did not ask for it",
-                                    host(&from)
-                                ),
-                            )
-                        });
+                    let Some(record) = known else {
+                        return Err(Error::new(
+                            Kind::NetworkStatus,
+                            format!(
+                                "{} answered 304 to a request that did not ask for it",
+                                host(&from)
+                            ),
+                        ));
+                    };
+                    return recalled(record, Origin::NotModified, on);
                 }
                 Ok(Answer::Stored {
                     received: Received { stored, arrived },
                     validators,
-                    name,
+                    told,
                     resumed,
                 }) => match verify(&fetch.url, &fetch.expect, &stored) {
                     Ok(()) => {
                         let moved = reach.moved.load(Ordering::Relaxed);
                         let mut fetched =
-                            self.remember(fetch, cache, &stored, validators, name, moved);
+                            self.remember(fetch, cache, &stored, validators, told, moved);
                         fetched.arrived = Some(arrived);
                         return Ok(fetched);
                     }
@@ -827,7 +832,10 @@ impl Net {
             return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);
-        let name = describe_response(&response, &fetch.url, on)?;
+        let told = Told {
+            name: describe_response(&response, &fetch.url, on)?,
+            page: headers::is_html(&head),
+        };
         refuse_other_length(fetch, total)?;
         let proven = fetch.expect.proves() || if_range(&validators).is_some();
         let splits = state.split && self.may_split(total, status, &head, proven);
@@ -882,7 +890,7 @@ impl Net {
                     return Ok(Answer::Stored {
                         received: self.after_body(&mut state.permits, finish(writer)).await?,
                         validators,
-                        name,
+                        told,
                         resumed: offset + kept > 0,
                     });
                 }
@@ -915,7 +923,7 @@ impl Net {
         Ok(Answer::Stored {
             received: self.after_body(&mut state.permits, finish(writer)).await?,
             validators,
-            name,
+            told,
             resumed: offset + kept > 0 || pieced,
         })
     }
@@ -1257,7 +1265,7 @@ impl Net {
         cache: &Cache,
         stored: &Stored,
         validators: Validators,
-        name: Option<String>,
+        told: Told,
         moved: u64,
     ) -> Fetched {
         if stored.new {
@@ -1281,8 +1289,9 @@ impl Net {
                 url: fetch.url.as_str().to_owned(),
                 sha256: stored.digest,
                 size: stored.size,
-                name: name.clone(),
+                name: told.name.clone(),
                 validators,
+                page: told.page,
             };
             if let Err(err) = cache.save_url_record(&record) {
                 tracing::debug!(%err, "could not record what the URL served");
@@ -1292,7 +1301,7 @@ impl Net {
             digest: stored.digest,
             size: stored.size,
             moved,
-            name,
+            name: told.name,
             origin: Origin::Network,
             version,
             arrived: None,
@@ -1525,6 +1534,18 @@ fn unread(error: Error, refused: Error, version: &str) -> Error {
 /// every file it unpacked to.
 fn holds(cache: &Cache, fetch: &Fetch, digest: &Sha256, size: Option<u64>) -> bool {
     cache.find(digest, size).is_some() || fetch.unpack && cache.holds_unpacked(digest, None)
+}
+
+/// the bytes `record` says the URL served, which `origin` brings back without a new answer.
+/// bytes that came as a web page are told as one again, so the rule that took or refused them
+/// then decides now.
+fn recalled(record: UrlRecord, origin: Origin, on: Listener<'_>) -> Result<Fetched, Error> {
+    if record.page {
+        on(Event::WebPage {
+            name: record.name.clone(),
+        })?;
+    }
+    Ok(fetched(record, origin))
 }
 
 fn fetched(record: UrlRecord, origin: Origin) -> Fetched {

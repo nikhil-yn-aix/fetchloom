@@ -66,7 +66,7 @@ error: http://127.0.0.1:19353/many/ answered with a web page, such as a folder l
   help: open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add web_page = true to [datasets.notes] in data.toml
 ```
 
-the setting only lets a page through, and adds no host, header or key, so data.toml may carry it. most pages change between visits, so a clone that fetches the page again gets other bytes than data.lock pins and is refused, as for any [changed file](../troubleshooting.md#errors); whoever pinned it can push the pinned copy to a folder the clone reads.
+the rule holds for a page fetchloom kept before, too: a later run without `--web-page` is refused when the server answers that the page is unchanged, and offline, where only the cache answers. taking `web_page = true` out of data.toml makes the next sync ask the link again, as `lock --check` warns, and refuses its page. the setting only lets a page through, and adds no host, header or key, so data.toml may carry it. most pages change between visits, so a clone that fetches the page again gets other bytes than data.lock pins and is refused, as for any [changed file](../troubleshooting.md#errors); whoever pinned it can push the pinned copy to a folder the clone reads.
 
 ## dry runs
 

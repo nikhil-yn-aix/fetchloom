@@ -469,6 +469,7 @@ mod tests {
                 etag: Some(format!("\"v{version}\"")),
                 ..Validators::default()
             },
+            page: false,
         }
     }
 

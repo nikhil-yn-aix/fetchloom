@@ -121,6 +121,9 @@ pub(crate) struct UrlRecord {
     #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) name: Option<String>,
     pub(crate) validators: Validators,
+    /// whether the bytes came as a web page, which counts as the file only when asked for again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) page: bool,
 }
 
 fn url_identity(url: &str) -> String {
@@ -1191,6 +1194,7 @@ pub(crate) mod tests {
             size: 4,
             name: None,
             validators: Validators::default(),
+            page: false,
         };
         let mut stored = serde_json::to_value(&record).unwrap();
         let mut read = serde_json::from_value::<UrlRecord>(stored.clone()).unwrap();
@@ -1666,6 +1670,7 @@ pub(crate) mod tests {
                 date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
                 version: Some("3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY".to_owned()),
             },
+            page: true,
         };
         cache.save_url_record(&record).unwrap();
         assert_eq!(cache.url_record(&record.url), Some(record));

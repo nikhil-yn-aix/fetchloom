@@ -69,6 +69,7 @@ impl Draft {
         upgrading: bool,
         cache: &Cache,
     ) -> Result<Draft, Error> {
+        let previous = previous.filter(|locked| !lock::page_no_longer_asked(locked, source));
         // data.lock's files by their link, so a dataset of many files needs no search for each; a
         // link pinned to an object version goes by the link without it, as the listing gives it
         let versions = listing.resolved.keeps_versions();
@@ -743,7 +744,8 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
 
 /// what the cache recorded the link served, while the listing gives the strong `ETag` and size
 /// recorded with those bytes and the cache still holds them or, for an archive, its files. this
-/// trusts a service to change an object's `ETag` with its bytes.
+/// trusts a service to change an object's `ETag` with its bytes. a web page is asked for again,
+/// so the page rule decides whether it is the file.
 fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
     let etag = remote
         .etag
@@ -751,7 +753,7 @@ fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord>
         .filter(|etag| etag.starts_with('"'))?;
     let size = remote.size?;
     let record = cache.url_record(remote.url.as_str())?;
-    if record.size != size || record.validators.etag.as_deref() != Some(etag) {
+    if record.page || record.size != size || record.validators.etag.as_deref() != Some(etag) {
         return None;
     }
     let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
@@ -1965,6 +1967,64 @@ mod tests {
             again.finish("2026-11-01T00:00:00Z").unwrap().files,
             locked.files
         );
+    }
+
+    /// a listing's strong `ETag` and size vouch for the bytes the cache recorded its link served,
+    /// unless those came as a web page: that file is asked for again, where the page rule decides.
+    #[test]
+    fn a_listings_etag_never_vouches_for_a_kept_web_page() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let stored = crate::cache::tests::store(&cache, b"<html>the report</html>");
+        let link = "https://bucket.example.org/report";
+        let etag = "\"5d41402abc4b2a76b9719d911017c592-2\"";
+        let manifest = Manifest::parse(&format!("[datasets.report]\nref = \"{link}\"\n")).unwrap();
+        let entry = &manifest.datasets["report"];
+        for page in [false, true] {
+            cache
+                .save_url_record(&UrlRecord {
+                    url: link.to_owned(),
+                    sha256: stored.digest,
+                    size: stored.size,
+                    name: None,
+                    validators: crate::cache::Validators {
+                        etag: Some(etag.to_owned()),
+                        ..crate::cache::Validators::default()
+                    },
+                    page,
+                })
+                .unwrap();
+            let listing = Listing {
+                within: Vec::new(),
+                access: Access::Public,
+                unavailable: Vec::new(),
+                warnings: Vec::new(),
+                resolved: Reference::parse(link).unwrap().reference,
+                title: None,
+                license: None,
+                doi: None,
+                files: vec![Remote {
+                    path: "report".to_owned(),
+                    size: Some(stored.size),
+                    sha256: None,
+                    md5: None,
+                    url: Url::parse(link).unwrap(),
+                    named_by_server: false,
+                    etag: Some(etag.to_owned()),
+                }],
+            };
+            let draft = Draft::new(
+                "report",
+                entry,
+                entry.source().unwrap(),
+                listing,
+                None,
+                false,
+                &cache,
+            )
+            .unwrap();
+            assert_eq!(draft.jobs(&cache).len(), usize::from(page), "page: {page}");
+        }
     }
 }
 
