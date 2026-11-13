@@ -40,6 +40,28 @@ impl Value {
     }
 }
 
+/// how SQLite reads a column's values, by the affinity its declared type gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Affinity {
+    Blob,
+    Text,
+    Numeric,
+    Integer,
+    Real,
+}
+
+/// a column as the statement that made its table, and any `ALTER TABLE` since, declares it.
+#[derive(Clone, Debug, PartialEq)]
+struct Column {
+    name: String,
+    /// whether it is the table's `INTEGER PRIMARY KEY`, which SQLite keeps as the rowid.
+    rowid: bool,
+    affinity: Affinity,
+    /// what a row written before the column was added holds in it: its default, or none for a
+    /// default this reader cannot work out, as a time is.
+    default: Option<Value>,
+}
+
 /// why a file could not be read as a database.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Broken(pub(crate) String);
@@ -213,26 +235,38 @@ impl Database {
         if sql.to_ascii_lowercase().contains("without rowid") {
             return Err(broken(format!("the table {table} has no rowid")));
         }
-        let at: Vec<Option<usize>> = wanted
+        let at: Vec<Option<&Column>> = wanted
             .iter()
             .map(|name| {
                 columns
                     .iter()
-                    .position(|(column, _)| column.eq_ignore_ascii_case(name))
+                    .find(|column| column.name.eq_ignore_ascii_case(name))
             })
+            .collect();
+        let positions: Vec<Option<usize>> = at
+            .iter()
+            .map(|column| column.and_then(|column| columns.iter().position(|each| each == column)))
             .collect();
         let mut rows = Vec::new();
         self.walk(root, 0, &mut |rowid, record| {
             let fields = decode(record)?;
-            rows.push(
-                at.iter()
-                    .map(|position| match position {
-                        Some(position) if columns[*position].1 => Value::Integer(rowid),
-                        Some(position) => fields.get(*position).cloned().unwrap_or(Value::Null),
-                        None => Value::Null,
-                    })
-                    .collect(),
-            );
+            let mut row = Vec::with_capacity(at.len());
+            for (column, position) in at.iter().zip(&positions) {
+                row.push(match (column, position) {
+                    (Some(column), _) if column.rowid => Value::Integer(rowid),
+                    (Some(column), Some(position)) => match fields.get(*position) {
+                        Some(value) => read_as(column.affinity, value.clone()),
+                        None => column.default.clone().ok_or_else(|| {
+                            broken(format!(
+                                "a row predates the column {}, whose default is no constant",
+                                column.name
+                            ))
+                        })?,
+                    },
+                    _ => Value::Null,
+                });
+            }
+            rows.push(row);
             Ok(())
         })?;
         Ok(rows)
@@ -396,9 +430,255 @@ fn varint(bytes: &[u8], at: usize) -> Result<(u64, usize), Broken> {
     Ok((value, 9))
 }
 
-/// the columns a `CREATE TABLE` statement names, in order, each with whether it is the table's
-/// `INTEGER PRIMARY KEY`, which SQLite keeps as the rowid.
-fn columns(sql: &str) -> Vec<(String, bool)> {
+/// a value stored in a column of `affinity`, as SQLite reads it back: a REAL column keeps a whole
+/// number as an integer to save room, and reads it as a real.
+fn read_as(affinity: Affinity, value: Value) -> Value {
+    match (affinity, value) {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "SQLite converts the stored integer just so"
+        )]
+        (Affinity::Real, Value::Integer(integer)) => Value::Real(integer as f64),
+        (_, value) => value,
+    }
+}
+
+/// the affinity SQLite gives a column of the declared type `kind`, by its rules in order.
+fn affinity(kind: &str) -> Affinity {
+    let kind = kind.to_ascii_uppercase();
+    let has = |part: &str| kind.contains(part);
+    if has("INT") {
+        Affinity::Integer
+    } else if has("CHAR") || has("CLOB") || has("TEXT") {
+        Affinity::Text
+    } else if has("BLOB") || kind.trim().is_empty() {
+        Affinity::Blob
+    } else if has("REAL") || has("FLOA") || has("DOUB") {
+        Affinity::Real
+    } else {
+        Affinity::Numeric
+    }
+}
+
+/// the words that end a column's declared type and start its constraints.
+const CONSTRAINTS: [&str; 11] = [
+    "constraint",
+    "primary",
+    "not",
+    "null",
+    "unique",
+    "check",
+    "default",
+    "collate",
+    "references",
+    "generated",
+    "as",
+];
+
+/// the value of the literal `text` starts with, and what follows it: a number, a string, a
+/// blob, `NULL`, `TRUE` or `FALSE`, or one of those in parentheses. none for anything else, as an
+/// expression or a time is.
+fn literal(text: &str) -> Option<(Value, &str)> {
+    let text = text.trim_start();
+    if let Some(rest) = text.strip_prefix('\'') {
+        let mut value = String::new();
+        let mut chars = rest.char_indices().peekable();
+        while let Some((at, c)) = chars.next() {
+            if c == '\'' {
+                if chars.peek().map(|(_, next)| *next) != Some('\'') {
+                    return Some((Value::Text(value), &rest[at + 1..]));
+                }
+                chars.next();
+            }
+            value.push(c);
+        }
+        return None;
+    }
+    if let Some(rest) = text.strip_prefix("X'").or_else(|| text.strip_prefix("x'")) {
+        let end = rest.find('\'')?;
+        let hex = &rest[..end];
+        if hex.len() % 2 != 0 {
+            return None;
+        }
+        let bytes = (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()?;
+        return Some((Value::Blob(bytes), &rest[end + 1..]));
+    }
+    if let Some(rest) = text.strip_prefix('(') {
+        let (value, after) = literal(rest)?;
+        let after = after.trim_start().strip_prefix(')')?;
+        return Some((value, after));
+    }
+    let length = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_')))
+        .unwrap_or(text.len());
+    let (word, rest) = text.split_at(length);
+    let value = match word.to_ascii_lowercase().as_str() {
+        "null" => Value::Null,
+        "true" => Value::Integer(1),
+        "false" => Value::Integer(0),
+        _ => number(word)?,
+    };
+    Some((value, rest))
+}
+
+/// the number `word` is, as SQLite reads a numeric literal: an integer, in hex too, or a real.
+fn number(word: &str) -> Option<Value> {
+    let (negative, digits) = match word.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, word.strip_prefix('+').unwrap_or(word)),
+    };
+    if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        let bits = u64::from_str_radix(hex, 16).ok()?.cast_signed();
+        return Some(Value::Integer(if negative {
+            bits.wrapping_neg()
+        } else {
+            bits
+        }));
+    }
+    if !digits.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    let unsigned = word.trim_start_matches('+');
+    if let Ok(integer) = unsigned.parse::<i64>() {
+        return Some(Value::Integer(integer));
+    }
+    unsigned
+        .parse::<f64>()
+        .ok()
+        .filter(|real| real.is_finite())
+        .map(Value::Real)
+}
+
+/// `value`, a column's default, given the column's `affinity`, as SQLite reads it for a row that
+/// predates the column. none where this reader would have to guess at SQLite's text for a real.
+fn defaulted(value: Value, affinity: Affinity) -> Option<Value> {
+    let numeric = |text: &str| -> Option<Value> {
+        let text = text.trim();
+        if let Ok(integer) = text.parse::<i64>() {
+            return Some(Value::Integer(integer));
+        }
+        text.parse::<f64>()
+            .ok()
+            .filter(|real| real.is_finite() && !text.is_empty())
+            .map(Value::Real)
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "a real converts only when it holds the integer exactly, as SQLite checks"
+    )]
+    let whole = |real: f64| {
+        let integer = real as i64;
+        (integer as f64 == real && integer > i64::MIN && integer < i64::MAX)
+            .then_some(Value::Integer(integer))
+    };
+    Some(match (affinity, value) {
+        (Affinity::Blob, value)
+        | (_, value @ (Value::Null | Value::Blob(_)))
+        | (Affinity::Text, value @ Value::Text(_)) => value,
+        (Affinity::Text, Value::Integer(integer)) => Value::Text(integer.to_string()),
+        (Affinity::Text, Value::Real(_)) => return None,
+        (Affinity::Real, Value::Text(text)) => match numeric(&text) {
+            Some(number) => read_as(Affinity::Real, number),
+            None => Value::Text(text),
+        },
+        (Affinity::Real, value) => read_as(Affinity::Real, value),
+        (Affinity::Numeric | Affinity::Integer, Value::Text(text)) => match numeric(&text) {
+            Some(Value::Real(real)) => whole(real).unwrap_or(Value::Real(real)),
+            Some(number) => number,
+            None => Value::Text(text),
+        },
+        (Affinity::Numeric | Affinity::Integer, Value::Real(real)) => {
+            whole(real).unwrap_or(Value::Real(real))
+        }
+        (Affinity::Numeric | Affinity::Integer, value) => value,
+    })
+}
+
+/// the column a part of a `CREATE TABLE` statement declares, or none for a table constraint.
+fn column(part: &str) -> Option<Column> {
+    let part = part.trim();
+    let first = part.split_whitespace().next()?;
+    let constraint = ["constraint", "primary", "unique", "check", "foreign"]
+        .iter()
+        .any(|word| first.eq_ignore_ascii_case(word));
+    if constraint {
+        return None;
+    }
+    // a name in quotes may hold spaces, so it ends where its quote closes
+    let (name, rest) = match part.chars().next()? {
+        open @ ('"' | '`' | '[') => {
+            let close = if open == '[' { ']' } else { open };
+            let end = part[1..].find(close)? + 1;
+            (&part[1..end], &part[end + 1..])
+        }
+        _ => part.split_at(first.len()),
+    };
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let typed = words
+        .iter()
+        .take_while(|word| {
+            !CONSTRAINTS
+                .iter()
+                .any(|constraint| word.eq_ignore_ascii_case(constraint))
+        })
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let affinity = affinity(&typed);
+    let lowered: Vec<String> = words.iter().map(|word| word.to_ascii_lowercase()).collect();
+    let rowid = lowered.first().is_some_and(|kind| kind == "integer")
+        && lowered.windows(2).any(|pair| pair == ["primary", "key"]);
+    let default = match find_word(rest, "default") {
+        Some(after) => literal(after).and_then(|(value, _)| defaulted(value, affinity)),
+        None => Some(Value::Null),
+    };
+    Some(Column {
+        name: name.to_owned(),
+        rowid,
+        affinity,
+        default,
+    })
+}
+
+/// what follows the word `word` in `text`, outside quotes, ignoring case.
+fn find_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let mut quote = None;
+    for (at, c) in text.char_indices() {
+        match (quote, c) {
+            (Some(open), c) if c == open => quote = None,
+            (None, '"' | '\'' | '`') => quote = Some(c),
+            (None, '[') => quote = Some(']'),
+            (None, _)
+                if text[at..]
+                    .get(..word.len())
+                    .is_some_and(|here| here.eq_ignore_ascii_case(word))
+                    && text[..at]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|before| !before.is_ascii_alphanumeric() && before != '_')
+                    && text[at + word.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|after| !after.is_ascii_alphanumeric() && after != '_') =>
+            {
+                return Some(&text[at + word.len()..]);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// the columns a `CREATE TABLE` statement names, in order.
+fn columns(sql: &str) -> Vec<Column> {
     let Some(open) = sql.find('(') else {
         return Vec::new();
     };
@@ -421,28 +701,7 @@ fn columns(sql: &str) -> Vec<(String, bool)> {
         }
     }
     parts.push(&body[start..]);
-    parts
-        .into_iter()
-        .filter_map(|part| {
-            let part = part.trim();
-            let first = part.split_whitespace().next()?;
-            let constraint = ["constraint", "primary", "unique", "check", "foreign"]
-                .iter()
-                .any(|word| first.eq_ignore_ascii_case(word));
-            if constraint {
-                return None;
-            }
-            let name = first.trim_matches(|c| matches!(c, '"' | '`' | '[' | ']' | '\''));
-            let words: Vec<String> = part
-                .split_whitespace()
-                .skip(1)
-                .map(str::to_ascii_lowercase)
-                .collect();
-            let rowid = words.first().is_some_and(|kind| kind == "integer")
-                && words.windows(2).any(|pair| pair == ["primary", "key"]);
-            Some((name.to_owned(), rowid))
-        })
-        .collect()
+    parts.into_iter().filter_map(column).collect()
 }
 
 /// SQLite's running checksum of a log, over `bytes` as 32-bit words in the log's byte order.

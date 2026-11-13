@@ -44,9 +44,12 @@ fn row(at: i64) -> (String, String, Vec<u8>, i64, f64) {
         value,
         at.to_be_bytes().to_vec(),
         number,
-        // a whole number in a REAL column is stored as an integer, which SQLite's affinity reads
-        // back as REAL; cookie tables keep no reals, so the reader takes values as stored
-        (f64::from(u32::try_from(at).unwrap()) + 0.5) / 3.0,
+        // SQLite keeps a whole number in a REAL column as an integer, and reads it as a real
+        if at % 4 == 0 {
+            f64::from(u32::try_from(at).unwrap())
+        } else {
+            (f64::from(u32::try_from(at).unwrap()) + 0.5) / 3.0
+        },
     )
 }
 
@@ -177,21 +180,100 @@ fn what_is_no_database_is_refused_and_a_missing_table_named() {
 
 #[test]
 fn columns_are_read_from_the_statement_that_made_the_table() {
+    let read: Vec<_> = columns(
+        "CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes TEXT NOT NULL DEFAULT '', \
+         name TEXT, \"value\" TEXT, [host] TEXT, expiry INTEGER DEFAULT (1 + 2), \
+         CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes))",
+    )
+    .into_iter()
+    .map(|column| (column.name, column.rowid, column.default))
+    .collect();
+    let text = |text: &str| Some(Value::Text(text.to_owned()));
     assert_eq!(
-        columns(
-            "CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes TEXT NOT NULL DEFAULT '', \
-             name TEXT, \"value\" TEXT, [host] TEXT, expiry INTEGER DEFAULT (1 + 2), \
-             CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes))"
-        ),
+        read,
         [
-            ("id".to_owned(), true),
-            ("originAttributes".to_owned(), false),
-            ("name".to_owned(), false),
-            ("value".to_owned(), false),
-            ("host".to_owned(), false),
-            ("expiry".to_owned(), false),
+            ("id".to_owned(), true, Some(Value::Null)),
+            ("originAttributes".to_owned(), false, text("")),
+            ("name".to_owned(), false, Some(Value::Null)),
+            ("value".to_owned(), false, Some(Value::Null)),
+            ("host".to_owned(), false, Some(Value::Null)),
+            // an expression SQLite works out, which ALTER TABLE never adds a column with
+            ("expiry".to_owned(), false, None),
         ]
     );
+}
+
+/// a row written before `ALTER TABLE ADD COLUMN` lacks the columns added since, which SQLite
+/// reads as their defaults, by the affinity each column's type gives it, and a REAL column's whole
+/// numbers, which SQLite keeps as integers, read as reals.
+#[test]
+fn a_row_older_than_a_column_reads_its_default() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("cookies.sqlite");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, kept TEXT); INSERT INTO t (kept) VALUES ('old');",
+    )
+    .unwrap();
+    let added = [
+        ("a", "INTEGER DEFAULT 0"),
+        ("b", "TEXT DEFAULT ''"),
+        ("c", "TEXT DEFAULT 7"),
+        ("d", "INTEGER DEFAULT '7'"),
+        ("e", "INTEGER DEFAULT 'x'"),
+        ("f", "REAL DEFAULT 2"),
+        ("g", "REAL DEFAULT 1.5"),
+        ("h", "INTEGER DEFAULT 2.0"),
+        ("i", "NUMERIC DEFAULT '3.5'"),
+        ("j", "DEFAULT 'abc'"),
+        ("k", "BLOB DEFAULT X'00fF'"),
+        ("l", "INTEGER DEFAULT -3"),
+        ("m", "INTEGER DEFAULT 0x10"),
+        ("n", "TEXT DEFAULT NULL"),
+        ("o", "INTEGER DEFAULT TRUE"),
+        ("p", "INTEGER"),
+        ("q", "VARCHAR(20) DEFAULT 'it''s'"),
+        ("r", "DOUBLE PRECISION DEFAULT +4"),
+        ("s", "INTEGER NOT NULL DEFAULT 5"),
+        ("t u", "TEXT COLLATE NOCASE DEFAULT 'v'"),
+    ];
+    for (name, definition) in added {
+        db.execute_batch(&format!("ALTER TABLE t ADD \"{name}\" {definition}"))
+            .unwrap();
+    }
+    db.execute_batch("INSERT INTO t (kept, f, g) VALUES ('new', 9, 2.5)")
+        .unwrap();
+    let names: Vec<&str> = ["id", "kept"]
+        .into_iter()
+        .chain(added.iter().map(|(name, _)| *name))
+        .collect();
+    let ours = Database::open(&path).unwrap().rows("t", &names).unwrap();
+    let mut statement = db.prepare("SELECT * FROM t ORDER BY rowid").unwrap();
+    let theirs: Vec<Vec<Value>> = statement
+        .query_map([], |row| {
+            (0..names.len())
+                .map(|at| {
+                    Ok(match row.get_ref(at)? {
+                        rusqlite::types::ValueRef::Null => Value::Null,
+                        rusqlite::types::ValueRef::Integer(integer) => Value::Integer(integer),
+                        rusqlite::types::ValueRef::Real(real) => Value::Real(real),
+                        rusqlite::types::ValueRef::Text(text) => {
+                            Value::Text(String::from_utf8(text.to_vec()).unwrap())
+                        }
+                        rusqlite::types::ValueRef::Blob(blob) => Value::Blob(blob.to_vec()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (row, (ours, theirs)) in ours.iter().zip(&theirs).enumerate() {
+        for (name, (a, b)) in names.iter().zip(ours.iter().zip(theirs)) {
+            assert_eq!(a, b, "row {row}, column {name}");
+        }
+    }
+    assert_eq!(ours.len(), 2);
 }
 
 /// a database with any of its bytes changed, and any log beside it, never panics the reader:

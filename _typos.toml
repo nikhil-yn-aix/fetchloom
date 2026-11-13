@@ -21,6 +21,7 @@ actaul_kb = "actaul_kb"
 WRONLY = "WRONLY"
 ND = "ND"
 flate2 = "flate2"
+DOUB = "DOUB"
 
 [default.extend-words]
 # SPSS's file type, which generated names leave out
