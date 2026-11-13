@@ -1,7 +1,7 @@
 //! `auth`: which accounts are signed in, signing in once with a key shared with each source's own
 //! tools, and asking for that key when a download is refused.
 
-use std::io::Read as _;
+use std::io::{IsTerminal as _, Read as _};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -357,7 +357,7 @@ async fn sign_in(
 ) -> Result<Outcome, Error> {
     let output = &context.output;
     let (secret, user_name) = if login.with_token {
-        read_stdin(account)?
+        read_stdin(account, output)?
     } else {
         if !output.can_ask() {
             return Err(Error::new(
@@ -540,11 +540,23 @@ fn token_from(account: &Account, pasted: &str) -> (String, Option<String>) {
     (pasted.to_owned(), None)
 }
 
-fn read_stdin(account: &Account) -> Result<(String, Option<String>), Error> {
+fn read_stdin(
+    account: &Account,
+    output: &crate::output::Output,
+) -> Result<(String, Option<String>), Error> {
     let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .map_err(|err| Error::io("could not read the key from stdin", &err))?;
+    if std::io::stdin().is_terminal() {
+        // a key typed or pasted at a terminal stays hidden, as an interactive sign-in keeps it
+        let prompt = match account.secret() {
+            Secret::Password => "login",
+            Secret::Token => "key",
+        };
+        text = output.read_hidden(prompt)?;
+    } else {
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|err| Error::io("could not read the key from stdin", &err))?;
+    }
     // only the line ending a pipe adds goes; a password may start or end with a space
     let text = text.trim_end_matches(['\r', '\n']).to_owned();
     if text.trim().is_empty() {

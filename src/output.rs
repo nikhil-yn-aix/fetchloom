@@ -907,6 +907,37 @@ impl Output {
         self.asking(ask)
     }
 
+    /// a line typed at the terminal stdin is, shown as nothing: a key `--with-token` reads where
+    /// no pipe brings it. a person sees `prompt`, then the masked key once enter ends it; `--json`
+    /// writes nothing on stderr.
+    pub(crate) fn read_hidden(&self, prompt: &str) -> Result<String, Error> {
+        let terminal = console::Term::stderr();
+        let tone = paint(self.style.color, accent().bold());
+        let label = format!("{tone}{prompt:>11}{tone:#} ");
+        if !self.json {
+            let _ = terminal.write_str(&label);
+        }
+        let text = match typed_line(|| terminal.read_key_raw(), |_| {}) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                return Err(Error::new(crate::error::Kind::Interrupted, "stopped")
+                    .cancelled("the question"));
+            }
+            Err(err) => return Err(Error::io("could not read from the terminal", &err)),
+        };
+        if !self.json {
+            // keys read one by one bring no line break of their own
+            let _ = terminal.write_line("");
+            if !text.trim().is_empty() {
+                if self.style.interactive && !self.style.accessible {
+                    let _ = terminal.clear_last_lines(1);
+                }
+                let _ = terminal.write_line(&format!("{label}{}", masked(&text)));
+            }
+        }
+        Ok(text)
+    }
+
     /// asks for a line of text, such as a username, or none when nobody can answer. `hidden` shows
     /// nothing until enter, then a masked echo; a blank answer is asked again, twice at most.
     pub(crate) fn ask_text(&self, prompt: &str, hidden: bool) -> Result<Option<String>, Error> {

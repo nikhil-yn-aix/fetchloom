@@ -390,6 +390,32 @@ fn a_question_wraps_between_words_at_a_narrow_terminal() -> Result {
     Ok(())
 }
 
+/// a key typed at a terminal for `--with-token` stays hidden, as an interactive sign-in keeps it;
+/// a piped one is read as it comes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_typed_for_with_token_at_a_terminal_stays_hidden() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = sandbox.command(&["auth", "login", "hf", "--with-token", "--offline"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_test1234567890\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains("hf_test1234567890"), "{screen}");
+    assert_eq!(
+        std::fs::read_to_string(home(&sandbox).join(".cache/huggingface/token"))?,
+        "hf_test1234567890\n"
+    );
+    Ok(())
+}
+
 /// the questions are saving the key, replacing one and removing a key other tools read; one line
 /// says what was cancelled, and the exit code is 1, as for any no.
 #[cfg(target_os = "linux")]

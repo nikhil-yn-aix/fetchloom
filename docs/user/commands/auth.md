@@ -57,7 +57,7 @@ echo "$HF_TOKEN" | fetchloom auth login hf --with-token
 echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --with-token
 ```
 
-`--with-token` reads the key from stdin and saves it without asking; a login reads `username:password`. a source's variable, such as `HF_TOKEN`, works without signing in at all. without a terminal and without `--with-token`, `auth login` fails with `usage` and names the scripted form.
+`--with-token` reads the key from stdin and saves it without asking; a login reads `username:password`. typed or pasted at a terminal, it reads one line, hidden as an interactive sign-in keeps it, and enter ends it. a source's variable, such as `HF_TOKEN`, works without signing in at all. without a terminal and without `--with-token`, `auth login` fails with `usage` and names the scripted form.
 
 ## when a download is refused
 
