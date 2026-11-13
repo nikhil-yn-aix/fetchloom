@@ -13,9 +13,7 @@ use crate::support::{
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
 
-/// whether this disk takes `other` for `original`, as macos and windows do. the alias tests
-/// run only where it does, and `a_respelled_file_is_extra_where_the_disk_tells_names_apart`
-/// only where it does not.
+/// whether this disk takes `other` for `original`, as macos and windows do.
 fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
     let probe = sandbox.folder(".names")?;
     fs::write(probe.join(original), b"names")?;
@@ -102,7 +100,7 @@ fn force_restores_pinned_bytes_in_a_file_renamed_in_another_case() -> Result {
     clean_alias(&sandbox, &server)
 }
 
-/// a name in another unicode form matches its pin both ways: the file respelled, then the lock.
+/// the file is respelled first, then the lock.
 #[test]
 fn a_name_in_another_unicode_form_still_matches_its_pin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -152,7 +150,7 @@ fn a_data_folder_in_another_case_matches_and_data_dir_takes_its_spelling() -> Re
     Ok(())
 }
 
-/// the state then records the file under the lock's spelling.
+/// the state records the file under the lock's spelling.
 #[test]
 fn a_lock_path_in_another_case_matches_the_placed_file() -> Result {
     let sandbox = Sandbox::new()?;
@@ -463,7 +461,6 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     let forced = sandbox.run(&["sync", "--force"])?;
     let told = text(&forced.stderr)?;
     assert_eq!(forced.status.code(), Some(0), "{told}");
-    // the one line after which the edit is gone says so
     assert!(
         told.starts_with("   Replaced data/iris/iris.csv · discarding your edit\n"),
         "{told}"
@@ -473,8 +470,7 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     Ok(())
 }
 
-/// a file as new as the state is hashed once and settled by writing the state again, after which
-/// a sync hashes nothing and writes nothing.
+/// settling writes the state again, and the sync after it writes nothing.
 #[test]
 fn a_sync_settles_files_as_new_as_the_state_and_then_hashes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -633,8 +629,7 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
     Ok(())
 }
 
-/// after a sync that left every file in place, a sync with data.toml and data.lock unchanged
-/// plans nothing while every file looks as placed. an edit still sends it the long way.
+/// settled means the last sync left every file in place and nothing changed since.
 #[test]
 fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let sandbox = Sandbox::new()?;
@@ -686,8 +681,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     Ok(())
 }
 
-/// a sync that left a file out records data.toml and data.lock as unsettled, so the next one
-/// plans again and still tells about the file, though nothing it recorded changed.
+/// the next sync still tells about the file, though nothing the first one recorded changed.
 #[test]
 fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     let sandbox = Sandbox::new()?;
@@ -713,9 +707,8 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     Ok(())
 }
 
-/// `add` records data.toml and data.lock as it leaves them, so the next sync can tell nothing
-/// changed without planning. a `path` that has to sync syncs its dataset alone, which never
-/// settles a project, so the sync after it plans once more, finds nothing to do and settles it.
+/// a `path` that has to sync syncs its dataset alone, which never settles a project, so the next
+/// sync plans once more, finds nothing to do and settles it.
 #[test]
 fn add_settles_the_project_and_a_syncing_path_does_not() -> Result {
     let sandbox = Sandbox::new()?;
@@ -797,9 +790,7 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
     Ok(())
 }
 
-/// a project in `work` and a second one in `other`, both holding iris as a link to one cached
-/// file, with iris then edited through the first project's link. nothing, on a filesystem
-/// without hardlinks.
+/// the projects of `shared`, with iris then edited through the first project's link.
 fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBuf>> {
     let Some(other) = shared(sandbox, server)? else {
         return Ok(None);
@@ -838,9 +829,8 @@ fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBu
     for project in [sandbox.work(), other.clone()] {
         link_iris(sandbox, &project)?;
     }
-    // hfs+ keeps whole seconds and fat two, so a state written in the link's own tick leaves it
-    // racy, and hashing would take the edit below for each project's own. states written later
-    // vouch for the links as on a finer clock
+    // hfs+ keeps whole seconds and fat two, so a state written in the link's tick leaves it racy
+    // and hashing would take the edit below as each project's own; a later state vouches for it
     let modified =
         fs::metadata(sandbox.work().join("data").join("iris").join("iris.csv"))?.modified()?;
     if modified.duration_since(UNIX_EPOCH)?.subsec_nanos() == 0 {
@@ -853,13 +843,8 @@ fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBu
     Ok(Some(other))
 }
 
-/// the case a person met: two projects hold one cached file through links, and someone makes it
-/// writable and appends to it through the first project's link, which changes the cache's own
-/// copy. the other project's status calls that damage to the cached copy, not its own edit, and
-/// its plain sync downloads the file again and puts it back. the first project's plain sync then
-/// puts its link back too, since it is still the very copy the cache found changed. each keeps a
-/// changed copy of its own beside the pinned file, so the edit is not lost, and editing one
-/// project's copy changes no other's.
+/// the editing project's own link is put back too, since it is the very copy the cache found
+/// changed, and each project keeps the edit in a changed copy of its own.
 #[test]
 fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -924,8 +909,7 @@ fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     Ok(())
 }
 
-/// that status in `project` finds nothing to put back, and only the changed copy sync kept beside
-/// iris as an extra file.
+/// checks that status in `project` lists only the changed copy sync kept, as extra.
 fn only_the_kept_copy_differs(sandbox: &Sandbox, project: &Path) -> Result {
     let status = sandbox
         .command_in(project, &["--json", "status"])
@@ -981,8 +965,7 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
     Ok(())
 }
 
-/// an edit through one project's hardlink shows in the other project's status, though on
-/// windows the other folder's listing still holds the old size and time.
+/// on windows the other folder's listing keeps the old size and time, yet status sees the edit.
 #[test]
 fn an_edit_through_one_link_shows_in_the_other_projects_status() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1004,8 +987,7 @@ fn an_edit_through_one_link_shows_in_the_other_projects_status() -> Result {
     Ok(())
 }
 
-/// an edit through one project's hardlink that changes the size leaves the cached object at the
-/// wrong size, so a new project downloads the file. the fresh bytes take the object's place.
+/// the edit leaves the cached object at the wrong size, so the new project downloads the file.
 #[test]
 fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1042,9 +1024,8 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> 
     Ok(())
 }
 
-/// an edit in place through one project's hardlink that keeps the size, saved as vim's `:w!`
-/// saves a read-only file and then sealed again, leaves the cached object looking whole. its time
-/// moved, so a new project's sync checks it, downloads the file again and places the locked bytes.
+/// an edit that keeps the size, saved as vim's `:w!` saves a read-only file and sealed again,
+/// leaves the object looking whole but for its time, so the new project's sync checks it.
 #[test]
 fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_them_in_place() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1114,9 +1095,7 @@ fn sync_force_puts_back_a_link_another_project_edited() -> Result {
     Ok(())
 }
 
-/// a link to the cache's copy that an edit through another project's link changed is damaged,
-/// in the terminal and in JSON alike, since both mean the pinned bytes are gone and sync puts
-/// them back.
+/// both forms say damaged, since the pinned bytes are gone and sync puts them back.
 #[test]
 fn status_files_a_changed_shared_copy_as_damaged_in_both_forms() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1149,9 +1128,8 @@ fn status_files_a_changed_shared_copy_as_damaged_in_both_forms() -> Result {
     Ok(())
 }
 
-/// on windows a folder's listing keeps the old size and time of a hardlink edited through another
-/// name, so fetchloom opens each hardlink to see it as it is. the other project then finds the
-/// edit at once, as on linux, and its plain sync puts the pinned file back.
+/// a folder's listing keeps the old size and time of a hardlink edited through another name, so
+/// fetchloom opens each hardlink, and a plain sync puts the pinned file back as on linux.
 #[cfg(windows)]
 #[test]
 fn another_projects_edit_through_a_link_is_seen_at_once_on_windows() -> Result {
@@ -1192,9 +1170,8 @@ fn keep_time(project: &Path) -> Result {
     Ok(())
 }
 
-/// a link to the cache's copy that someone made writable, but did not edit, leaves the copy every
-/// project shares open to an edit. status shows it, and a plain sync makes it read-only again,
-/// checking its bytes, with no download.
+/// a writable link leaves the copy every project shares open to an edit, so status calls it
+/// outdated, and a plain sync checks its bytes and seals it with no download.
 #[test]
 fn a_link_made_writable_is_sealed_again() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1230,8 +1207,7 @@ fn a_link_made_writable_is_sealed_again() -> Result {
     Ok(())
 }
 
-/// an edit through a shared link that keeps the size and time leaves no mark, so only hashing
-/// finds it, and a plain sync could not: `status --verify` points to `sync --verify` alone.
+/// with no mark and the same size and time, a plain sync would miss the edit.
 #[test]
 fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1259,10 +1235,8 @@ fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
     Ok(())
 }
 
-/// an edit through one project's link that keeps the size and time shows in no listing on any
-/// platform, so the cache's mark is all the other project has. status, sync and path agree on
-/// it: sync puts the locked bytes back and keeps the changed copy beside them, which is then all
-/// that differs.
+/// an edit keeping the size and time shows in no listing, so the cache's mark is all the other
+/// project has. status, sync and path agree on it, and the copy sync keeps is all that differs.
 #[test]
 fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1317,10 +1291,8 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     Ok(())
 }
 
-/// a coarse clock can give a project's state the same time as the link it records, and then an
-/// edit that keeps the size and time is racy: hashing finds it. the link is still the cache's
-/// copy, so the edit changed what every project sharing it reads, and a plain sync puts the
-/// pinned file back.
+/// a coarse clock can give the state its link's own time, making the edit racy so hashing finds
+/// it; the link is still the cache's copy, so a plain sync puts the pinned file back.
 #[test]
 fn a_racy_edit_through_a_shared_link_is_put_back() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1430,8 +1402,7 @@ fn a_recovered_hardlink_becomes_writable_when_copies_are_requested() -> Result {
     Ok(())
 }
 
-/// asking for writable copies after the files were placed read-only leaves them waiting for a
-/// sync, which status shows and path does before it answers.
+/// status calls the read-only files outdated, and path syncs them before it answers.
 #[test]
 fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1499,9 +1470,8 @@ fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     Ok(())
 }
 
-/// a run cut off between placing a link and writing the state leaves a file the next run adopts.
-/// it is the cached object under another name, so the state records it as a hardlink, and an
-/// edit through it is audited like any placed link.
+/// a run cut off before writing the state leaves a link the next run adopts; it is the cached
+/// object, so an edit through it is audited like any placed link's.
 #[test]
 fn an_adopted_link_is_recorded_as_a_hardlink() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1539,9 +1509,8 @@ fn adopted_iris(sandbox: &Sandbox, server: &Server) -> Result<String> {
     Ok(stderr)
 }
 
-/// a file already at its place with the pinned bytes is taken as placed. where the disk makes
-/// hardlinks it becomes a link to the downloaded copy, so one copy stays on disk, and the run
-/// says so. elsewhere it stays as it is.
+/// where the disk makes hardlinks, linking keeps one copy on disk; elsewhere the file stays as it
+/// is, and the run says which.
 #[test]
 fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1576,9 +1545,8 @@ fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
     Ok(())
 }
 
-/// three datasets moved into one folder, `raw`, that already holds a copy of each one's file, as
-/// files fetched by hand before the move. a plain sync adopts them, so status says so rather than
-/// offering `--force`, and sync tells the folder once rather than once for each dataset.
+/// three datasets share `raw`, which already holds each one's file, so status says a plain sync
+/// adopts them rather than offering `--force`.
 #[test]
 fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1632,9 +1600,8 @@ fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
     Ok(())
 }
 
-/// after a pull that took a dataset out of data.toml and data.lock, its folder holds the file
-/// fetchloom placed, which the next sync removes, and notes of the person's own, which it keeps.
-/// status tells them apart, and sync does as status said.
+/// a pull took the dataset out of data.toml and data.lock, leaving the file fetchloom placed and
+/// the person's notes in its folder; sync then does as status said.
 #[test]
 fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1685,8 +1652,7 @@ fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     Ok(())
 }
 
-/// removing a dataset deletes a file sync took as placed when it was already there, as it
-/// deletes the files sync placed, and says so, in a dry run too, since the person put it there.
+/// the file goes as a placed one does, with a warning, since a person put it there.
 #[test]
 fn remove_says_it_deletes_a_file_that_was_there_before_it_was_adopted() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1797,10 +1763,8 @@ fn hold(path: &Path) -> Result<Option<Unwritable>> {
     Ok(Some(held))
 }
 
-/// a mark on an object still in the cache, as `cache verify` leaves one awaiting repair, whose
-/// bytes changed while its size and time stayed. sync hashes the object before it places anything
-/// from it, so the project sharing the link gets the locked bytes from a new download instead of
-/// the changed object linked again.
+/// the mark is as `cache verify` leaves one awaiting repair, on bytes that changed under the same
+/// size and time, so sync hashes the object before placing from it and downloads instead.
 #[test]
 fn a_marked_object_still_in_the_cache_is_never_placed_again() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1837,7 +1801,7 @@ fn a_marked_object_still_in_the_cache_is_never_placed_again() -> Result {
     Ok(())
 }
 
-/// a project that copies its files gets the locked bytes too, never a copy of the marked object.
+/// a project that copies its files downloads the locked bytes again.
 #[test]
 fn a_copy_is_never_made_from_a_marked_object() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1874,8 +1838,7 @@ fn a_copy_is_never_made_from_a_marked_object() -> Result {
     Ok(())
 }
 
-/// a marked object another program holds open cannot be replaced. sync names the refused object
-/// and leaves its old bytes in place.
+/// sync names the object another program holds open, and puts nothing back.
 #[test]
 fn a_marked_object_that_cannot_be_replaced_stops_sync() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1951,9 +1914,8 @@ fn an_unreadable_marked_link_stops_sync_without_replacing_it() -> Result {
     Ok(())
 }
 
-/// a link may name an older copy of an object than the one that changed, such as one placed
-/// before gc freed the object and a download brought it back. sync hashes the project's own file
-/// once, keeps it without downloading, and nothing differs afterwards.
+/// a link placed before gc freed its object, which a download then brought back, is not the
+/// marked copy, so sync hashes it once and keeps it, offline.
 #[test]
 fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2016,8 +1978,7 @@ fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
     Ok(())
 }
 
-/// get hashes a marked object before it takes it too, so it places the locked bytes from a new
-/// download instead of the changed object.
+/// get hashes a marked object before taking it, as sync does, and downloads the locked bytes.
 #[test]
 fn get_never_takes_a_marked_object() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2105,9 +2066,7 @@ fn a_later_get_conflict_preserves_earlier_files() -> Result {
     Ok(())
 }
 
-/// a link someone put where data.lock places a file is in the way: status calls it blocked
-/// rather than missing, a plain sync leaves it with a warning, and `--force` replaces the link
-/// itself, never what it points to.
+/// status calls the link blocked rather than missing, and a plain sync warns and leaves it.
 #[cfg(unix)]
 #[test]
 fn force_replaces_a_link_at_a_pinned_path_without_following_it() -> Result {
@@ -2158,9 +2117,8 @@ fn force_replaces_a_link_at_a_pinned_path_without_following_it() -> Result {
     Ok(())
 }
 
-/// a file where a dataset's folder belongs keeps every file of the dataset out. status names
-/// that one file as blocking rather than each file as missing, a plain sync leaves it with a
-/// warning, and `--force` replaces it with the folder and its files.
+/// status names the file as blocking rather than each of the dataset's files as missing, and a
+/// plain sync warns and leaves it.
 #[test]
 fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2206,8 +2164,6 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     Ok(())
 }
 
-/// a file where a dataset's folder belongs keeps each of its files out, and status names that
-/// file once.
 #[test]
 fn status_names_a_file_in_a_folders_way_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2241,8 +2197,7 @@ fn reshaped(sandbox: &Sandbox, server: &Server) -> Result<(std::path::PathBuf, S
     Ok((lock, as_file, as_folder))
 }
 
-/// a pinned file that becomes a folder of pinned files, and back, is placed by the sync that
-/// removes what was placed in its way, rather than reported blocked until a second sync.
+/// the sync clears what was placed in the way first, rather than leave the pin blocked.
 #[test]
 fn a_file_that_becomes_a_folder_and_back_is_placed_in_one_sync() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2272,9 +2227,8 @@ fn a_file_that_becomes_a_folder_and_back_is_placed_in_one_sync() -> Result {
     Ok(())
 }
 
-/// status agrees with sync: a file fetchloom placed that sync removes before it places anything,
-/// or a folder of only such files, is unneeded rather than in the way, and the file behind it is
-/// missing rather than blocked.
+/// sync removes an unneeded placed file, or a folder of only such files, before it places
+/// anything, so status calls the file behind it missing rather than blocked.
 #[test]
 fn status_lists_what_sync_removes_as_unneeded_rather_than_blocking() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2318,8 +2272,7 @@ fn status_lists_what_sync_removes_as_unneeded_rather_than_blocking() -> Result {
     Ok(())
 }
 
-/// an add whose placing fails is rolled back, and the files it placed for the dataset go with
-/// data.toml and data.lock, so a failed add leaves nothing of the dataset in the data folder.
+/// a failed add leaves nothing of the dataset in the data folder or the state.
 #[cfg(unix)]
 #[test]
 fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
@@ -2358,8 +2311,7 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     Ok(())
 }
 
-/// a list whose placing fails is rolled back whole, and the files it placed for each of its
-/// datasets go with data.toml and data.lock, as a single add's do.
+/// the list is rolled back whole, so the files placed for each of its datasets go too.
 #[cfg(unix)]
 #[test]
 fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
@@ -2377,8 +2329,7 @@ fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
         sandbox.work().join("links.txt"),
         format!("{}\n{}\n", plain.url, archive.url),
     )?;
-    // a folder the second dataset needs that refuses new files, so its second file cannot be
-    // placed
+    // a folder the second dataset needs that refuses new files, so its second file cannot be placed
     let refusing = sandbox.work().join("data").join("files").join("sub");
     fs::create_dir_all(&refusing)?;
     fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
@@ -2396,9 +2347,8 @@ fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
     Ok(())
 }
 
-/// the work counters say how many files a run placed from bytes the cache already held, so a
-/// sync that downloads nothing does not read as one that found nothing in the cache. `-v` says
-/// it in words.
+/// without the count, a sync that downloads nothing reads as one that found nothing in the cache.
+/// `-v` says it in words.
 #[test]
 fn the_counters_tell_files_placed_from_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2429,9 +2379,8 @@ fn the_counters_tell_files_placed_from_the_cache() -> Result {
     Ok(())
 }
 
-/// status compares sizes and times, and hashes only files those cannot vouch for, so its last line
-/// says what it compared rather than claiming the bytes match: an edit that kept a copy's size
-/// and time passes unseen.
+/// status hashes only files sizes and times cannot vouch for, so an edit that kept a copy's size
+/// and time passes unseen, and the last line must not claim the bytes match.
 #[test]
 fn status_says_it_compared_sizes_and_times() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2462,9 +2411,8 @@ fn status_says_it_compared_sizes_and_times() -> Result {
     Ok(())
 }
 
-/// a copy of iris placed in its own project, with its time no longer as new as the state, then
-/// changed in place keeping its size and time, as a failing disk or a tool that restores times
-/// leaves it.
+/// a copy of iris, older than the state, changed in place under the same size and time, as a
+/// failing disk or a tool that restores times leaves it.
 fn quietly_changed_copy(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
     sandbox.allow(&server.url);
     fs::write(
@@ -2485,9 +2433,8 @@ fn quietly_changed_copy(sandbox: &Sandbox, server: &Server) -> Result<std::path:
     Ok(placed)
 }
 
-/// a change that keeps a copy's size and time shows in no listing. `status --verify` hashes every
-/// placed file and lists it as damaged, a plain sync still finds nothing to do, and
-/// `sync --verify` puts the pinned file back without --force.
+/// the change shows in no listing, so a plain sync finds nothing to do; `sync --verify` puts the
+/// pinned file back without --force.
 #[test]
 fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2540,8 +2487,7 @@ fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
     Ok(())
 }
 
-/// `sync --verify` keeps the rule for an edit that shows: a copy whose size or time changed is the
-/// project's own, and it stays with the usual warning until --force.
+/// a copy whose size or time changed is the project's own, so it stays until --force.
 #[test]
 fn verify_keeps_an_edit_that_shows() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2563,9 +2509,8 @@ fn verify_keeps_an_edit_that_shows() -> Result {
     Ok(())
 }
 
-/// a change through a shared link that keeps the size and time, with the file made read-only
-/// again, changes the cache's own copy unseen, so `sync --verify` marks it, downloads the file
-/// again and puts the link back.
+/// the change keeps the size and time and the file is sealed again, so only hashing sees it;
+/// `sync --verify` marks the copy, downloads the file again and puts the link back.
 #[test]
 fn verify_puts_back_a_link_whose_cached_copy_quietly_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2602,10 +2547,8 @@ fn verify_puts_back_a_link_whose_cached_copy_quietly_changed() -> Result {
     Ok(())
 }
 
-/// a sync never deletes outside the data folder, so a data folder `data_dir` moved away keeps the
-/// files fetchloom placed in it, and the sync that moves it, and its dry run, say where they are.
-/// files of the person's own there are counted and named, so deleting the folder loses none
-/// unseen.
+/// a sync never deletes outside the data folder, so the old one keeps what fetchloom placed, and
+/// the sync and its dry run name the person's own files there, so deleting it loses none unseen.
 #[test]
 fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2661,8 +2604,7 @@ fn unplace(sandbox: &Sandbox, name: &str) -> Result {
     Ok(())
 }
 
-/// a dataset set to `place = false` retires what sync placed of it: unchanged files go, an
-/// edited one stays with the warning a removed dataset's edit gets, and the sync says so once.
+/// the edit stays with a removed dataset's warning, and the next sync tells neither again.
 #[test]
 fn place_false_retires_unchanged_files_and_keeps_edits() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2709,8 +2651,7 @@ fn place_false_retires_unchanged_files_and_keeps_edits() -> Result {
     Ok(())
 }
 
-/// a dataset with `place = false` has no folder, so `path` refuses it, and its files, with
-/// the line of data.toml that would place it.
+/// path refuses the dataset and its files alike, naming the data.toml line that places it.
 #[test]
 fn path_of_an_unplaced_dataset_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2736,8 +2677,7 @@ fn path_of_an_unplaced_dataset_is_refused() -> Result {
     Ok(())
 }
 
-/// a pinned dataset with `place = false` needs no file in the data folder, so a sync in a
-/// fresh clone, whose cache lacks its files, downloads nothing.
+/// an unplaced dataset needs no file, so a sync in a clone with an empty cache downloads nothing.
 #[test]
 fn sync_fetches_nothing_for_a_pinned_unplaced_dataset() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2765,9 +2705,8 @@ fn sync_fetches_nothing_for_a_pinned_unplaced_dataset() -> Result {
     Ok(())
 }
 
-/// status tells a dataset with `place = false` apart from a difference. until a sync retires what
-/// sync placed of it before, its line says the sync removes those files, apart from notes of the
-/// person's own, which sync keeps, and the hint says what the sync does.
+/// the dataset is not a difference. until a sync retires what it placed, its line says sync
+/// removes those files but keeps the person's notes.
 #[test]
 fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2817,9 +2756,8 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     Ok(())
 }
 
-/// a strict sync keeps an edited file as a plain sync does, but fails with `data.not_ready`,
-/// naming it and what to do, as `status --check` does without changing anything. both pass once
-/// the file holds the pinned bytes again.
+/// both fail with `data.not_ready`, naming the file and what to do, and the strict sync keeps the
+/// edit as a plain sync does.
 #[test]
 fn a_kept_edit_fails_a_strict_sync_and_status_check_until_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
