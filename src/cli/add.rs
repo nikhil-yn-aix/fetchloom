@@ -312,7 +312,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
 /// or one link or search words, refused when they name something on this machine.
 async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     if let Some(path) = args.input_file.take() {
-        let (name, text) = links::read(&path, &context.stop).await?;
+        let (name, text) = links::read(&path, &context.output, &context.stop).await?;
         let lines = links::checked(&name, links::parse(&name, &text)?, true)?;
         return Ok(Request::List(List {
             name: Some(name),

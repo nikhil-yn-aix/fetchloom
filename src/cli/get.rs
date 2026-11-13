@@ -333,7 +333,7 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
     let Some(path) = &args.input_file else {
         return Ok(asked);
     };
-    let (name, text) = links::read(path, &context.stop).await?;
+    let (name, text) = links::read(path, &context.output, &context.stop).await?;
     let listed = links::checked(&name, links::parse(&name, &text)?, false)?;
     asked.extend(listed.into_iter().map(|(line, _)| Asked {
         expected: line.sha256.map(|sha256| Expected {

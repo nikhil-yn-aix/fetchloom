@@ -176,6 +176,8 @@ zenodo:3608990
 fetchloom get -i - < links.txt
 ```
 
+at a terminal, it says so on stderr before it waits: `reading links from stdin, one per line; ctrl-d ends`. on windows, ctrl-z, then enter, ends the list.
+
 a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a line that is no link, or a list with no links, stops the run naming the line. a line whose hash names other bytes fails that link alone with `integrity.mismatch`, naming the line, as `wine.csv does not match the SHA-256 on line 2 of links.txt`.
 
 ## checking a hash

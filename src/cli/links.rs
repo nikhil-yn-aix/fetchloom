@@ -4,18 +4,25 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io::Read as _;
+use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net;
+use crate::output::Output;
 use crate::source::search::is_search;
 use crate::source::{Parsed, Reference, local};
 use crate::stop::Stop;
 
 /// what a line holds, for messages that cannot read it.
 const FORM: &str = "a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped";
+
+/// the keys that end what a terminal's stdin gives.
+#[cfg(not(windows))]
+const ENDS: &str = "ctrl-d ends";
+#[cfg(windows)]
+const ENDS: &str = "ctrl-z, then enter, ends";
 
 /// one link of a list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,8 +42,15 @@ impl Line {
 }
 
 /// the text of the list at `path`, or of stdin for `-`, and the name messages give it.
-pub(super) async fn read(path: &Path, stop: &Stop) -> Result<(String, String), Error> {
+pub(super) async fn read(
+    path: &Path,
+    output: &Output,
+    stop: &Stop,
+) -> Result<(String, String), Error> {
     stop.check()?;
+    if path == Path::new("-") && std::io::stdin().is_terminal() {
+        output.awaiting(&format!("reading links from stdin, one per line; {ENDS}"));
+    }
     let path = path.to_path_buf();
     let reading = tokio::task::spawn_blocking(move || read_text(&path));
     tokio::select! {

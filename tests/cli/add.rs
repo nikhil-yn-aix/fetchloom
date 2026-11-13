@@ -1232,6 +1232,32 @@ fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
     Ok(())
 }
 
+/// a list typed at a terminal says where it is read and how to end it, so `add -i -` and
+/// `get -i -` never wait there in silence.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_list_typed_at_a_terminal_says_how_to_end_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
+    sandbox.allow(&server.url);
+    let told = "reading links from stdin, one per line; ctrl-d ends";
+    let loose = sandbox.folder("loose")?;
+    for (folder, args, made) in [
+        (sandbox.work(), ["add", "-i", "-"], "data/iris/iris.csv"),
+        (loose, ["get", "-i", "-"], "iris/iris.csv"),
+    ] {
+        let command = sandbox.command_in(&folder, &args);
+        let keys = format!("{}{PATH}\r\u{4}", server.url);
+        let Some((code, screen)) = crate::support::typed(&folder, &command, "", told, &keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(0), "{screen}");
+        assert_eq!(fs::read(folder.join(made))?, IRIS, "{screen}");
+    }
+    Ok(())
+}
+
 /// every link is trusted as a single typed one is, and `--as`, which names one dataset, is
 /// refused before any request.
 #[test]

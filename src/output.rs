@@ -1041,6 +1041,15 @@ impl Output {
         self.asking(ask)
     }
 
+    /// what a read of the terminal stdin waits for, such as the links `-i -` reads, so a person
+    /// sees a wait for their typing, not a hang: told with `-q` too, never with `--json`, as
+    /// [`Output::read_hidden`]'s prompt is.
+    pub(crate) fn awaiting(&self, text: &str) {
+        if !self.json {
+            self.line(&plain(text));
+        }
+    }
+
     /// a line fetchloom wrote itself, such as sign-in steps holding [`Output::link`]s. text from
     /// elsewhere goes through the other methods, which escape control characters.
     pub(crate) fn say(&self, text: &str) {

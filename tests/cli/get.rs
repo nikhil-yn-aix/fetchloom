@@ -1873,7 +1873,10 @@ fn a_dash_reads_the_links_from_stdin() -> Result {
     )?;
     drop(stdin);
     let output = child.wait_with_output()?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    // a pipe is no person typing, so nothing says how to end it
+    assert!(!stderr.contains("reading links"), "{stderr}");
     assert_eq!(
         fs::read(sandbox.work().join("iris").join("iris.csv"))?,
         IRIS

@@ -159,6 +159,8 @@ https://example.org/iris.csv sha256:d144ff83495e88cf892b8415db97343ff575bf11e47b
 zenodo:3608990
 ```
 
+`-i -` reads the list from stdin. at a terminal, it says so on stderr before it waits: `reading links from stdin, one per line; ctrl-d ends`. on windows, ctrl-z, then enter, ends the list.
+
 the whole list is checked before any request. a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, or a link carrying a secret data.toml would keep, stops the add, naming the line with the secret masked. then the links resolve and download together, and each dataset gets a name as a single add would. a line with a SHA-256 must keep one file with that hash, or the add stops with `integrity.mismatch`, exit 30. a link data.toml has already stays as it is.
 
 a link that fails while its file downloads is named by its line too, in the error and in each of the JSON `failures`, as in `line 3 of links.txt: 127.0.0.1 has nothing at http://127.0.0.1:43121/files/missing.csv (404)`. data.toml and data.lock are each written once, and any failure leaves both as they were. the add ends with one `Added` line for each dataset; `-v` adds what each one pinned and where its files went. hosts in a list are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md#settings-file) first. `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
