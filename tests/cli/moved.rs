@@ -1,6 +1,5 @@
-//! data that moved: when a link data.lock recorded is dead, the source is asked again, and what
-//! it points to now must still match the pinned hash. a project folder that moved keeps its
-//! files as they were.
+//! data that moved: a dead link is looked up again at its source, whose answer must match the
+//! pinned hash, and a project folder that moved keeps its files as they were.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,9 +9,8 @@ use crate::support::{Result, Sandbox, Server, file, json, reply, text};
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
 
-/// a fresh clone of a project whose data.lock records iris at a link that is now dead, with a
-/// cold cache. the server's first response serves `add`, the second answers the dead link and
-/// the third serves the link the source lists now.
+/// a fresh clone whose data.lock records iris at a dead link: the server's first response serves
+/// `add`, the second answers the dead link and the third the link the source lists now.
 fn moved(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
@@ -143,9 +141,8 @@ fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
     Ok(())
 }
 
-/// a project moved to another folder, then `cache gc --now` before any run there: gc no longer
-/// knew the project, so it freed the zip and the record of what it holds. every file still looks
-/// as the last complete sync left it, so status finds nothing, as sync does, with no request.
+/// gc before any run in the new folder no longer knows the project and frees the zip and its
+/// record, yet every file looks as the last sync left it, so status and sync find nothing to do.
 #[test]
 fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
     let sandbox = Sandbox::new()?;

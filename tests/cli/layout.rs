@@ -19,8 +19,7 @@ fn serve(sandbox: &Sandbox, files: &[(&str, &[u8])]) -> Result<Vec<Server>> {
     Ok(servers)
 }
 
-/// scripts that read data/train.csv keep working: a dataset with `path = "."` puts its files
-/// straight in the data folder, beside another that does the same.
+/// scripts that read data/train.csv keep working, and two datasets with `path = "."` share data/.
 #[test]
 fn flat_layout_keeps_data_train_csv() -> Result {
     let sandbox = Sandbox::new()?;
@@ -54,8 +53,7 @@ fn flat_layout_keeps_data_train_csv() -> Result {
     Ok(())
 }
 
-/// datasets share a folder when no two files clash. each placed file belongs to one dataset, so
-/// removing one leaves the other's files and a person's own file in that folder.
+/// datasets share a folder when no two files clash, and each placed file belongs to one of them.
 #[test]
 fn shared_folder_removal_keeps_the_other_dataset_and_extras() -> Result {
     let sandbox = Sandbox::new()?;
@@ -116,8 +114,7 @@ fn listing(key: &str, body: &[u8]) -> Vec<crate::support::Part> {
     )
 }
 
-/// a listing names its files before any is downloaded, so two datasets in one folder that both
-/// list a labels.csv are refused before either file is fetched, and nothing is written.
+/// a listing names its files before any download, so the clash is found before either is fetched.
 #[cfg(debug_assertions)]
 #[test]
 fn a_clash_the_listings_show_stops_sync_before_any_download() -> Result {
@@ -159,8 +156,8 @@ fn a_clash_the_listings_show_stops_sync_before_any_download() -> Result {
     Ok(())
 }
 
-/// `path` names a folder, so `path = "train.csv"` puts the file at data/train.csv/train.csv. that
-/// layout works, and sync says how to put the file at data/train.csv instead.
+/// `path` names a folder, so `path = "train.csv"` puts the file at data/train.csv/train.csv; that
+/// works, and the help says how to put it at data/train.csv.
 #[test]
 fn a_filename_shaped_path_warns() -> Result {
     let sandbox = Sandbox::new()?;
