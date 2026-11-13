@@ -33,8 +33,7 @@ def require_selection(expected, actual):
 
 
 def mutation_run(command, tests, output):
-    # no fixed --timeout: it would cap the unmutated baseline too. each mutant stops at three times
-    # the baseline's measured test time
+    # no fixed --timeout, which would cap the unmutated baseline too; the multiplier scales from it
     return [*command, '--baseline', 'run', '--jobs', '2', '--timeout-multiplier', '3',
             '--build-timeout', '600', '--no-shuffle', '--test-tool', 'cargo',
             '--output', str(output), '--', '--locked', TESTS[tests]]
