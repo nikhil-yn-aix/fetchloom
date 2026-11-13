@@ -1,7 +1,5 @@
-//! every setting a run reads, read once when it starts: each value and where it came from, so
-//! `fetchloom settings` can show what a run would use and why. a value comes from a `FETCHLOOM_*`
-//! environment variable, else from the settings file, else from this machine, else from
-//! fetchloom's defaults.
+//! every setting a run reads, once as it starts, with where each value came from: a `FETCHLOOM_*`
+//! variable, else the settings file, the `resources` level, this machine or fetchloom's default.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -28,8 +26,7 @@ pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 pub(crate) const JOBS: usize = 8;
 /// requests running at once to one host, so no server sees fetchloom as a flood.
 pub(crate) const HOST_JOBS: usize = 4;
-/// how long a request may wait for an answer, or a download stay silent, before it is tried
-/// again.
+/// how long a request may wait for an answer, or a download stay silent, before it is tried again.
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 /// downloads above this size ask first, at a terminal, or need `--yes` without one.
 pub(crate) const ASK_ABOVE: u64 = 1 << 30;
@@ -77,9 +74,8 @@ const LISTS: [&str; 6] = [
 ];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 1] = ["mirrors_only"];
-/// the keys an empty variable clears rather than leaving to the settings file: who may be
-/// reached, which buckets keys sign for, where requests go and where push writes, so blanking one
-/// for a run cannot leave the file's choice in force.
+/// the keys an empty variable clears rather than leaving to the settings file, so blanking where
+/// requests go, what keys sign or where push writes cannot leave the file's choice in force.
 const CLEARED: [&str; 8] = [
     "allowed_origins",
     "s3_buckets",
@@ -187,12 +183,8 @@ pub(crate) struct File {
 
 impl File {
     /// the settings file: the one `FETCHLOOM_SETTINGS` names, else `settings.toml` in fetchloom's
-    /// folder.
-    ///
-    /// # Errors
-    ///
-    /// `usage` when the file named by the variable is missing, or when the file holds a key it does
-    /// not take or a value that is not text or a whole number; `local.io` when it cannot be read.
+    /// folder. `usage` when a named file is missing, or holds a key it does not take or a value
+    /// that is not text or a whole number; `local.io` when it cannot be read.
     pub(crate) fn read(var: Var<'_>) -> Result<File, Error> {
         let (path, named) = located(var);
         let Some(path) = path else {
@@ -289,9 +281,8 @@ enum Value {
     List(Vec<String>),
 }
 
-/// the settings file's values, refusing a key it does not take, so a mistyped key is told rather
-/// than quietly ignored. a message names where the file stops being TOML but never quotes it,
-/// since a value may hold a login.
+/// the settings file's values, refusing a key it does not take, so a typo is told, not ignored. an
+/// error names where the file stops being TOML but never quotes it, since a value may hold a login.
 fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
     let invalid = |message: String| {
         Error::new(Kind::Usage, message).help(format!(
@@ -441,13 +432,8 @@ impl Settings {
         }
     }
 
-    /// every setting, from the environment `var` reads, else from `file`, else from `machine`
-    /// and the defaults.
-    ///
-    /// # Errors
-    ///
-    /// `usage` naming the variable or the file's key and the values it takes, when one holds
-    /// something else.
+    /// every setting, from the environment `var` reads, else from `file`, else from `machine` and
+    /// the defaults. `usage` names the variable or key, and what it takes, when one holds another.
     pub(crate) fn read(var: Var<'_>, file: File, machine: Machine) -> Result<Settings, Error> {
         let defaults = Settings::defaults(machine);
         let given = Given { var, file: &file };
@@ -524,9 +510,8 @@ impl Settings {
         })
     }
 
-    /// the limits every archive unpacks within: as set, with each of the at most four archives
-    /// unpacking at once given a quarter of the memory budget to decompress in, never less than
-    /// the default.
+    /// the limits every archive unpacks within: as set, each of at most four archives unpacking at
+    /// once getting a quarter of the memory budget to decompress in, never less than the default.
     pub(crate) fn archive_limits(&self) -> crate::archive::Limits {
         let defaults = crate::archive::Limits::default();
         crate::archive::Limits {
@@ -695,9 +680,8 @@ fn known() -> impl Iterator<Item = &'static str> {
     KEYS.iter().map(|(_, variable)| *variable).chain(OTHERS)
 }
 
-/// the names among `names` that fetchloom does not read but that are one typo, a character
-/// added, dropped, changed or swapped with its neighbour, from a variable it does, each with that
-/// variable. any other name is left alone, since a wrapper or another version may read it.
+/// the names among `names` fetchloom does not read but that are one typo from a variable it does,
+/// each with that variable. any other is left alone, as a wrapper or another version may read it.
 pub(crate) fn misnamed(names: impl IntoIterator<Item = OsString>) -> Vec<(String, &'static str)> {
     names
         .into_iter()
@@ -910,9 +894,8 @@ fn gcs_buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<GcsBucket>>, Erro
     })
 }
 
-/// the azure containers `key` lists, separated by commas: `azure:account/container`, or the
-/// container's link, which may carry its SAS as the azure portal gives one. none when it is unset
-/// or empty.
+/// the azure containers `key` lists, separated by commas: `azure:account/container`, or a link to
+/// the container, which may carry its SAS as the portal gives one. none when unset or empty.
 fn azure_containers(given: &Given<'_>, key: &str) -> Result<Set<Vec<AzureContainer>>, Error> {
     let Some((entries, origin, named)) = given.list(key) else {
         return Ok(Set::default(Vec::new()));
@@ -982,8 +965,7 @@ fn drive_folders(given: &Given<'_>, key: &str) -> Result<Set<Vec<DriveId>>, Erro
 }
 
 /// the mirrors `key` lists, in order: folders, and http or https addresses. a relative folder in
-/// the settings file is taken from the file's folder, as `cache` is, and one in a variable from
-/// the working folder. none when it is unset or empty.
+/// the settings file is taken from its folder, one in a variable from the working folder.
 fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
     let Some((entries, origin, named)) = given.list(key) else {
         return Ok(Set::default(Vec::new()));
@@ -1023,9 +1005,8 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
     })
 }
 
-/// the folder `key` names for `fetchloom push`, which writes folders only: a web address is
-/// refused, as a mirror's is read. a relative folder in the settings file is taken from the
-/// file's folder, and one in a variable from the working folder. none when it is unset or empty.
+/// the folder `key` names for `fetchloom push`, which writes folders only, so a web address is
+/// refused. a relative folder is taken as [`mirrors`] takes one. none when unset or empty.
 fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Error> {
     let Some((value, origin, named)) = given.text(key) else {
         return Ok(Set::default(None));
@@ -1117,10 +1098,9 @@ pub(crate) fn is_on(var: Var<'_>, name: &str) -> bool {
     matches!(switched(name, var(name).as_deref()), Ok(Some(true)))
 }
 
-/// what an on/off setting `named` says as `value`: none when it is unset or holds only spaces,
-/// true for `true` or `1` and false for `false` or `0`, in any case and with spaces around it.
-/// any other value is a usage error, without a help, for the caller to refuse or to tell as a
-/// warning.
+/// what an on/off setting `named` says as `value`: none when unset or blank, true for `true` or
+/// `1`, false for `false` or `0`, in any case. anything else is a usage error without a help, for
+/// the caller to refuse or to tell as a warning.
 pub(crate) fn switched(
     named: &str,
     value: Option<&std::ffi::OsStr>,
@@ -1197,8 +1177,6 @@ mod tests {
         })
     }
 
-    /// `build_floor` is a size from a variable or the file, and unset means the default the disk
-    /// holding the cache sets.
     #[test]
     fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
         assert_eq!(read(&[], None).unwrap().build_floor, Set::default(None));
@@ -1343,10 +1321,8 @@ mod tests {
         assert!(self::file("jobs = [").is_err());
     }
 
-    /// a settings file that is not TOML names the line and column where reading stopped, and
-    /// never the text there, which may hold a login.
-    /// a settings file that is there but cannot be read stops the run, saying why, rather than
-    /// reading as no file and leaving its settings out. here `FETCHLOOM_SETTINGS` names a folder.
+    /// rather than reading as no file and leaving its settings out. here `FETCHLOOM_SETTINGS`
+    /// names a folder.
     #[test]
     fn a_settings_file_that_cannot_be_read_is_an_error_not_a_missing_file() {
         let folder = tempfile::tempdir().unwrap();
@@ -1371,6 +1347,7 @@ mod tests {
         }
     }
 
+    /// and never the text there, which may hold a login.
     #[test]
     fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {
         let error = file("jobs = 16\n[extra\n").unwrap_err();
@@ -1385,8 +1362,7 @@ mod tests {
         assert!(!error.message.contains("hunter2"), "{}", error.message);
     }
 
-    /// a key one typo away from a setting is told that setting; any other key gets the list of
-    /// settings.
+    /// and any other key gets the list of settings.
     #[test]
     fn a_mistyped_key_is_told_the_setting_it_is_near() {
         let typo = file("jbos = 16\n").unwrap_err();
@@ -1820,9 +1796,8 @@ mod tests {
         assert_eq!(wrong.kind, Kind::Usage);
     }
 
-    /// an empty or blank variable for where requests go or where push writes clears what the
-    /// settings file names there, so a run meant to reach the sources cannot take the file's
-    /// mirror. other settings still fall back to the file.
+    /// so a run meant to reach the sources cannot take the file's mirror. other settings still
+    /// fall back to the file.
     #[test]
     fn an_empty_variable_clears_the_files_mirrors_and_push_folder() {
         let filed = file(
@@ -1941,8 +1916,8 @@ mod tests {
         }
     }
 
-    /// containers are named by account and container, or by link, which in the settings file
-    /// may carry the container's own SAS. the SAS never shows, not even in a refused entry.
+    /// by account and container, or by a link that may carry the container's own SAS, which never
+    /// shows, not even in a refused entry.
     #[test]
     fn azure_containers_name_containers_and_keep_their_sas_unshown() {
         let shown = |settings: &Settings| -> Vec<String> {
@@ -2089,8 +2064,7 @@ mod tests {
         }
     }
 
-    /// an empty or blank `FETCHLOOM_S3_BUCKETS` clears the buckets the settings file lists, so no
-    /// request is signed for them.
+    /// so no request is signed for them.
     #[test]
     fn an_empty_variable_clears_the_files_s3_buckets() {
         let filed = file("s3_buckets = [\"s3://lab-raw\"]\n").unwrap();
@@ -2112,9 +2086,7 @@ mod tests {
         }
     }
 
-    /// a variable one typo from one fetchloom reads, a character added, dropped, changed or
-    /// swapped with its neighbour, is named with the one it is near; known names and names
-    /// further off are left alone.
+    /// a character added, dropped, changed or swapped; known names and those further off stay.
     #[test]
     fn a_name_one_typo_from_a_variable_is_named_with_it() {
         // put together, since the docs check takes each whole FETCHLOOM_ name in src for a setting
@@ -2146,8 +2118,7 @@ mod tests {
         );
     }
 
-    /// every variable the environment page documents is one fetchloom reads, so setting it is
-    /// never taken for a typo.
+    /// so setting one is never taken for a typo.
     #[test]
     fn every_documented_variable_is_known() {
         let page = include_str!("../docs/user/reference/environment.md");
