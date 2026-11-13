@@ -237,8 +237,8 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
     assert_eq!(choice(&actual), expected, "observation {bytes:?}");
 }
 
-/// twelve file states under every mix of force, copy, writable and shared, each checked
-/// against `reference`, a small model of who owns the file.
+/// twelve file states meet every mix of force, copy, writable and shared, each checked against
+/// `reference`, a small model of who owns the file.
 #[test]
 fn every_observed_file_gets_the_decision_the_ownership_model_predicts() {
     let run = tempfile::tempdir().unwrap();
@@ -256,8 +256,8 @@ fn every_observed_file_gets_the_decision_the_ownership_model_predicts() {
     }
 }
 
-/// a file `--verify` found changed under its placed size and time is put back without force,
-/// whatever it was placed as, since no edit of the project's shows.
+/// no edit of the project's shows in a file `--verify` found changed under its placed size and
+/// time, whatever it was placed as.
 #[test]
 fn a_damaged_file_is_replaced_without_force() {
     let run = tempfile::tempdir().unwrap();
@@ -302,8 +302,7 @@ fn a_damaged_file_is_replaced_without_force() {
     }
 }
 
-/// which records sync removes, keeps or forgets: only those of a dataset the run works on that
-/// no target wants, whatever else the run's scope names.
+/// sync removes, keeps or forgets only the records no target wants of datasets the run works on.
 #[test]
 fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
     let run = tempfile::tempdir().unwrap();

@@ -1,6 +1,5 @@
-//! making the data folder match the lock: place what is missing, replace what fetchloom placed
-//! before when the lock moved on, remove what no dataset needs, and leave alone every file
-//! someone changed or added.
+//! making the data folder match the lock: place what is missing, replace what fetchloom placed for
+//! an older pin, remove what no dataset needs, and leave alone every file someone changed or added.
 
 #[cfg(test)]
 #[cfg(unix)]
@@ -38,19 +37,16 @@ pub(crate) struct Placement {
     pub(crate) replaced: u64,
     pub(crate) removed: u64,
     pub(crate) unchanged: u64,
-    /// files left alone: changed by hand, or never placed by fetchloom.
+    /// files left alone, each with why.
     pub(crate) kept: Vec<Kept>,
-    /// files replaced though no edit of this project's showed: hardlinks to the cache's copy,
-    /// which an edit through a link changed, here or in another project, and files `--verify`
-    /// found changed under an unchanged size and time.
+    /// files replaced though no edit of this project's showed: cache links an edit changed, here or
+    /// in another project, and files `--verify` found changed under the same size and time.
     pub(crate) restored: Vec<String>,
     /// files `--force` replaced that sync would otherwise keep, with the reason it would have.
     pub(crate) overwritten: Vec<Kept>,
-    /// the files of `restored` that were links to the cache's changed copy, with the name that
-    /// copy was kept under beside each, so an edit made in place through a link is not lost.
+    /// the files of `restored` linked to the cache's changed copy, with the name it was kept under.
     pub(crate) changed_copies: Vec<ChangedCopy>,
-    /// files fetchloom placed that were gone, deleted or moved by someone, and that it placed
-    /// again since data.lock still pins them. `placed` counts them.
+    /// files fetchloom placed that someone deleted or moved, placed again. `placed` counts them.
     pub(crate) put_back: Vec<String>,
     /// those of `put_back` that `fetchloom drop` would not leave out, by path, with why.
     #[serde(skip)]
@@ -59,8 +55,7 @@ pub(crate) struct Placement {
     /// their dataset's own, so a warning names the folder once.
     #[serde(skip)]
     pub(crate) emptied: HashMap<String, String>,
-    /// the folders of datasets that were gone, as after a person deleted one, or the data folder,
-    /// to start afresh. a sync fills them again without a warning.
+    /// dataset folders deleted for a fresh start, which a sync fills again without a warning.
     #[serde(skip)]
     pub(crate) refilled: BTreeSet<String>,
     /// the datasets the run places or replaces files of.
@@ -69,11 +64,9 @@ pub(crate) struct Placement {
     /// the datasets the plan has files of, placed now or before.
     #[serde(skip)]
     pub(crate) planned: BTreeSet<String>,
-    /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
-    /// a mirror holds them and only `fetchloom build` makes them.
+    /// recipes whose pinned results the run left out, since no cache or mirror holds them.
     pub(crate) unbuilt: Vec<String>,
-    /// exclude patterns of datasets in the run that name files inside an archive, which they
-    /// leave where they are.
+    /// excludes of datasets in the run naming files inside an archive, which stay in place.
     #[serde(skip)]
     pub(crate) unreached: Vec<plan::Unreached>,
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
@@ -82,8 +75,7 @@ pub(crate) struct Placement {
     /// entries `--force` removed from the way of placed files, by path.
     #[serde(skip)]
     pub(crate) cleared: Vec<(String, Entry)>,
-    /// files that were already at their places with the pinned bytes, which sync took as placed
-    /// and counts as unchanged, by dataset.
+    /// files that already held the pinned bytes, adopted and counted as unchanged, by dataset.
     #[serde(skip)]
     pub(crate) adopted: BTreeMap<String, Vec<String>>,
     /// those of `adopted` now linked to the cache's copy of their bytes.
@@ -116,11 +108,8 @@ pub(crate) enum Undroppable {
 }
 
 impl Placement {
-    /// notes what a placing tells beside its counts: the files it places that the state records
-    /// as placed, which someone deleted or moved while data.lock still pins them, with those of
-    /// them drop would refuse, and the excludes of datasets in `scope` that name files inside an
-    /// archive and matched no listed file, as `unlisted` says. `unknown` are the archives whose
-    /// files are not planned yet.
+    /// notes what a placing tells beside its counts. `unknown` are the archives whose files are not
+    /// planned yet, so a dataset with one may have more files than its targets.
     #[expect(
         clippy::too_many_arguments,
         reason = "each is a part of the placing it notes what to tell of"
@@ -179,7 +168,6 @@ impl Placement {
             }
             self.emptied.insert(target.path.clone(), folder.to_owned());
         }
-        // as drop refuses them: a result's file, and a dataset's every file
         self.undroppable = targets
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
@@ -204,11 +192,9 @@ impl Placement {
     }
 }
 
-/// a file `--force` moved aside to replace it, which goes once what replaces it is in place and
-/// goes back where that failed.
+/// a file `--force` moved aside, deleted once its replacement is in place, else moved back.
 #[derive(Debug)]
 struct SetAside {
-    /// its path in the project.
     path: String,
     /// the hidden name beside it that it was moved to.
     aside: std::path::PathBuf,
@@ -217,9 +203,8 @@ struct SetAside {
     stead: Vec<(String, Sha256)>,
 }
 
-/// where each file `--force` set aside is among [`Placement::set_aside`], the first set aside
-/// from each path, as a search from the start finds it, so a run that sets thousands aside notes
-/// the files placed in their stead without searching for each.
+/// an index of [`Placement::set_aside`] by path, to the first set aside from each, as a search from
+/// the start finds it, so a run that sets thousands aside needs no search for each.
 #[derive(Default)]
 struct AsideAt {
     by_path: HashMap<String, usize>,
@@ -228,8 +213,7 @@ struct AsideAt {
 }
 
 impl AsideAt {
-    /// the first file of `set_aside` set aside from `path`, once those set aside since the last
-    /// call are indexed.
+    /// the first file set aside from `path`, indexing those set aside since the last call.
     fn find(&mut self, set_aside: &[SetAside], path: &str) -> Option<usize> {
         for (at, set) in set_aside.iter().enumerate().skip(self.indexed) {
             self.by_path.entry(set.path.clone()).or_insert(at);
@@ -276,7 +260,6 @@ impl Kept {
         }
     }
 
-    /// the file of `target`, left as it is for `reason`, as `survey` found it.
     fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
         Kept {
             dataset: Some(target.dataset.to_owned()),
@@ -336,11 +319,9 @@ pub(crate) struct Preview {
 pub(crate) struct Planned {
     pub(crate) place: Vec<String>,
     pub(crate) replace: Vec<String>,
-    /// files already at the place of a file whose hash only its download can learn, so only
-    /// the download tells whether they hold the pinned bytes.
+    /// files already at the place of a file whose hash only its download can learn.
     pub(crate) check: Vec<String>,
-    /// files fetchloom did not place that already hold the pinned bytes, which sync would take
-    /// as placed.
+    /// files fetchloom did not place that already hold the pinned bytes, which sync would adopt.
     pub(crate) adopt: Vec<String>,
 }
 
@@ -366,7 +347,6 @@ enum Unwanted {
     Remove(Look),
     /// someone changed it, so it stays.
     Keep,
-    /// it is gone already.
     Gone,
 }
 
@@ -375,17 +355,15 @@ enum Unwanted {
 pub(crate) enum Reason {
     /// fetchloom placed it, and it changed since.
     Changed,
-    /// fetchloom placed it as a hardlink to the cache, and it changed since, while other names
-    /// still share it. the cache neither holds nor records that copy, so nothing tells which
-    /// project made the change.
+    /// a hardlink fetchloom placed that changed while other names share it, a copy the cache
+    /// neither holds nor records, so nothing tells which project changed it.
     Shared,
     /// fetchloom did not place it, and it holds other bytes than the lock pins.
     Foreign,
     /// no dataset needs it now, but it changed since fetchloom placed it.
     Unneeded,
-    /// another entry stands in its way: a link or special file at its path, or a file where a
-    /// folder on its way belongs. `--force` replaces that entry, though never a folder that
-    /// holds anything.
+    /// another entry is in its way: a link or special file at its path, or a file where a folder on
+    /// its way belongs. `--force` replaces it, though never a folder that holds anything.
     Blocked,
 }
 
@@ -395,9 +373,8 @@ enum Action {
     /// `--force` removes the entry in the way, without following it, and places the file.
     Unblock(Blocker),
     Blocked(Blocker),
-    /// the entry in the way is a file fetchloom placed that no dataset needs now, or a folder of
-    /// only such files, so removing those first clears the way and the file is placed. one that
-    /// changed since the scan stays, and keeps the file out as blocked.
+    /// an unneeded file fetchloom placed is in the way, or a folder of only such files, which
+    /// removal clears first; one changed since the scan stays, and the file is blocked.
     Freed(Blocker),
     Replace,
     /// `--force` replaces a file sync would otherwise keep for this reason, and names it.
@@ -422,21 +399,16 @@ pub(crate) struct Placing<'a> {
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     survey: Survey,
-    /// the datasets this placing works on.
     scope: Scope,
     /// the recipes whose results it leaves out, as [`Placing::leave_out`] says.
     unbuilt: Vec<String>,
-    /// the exclude patterns of each dataset the run listed that matched no listed file, as
-    /// [`Placing::listed`] gives them.
+    /// each listed dataset's excludes that matched no listed file, from [`Placing::listed`].
     unlisted: plan::Unlisted,
 }
 
 impl<'a> Placing<'a> {
-    /// compares the data folder, as `survey` saw it, with `lock`, with each archive standing for
-    /// the files the cache records it unpacked to. only files fetchloom did not place are hashed,
-    /// to see whether they already hold the locked bytes. nothing is written, so a dry run can
-    /// show what applying it would do. the files of datasets outside `scope` are left as they
-    /// are.
+    /// compares the data folder, as `survey` saw it, with `lock`, archives standing for the files
+    /// the cache records they unpacked to; it writes nothing, so a dry run can use it.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
@@ -507,9 +479,8 @@ impl<'a> Placing<'a> {
         })
     }
 
-    /// the exclude patterns of each dataset the run listed that matched no file its source
-    /// listed. without them, as from data.lock alone, no exclude is told as one that names
-    /// files inside an archive, since data.lock keeps no file an exclude left out.
+    /// takes each listed dataset's excludes that matched no listed file; without them none is told
+    /// as reaching into an archive, since data.lock keeps no file an exclude left out.
     pub(crate) fn listed(&mut self, unlisted: plan::Unlisted) {
         self.unlisted = unlisted;
     }
@@ -519,7 +490,6 @@ impl<'a> Placing<'a> {
         self.survey
     }
 
-    /// the archives never unpacked on this machine, with the dataset each belongs to.
     pub(crate) fn unknown(&self) -> Vec<(String, &'a LockedFile)> {
         self.unknown
             .iter()
@@ -527,10 +497,9 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
-    /// the locked files whose bytes placing needs and the cache lacks, each once, with the
-    /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
-    /// object a mark puts in doubt is hashed first, and changed bytes are listed for replacement.
-    /// a failed read, seal or change mark stops the run.
+    /// the locked files whose bytes placing needs and the cache lacks, each once with its dataset,
+    /// an archive for its missing files. an object a mark puts in doubt is hashed first and listed
+    /// when changed; a failed read, seal or change mark stops the run.
     pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let marks = cache.doubts()?;
         self.lacking(|digest, size| {
@@ -589,9 +558,8 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
-    /// the files inside archives that applying this placing puts in the data folder and whose
-    /// names are archives too, each by its dataset, its path in the project and the archive it
-    /// came in, which fetchloom did not unpack again.
+    /// the archives inside archives that this placing puts in the data folder, which fetchloom does
+    /// not unpack again, each with its dataset, its path in the project and the archive it came in.
     pub(crate) fn nested(&self) -> Vec<(&'a str, String, &'a LockedFile)> {
         self.put()
             .filter(|target| crate::archive::by_name(&target.path).is_some())
@@ -620,9 +588,8 @@ impl<'a> Placing<'a> {
             .map(|(target, _)| target)
     }
 
-    /// the files already at their places with the bytes data.lock pins there, by the state or by
-    /// hashing, whose bytes a file placing places or replaces needs too: where the cache can take
-    /// those bytes from when it lacks them. a file of a dataset the run leaves alone is left out.
+    /// the files kept, vouched for or adopted whose bytes a file this placing puts needs too: where
+    /// the cache can take them when it lacks them, outside datasets the run leaves alone.
     pub(crate) fn holding(&self) -> Vec<(Sha256, String)> {
         let needed: HashSet<Sha256> = self
             .targets
@@ -645,9 +612,8 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
-    /// the recipes in scope whose result placing needs bytes of that `holds` says the cache
-    /// lacks, by name. nothing downloads a result; only a build makes it again. bytes a fetched
-    /// file this placing needs holds too come with its download.
+    /// the recipes in scope whose result has bytes placing needs that `holds` says the cache lacks
+    /// and no fetched file brings: only a build makes a result.
     pub(crate) fn unbuilt(&self, holds: impl Fn(&Sha256, u64) -> bool) -> Vec<String> {
         let needed = || {
             self.targets
@@ -673,10 +639,8 @@ impl<'a> Placing<'a> {
         names
     }
 
-    /// leaves out the results of the recipes `names`, which [`Placing::unbuilt`] found nowhere:
-    /// their files already in place stay, the rest wait for a build, and what an older pin
-    /// placed where those go leaves as any file no dataset needs does. the run then counts as
-    /// incomplete.
+    /// leaves out the results of `names`, which [`Placing::unbuilt`] found nowhere, so the run is
+    /// incomplete: files in place stay, and an older pin's file where one goes is unneeded now.
     pub(crate) fn leave_out(&mut self, names: &[String]) {
         let (targets, actions) = std::mem::take(&mut self.targets)
             .into_iter()
@@ -731,11 +695,8 @@ impl<'a> Placing<'a> {
             .collect())
     }
 
-    /// what [`Placing::apply`] would do, decided as it decides and with nothing written. a file
-    /// that changes between this look and placing is still left alone when it is placed for real.
-    /// a file already at the place of one whose hash is a dry run's stand-in, `guessed` as
-    /// `<dataset>/<path>`, is one to check, since only the download tells whether it holds the
-    /// pinned bytes.
+    /// what [`Placing::apply`] would do, writing nothing. a file already where one goes whose hash
+    /// is a stand-in, `guessed` as `<dataset>/<path>`, is one to check: only its download tells.
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
@@ -882,11 +843,9 @@ impl<'a> Placing<'a> {
         self.targets.len()
     }
 
-    /// removes what no dataset needs, places what is missing or outdated, and records it, with
-    /// `synced` marked complete when every file the lock asks for ended up in place. `told`
-    /// holds the datasets an add adds: their lines stay out of what this tells but for `-v`,
-    /// since the add tells each last, and when placing fails or stops, what this placed for them
-    /// goes again, since the add is then rolled back.
+    /// removes what no dataset needs, places what is missing or outdated and records it, `synced`
+    /// complete if every file the lock asks for is in place. `told` names an add's datasets, whose
+    /// lines wait for `-v` since the add tells them, and whose files go if placing fails or stops.
     pub(crate) fn apply(
         self,
         output: &Output,
@@ -963,7 +922,7 @@ impl<'a> Placing<'a> {
         // one look at the stop decides flushing, taking back an add's files and the result, so
         // a stop asked between them cannot leave an add's files placed and the add rolled back
         let stopped = stop.is_asked();
-        // place_all has flushed published copies; a stop discards its unfinished batch.
+        // place_all has flushed published copies; a stop discards its unfinished batch
         let flushed = if stopped {
             Ok(())
         } else {
@@ -971,8 +930,7 @@ impl<'a> Placing<'a> {
                 .flush_copies()
                 .map_err(|err| Error::io("could not flush the copied files to disk", &err))
         };
-        // a run that placed everything it set out to links what it adopted to the cache, so a
-        // failed add, which is rolled back, leaves those files as they were
+        // linking adopted files only after a full success leaves them alone in a rolled-back add
         if !stopped && failure.is_none() && flushed.is_ok() {
             link_adopted(project, &placer, cache, work, &found, state, &mut placement);
         }
@@ -983,7 +941,6 @@ impl<'a> Placing<'a> {
                     .get(path)
                     .is_some_and(|placed| placed.checked == checked && placed.sha256 == *sha256)
         });
-        // an add that fails is rolled back, so what it placed for its dataset goes too
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
@@ -1054,10 +1011,8 @@ impl<'a> Placing<'a> {
 }
 
 /// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
-/// `recorded`, must be written. a state that only settles files hashed as unchanged or marks the
-/// run synced spares later runs work, and one that only forgets a kept rebuild frees its files
-/// for gc, so a project folder that takes no write, as on a full disk, fails no run that changed
-/// nothing.
+/// `recorded`, must be written; settled hashes, the synced mark and forgotten rebuilds need not be,
+/// so a project folder that takes no write, as on a full disk, fails no run that changed nothing.
 fn record(
     project: &Project,
     state: &mut State,
@@ -1085,7 +1040,6 @@ pub(crate) struct Seen {
     pub(crate) lock: Option<Sha256>,
 }
 
-/// whether `action` places bytes the cache must hold.
 fn needs_bytes(action: &Action) -> bool {
     matches!(
         action,
@@ -1097,13 +1051,10 @@ fn needs_bytes(action: &Action) -> bool {
     )
 }
 
-/// what a sync with nothing to do placed, found without reading what archives unpack to or
-/// planning: data.toml and data.lock are byte for byte as a sync that left every file they ask
-/// for in place left them, so the state records exactly those files, and each one still looks as
-/// recorded. files as new as the state that hashing found unchanged need only a state written
-/// again, which the caller does. anything else, or any doubt the survey raised, takes the long
-/// way. a dry run passes `make` false so a missing data folder is not created. the whole project
-/// must be settled, while the placement counts the files of the datasets in `scope` alone.
+/// what a sync with nothing to do placed, or none unless data.toml and data.lock are as the last
+/// complete sync left them, every file looks as recorded and the survey raised no doubt; the caller
+/// writes the state again for racy files found intact. `make` false, for a dry run, makes no data
+/// folder, and the count covers `scope` alone, though the whole project must be settled.
 pub(crate) fn untouched(
     project: &Project,
     manifest: &Manifest,
@@ -1150,9 +1101,8 @@ pub(crate) fn untouched(
     }))
 }
 
-/// the files fetchloom did not place that already hold their target's bytes, those sync adopts,
-/// each with how the scan saw it, for [`link_adopted`]. a dataset that asks for writable copies
-/// keeps its own files as they are.
+/// the files fetchloom did not place that sync adopts, each with how the scan saw it, for
+/// [`link_adopted`]. a dataset that asks for writable copies keeps its own files as they are.
 fn found_in_place<'t, 'a>(
     targets: &'t [Target<'a>],
     actions: &[Action],
@@ -1172,10 +1122,9 @@ fn found_in_place<'t, 'a>(
         .collect()
 }
 
-/// links each file of `found` that sync adopted to the cache's copy of its bytes, so one copy
-/// stays on disk, while the file still looks as the scan saw it. a file with another name stays,
-/// since linking this one would free nothing, and so does one whose bytes the cache cannot vouch
-/// for, or one on a drive that makes no hardlinks. a failure leaves the file as it was.
+/// links each adopted file of `found` that still looks as scanned to the cache's copy, so one copy
+/// stays on disk. a file with another name stays, since linking it frees nothing, as does one the
+/// cache cannot vouch for or a drive cannot link; a failure leaves the file as it was.
 fn link_adopted(
     project: &Project,
     placer: &Placer,
@@ -1240,12 +1189,9 @@ fn added_here(
         .collect()
 }
 
-/// takes back what this run recorded for the dataset an add adds, as `adding` names it, since
-/// the add is rolled back when placing fails: a file it placed where nothing stood goes, unless
-/// it changed since, and so does its record, while a file it took as placed stays and only its
-/// record goes. a record of a file that cannot be removed stays, so a later sync removes it. a
-/// stop asked for does not stop this, so the placer it removes with does not listen for one.
-/// says whether the state changed.
+/// takes back what this run recorded for an add's datasets, `adding`, as the add is rolled back,
+/// whatever stop is asked: a file it placed goes with its record unless it changed or will not go,
+/// and a file it took as placed stays, losing its record. says whether the state changed.
 fn undo(
     project: &Project,
     data_dir: &Path,
@@ -1279,11 +1225,9 @@ fn undo(
     changed
 }
 
-/// deletes each file `--force` moved aside once every file placed in its stead is in place, as
-/// `in_place` says, and moves it back where one is not, so a forced replacement that failed or
-/// stopped leaves what it would have replaced. a file that cannot go back, as when a folder now
-/// stands at its name, stays under the hidden name it was moved to. a stop does not stop this, so
-/// the placer it works with does not listen for one.
+/// deletes each file `--force` moved aside once `in_place` says every file in its stead is in
+/// place, else moves it back, so a failed or stopped replacement leaves it; one that cannot go back
+/// keeps its hidden name. a stop does not stop this.
 fn settle_aside(
     project: &Project,
     data_dir: &Path,
@@ -1307,10 +1251,9 @@ fn settle_aside(
     }
 }
 
-/// carries out every decision short of placing files: counts what stays, records files found to
-/// hold the locked bytes, and removes files about to be replaced unless they changed since the
-/// scan, moving those `--force` replaces aside instead. returns the targets left to place, and
-/// whether the state gained a file or changed a record.
+/// carries out every decision short of placing: counts what stays, records files found holding the
+/// locked bytes, and removes files about to be replaced unless changed since the scan, moving those
+/// `--force` replaces aside. returns the targets to place and whether the state changed.
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
@@ -1328,8 +1271,7 @@ fn settle<'t, 'a>(
     let mut aside = AsideAt::default();
     for (target, action) in targets.iter().zip(actions) {
         placer.stop().check()?;
-        // a file that stays where another dataset placed it is this dataset's now, so its
-        // removal follows this dataset
+        // a file another dataset placed is this one's now, so its removal follows this dataset
         if let Some(placed) = survey.state.files.get_mut(&target.path)
             && placed.dataset != target.dataset
             && !matches!(action, Action::Unselected)
@@ -1368,8 +1310,7 @@ fn settle<'t, 'a>(
                     });
                 }
             }
-            // removing what no dataset needs came first, and cleared the way unless it found
-            // what stood there changed
+            // removal ran first and cleared the way, unless what stood there had changed
             Action::Freed(blocker) if now(&project.root.join(&blocker.path)).is_none() => {
                 placement.placed += 1;
                 todo.push(target);
@@ -1427,9 +1368,8 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
-/// records the file at `target`'s place, seen as `seen`, which holds its bytes, as placed. a file
-/// nothing recorded, other than a link to the cache's copy a run cut off before writing the state
-/// left, was put there by someone, so its record and the run's lines say it was adopted.
+/// records the file at `target`'s place, which holds its bytes, as placed; one nothing recorded is
+/// someone's, so it is marked adopted, unless it is a cache link a cut-off run left.
 fn adopt(
     project: &Project,
     cache: &Cache,
@@ -1465,9 +1405,8 @@ fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
 /// the most names [`keep_aside`] tries beside one file.
 const MOST_KEPT: u32 = 100;
 
-/// takes the file at `target`'s place away for its pinned copy. a link to the cache's changed
-/// copy is kept beside it instead, so an edit made in place through the link is not lost, and a
-/// file `--force` replaces, as `forced` says, is moved aside until the pinned file is in place.
+/// takes the file at `target`'s place away for its pinned copy, keeping a changed cache link beside
+/// it so the edit survives, and a `forced` file aside until the pinned one is in place.
 fn make_way(
     project: &Project,
     placer: &mut Placer,
@@ -1527,12 +1466,8 @@ fn taken_paths<'t>(survey: &Survey, targets: &'t [Target<'_>]) -> HashSet<&'t st
     targets.iter().map(|target| target.path.as_str()).collect()
 }
 
-/// keeps the cache's changed copy, linked at `path`, under the first free name of
-/// [`aside_names`], then takes `path` away for the pinned file. a copy nothing else names gets
-/// the new name as a second link, which costs nothing. one other names still share, as other
-/// projects' links do, is cloned or copied instead, so each project's changed copy is its own
-/// and an edit of one changes no other. a name already there is refused, so no file is replaced.
-/// returns that name.
+/// keeps the changed copy linked at `path` under the first free name of [`aside_names`], as a
+/// second link, or a copy while other names share it, then removes `path`. returns that name.
 fn keep_aside(
     project: &Project,
     placer: &mut Placer,
@@ -1568,10 +1503,9 @@ fn keep_aside(
     Err(local(&from, &full))
 }
 
-/// removes the entry in the way of placing, without following it, once it still is what the
-/// survey listed: a link or special file, an empty folder, or a file whose size and time are
-/// unchanged, so a file written to since the scan stays. a file is moved aside instead, and
-/// stays until the files placed in its stead are in place. says whether it is gone.
+/// removes the entry in the way, without following it, if it is still what the survey listed: a
+/// link, special file, empty folder or unchanged file. a file is moved aside until the files in its
+/// stead are in place. says whether it is gone.
 fn clear(
     project: &Project,
     placer: &mut Placer,
@@ -1630,12 +1564,8 @@ fn clear(
     }
 }
 
-/// what the file at `destination` needs, as `survey` saw it. a hardlink a mark put in doubt is
-/// replaced when hashing found its bytes changed and kept when it found them intact, and a file
-/// hashing found changed is an edit, though its size and time may not show either. a changed file
-/// that holds the locked bytes is taken as placed if its mode fits the dataset: a run cut off
-/// after it replaced a file and before it wrote the state leaves the new bytes recorded as old.
-/// an entry in the way of a file that is not there stays unless `force` may replace it.
+/// what the file at `destination` needs. a changed file holding the locked bytes is adopted if its
+/// mode fits, since a run cut off before writing the state leaves a replaced file recorded as old.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -1720,9 +1650,8 @@ fn decide(
     }
 }
 
-/// deletes files fetchloom placed for a dataset in `scope` that no dataset needs now, unless
-/// someone changed them, counting those of datasets `manifest` keeps out of the data folder.
-/// says whether the state lost a file.
+/// deletes the unchanged files fetchloom placed for `scope` that no dataset needs now, counting
+/// those of datasets with `place = false`. says whether the state lost a file.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is a part of the placing whose unwanted files go"
@@ -1775,8 +1704,7 @@ fn remove_unwanted(
     Ok(changed)
 }
 
-/// whether `placed` is a file of a dataset `manifest` keeps out of the data folder with
-/// `place = false`.
+/// whether `placed` is a file of a dataset with `place = false`.
 fn unplaced(manifest: &Manifest, placed: &Placed) -> bool {
     manifest
         .datasets
@@ -1784,10 +1712,9 @@ fn unplaced(manifest: &Manifest, placed: &Placed) -> bool {
         .is_some_and(|entry| !entry.place)
 }
 
-/// deletes what an interrupted placement left under the hidden names it stages files in, in
-/// `folders` when it names some. the project lock keeps any other sync from staging files
-/// meanwhile. a leftover that changed since the scan, or that cannot be deleted, stays for a
-/// later sync.
+/// deletes what an interrupted placement left under its hidden staging names, within `folders` if
+/// given; the project lock keeps other syncs from staging meanwhile. a leftover that changed or
+/// will not go stays for a later sync.
 fn sweep(
     project: &Project,
     placer: &mut Placer,
@@ -1842,8 +1769,7 @@ pub(crate) fn going(
     removable(survey, &wanted, unknown, &Scope::All, root)
 }
 
-/// the files fetchloom placed for a dataset in `scope` that no target of `wanted` needs now and
-/// nobody changed, which sync removes before it places anything.
+/// the files [`going`] names, for the datasets in `scope` alone.
 fn removable(
     survey: &Survey,
     wanted: &HashSet<&str>,
@@ -1857,9 +1783,8 @@ fn removable(
         .collect()
 }
 
-/// what becomes of a file an entry keeps out, as `action` decided: placed once removing what
-/// sync removes first, `going`, clears the way. an entry that is a file of a dataset outside
-/// `scope`, or a folder holding one, stays even with `--force` and names that dataset.
+/// `action` for a file an entry keeps out, freed when `freeing` clears that entry. one holding a
+/// file of a dataset outside `scope` stays even with `--force`, naming that dataset.
 fn clearing(action: Action, survey: &Survey, freeing: &Freeing, scope: &Scope) -> Action {
     let (Action::Blocked(blocker) | Action::Unblock(blocker)) = &action else {
         return action;
@@ -1892,10 +1817,9 @@ fn clearing(action: Action, survey: &Survey, freeing: &Freeing, scope: &Scope) -
     }
 }
 
-/// what becomes of each file fetchloom placed for a dataset in `scope` that no dataset needs
-/// now. the files of a dataset with an archive this machine never unpacked stay, since nothing
-/// tells which of them it still needs. one that no longer looks as placed goes only when `holds`
-/// finds the placed bytes still in it; otherwise someone changed it, and it stays.
+/// what becomes of each file fetchloom placed for `scope` that no dataset needs now. a dataset with
+/// an archive never unpacked here keeps its files, since nothing tells which it needs, and a file
+/// that no longer looks as placed goes only when `holds` finds its placed bytes.
 fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
@@ -1927,9 +1851,8 @@ fn unwanted(
         .collect()
 }
 
-/// whether a file fetchloom placed below `root`, seen as `look`, still holds the bytes it placed
-/// there though it no longer looks as placed: a disk such as fat settles a file's time after it
-/// is written. only a file of the placed size is hashed, and one that cannot be read does not.
+/// whether a placed file below `root` that no longer looks as placed still holds its bytes, as when
+/// fat settles a file's time after writing. only a readable file of the placed size is hashed.
 fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed, &Look) -> bool {
     move |path, placed, look| {
         let file = root.join(survey.listed.get(path).map_or(path, String::as_str));
@@ -1939,9 +1862,8 @@ fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed
     }
 }
 
-/// how the file at `path` looks right now. a file is read again right before it is deleted,
-/// since downloads may have run for hours after the folder was scanned, and someone may have
-/// changed it meanwhile.
+/// how the file at `path` looks now, read again right before a delete, since downloads may have run
+/// for hours since the scan and someone may have changed it.
 fn now(path: &Path) -> Option<Look> {
     fs::symlink_metadata(path)
         .ok()
@@ -1961,9 +1883,8 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
     }
 }
 
-/// the record of a file at `path` found to hold the target's bytes. a link a run cut off before
-/// it wrote the state placed is the cached object under another name, so it is recorded as a
-/// hardlink, which the audit covers and whose read-only flag is never cleared.
+/// the record of a file at `path` holding the target's bytes, a hardlink when it is the cached
+/// object, as a cut-off run leaves it, so the audit covers it and its read-only flag stays.
 fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u64) -> Placed {
     if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
         placed(target, Method::Hardlink, look, false, checked)
@@ -1972,8 +1893,7 @@ fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u6
     }
 }
 
-/// whether the file at `path`, seen as `look`, holds the target's bytes. only a file of the
-/// target's size is hashed, and one that cannot be read does not.
+/// whether the file at `path` holds the target's bytes; only a readable file of its size is hashed.
 pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
     look.size == target.size
         && Sha256::of_file(path, Block::sized(look.size.saturating_add(1)))
@@ -1984,9 +1904,8 @@ pub(crate) fn now_writable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
 }
 
-/// whether a file placed as `placed` has the mode its dataset asks for: writable for `copy =
-/// true`, and otherwise no link to the cache's copy someone made writable, which leaves the copy
-/// every project shares open to an edit.
+/// whether a file placed as `placed` has its dataset's mode: writable for `copy = true`, else no
+/// cache link someone made writable, which opens the copy every project shares to edits.
 pub(crate) fn fits(target: &Target, placed: &Placed, survey: &Survey) -> bool {
     if target.copy {
         placed.writable
@@ -1995,9 +1914,8 @@ pub(crate) fn fits(target: &Target, placed: &Placed, survey: &Survey) -> bool {
     }
 }
 
-/// the size of the bytes `sha256` names when the file at `path`, which the state records as
-/// `placed` with them and which still looks so, hashes to them at another size than `size`.
-/// only such a file is read.
+/// the size of the bytes `sha256` names when the file at `path`, still as `placed` records it,
+/// hashes to them at another size than `size`. only such a file is read.
 pub(crate) fn placed_other_size(
     path: &Path,
     placed: &Placed,
@@ -2023,9 +1941,8 @@ pub(crate) fn cached_other_size(cache: &Cache, sha256: &Sha256, size: u64) -> Op
     .then_some(found)
 }
 
-/// the error for `label`, which data.lock pins at `size` bytes though the bytes its SHA-256
-/// names have `actual`: no source or mirror can send bytes that have both, so only data.lock
-/// can be wrong, and only a person can tell what it said before.
+/// the error for `label`, pinned at `size` bytes though its SHA-256 names `actual` bytes: no source
+/// can send both, so data.lock is wrong, and only a person can tell what it said before.
 pub(crate) fn mispinned(label: &str, size: u64, actual: u64) -> Error {
     Error::new(
         Kind::ProjectInvalid,
@@ -2073,8 +1990,7 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::project::state::State;
 
-    /// a project's data folder cannot leave the project, so a sync whose cache is on another
-    /// drive tells the person to move the project, while other reasons name the data folder.
+    /// a data folder cannot leave its project, so it is the project that moves.
     #[test]
     fn a_copy_warning_names_the_project_when_the_cache_is_on_another_drive() {
         assert!(
@@ -2090,7 +2006,6 @@ mod tests {
         );
     }
 
-    /// a changed copy is kept under the first `.changed` name no locked file takes.
     #[test]
     fn a_changed_copy_skips_names_locked_files_take() {
         let taken = HashSet::from(["data/a.csv.changed", "data/a.csv.changed.2"]);
@@ -2104,8 +2019,8 @@ mod tests {
         );
     }
 
-    /// the files placed in a set-aside file's stead are noted on the first file set aside from
-    /// its path, as a search from the start finds it, one set aside since included.
+    /// the index finds the first file set aside from a path, as a search from the start would,
+    /// files set aside since included.
     #[test]
     fn a_file_set_aside_is_found_by_its_path() {
         let set = |path: &str| SetAside {
@@ -2122,8 +2037,7 @@ mod tests {
         assert_eq!(at.find(&set_aside, "data/d"), None);
     }
 
-    /// a cached file that cannot be checked or noted as changed is named as a file in the cache,
-    /// without the words fetchloom uses inside for those steps.
+    /// the messages leave out the words fetchloom uses inside for checking and marking an object.
     #[test]
     fn a_cached_file_that_cannot_be_checked_is_named_plainly() {
         let object = Path::new("cache").join("objects").join("ab").join("cdef");
@@ -2158,8 +2072,7 @@ mod tests {
         .unwrap()
     }
 
-    /// a file that stays where it is but now belongs to another dataset, as when two datasets in
-    /// one folder trade a file, is recorded for its new dataset, which removal then follows.
+    /// two datasets in one folder can trade a file, and its removal then follows its new dataset.
     #[test]
     fn a_kept_file_is_recorded_for_the_dataset_that_places_it_now() {
         let dir = tempfile::tempdir().unwrap();
@@ -2233,10 +2146,8 @@ mod tests {
         assert_eq!(recorded.files["data/weather.csv"].dataset, "weather");
     }
 
-    /// a sync of named datasets never takes another dataset's file out of a named file's way,
-    /// even with `--force`: the file stays, and the named file is kept out as blocked, naming
-    /// the dataset the file is of. a sync of every dataset clears it first, as no dataset needs
-    /// it now.
+    /// the other dataset's file stays even with `--force`, and the warning for the file it blocks
+    /// names that dataset. a sync of every dataset clears it first, since no dataset needs it now.
     #[test]
     fn a_named_sync_never_clears_another_datasets_file_from_the_way() {
         let dir = tempfile::tempdir().unwrap();
@@ -2428,9 +2339,8 @@ mod tests {
         }
     }
 
-    /// `--force` takes an edited file's place only once the pinned file can take it: when placing
-    /// fails, as when the cache lost the pinned bytes, the edit is still at its path, and when it
-    /// works, nothing of the edit is left beside the pinned file.
+    /// when placing fails, as when the cache lost the pinned bytes, the edit is still at its path,
+    /// and when it works, nothing of the edit is left beside the pinned file.
     #[test]
     fn a_forced_replacement_keeps_the_edit_until_the_pinned_file_is_in_place() {
         let bytes = b"station,temperature\nlerwick,9.1\n";
@@ -2500,9 +2410,8 @@ mod tests {
         }
     }
 
-    /// `--force` moves a file that stands where a dataset's folder belongs out of the way, and
-    /// deletes it only once the files under that folder are in place: when placing them fails,
-    /// its bytes are still in the data folder.
+    /// `--force` moves a file where a dataset's folder belongs aside, so when placing the folder's
+    /// files fails, its bytes are still in the data folder.
     #[test]
     fn a_file_in_the_way_stays_until_the_files_in_its_stead_are_in_place() {
         let bytes = b"station,temperature\nlerwick,9.1\n";
@@ -2692,9 +2601,8 @@ mod tests {
         assert!(found.is_none(), "a settled sync would leave the copy");
     }
 
-    /// only cached bytes that hash to their name tell the size they have: a copy damaged to
-    /// another size says nothing of data.lock, even one the cache trusts unread, since it looks
-    /// as sealed: read-only, with its old time.
+    /// a copy damaged to another size says nothing of data.lock, even one the cache trusts unread
+    /// since it looks sealed, read-only with its old time.
     #[test]
     fn only_intact_cached_bytes_show_a_pin_has_another_size() {
         let dir = tempfile::tempdir().unwrap();
@@ -2724,9 +2632,8 @@ mod tests {
         assert_eq!(cached_other_size(&cache, &digest, 13), None);
     }
 
-    /// the cache takes an object's bytes only from a file placing found holding them, kept,
-    /// vouched for or adopted, and only for an object a file it places or replaces needs: never
-    /// from a file it replaces or keeps as edited.
+    /// kept, vouched and adopted files lend their bytes, and only to a file placed or replaced;
+    /// files replaced or kept as edited never do.
     #[test]
     fn only_files_holding_their_pins_lend_bytes_to_files_that_need_them() {
         let dir = tempfile::tempdir().unwrap();

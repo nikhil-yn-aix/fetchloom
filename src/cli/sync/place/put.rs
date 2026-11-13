@@ -23,9 +23,8 @@ pub(super) struct Tally {
     pub(super) unlinked: u64,
 }
 
-/// places every file in `todo` several at once and records each one placed in `state`, counting
-/// in `work` each method and the files placed from objects the run did not write. a failure
-/// leaves the others placed and recorded, and the first one is returned.
+/// places every file in `todo` and records each in `state`, counting in `work` each method and the
+/// files from objects the run did not write; the first failure is returned, the rest still placed.
 pub(super) fn put_all<'t>(
     project: &Project,
     placer: &mut Placer,
@@ -176,8 +175,7 @@ mod tests {
         assert_eq!(other.details, Vec::<String>::new());
     }
 
-    /// a file counts as placed from the cache when the run did not write its object, whatever
-    /// the object's time says: a filesystem that keeps whole seconds, or a file server with its
+    /// an object's time decides nothing: a disk keeping whole seconds, or a file server with its
     /// own clock, can date an object the run wrote long before the run began.
     #[test]
     fn placed_from_cache_counts_objects_the_run_did_not_write() {
