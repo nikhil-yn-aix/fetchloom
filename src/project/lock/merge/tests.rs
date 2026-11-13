@@ -94,8 +94,8 @@ fn two_additions(base: bool) -> (Sides, Sides) {
     (manifest, locks)
 }
 
-/// whether the sides agreed on the dataset (`check_merged`) or a person chose it
-/// (`check_chosen`); the help is to merge by hand.
+/// a merged data.toml is checked against datasets the sides agreed on (`check_merged`) and those a
+/// person chose (`check_chosen`); the help is to merge by hand.
 #[test]
 fn a_merged_data_toml_that_lost_or_changed_a_decided_dataset_is_refused() {
     let ours = toml(&[("alpha", "zenodo:1")]);
@@ -200,7 +200,7 @@ fn a_removal_survives_with_a_base() {
     assert_eq!(merged.summary.from_theirs, ["beta"]);
 }
 
-/// the style that shows a base is in use already, so the help names only git.
+/// conflict lines that show a base mean that style is in use already, so the help names only git.
 #[test]
 fn a_base_shown_but_unread_names_no_conflict_style() {
     let (mut manifest, mut locks) = two_additions(false);
@@ -602,7 +602,7 @@ fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
     );
 }
 
-/// with no base to tell which side changed it.
+/// no base tells which side changed the dataset.
 #[test]
 fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
     let ours = "[datasets.a]\nref = \"zenodo:1\" # ours\n".to_owned();
@@ -805,7 +805,7 @@ fn a_merge_of_many_edits_keeps_our_layout_and_their_comments() {
     );
 }
 
-/// as its side's branch writes it, or removed, whichever side each choice names.
+/// each chosen entry stays as its side's branch writes it, or removed, as each choice names.
 #[test]
 fn choices_keep_each_chosen_entry_whole_in_place() {
     let ours = format!(
@@ -833,7 +833,7 @@ fn choices_keep_each_chosen_entry_whole_in_place() {
     );
 }
 
-/// rather than once more for each dataset it copies in, changes in place or takes out.
+/// no dataset a merge copies in, changes in place or takes out costs another read.
 #[test]
 fn a_merge_reads_data_toml_as_often_for_many_datasets_as_for_few() {
     let datasets = |prefix: &str, count: usize, record: &dyn Fn(usize) -> Option<usize>| {

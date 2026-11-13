@@ -1313,8 +1313,8 @@ mod tests {
             .collect()
     }
 
-    /// from 40 to 100 columns, the widths help uses. wrapping adds only a shell's continuation
-    /// mark in an example, and `#` before each line of its comment.
+    /// every width from 40 to 100 columns, the range help uses, is checked. wrapping adds only a
+    /// shell's continuation mark in an example, and `#` before each line of its comment.
     #[test]
     fn help_wraps_between_words_and_never_inside_one() {
         let mut screens = every_help();
@@ -1342,8 +1342,8 @@ mod tests {
         }
     }
 
-    /// for people whose first language is not english: a screen that says "pin" explains it, and
-    /// none uses the kitchen analogy, which belongs to `help concepts`, or words in place of names.
+    /// many read help in a second language: a screen that says "pin" explains it, and none uses the
+    /// kitchen analogy of `help concepts` or words in place of names.
     #[test]
     fn help_screens_name_things_plainly() {
         let mut screens = every_help();

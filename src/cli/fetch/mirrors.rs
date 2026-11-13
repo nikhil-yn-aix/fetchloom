@@ -767,7 +767,7 @@ mod tests {
         assert!(!listed.load(Ordering::Relaxed));
     }
 
-    /// refused together, each counted for what it is.
+    /// pinned files no mirror had and unhashed new ones are refused together, counted apart.
     #[test]
     fn mirror_only_mode_tells_pinned_files_from_new_ones() {
         let mut context = Context::new(Output::new(

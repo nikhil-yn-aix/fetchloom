@@ -411,8 +411,8 @@ mod tests {
         );
     }
 
-    /// in PATH's order, passing over a relative folder, a folder by that name and, on unix, a file
-    /// with no execute bit.
+    /// folders are tried in PATH's order, passing over a relative folder, a folder by that name
+    /// and, on unix, a file with no execute bit.
     #[test]
     fn a_program_is_the_first_runnable_file_in_an_absolute_folder_of_path() {
         let root = tempfile::tempdir().unwrap();

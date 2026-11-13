@@ -485,7 +485,7 @@ mod tests {
         state
     }
 
-    /// its dataset's, those whose folders meet its folder, and what the recipes among them read.
+    /// `path` needs its dataset's pins, those of overlapping folders, and what their recipes read.
     #[test]
     fn path_reads_only_the_pins_its_dataset_needs() {
         let text = concat!(

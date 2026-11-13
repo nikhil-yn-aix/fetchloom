@@ -200,7 +200,7 @@ fn compare(lock: &Lock) {
     assert_eq!(shuffled.render_with(INLINE), rendered);
 }
 
-/// whatever its line ends, a leading byte order mark or the order it was built in.
+/// line ends, a leading byte order mark and the order a lock was built in change nothing.
 #[test]
 fn every_generated_lock_reads_back_alike_through_both_readers() {
     compare(&Lock::default());

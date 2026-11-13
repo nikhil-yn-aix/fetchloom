@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
 
-    /// the error says what the field holds, and leaves the rest of the lock out.
+    /// a version error says what the field holds and leaves the rest of the lock out.
     #[test]
     fn a_version_that_is_no_whole_number_says_what_it_takes() {
         let rest = sample().render().replacen("version = 1\n", "", 1);
@@ -1240,7 +1240,7 @@ mod tests {
         (root, text)
     }
 
-    /// the others are left out, their file lines passed over unread where no string among them
+    /// the datasets left out have their file lines passed over unread where no string among them
     /// could hide a line of the lock.
     #[test]
     fn a_read_of_some_datasets_reads_them_as_a_whole_read_does() {
@@ -1479,8 +1479,8 @@ mod tests {
         );
     }
 
-    /// a dataset's files count whether data.lock or its list holds them; a read of some datasets
-    /// counts only theirs.
+    /// the memory check counts a dataset's files whether data.lock or its list holds them; a read
+    /// of some datasets counts only theirs.
     #[test]
     fn a_lock_too_big_for_its_room_is_refused_before_its_lists() {
         let text = sample_sorted()
@@ -1597,7 +1597,7 @@ mod tests {
         ]
     }
 
-    /// each reader names the key and never its value.
+    /// each reader's refusal names the key and never its value.
     #[test]
     fn a_link_with_a_login_or_a_secret_is_refused_by_every_reader() {
         const CANARY: &str = "canary-value";

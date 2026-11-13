@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(variables(ENVIRONMENT), variables(docs));
     }
 
-    /// a person whose download fails behind a company proxy looks here for where it is set.
+    /// a person behind a company proxy looks in this topic for where the proxy is set.
     #[test]
     fn the_environment_topic_names_the_proxy_variables() {
         let docs = include_str!("../../docs/user/reference/environment.md");
@@ -624,7 +624,7 @@ mod tests {
         }
     }
 
-    /// each kind by its name, or as one of a family such as `network.*`.
+    /// a kind is listed by its name, or as one of a family such as `network.*`.
     #[test]
     fn the_exit_codes_topic_lists_every_documented_code_and_kind() {
         let docs = include_str!("../../docs/user/reference/exit-codes.md");
@@ -676,7 +676,7 @@ mod tests {
         }
     }
 
-    /// the argument of `help --help`, the help of a topic that does not exist, and the welcome.
+    /// topics are listed in `help --help`'s argument, an unknown topic's help and the welcome.
     #[test]
     fn every_topic_is_named_where_topics_are_listed() {
         let command = args::Args::command();
@@ -702,7 +702,7 @@ mod tests {
         }
     }
 
-    /// and keeps every line it had.
+    /// moving the examples up keeps every line the help had.
     #[test]
     fn a_command_help_shows_its_examples_before_its_options() {
         let rendered = args::command()
@@ -737,7 +737,7 @@ mod tests {
         }
     }
 
-    /// even a result of one file, so the concepts ask to commit it for recipes too.
+    /// even a one-file result keeps its list in data.lock.d, so recipes need it committed too.
     #[test]
     fn the_concepts_say_recipes_keep_their_lists_in_data_lock_d() {
         let flat = CONCEPTS.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -747,7 +747,7 @@ mod tests {
         );
     }
 
-    /// and `build --help` points at it.
+    /// `build --help` points at `help recipes`.
     #[test]
     fn the_recipes_topic_shows_a_recipe_that_reads() {
         let recipes = super::topic_text(&["recipes".to_owned()]).unwrap_or_default();

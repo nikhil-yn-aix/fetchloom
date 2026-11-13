@@ -620,7 +620,7 @@ mod tests {
         }
     }
 
-    /// one small dataset's folder beside a large one, however large the state.
+    /// a small folder beside a large one reads little past its records, however large the state.
     #[test]
     fn a_read_within_a_folder_reads_little_beyond_its_records() {
         let mut state = State::default();
@@ -916,7 +916,7 @@ mod tests {
         }
     }
 
-    /// through the index, at any block size.
+    /// a read within folders goes through the index, at any block size.
     #[test]
     fn a_read_within_folders_answers_as_a_whole_read() {
         let state = crowded();
@@ -949,7 +949,7 @@ mod tests {
         mangled
     }
 
-    /// or whose `at` was changed, since a whole read ignores both.
+    /// a changed `at` changes no answer either, since a whole read ignores it and the index.
     #[test]
     fn a_read_within_a_changed_index_answers_as_a_whole_read() {
         let bytes = crowded().render_in(300);

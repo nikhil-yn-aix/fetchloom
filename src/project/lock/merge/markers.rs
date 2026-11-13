@@ -253,7 +253,7 @@ mod tests {
         );
     }
 
-    /// as git 2.43 wrote it when both branches added labels and one other dataset each: the base
+    /// git 2.43 wrote this when both branches added labels and one other dataset each: the base
     /// with zdiff3's moved lines does not read, and the trimmed one leaves out every cut table.
     #[test]
     fn the_base_is_read_again_around_what_zdiff3_moved_out() {

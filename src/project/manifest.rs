@@ -2224,7 +2224,7 @@ pub(crate) mod tests {
 
     const PETS: &str = "[datasets.pets]\nref = \"https://example.org/pets.zip\"\n";
 
-    /// by their paths inside it, top folder and all, whichever way the table is written.
+    /// a members table matches paths inside the archive, top folder and all, however it is written.
     #[test]
     fn members_tables_choose_files_inside_each_archive() {
         let manifest = parse(&format!(
@@ -2273,7 +2273,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// so editing them needs no network and `sync --locked` still passes.
+    /// editing member filters needs no network, and `sync --locked` still passes.
     #[test]
     fn member_filters_stay_out_of_the_spec() {
         let plain = parse(PETS);
@@ -2556,8 +2556,8 @@ pub(crate) mod tests {
         assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
     }
 
-    /// one after another, in any order, comments, notes and blank lines included; those that go
-    /// before the same dataset land in name order.
+    /// the order datasets are added in changes nothing, comments, notes and blank lines included;
+    /// those that go before the same dataset land in name order.
     #[test]
     fn datasets_added_together_land_as_each_would_alone() {
         let texts = [
@@ -2651,7 +2651,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// in place of the one this side has, or in name order.
+    /// a dataset taken from the other side lands in place of this side's, or in name order.
     #[test]
     fn a_dataset_from_the_other_side_keeps_its_comments_and_its_place() {
         let ours = "# inputs\n\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.core]\nref = \"zenodo:3\"\n";
@@ -2672,7 +2672,7 @@ pub(crate) mod tests {
         assert!(with_dataset_from(ours, theirs, "missing").is_err());
     }
 
-    /// as `datasets = { … }`, with help to merge by hand.
+    /// with `datasets = { … }` the help is to merge by hand.
     #[test]
     fn a_dataset_from_the_other_side_is_refused_where_datasets_are_inline() {
         let ours = "datasets = { alpha = { ref = \"zenodo:1\" } }\n";
@@ -2720,7 +2720,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// under the dataset's own header or one of its own for the archive.
+    /// each pattern goes under the dataset's own header, or one of its own for the archive.
     #[test]
     fn an_exclusion_is_added_once_keeping_comments() {
         let text = "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n";
@@ -3326,7 +3326,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// with LF, so a recipe's key is the same on every system.
+    /// a CRLF checkout's variable reads with LF, so a recipe's key is the same on every system.
     #[test]
     fn a_multi_line_variable_reads_alike_in_a_crlf_checkout() {
         let text =
@@ -3534,7 +3534,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// naming the new table only when data.toml shows which one it is.
+    /// a rename names the new table only when data.toml shows which one it is.
     #[test]
     fn members_left_by_a_rename_say_to_rename_them_too() {
         let members = "\n[datasets.glob.members.\"glob-000000.tar\"]\nexclude = ['a1.wav']\n";
@@ -3707,8 +3707,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// over varied layouts, with copies in place, before another dataset or last, from either of
-    /// two sources, and removals; layouts edits at once cannot follow fall back to one at a time.
+    /// the layouts vary, with copies in place, before another dataset or last, from either of two
+    /// sources, and removals; a layout edits at once cannot follow falls back to one at a time.
     #[test]
     fn edits_at_once_write_what_edits_one_at_a_time_write() {
         let names = ["a", "b", "c", "d", "e", "f"];
@@ -3798,7 +3798,7 @@ pub(crate) mod tests {
         (text, written)
     }
 
-    /// and fail alike where one meets a part written inline.
+    /// at once or one at a time, changes fail alike where one meets a part written inline.
     #[test]
     fn drop_changes_at_once_write_what_changes_one_at_a_time_write() {
         let missing = ["e", "z"];

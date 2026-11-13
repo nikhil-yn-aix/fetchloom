@@ -275,8 +275,8 @@ mod tests {
         ]
     }
 
-    /// on a big machine, a small one, a tiny one whose default budget is below lean's, and one that
-    /// does not say its memory. `most_files` stays sized from the default level's memory.
+    /// the machines are big, small, tiny with a default budget below lean's, and one of unknown
+    /// memory. `most_files` stays sized from the default level's memory.
     #[test]
     fn a_level_derives_each_knob_from_the_machine() {
         let big = machine(16, Some(16 * GIB));
@@ -398,8 +398,8 @@ mod tests {
         }
     }
 
-    /// at two, or one on a machine of one processor, as `FETCHLOOM_THREADS` would. the other
-    /// levels leave the workers as they are.
+    /// lean caps each local group at two workers, or one on a machine of one processor, as
+    /// `FETCHLOOM_THREADS` would. the other levels leave the workers as they are.
     #[test]
     fn lean_caps_local_workers_unless_threads_are_set_by_name() {
         let lean = [("FETCHLOOM_RESOURCES", "lean")];
@@ -421,8 +421,8 @@ mod tests {
         }
     }
 
-    /// what no level derives: the limits on listings and archives, retries, the timeout, the size
-    /// that asks first, mirrors, buckets and where push writes.
+    /// no level derives the limits on listings and archives, retries, the timeout, the size that
+    /// asks first, mirrors, buckets or where push writes.
     #[test]
     fn the_default_level_keeps_the_defaults_and_no_level_moves_what_it_does_not_derive() {
         let text = "mirrors = [\"/mnt/lab/mirror\"]\ns3_buckets = [\"s3://lab-raw\"]\npush_to = \"/mnt/lab/push\"\n";
@@ -480,7 +480,7 @@ mod tests {
         }
     }
 
-    /// naming them, worded as the other settings' errors are, from the environment or the file.
+    /// the error names the three levels, worded as other settings' errors, from either source.
     #[test]
     fn a_level_that_is_none_of_the_three_is_a_usage_error() {
         let big = machine(16, Some(16 * GIB));
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    /// which no level changes, though lean spends less memory.
+    /// no level changes `most_files` or the archive limits, though lean spends less memory.
     #[test]
     fn lean_keeps_most_files_and_the_archive_limits() {
         let big = machine(16, Some(16 * GIB));
@@ -560,7 +560,7 @@ mod tests {
         }
     }
 
-    /// and downloads to one host never pass downloads at once.
+    /// downloads to one host never pass downloads at once.
     #[test]
     fn a_run_names_the_level_or_setting_behind_each_number() {
         let roomy = machine(8, Some(8 * GIB));
@@ -645,7 +645,7 @@ mod tests {
         ]);
     }
 
-    /// the processors this process may use, and the memory the system or a cgroup leaves.
+    /// the machine limits are the usable processors and the memory the system or a cgroup leaves.
     #[test]
     fn a_run_names_the_machine_limits_behind_each_number() {
         let in_cgroup = |processors, memory| Machine {

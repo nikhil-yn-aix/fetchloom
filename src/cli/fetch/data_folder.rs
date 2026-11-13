@@ -407,7 +407,7 @@ mod tests {
         DataFolder::found(project, manifest, at.collect())
     }
 
-    /// so the file stays as it was and a later edit of it never reaches the cache.
+    /// the cache gets a clone or copy, so the file stays put and its edits never reach the cache.
     #[test]
     fn a_file_holding_its_pin_comes_into_the_cache_as_a_copy_of_its_own() {
         let (_folder, project, manifest, cache) = project();
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(counts.objects_written, 1);
     }
 
-    /// with no path left, the object stays wanted.
+    /// with no path left to try, the object stays wanted.
     #[test]
     fn an_edit_is_left_and_the_next_path_tried() {
         let (_folder, project, manifest, cache) = project();
@@ -499,7 +499,7 @@ mod tests {
         );
     }
 
-    /// it may lead out of the project, and fetchloom never places through one.
+    /// a link on a file's way may lead out of the project, and fetchloom never places through one.
     #[cfg(unix)]
     #[test]
     fn a_link_on_the_way_is_not_followed() {
@@ -555,8 +555,8 @@ mod tests {
         }
     }
 
-    /// the pinned bytes recorded at its path, and the file looking as recorded from before the
-    /// state was written. any other counts once it hashes to its pin, as an edit never does.
+    /// the state vouches when it records the pinned bytes at the path and the file looks as
+    /// recorded, from before the state was written. any other file must hash to its pin.
     #[test]
     fn a_file_counts_unread_only_where_the_state_vouches_for_it() {
         let (_folder, project, _, cache) = project();

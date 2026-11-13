@@ -2527,7 +2527,7 @@ mod tests {
         }
     }
 
-    /// one that failed before changing anything claims no rollback, and keeps no recovery copy.
+    /// an add that failed before changing anything claims no rollback and keeps no recovery copy.
     #[test]
     fn a_rollback_restores_only_what_the_add_changed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2565,8 +2565,8 @@ mod tests {
         assert_eq!(left, [std::ffi::OsString::from(".gitignore")]);
     }
 
-    /// the rollback says so and keeps the recovery copy, and still puts back the other file, which
-    /// only the add changed.
+    /// the rollback says it kept that change, keeps the recovery copy, and still puts back the
+    /// other file, which only the add changed.
     #[test]
     fn a_rollback_keeps_a_change_made_after_the_add_wrote_the_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -2659,7 +2659,7 @@ mod tests {
         );
     }
 
-    /// with nobody to ask it needs --yes.
+    /// with nobody to ask, starting a project at a disk root or in home needs --yes.
     #[test]
     fn starting_a_project_at_a_disk_root_or_in_home_asks_first() {
         let style = Style {
@@ -2685,7 +2685,7 @@ mod tests {
         assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
     }
 
-    /// the files the system made that an import skips, and the links one add with `--as` was given.
+    /// the counts are of system files an import skips and links one add with `--as` was given.
     #[test]
     fn counts_in_add_lines_have_their_thousands_apart() {
         use clap::Parser as _;
@@ -2768,7 +2768,7 @@ mod tests {
         (list, found)
     }
 
-    /// reading it again for each link made 4,000 links take a minute.
+    /// reading data.toml again for each link made 4,000 links take a minute.
     #[test]
     fn a_list_reads_data_toml_as_often_however_many_links_it_holds() {
         let dir = tempfile::tempdir().unwrap();
@@ -2896,7 +2896,7 @@ mod tests {
         assert!(!root.join("data").join("b").exists());
     }
 
-    /// here because the metadata folder takes no new files.
+    /// the copies fail here because the metadata folder takes no new files.
     #[cfg(unix)]
     #[test]
     fn an_add_that_cannot_save_its_recovery_copies_writes_neither_file() {

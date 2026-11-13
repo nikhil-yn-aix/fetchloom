@@ -1596,7 +1596,7 @@ fn retyped(line: &[std::ffi::OsString], typed: &[&str], meant: &[&str]) -> Optio
 mod tests {
     use super::*;
 
-    /// one asked before the mark ends it as stopped.
+    /// a stop asked before the command marks its work finished ends it as stopped.
     #[test]
     fn a_stop_after_a_command_finished_its_work_leaves_it_finished() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1669,7 +1669,7 @@ mod tests {
         );
     }
 
-    /// on linux and macos, since waiting cost commands such as `path` most of a millisecond.
+    /// waiting for runtime threads cost commands such as `path` most of a millisecond.
     #[cfg(not(windows))]
     #[test]
     fn the_run_ends_without_waiting_for_threads_still_exiting() {
@@ -1714,7 +1714,7 @@ mod tests {
         );
     }
 
-    /// as a scan a stop left running, or `get -i`'s reader of a pipe kept open.
+    /// a scan a stop left running, or `get -i`'s reader of a pipe kept open, may never end.
     #[test]
     fn a_task_that_never_ends_still_lets_the_run_end() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1783,7 +1783,7 @@ mod tests {
         }
     }
 
-    /// told in whole seconds, rounded up.
+    /// a rate limit wait is told in whole seconds, rounded up.
     #[test]
     fn a_rate_limit_wait_names_the_limit_it_waits_for() {
         assert_eq!(
@@ -1857,7 +1857,7 @@ mod tests {
         assert_eq!(about(context.output.told()), 1);
     }
 
-    /// either ctrl-c or SIGTERM, the first told as the one it was.
+    /// ctrl-c and SIGTERM both count as an interrupt, and the first is told as the one it was.
     #[test]
     fn the_first_interrupt_stops_the_work_and_the_second_quits() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1893,7 +1893,7 @@ mod tests {
         }
     }
 
-    /// whatever the work said it stopped doing, since no person asked.
+    /// the stop names SIGTERM whatever the work said it stopped doing, since no person asked.
     #[test]
     fn a_stop_a_sigterm_asked_names_it() {
         for (said, named) in [
@@ -1931,7 +1931,7 @@ mod tests {
         assert!(!finished.is_asked());
     }
 
-    /// since the stop is asked before `Stopping` while every other line waits for it.
+    /// the stop is asked before `Stopping` is written, and every other line waits for `Stopping`.
     #[test]
     fn a_line_told_once_the_stop_is_seen_follows_stopping() {
         let output = Output::new(
@@ -1997,8 +1997,8 @@ mod tests {
         );
     }
 
-    /// never to sign in, and offers to sign in no more, but for terms to accept. with no key here,
-    /// it stays as it was.
+    /// with a key here, a refusal never says to sign in, and offers sign-in only for terms to
+    /// accept; with no key, it stays as it was.
     #[test]
     fn a_refusal_with_a_key_here_says_to_check_the_key() {
         use crate::auth::Account;
@@ -2324,7 +2324,7 @@ mod tests {
         }
     }
 
-    /// a value it cannot read is a usage error naming it, never a run that goes online.
+    /// an unreadable value is a usage error naming the variable, never a run that goes online.
     #[test]
     fn the_offline_variable_takes_true_or_false_and_refuses_the_rest() {
         let read = |value: Option<&str>| offline(value.map(std::ffi::OsStr::new));

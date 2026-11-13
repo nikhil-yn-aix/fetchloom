@@ -956,7 +956,7 @@ mod tests {
         FILE_FLUSHES.set(FILE_FLUSHES.get() + 1);
     }
 
-    /// so a power cut leaves it whole for the next command to take over. its folder is not flushed.
+    /// a power cut leaves the flushed record whole for the next command; its folder is not flushed.
     #[test]
     fn the_owner_record_is_flushed_once_before_it_is_named() {
         let (_dir, project) = project(&[]);
@@ -1003,8 +1003,8 @@ mod tests {
         assert!(Project::find(&tempfile::tempdir().unwrap().path().join("x")).is_none());
     }
 
-    /// at the first folder holding `.git`, a folder or a submodule's or worktree's file, once its
-    /// own data.toml is checked.
+    /// the search ends at the first folder holding `.git`, a folder or a submodule's or worktree's
+    /// file, once its own data.toml is checked.
     #[test]
     fn a_git_repository_ends_the_search_for_data_toml() {
         let (dir, _) = project(&[
@@ -1050,7 +1050,7 @@ mod tests {
         );
     }
 
-    /// so a forgotten terminal is found.
+    /// naming the holder lets a person find a forgotten terminal.
     #[test]
     fn a_waiting_command_learns_which_command_holds_the_project() {
         let (_dir, project) = project(&[("data.toml", "")]);
@@ -1300,7 +1300,7 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"{}");
     }
 
-    /// whether it names a file or nothing: no lock on what it names would keep anyone out.
+    /// a `.fetchloom/lock` link is refused whatever it names: locking its target keeps no one out.
     #[test]
     fn a_linked_project_lock_is_refused_and_never_followed() {
         let (_dir, project) = project(&[(".fetchloom/elsewhere", "")]);
@@ -1339,7 +1339,7 @@ mod tests {
         assert!(!folder.join("owner").exists());
     }
 
-    /// as on a filesystem whose names and open files disagree, rather than trying forever.
+    /// where names and open files disagree, the hold ends with an error rather than trying forever.
     #[test]
     fn a_lock_that_never_keeps_its_name_is_given_up() {
         let (_dir, project) = project(&[]);
@@ -1586,7 +1586,7 @@ mod tests {
         }
     }
 
-    /// but never removes what it did not make.
+    /// a command that did not start its project never removes what it did not make.
     #[test]
     fn a_project_never_started_leaves_its_folder_as_it_was() {
         let (dir, project) = project(&[]);
@@ -1620,8 +1620,8 @@ mod tests {
         assert!(matches!(project.hold("add").unwrap(), Hold::Held(_)));
     }
 
-    /// a lock on it keeps nobody out, as when a command that started no project removed
-    /// `.fetchloom` while another waited, so the name is opened again.
+    /// a lock on a file that lost its name keeps nobody out, as when a command that started no
+    /// project removed `.fetchloom` while another waited, so the name is opened again.
     #[test]
     fn a_lock_file_that_lost_its_name_is_not_taken() {
         let (_dir, project) = project(&[]);
@@ -1662,8 +1662,8 @@ mod tests {
         assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
     }
 
-    /// rather than the TOML mistake its conflict lines make, in either of git's conflict styles
-    /// and either line ending.
+    /// the message names the merge, not the TOML mistake its conflict lines make, in either of
+    /// git's conflict styles and either line ending.
     #[test]
     fn an_unfinished_merge_in_data_toml_or_data_lock_says_how_to_finish_it() {
         let both = "[datasets.core]\nref = \"zenodo:1\"\n<<<<<<< HEAD\n\n[datasets.alpha]\nref = \"zenodo:2\"\n=======\n\n[datasets.beta]\nref = \"zenodo:3\"\n>>>>>>> beta\n";
@@ -1750,7 +1750,7 @@ mod tests {
         assert_eq!(read.synced, None);
     }
 
-    /// also once its index was changed by hand, which the whole read ignores.
+    /// a hand-changed index changes no answer, since the whole read ignores the index.
     #[test]
     fn a_state_read_within_a_folder_answers_as_a_whole_read() {
         use crate::place::Method;

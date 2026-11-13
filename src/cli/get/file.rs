@@ -1133,7 +1133,7 @@ mod tests {
         }
     }
 
-    /// one of the same or no stated size waits for the download, and `--force` replaces either.
+    /// a file of the same or no stated size waits for the download, and `--force` replaces either.
     #[test]
     fn a_file_of_another_size_than_stated_is_refused_before_downloading() {
         let dir = tempfile::tempdir().unwrap();
@@ -1309,7 +1309,7 @@ mod tests {
         object
     }
 
-    /// so its bytes are never written a second time, and the file is the person's to edit.
+    /// the download's bytes are never written a second time, and the file is the person's to edit.
     #[cfg(unix)]
     #[test]
     fn a_one_off_moves_out_of_the_cache_rather_than_being_copied() {
@@ -1327,7 +1327,7 @@ mod tests {
         assert_eq!(names_in(&dir.path().join("objects")), Vec::<String>::new());
     }
 
-    /// so the download still moves rather than being copied once a copy has made the folder.
+    /// a missing folder `-o` names is made before the move, so it never turns the move into a copy.
     #[cfg(unix)]
     #[test]
     fn a_one_off_moves_into_a_folder_made_for_it() {
@@ -1356,7 +1356,7 @@ mod tests {
         assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
     }
 
-    /// sealed, as a project's hardlink is: the file made writable would let an edit reach it.
+    /// an object a project links to stays sealed, or an edit could reach that project.
     #[cfg(unix)]
     #[test]
     fn an_object_with_another_name_stays_in_the_cache() {
@@ -1418,8 +1418,8 @@ mod tests {
         refuse_zipped(&cache, &remote, &plain.digest).unwrap();
     }
 
-    /// between this run's look at the path and its write, taking the bytes out of the cache or not.
-    /// one holding other bytes stays as it is.
+    /// another run of the same link may write the file between this run's look and its write,
+    /// taking the bytes out of the cache or not. a file holding other bytes stays as it is.
     #[test]
     fn a_file_another_run_wrote_meanwhile_is_kept_only_with_the_same_bytes() {
         let dir = tempfile::tempdir().unwrap();

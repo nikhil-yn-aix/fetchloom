@@ -505,7 +505,7 @@ mod tests {
         Location::Folder(PathBuf::from(path))
     }
 
-    /// and a terminal too narrow for every column leaves out the variable.
+    /// a terminal too narrow for every column leaves out the variable column.
     #[test]
     fn a_long_value_keeps_the_other_rows_in_their_columns() {
         let row = |name: &'static str, said: &str, variable: &'static str| Shown {
@@ -532,7 +532,7 @@ mod tests {
         );
     }
 
-    /// while `--json` keeps the number.
+    /// `--json` keeps the plain number.
     #[test]
     fn counts_read_with_their_thousands_apart() {
         let files = count("archive_files", 10_000_000_u64, Origin::Default);
@@ -564,7 +564,7 @@ mod tests {
         context
     }
 
-    /// those `--mirror` names first, then those of the setting it did not name, each once.
+    /// mirrors `--mirror` names come first, then those of the setting it did not name, each once.
     #[test]
     fn the_mirrors_row_shows_what_a_run_asks_and_where_each_part_came_from() {
         for (flagged, listed, origin, value, json, said) in [

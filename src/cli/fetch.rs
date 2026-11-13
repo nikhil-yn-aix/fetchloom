@@ -1519,7 +1519,7 @@ mod tests {
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
     }
 
-    /// though its size was known before, since it was not asked about before it started.
+    /// a download that may be unchanged is never asked about up front, even with its size known.
     #[test]
     fn a_download_that_may_be_unchanged_asks_once_the_server_sends_it() {
         let output = Output::new(
@@ -1604,7 +1604,7 @@ mod tests {
         assert!(overall.ticker.get().is_some());
     }
 
-    /// the batch's plain lines, however long a person took to answer no.
+    /// plain lines never say a refused download began, however long a person took to say no.
     #[test]
     fn a_download_its_question_stops_never_says_it_began() {
         let context = Context::new(Output::new(
@@ -1641,7 +1641,7 @@ mod tests {
         assert!(overall.ticker.get().is_none());
     }
 
-    /// so its bar promises no time left until then; each size counts once.
+    /// a bar whose sizes are not all known promises no time left, and each size counts once.
     #[test]
     fn a_batch_has_a_total_only_once_every_size_is_known() {
         let context = Context::new(Output::new(
@@ -1682,8 +1682,8 @@ mod tests {
         );
     }
 
-    /// what is left to transfer and its files once more, at least its size, when nobody listed
-    /// them. a file kept as it came, or no archive, needs only the transfer.
+    /// an archive needs room for what is left to transfer plus its files again, at least its size
+    /// if unlisted. a file kept as it came, or no archive, needs only the transfer.
     #[test]
     fn an_archive_whose_server_told_its_size_needs_room_to_unpack_it() {
         const MB: u64 = 1_000_000;
@@ -1698,7 +1698,7 @@ mod tests {
         assert_eq!(room_needed(Some(u64::MAX), 0, true), u64::MAX);
     }
 
-    /// on a lone download's bar, before the server answers, rather than an empty bar.
+    /// a lone download's bar shows the kept bytes before the server answers, not an empty bar.
     #[test]
     fn a_kept_part_is_told_before_the_download_starts() {
         let context = Context::new(Output::new(
@@ -1865,7 +1865,7 @@ mod tests {
         );
     }
 
-    /// it says when a server never said whether it would, and what starts over instead.
+    /// the stop says when a server never said whether a run may go on, and what starts over.
     #[test]
     fn a_stop_promises_to_go_on_only_where_a_server_allows() {
         let mib = 1 << 20;

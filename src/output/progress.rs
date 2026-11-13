@@ -1007,8 +1007,8 @@ fn report(
 mod tests {
     use super::*;
 
-    /// neither as data that stopped coming nor in its time: 4 s of waiting in a bar born 5 s ago
-    /// leave it neither quiet nor 2 s old.
+    /// a wait for a person's answer counts neither as data that stopped coming nor in the bar's
+    /// time: 4 s of waiting in a bar born 5 s ago leave it neither quiet nor 2 s old.
     #[test]
     fn a_bar_leaves_out_the_wait_for_an_answer() {
         let five = Duration::from_secs(5);
@@ -1054,7 +1054,7 @@ mod tests {
         (heard, reported, say)
     }
 
-    /// going on from 900 bytes an earlier run kept and moving 100, it rates and times only the 100.
+    /// a bar resuming from 900 kept bytes and moving 100 rates and times only the 100.
     #[test]
     fn a_resumed_bar_rates_only_the_bytes_this_run_moved() {
         let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
@@ -1167,7 +1167,7 @@ mod tests {
         drop(setup);
     }
 
-    /// rather than at its next tick, which a busy machine once put off for 6 s of `9 s left`.
+    /// waiting for each bar's next tick once kept a busy machine showing `9 s left` for 6 s.
     #[test]
     fn a_stop_shows_on_every_bar_at_once() {
         let style = super::super::Style {
@@ -1196,7 +1196,7 @@ mod tests {
         assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
     }
 
-    /// as when the bar waited for the server or checked what an earlier run kept.
+    /// a bar can appear before its transfer, as when it waits for the server or checks kept bytes.
     #[test]
     fn a_transfer_counts_its_time_from_its_start_not_from_its_bar() {
         let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
@@ -1218,7 +1218,7 @@ mod tests {
         assert!(shown <= asked.elapsed(), "{shown:?}");
     }
 
-    /// leaving out bytes that arrived at once, once read as `58.5 MiB/s` from a server at 38.1.
+    /// counting the first burst once read as `58.5 MiB/s` from a server sending 38.1.
     #[test]
     fn the_rate_starts_over_once_a_second_into_a_transfer() {
         let moved = Moved::new(Arc::default());
@@ -1235,7 +1235,7 @@ mod tests {
         assert!((rate - 38.0 * 1_048_576.0).abs() < 1.0, "{rate}");
     }
 
-    /// it covers the last 10 to 20 s, so a link slowing from 38 MiB a second to 19 shows 19.
+    /// the rate covers the last 10 to 20 s, so a link slowing from 38 MiB a second to 19 shows 19.
     #[test]
     fn the_rate_follows_a_link_that_slows_within_twenty_seconds() {
         let moved = Moved::new(Arc::default());
@@ -1341,7 +1341,7 @@ mod tests {
         );
     }
 
-    /// the bar first, then the verb, then the middle of the name, while the counters keep room.
+    /// a narrow line drops the bar, then the verb, then the name's middle; the counters keep room.
     #[test]
     fn narrow_progress_drops_decoration_before_facts() {
         let name = "train-00000-of-00004.parquet";
@@ -1415,7 +1415,7 @@ mod tests {
         }
     }
 
-    /// even one too quick for a later line: a download once it knows its size, a lookup at once.
+    /// even the quickest batch says it began: a download once its size is known, a lookup at once.
     #[test]
     fn a_network_batch_tells_its_start_at_once() {
         let pace = (Duration::from_mins(1), Duration::from_mins(2));
@@ -1485,7 +1485,7 @@ mod tests {
         );
     }
 
-    /// with two decimals below one, so it never jumps from `1002.0 MiB/2.0 GiB` to `1.0/2.0 GiB`.
+    /// two decimals below one unit stop a jump from `1002.0 MiB/2.0 GiB` to `1.0/2.0 GiB`.
     #[test]
     fn a_fraction_counts_in_the_unit_of_its_total() {
         let mib = 1024 * 1024;
@@ -1602,7 +1602,7 @@ mod tests {
         );
     }
 
-    /// not that no data came, which would send a person to check the network.
+    /// the bar never says no data came, which would send a person to check the network.
     #[test]
     fn a_download_held_by_the_disk_says_so() {
         let second = Duration::from_secs(1);
@@ -1623,7 +1623,7 @@ mod tests {
         );
     }
 
-    /// and for how long once it has waited a moment, not that no data came.
+    /// a full bar adds how long it has waited after a moment, never saying no data came.
     #[test]
     fn a_full_bar_says_it_waits_for_the_disk() {
         let second = Duration::from_secs(1);
@@ -1684,7 +1684,7 @@ mod tests {
         );
     }
 
-    /// as its bar does, while its files are written, rather than a count that stands full.
+    /// the line says it is finishing while files are written, as its bar does, not a full count.
     #[test]
     fn a_plain_line_says_an_unpack_that_read_every_byte_is_finishing() {
         let ten = Duration::from_secs(10);
@@ -1703,7 +1703,7 @@ mod tests {
         );
     }
 
-    /// of how many, and whose rate limit it waits for, not that no data came: the server answered.
+    /// the bar says which try of how many and whose limit it waits for, never that no data came.
     #[test]
     fn a_bar_waiting_to_try_again_says_which_try_and_when() {
         let second = Duration::from_secs(1);
@@ -1741,7 +1741,7 @@ mod tests {
         );
     }
 
-    /// rather than no data or a rate and time left that no longer apply, however long it takes.
+    /// however long a stop takes, the bar says stopping, not no data or a stale rate and time left.
     #[test]
     fn a_bar_says_it_is_stopping_once_a_stop_is_asked_for() {
         let second = Duration::from_secs(1);
@@ -1854,7 +1854,7 @@ mod tests {
         );
     }
 
-    /// where the conversion panicked, which a release build turns into an abort.
+    /// too slow a rate once panicked the conversion, which a release build turns into an abort.
     #[test]
     fn a_time_left_beyond_counting_is_the_longest() {
         assert_eq!(time_left(u64::MAX, 1e-6), Duration::MAX);

@@ -1635,7 +1635,7 @@ mod tests {
         assert_eq!(shown("zenodo:1"), "zenodo:1");
     }
 
-    /// so the time a slow disk takes to keep the file, as `-o` waits for, never counts against it.
+    /// a slow disk keeping the file, which `-o` waits for, never counts against the link.
     #[test]
     fn a_download_is_told_by_when_its_last_byte_arrived() {
         let started = Instant::now();
@@ -1667,7 +1667,7 @@ mod tests {
         );
     }
 
-    /// while the size question counts the bytes moved. a file kept packed, one that is no archive
+    /// the size question counts only the bytes moved. a file kept packed, one that is no archive
     /// and an archive of no stated size add nothing, and a sum too large stays the largest.
     #[test]
     fn the_room_a_get_needs_counts_each_archive_it_unpacks_once_more() {
@@ -1693,7 +1693,7 @@ mod tests {
         assert_eq!(needs(&[&huge, &zip]), (u64::MAX, u64::MAX));
     }
 
-    /// which says first that it stopped, as every stop does.
+    /// the stop says first that it stopped, as every stop does.
     #[test]
     fn links_a_stop_kept_from_their_folders_end_as_a_stop() {
         let links = [
@@ -1795,7 +1795,7 @@ mod tests {
         );
     }
 
-    /// it is asked about once its server sends it, so a rerun answered 304 asks nothing.
+    /// a rerun answered 304 asks nothing, since the question waits for the server's answer.
     #[test]
     fn get_approval_leaves_a_file_that_may_be_unchanged_to_its_answer() {
         let dir = tempfile::tempdir().unwrap();
@@ -1819,7 +1819,7 @@ mod tests {
         approve(&context, &cache, &jobs).unwrap();
     }
 
-    /// as hugging face's `Iris.csv` for a typed `iris.csv`, rather than a pattern nobody typed.
+    /// a typed `iris.csv` gets hugging face's `Iris.csv`, rather than a pattern nobody typed.
     #[test]
     fn a_link_to_a_missing_file_names_the_one_meant() {
         let listing = |paths: &[&str]| Listing {

@@ -2039,7 +2039,7 @@ mod tests {
         assert_eq!(super::wrap_help(examples, 60, false), examples);
     }
 
-    /// such as a link, which goes on a line of its own.
+    /// a link wider than the terminal gets a line of its own.
     #[test]
     fn help_keeps_a_word_wider_than_the_terminal_whole() {
         let link = "https://huggingface.co/datasets/ILSVRC/imagenet-1k/resolve/main/train.tar";
@@ -2075,8 +2075,8 @@ mod tests {
         );
     }
 
-    /// as a cancel they chose is not: a `Stopped` line in the warning color, its supporting lines
-    /// dim and its help a hint, never `error:`, even with -v.
+    /// a stop the person asked for is no failure: a `Stopped` line in the warning color, its
+    /// supporting lines dim and its help a hint, never `error:`, even with -v.
     #[test]
     fn a_stop_is_a_plain_line_not_an_error() {
         use crate::error::{Error, Kind};
@@ -2175,8 +2175,8 @@ mod tests {
         );
     }
 
-    /// a row for each rule: placeholders, examples, guesses, a person's terminal, hand fixes
-    /// first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
+    /// each rule in `fix`'s doc has a row: placeholders, examples, guesses, a person's terminal,
+    /// hand fixes first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
@@ -2274,8 +2274,8 @@ mod tests {
         );
     }
 
-    /// it needs a person to paste the key, even as the one command a help names: an agent that
-    /// ran it only failed.
+    /// signing in needs a person to paste the key, even when it is the one command a help names: an
+    /// agent that ran it only failed.
     #[test]
     fn signing_in_is_never_a_fix() {
         assert_eq!(
@@ -2317,8 +2317,8 @@ mod tests {
         }
     }
 
-    /// nor says yes for a person, and a help naming one first has none: an agent ran the fix of an
-    /// add whose name data.toml had, and the dataset was gone. a dry run of one only shows.
+    /// a fix never says yes for a person, and a help naming such a command first has none: an agent
+    /// ran the fix of an add whose name data.toml had and lost the dataset. a dry run only shows.
     #[test]
     fn a_fix_never_deletes_overwrites_repins_or_runs_code() {
         for help in [
@@ -2339,8 +2339,8 @@ mod tests {
         );
     }
 
-    /// every command, alone and with each option, so one added later is no fix until someone
-    /// decides here that a script may run it without asking a person.
+    /// the table decides for every command, alone and with each option, so one added later is no
+    /// fix until someone decides here that a script may run it without asking a person.
     #[test]
     fn a_fix_is_only_a_command_the_table_allows() {
         // each command, whether it is a fix alone, and the options it stays one with
@@ -2473,7 +2473,7 @@ mod tests {
             .collect()
     }
 
-    /// colored as stdout decides apart from stderr; quiet and `--json` print none.
+    /// report rows are colored as stdout decides, apart from stderr; quiet and `--json` print none.
     #[test]
     fn report_rows_follow_stdout_alone() {
         let style = |color| Style {
@@ -2559,8 +2559,8 @@ mod tests {
         );
     }
 
-    /// in 80 columns with its indent: each label leads its hash where both fit, else stands above
-    /// it. a lone hash reads as [`super::hashes_apart`] cuts it.
+    /// a hash comparison fits 80 columns with its indent: each label leads its hash where both fit,
+    /// else stands above it. a lone hash reads as [`super::hashes_apart`] cuts it.
     #[test]
     fn a_hash_comparison_reads_whole_one_value_under_the_other() {
         let wrong = "0".repeat(64);
@@ -2806,7 +2806,7 @@ mod tests {
         }
     }
 
-    /// y, yes, n and no in any case; q typed to quit is asked again, never taken as a yes.
+    /// y, yes, n and no answer in any case; q typed to quit is asked again, never taken as a yes.
     #[test]
     fn an_answer_other_than_yes_or_no_is_asked_again_not_taken_as_the_default() {
         for default in [true, false] {
@@ -2833,7 +2833,7 @@ mod tests {
         }
     }
 
-    /// as at the end of its input.
+    /// a closed terminal counts as the end of the question's input.
     #[test]
     fn a_question_whose_terminal_closed_is_answered_no() {
         let closed = || Err(std::io::ErrorKind::UnexpectedEof.into());
@@ -3082,7 +3082,7 @@ mod tests {
         output
     }
 
-    /// a batch's plain lines too, so none is written over the question, as in accessible output.
+    /// plain batch lines wait for answers too, so none writes over a question in accessible output.
     #[test]
     fn lines_told_during_a_question_wait_for_the_answer() {
         let output = telling(false);
@@ -3101,8 +3101,8 @@ mod tests {
         assert!(said[1].contains("Downloading iris.csv"), "{said:?}");
     }
 
-    /// since a terminal drops what it had not yet shown at a ctrl-c. one told after it, or with no
-    /// ctrl-c, is told once.
+    /// a terminal drops what it had not yet shown at a ctrl-c. a closing line told after one, or
+    /// with no ctrl-c, is told once.
     #[test]
     fn a_closing_line_before_a_finishing_ctrl_c_is_told_again() {
         let added = "      Added iris, its files are in data/iris";
@@ -3123,8 +3123,8 @@ mod tests {
         assert_eq!(calm.said(), [added]);
     }
 
-    /// a terminal echoes `^C` where its cursor waits, so that line clears it first and every line
-    /// starts at its own start, keeping the verb column; a pipe gets the lines alone.
+    /// a terminal echoes `^C` where its cursor waits, so a line told then clears it first and every
+    /// line starts at its own start, keeping the verb column; a pipe gets the lines alone.
     #[test]
     fn a_line_told_at_a_ctrl_c_clears_the_echo() {
         let stopping = "   Stopping (press ctrl-c again to quit at once)";
@@ -3146,7 +3146,7 @@ mod tests {
         assert_eq!(piped.said(), [stopping]);
     }
 
-    /// and a ctrl-c after it is told as a ctrl-c.
+    /// a ctrl-c after a SIGTERM is told as a ctrl-c.
     #[test]
     fn a_line_told_at_a_sigterm_names_a_second_sigterm() {
         let output = telling(false);
@@ -3167,7 +3167,7 @@ mod tests {
         );
     }
 
-    /// where a fixed line once stood still for the whole wait, and is one plain line in a log.
+    /// a fixed line once stood still through a whole wait; a log gets one plain line.
     #[test]
     fn a_wait_for_another_program_counts_on_a_terminal() {
         let text = "for `fetchloom add` (pid 7) working in this project";
@@ -3184,7 +3184,7 @@ mod tests {
         assert_eq!(piped.said(), [format!("    Waiting {text}")]);
     }
 
-    /// it once went untold for seconds after `Imported`.
+    /// placing many files once went untold for seconds after `Imported`.
     #[test]
     fn lasting_work_is_told_once_it_lasts() {
         let mut terminal = telling(false);

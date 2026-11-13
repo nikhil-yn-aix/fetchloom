@@ -1321,8 +1321,8 @@ mod tests {
         assert!(self::file("jobs = [").is_err());
     }
 
-    /// rather than reading as no file and leaving its settings out. here `FETCHLOOM_SETTINGS`
-    /// names a folder.
+    /// an unreadable file never counts as no file, which would leave its settings out. here
+    /// `FETCHLOOM_SETTINGS` names a folder.
     #[test]
     fn a_settings_file_that_cannot_be_read_is_an_error_not_a_missing_file() {
         let folder = tempfile::tempdir().unwrap();
@@ -1347,7 +1347,7 @@ mod tests {
         }
     }
 
-    /// and never the text there, which may hold a login.
+    /// the error never shows the text where reading stopped, which may hold a login.
     #[test]
     fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {
         let error = file("jobs = 16\n[extra\n").unwrap_err();
@@ -1362,7 +1362,7 @@ mod tests {
         assert!(!error.message.contains("hunter2"), "{}", error.message);
     }
 
-    /// and any other key gets the list of settings.
+    /// an unknown key far from every setting gets the list of settings.
     #[test]
     fn a_mistyped_key_is_told_the_setting_it_is_near() {
         let typo = file("jbos = 16\n").unwrap_err();
@@ -1796,8 +1796,8 @@ mod tests {
         assert_eq!(wrong.kind, Kind::Usage);
     }
 
-    /// so a run meant to reach the sources cannot take the file's mirror. other settings still
-    /// fall back to the file.
+    /// an empty variable keeps a run meant to reach the sources from taking the file's mirror.
+    /// other settings still fall back to the file.
     #[test]
     fn an_empty_variable_clears_the_files_mirrors_and_push_folder() {
         let filed = file(
@@ -1916,8 +1916,8 @@ mod tests {
         }
     }
 
-    /// by account and container, or by a link that may carry the container's own SAS, which never
-    /// shows, not even in a refused entry.
+    /// a container is named by account and container, or by a link that may carry its own SAS,
+    /// which never shows, not even in a refused entry.
     #[test]
     fn azure_containers_name_containers_and_keep_their_sas_unshown() {
         let shown = |settings: &Settings| -> Vec<String> {
@@ -2064,7 +2064,7 @@ mod tests {
         }
     }
 
-    /// so no request is signed for them.
+    /// an empty variable leaves no request signed for the file's buckets.
     #[test]
     fn an_empty_variable_clears_the_files_s3_buckets() {
         let filed = file("s3_buckets = [\"s3://lab-raw\"]\n").unwrap();
@@ -2086,7 +2086,7 @@ mod tests {
         }
     }
 
-    /// a character added, dropped, changed or swapped; known names and those further off stay.
+    /// one typo means a character added, dropped, changed or swapped; other names are left alone.
     #[test]
     fn a_name_one_typo_from_a_variable_is_named_with_it() {
         // put together, since the docs check takes each whole FETCHLOOM_ name in src for a setting
@@ -2118,7 +2118,7 @@ mod tests {
         );
     }
 
-    /// so setting one is never taken for a typo.
+    /// setting a documented variable is never taken for a typo.
     #[test]
     fn every_documented_variable_is_known() {
         let page = include_str!("../docs/user/reference/environment.md");
