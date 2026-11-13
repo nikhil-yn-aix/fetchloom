@@ -22,6 +22,7 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::output::{Output, Warning};
 use crate::plan;
+use crate::project::Project;
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::source::{self, Access, local};
@@ -55,11 +56,11 @@ pub(super) async fn import_held(
         open_cache()?
     };
     refuse_overlap(
-        &start,
-        shown,
+        (&start, shown),
         &project.root,
-        &project.root.join(&manifest.data_dir),
+        &manifest.data_dir,
         cache.root(),
+        here,
     )?;
     let (supplied, source, walked) = walk_import(context, manifest, args, &start, shown)?;
     let pinned = supplied
@@ -604,19 +605,20 @@ fn near(typed: &str, path: &Path) -> Option<String> {
 }
 
 /// refuses to import `start`, a path with no link in it, where it overlaps what fetchloom keeps:
-/// a folder holding the project, anything in the data folder, which placing writes, or the cache.
+/// a folder holding the project, anything in its data folder `data_dir`, which placing writes, or
+/// the cache. `here` is the folder the command runs in.
 pub(super) fn refuse_overlap(
-    start: &Path,
-    shown: &str,
+    (start, shown): (&Path, &str),
     root: &Path,
-    data: &Path,
+    data_dir: &str,
     cache: &Path,
+    here: &Path,
 ) -> Result<(), Error> {
     let real = |path: &Path| std::fs::canonicalize(path).ok();
     let overlap = if real(root).is_some_and(|root| root.starts_with(start)) {
         Some("holds this project")
-    } else if real(data).is_some_and(|data| start.starts_with(data)) {
-        Some("is in the data folder, where fetchloom places what data.lock pins")
+    } else if real(&root.join(data_dir)).is_some_and(|data| start.starts_with(data)) {
+        return Err(in_data_folder((start, shown), root, data_dir, here));
     } else if let Some(cache) = real(cache) {
         if start.starts_with(&cache) {
             Some("is in fetchloom's cache")
@@ -637,6 +639,75 @@ pub(super) fn refuse_overlap(
             )),
         ),
     }
+}
+
+/// the refusal of `typed`, a word naming something in the folder `here`, when that is in the data
+/// folder of the project there, or of the one an add would start there.
+pub(super) fn word_in_data_folder(typed: &str, here: &Path) -> Option<Error> {
+    let project = Project::find(here).unwrap_or_else(|| Project {
+        root: here.to_path_buf(),
+    });
+    let data_dir = project
+        .manifest()
+        .map_or_else(|_| manifest::DATA_DIR.to_owned(), |(_, read)| read.data_dir);
+    let start = std::fs::canonicalize(here.join(typed)).ok()?;
+    let data = std::fs::canonicalize(project.root.join(&data_dir)).ok()?;
+    start
+        .starts_with(data)
+        .then(|| in_data_folder((&start, typed), &project.root, &data_dir, here))
+}
+
+/// the refusal of `shown`, which names `start` inside `data_dir`, the data folder of the project
+/// at `root`, seen from `here`. placing writes there, so the help gives the commands that move it
+/// out and add it back, and the `data_dir` that keeps the folder as it is.
+fn in_data_folder(
+    (start, shown): (&Path, &str),
+    root: &Path,
+    data_dir: &str,
+    here: &Path,
+) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        format!("{shown} is in the data folder, where fetchloom places what data.lock pins"),
+    );
+    let keep = format!(
+        "keep {data_dir}/ as it is by setting data_dir under [project] in data.toml to another folder"
+    );
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let named = start
+        .file_name()
+        .and_then(|own| own.to_str())
+        .zip(dataset_name(start, start.is_file()));
+    let Some((own, name)) = named.filter(|_| start != root.join(data_dir)) else {
+        return error.help(format!("move what you keep there out of it, or {keep}"));
+    };
+    // a name the project's folder holds already would take the files in rather than be theirs
+    let Some(out) = (1..100)
+        .map(|number| match number {
+            1 => own.to_owned(),
+            _ => format!("{own}-{number}"),
+        })
+        .find(|out| std::fs::symlink_metadata(root.join(out)).is_err())
+    else {
+        return error.help(format!("move it out of {data_dir}/ first, or {keep}"));
+    };
+    let up = super::up_to(&root, here);
+    let moved = if up.is_empty() {
+        format!("./{out}")
+    } else {
+        format!("{up}{out}")
+    };
+    let renamed = if dataset_name(&root.join(&out), start.is_file()).as_deref() == Some(&name) {
+        String::new()
+    } else {
+        format!(" --as {name}")
+    };
+    error.help(format!(
+        "move it out first, with `mv {} {}`, then run `{}` to place its files in {up}{data_dir}/{name}, or {keep}",
+        super::shell_word(shown.trim()),
+        super::shell_word(moved.strip_prefix("./").unwrap_or(&moved)),
+        super::project::command(&format!("add {}{renamed}", super::shell_word(&moved)))
+    ))
 }
 
 /// the name a dataset imported from `start` takes without `--as`: the folder's, or the file's

@@ -437,6 +437,38 @@ fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Re
     Ok(())
 }
 
+/// data a project keeps in data/ already, as cookiecutter's data/raw, is moved out first: both
+/// ways of naming it get the same commands, and those commands put its files back in data/raw.
+#[test]
+fn data_already_in_the_data_folder_is_moved_out_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("data/raw"))?;
+    fs::write(work.join("data/raw/visits.csv"), b"id\n1\n")?;
+    for typed in ["data/raw", "./data/raw"] {
+        let output = sandbox.run(&["--json", "add", typed])?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            error["message"],
+            format!("{typed} is in the data folder, where fetchloom places what data.lock pins")
+        );
+        assert_eq!(
+            error["help"],
+            format!(
+                "move it out first, with `mv {typed} raw`, then run `fetchloom add ./raw` to place its files in data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
+            )
+        );
+        assert_eq!(error["fix"], serde_json::Value::Null, "{typed}");
+    }
+    assert!(!work.join("data.toml").exists());
+    fs::rename(work.join("data/raw"), work.join("raw"))?;
+    let added = sandbox.run(&["add", "./raw"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(fs::read(work.join("data/raw/visits.csv"))?, b"id\n1\n");
+    Ok(())
+}
+
 /// the help retypes the command with the near name from the same folder, quoted for a shell.
 #[test]
 fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {

@@ -99,12 +99,16 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     if !search::is_search(word) {
         return Ok(());
     }
-    let Some(what) = std::env::current_dir()
-        .ok()
-        .and_then(|here| local::here(word, &here))
-    else {
+    let Ok(here) = std::env::current_dir() else {
         return Ok(());
     };
+    let Some(what) = local::here(word, &here) else {
+        return Ok(());
+    };
+    // a person pins data a project keeps in data/ by moving it out first, which `./<word>` misses
+    if pins && let Some(error) = super::import::word_in_data_folder(word, &here) {
+        return Err(error);
+    }
     let search = format!("`fetchloom search {}` to search", super::shell_word(word));
     let help = if pins {
         format!(

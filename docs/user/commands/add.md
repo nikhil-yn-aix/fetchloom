@@ -89,7 +89,14 @@ a folder of many files takes a moment to pin and place after `Imported`, so a te
 
 below the folder, `.git`, `.hg`, `.svn` and `.fetchloom` are left out unseen. files a system writes by itself are left out too, and one `Skipped` line names them: finder's `.DS_Store`, `._` files and `__MACOSX`, the `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems` and `.Trash-<uid>` folders of removable disks, and windows' `Thumbs.db`, `ehthumbs.db`, `desktop.ini`, `$RECYCLE.BIN` and `System Volume Information`. links and special files, such as named pipes, are left out with a warning and never followed. names are checked as an archive's members are, before anything is copied: a name with a control character or a `\`, one longer than 4096 bytes, one this machine cannot store, or two names that are one on disks that ignore case or unicode composition, stop the import with `source.invalid`, exit 10. `--select` and `--exclude` match the paths below the folder, and a select pattern that keeps nothing is a usage error. a folder holding more files than [`most_files`](../reference/environment.md) is refused before it is all read. archives in the folder unpack as a downloaded dataset's do.
 
-a folder that holds the project, sits in its data folder, or holds or sits in the cache, is refused with `usage`, exit 2. the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
+a folder that holds the project, sits in its data folder, or holds or sits in the cache, is refused with `usage`, exit 2. data a project keeps in its data folder already, such as cookiecutter's `data/raw`, is refused the same way whether it is typed `data/raw` or `./data/raw`, and the help gives the commands that move it out and add it back, or the `data_dir` that keeps `data/` as it is. stderr from a first run in a folder that holds `data/raw`:
+
+```text
+error: data/raw is in the data folder, where fetchloom places what data.lock pins
+  help: move it out first, with `mv data/raw raw`, then run `fetchloom add ./raw` to place its files in data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder
+```
+
+the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
 
 no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, but once a cached archive is unpacked its own bytes leave the cache, so a switch to `extract = false` then needs them supplied again.
 
