@@ -63,8 +63,7 @@ fn set(sandbox: &Sandbox) -> Result<PathBuf> {
     Ok(sandbox.work().join("data").join("set"))
 }
 
-/// the curator's journey: a bad sample inside an archive leaves for good as a pattern of the
-/// archive's own paths, and nothing asks the server, then or at the next locked sync.
+/// the pattern uses the archive's own paths, and the next locked sync asks the server nothing.
 #[test]
 fn drop_leaves_out_a_file_inside_an_archive_without_a_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -131,8 +130,7 @@ fn a_dry_run_names_what_drop_would_write_and_changes_nothing() -> Result {
     Ok(())
 }
 
-/// a disk such as fat settles a file's time after it is written, so a file fetchloom placed can
-/// look changed though it still holds the placed bytes. a drop removes it all the same.
+/// fat settles a file's time after it is written, so a placed file can look changed.
 #[test]
 fn a_dropped_file_whose_time_moved_still_goes() -> Result {
     let sandbox = Sandbox::new()?;
@@ -188,7 +186,6 @@ fn globbed(sandbox: &Sandbox) -> Result<PathBuf> {
     Ok(folder)
 }
 
-/// a file a glob key's table leaves out already is told by that key, as for any table.
 #[test]
 fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
     let sandbox = Sandbox::new()?;
@@ -202,9 +199,8 @@ fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
     Ok(())
 }
 
-/// a file of an archive a glob key's table covers is left out in a table of the archive's own,
-/// copied from the glob's, since an archive's own table wins over a glob: the archive keeps what
-/// the glob chose, and the pattern never reaches the other archives the glob covers.
+/// an archive's own table wins over a glob, so copying the glob's keeps what it chose, and the
+/// pattern never reaches the other archives the glob covers.
 #[test]
 fn drop_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -250,8 +246,7 @@ fn drop_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
     Ok(())
 }
 
-/// leaving out every file of an archive leaves out the archive, and a glob key's table goes once
-/// it matches no archive left, as an archive's own table goes with it.
+/// leaving out every file of an archive leaves out the archive itself.
 #[test]
 fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -273,9 +268,8 @@ fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
     Ok(())
 }
 
-/// a glob key's select pattern that matches no file of the archive drop copies its table for
-/// stays out of the copy: it keeps nothing there, and the archive's own table, held to today's
-/// rule, would refuse it.
+/// a pattern that matches nothing in the archive keeps nothing there, and the archive's own table
+/// would refuse it.
 #[test]
 fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -307,8 +301,8 @@ fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
     Ok(())
 }
 
-/// a file the source lists leaves data.lock too, rewritten as relocking would pin it, so a
-/// locked sync takes it. an import could not be listed again, so a stale pin would fail here.
+/// data.lock is rewritten as relocking would pin it, so a locked sync takes it; an import cannot
+/// be listed again, so a stale pin would fail here.
 #[test]
 fn drop_of_a_listed_file_keeps_the_lock_current() -> Result {
     let sandbox = Sandbox::new()?;
@@ -370,7 +364,7 @@ fn a_folder_is_dropped_as_one_pattern_and_a_whole_archive_leaves_data_lock() -> 
     Ok(())
 }
 
-/// a file someone changed is never deleted: drop writes the pattern and says the file stays.
+/// the pattern is written all the same.
 #[test]
 fn drop_keeps_an_edited_file_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -395,7 +389,6 @@ fn drop_keeps_an_edited_file_and_says_so() -> Result {
     Ok(())
 }
 
-/// a teammate who pulls the new data.toml drops the file at their next sync, with no download.
 #[test]
 fn a_clone_syncs_a_drop_without_downloads() -> Result {
     let sandbox = Sandbox::new()?;
@@ -422,9 +415,8 @@ fn a_clone_syncs_a_drop_without_downloads() -> Result {
     Ok(())
 }
 
-/// drop leaves out only files data.lock places, never every file of a dataset, never moves
-/// the files a dataset keeps, and rewrites a pin only while it answers data.toml. each refusal
-/// changes nothing.
+/// drop leaves out only files data.lock places, never every file of a dataset, never moves the
+/// files a dataset keeps, and rewrites a pin only while it answers data.toml.
 #[test]
 fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -503,9 +495,8 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     Ok(())
 }
 
-/// a file of a dataset with `place = false`, raw data only recipes read, is dropped by the path
-/// it would have in the data folder, as for any dataset. a file left out already says so, naming
-/// the pattern, and a path that names no file says neither.
+/// the file goes by the path it would have in the data folder; one left out already names its
+/// pattern, and a path naming no file gets neither.
 #[test]
 fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -556,8 +547,7 @@ fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
     Ok(())
 }
 
-/// a sample deleted by hand comes back at the next sync, since data.lock still pins it, and the
-/// sync says so: which files, and how to leave one out for good.
+/// data.lock still pins the file, and the warning says how to leave one out for good.
 #[test]
 fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     let sandbox = Sandbox::new()?;
@@ -601,9 +591,8 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     Ok(())
 }
 
-/// a folder deleted whole inside a dataset is named once, with the drop that leaves the folder
-/// out. a dataset's own folder deleted whole, or the whole data folder, is a fresh start: the
-/// sync places it again and says only that the folder was missing.
+/// the warning names the drop that leaves the folder out; a deleted dataset or data folder is a
+/// fresh start, told only as a missing folder.
 #[test]
 fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() -> Result {
     let sandbox = Sandbox::new()?;
@@ -635,9 +624,8 @@ fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() ->
     Ok(())
 }
 
-/// a folder of files the source lists leaves as one pattern, which stays the same however the
-/// paths overlap, and each file keeps its own record. files named one by one, as a shell expands
-/// `flac/*.flac`, stay one pattern each, so files added to the folder later are not left out.
+/// the pattern is the same however the paths overlap. files a shell expanded stay one pattern
+/// each, so files added to the folder later are not left out.
 #[test]
 fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
     let sandbox = Sandbox::new()?;
@@ -674,8 +662,7 @@ fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// a dataset downloaded from a listing, here a bucket, leaves a folder as one pattern too, and
-/// neither the drop nor a locked sync after it asks the server anything.
+/// neither the drop nor a locked sync after it asks the bucket anything.
 #[cfg(debug_assertions)]
 #[test]
 fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
@@ -729,9 +716,8 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// a ctrl-c while drop plans its patterns ends it there, before it writes or claims anything.
 /// data.lock is a fifo the test fills only once the drop heard the ctrl-c, so the stop always
-/// comes after the drop began and before it plans.
+/// lands after the drop began and before it plans.
 #[cfg(unix)]
 #[test]
 fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
@@ -791,9 +777,8 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
     Ok(())
 }
 
-/// a recipe made from a dataset a drop changed has a result data.lock pinned from the files the
-/// drop left out, so the next step a person sees is that build, also for raw data only recipes
-/// read. a drop no recipe depends on says to commit.
+/// the recipe's pinned result came from files the drop left out, so the next step is that build,
+/// even for raw data only recipes read; a drop no recipe reads says to commit.
 #[cfg(target_os = "linux")]
 #[test]
 fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
@@ -832,8 +817,7 @@ fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
     Ok(())
 }
 
-/// a path one typo away from a file or folder drop knows gets the command that names it, with
-/// the rest of the line as typed and the path as typed from the folder it was typed in.
+/// the rest of the line stays as typed, and the path relative to where it was typed.
 #[test]
 fn a_path_one_typo_away_names_the_drop_that_was_meant() -> Result {
     let sandbox = Sandbox::new()?;
@@ -879,8 +863,7 @@ fn a_path_one_typo_away_names_the_drop_that_was_meant() -> Result {
     Ok(())
 }
 
-/// drop takes paths, so a quoted pattern names no file: the error says so and gives the
-/// pattern in the members table that does leave those files out, which works as given.
+/// drop takes paths, and the exclude the help gives works as given.
 #[test]
 fn a_quoted_pattern_is_explained_with_the_exclude_that_does_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -913,7 +896,6 @@ fn a_quoted_pattern_is_explained_with_the_exclude_that_does_it() -> Result {
     Ok(())
 }
 
-/// a file whose name holds a `*` is a path like any other.
 #[cfg(unix)]
 #[test]
 fn a_file_named_with_a_star_drops_by_its_name() -> Result {
