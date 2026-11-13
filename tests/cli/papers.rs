@@ -1,5 +1,5 @@
-//! papers and scholarly data: arXiv's API, its OAI-PMH interface and the mirror of its pdfs,
-//! through a server on this machine that stands in for each host.
+//! papers and scholarly data: arXiv's API, its OAI-PMH interface and the mirror of its pdfs, and
+//! semantic scholar's API, through a server on this machine that stands in for each host.
 #![cfg(debug_assertions)]
 
 use std::fs;
@@ -307,5 +307,183 @@ fn arxiv_is_searched_by_title_when_named() -> Result {
         asked[0].contains("search_query=ti%3a%22attention+is+all+you+need%22"),
         "{asked:?}"
     );
+    Ok(())
+}
+
+const S2_OPEN: &[u8] = include_bytes!("../fixtures/sources/s2/paper-open.json");
+const S2_CLOSED: &[u8] = include_bytes!("../fixtures/sources/s2/paper-closed.json");
+const S2_SEARCH: &[u8] = include_bytes!("../fixtures/sources/s2/search.json");
+const S2_FIELDS: &str =
+    "fields=paperId%2CcorpusId%2CexternalIds%2Curl%2Ctitle%2Cyear%2Cauthors%2CopenAccessPdf";
+
+/// where the stand-in for semantic scholar's API answers about the paper `id`.
+fn s2_paper(id: &str) -> String {
+    format!("/api.semanticscholar.org/graph/v1/paper/{id}?{S2_FIELDS}")
+}
+
+fn s2_json(body: &[u8]) -> Vec<crate::support::Part> {
+    reply("200 OK", &[("Content-Type", "application/json")], body)
+}
+
+/// semantic scholar's answer for the PLOS paper, its pdf on `routes`, which stand in for the
+/// publisher.
+fn s2_open(routes: &Routes) -> Result<Vec<u8>> {
+    let mut answer: serde_json::Value = serde_json::from_slice(S2_OPEN)?;
+    answer["openAccessPdf"]["url"] = format!("{}/plos/printable.pdf", routes.url).into();
+    Ok(serde_json::to_vec(&answer)?)
+}
+
+/// a paper is found with no key, named by its title and pinned at the pdf semantic scholar links,
+/// with the license it states; a teammate's sync downloads that link and asks semantic scholar
+/// nothing.
+#[test]
+fn a_semantic_scholar_paper_is_pinned_at_its_open_pdf_without_a_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(Vec::new())?;
+    sandbox.allow(&routes.url);
+    routes.change(vec![
+        (
+            s2_paper("DOI:10.1371/journal.pcbi.1003285"),
+            s2_json(&s2_open(&routes)?),
+        ),
+        ("/plos/printable.pdf".to_owned(), file(PDF, "\"p\"")),
+    ]);
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", "s2:DOI:10.1371/journal.pcbi.1003285"],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains(
+            "[datasets.ten-simple-rules]\nref = \"s2:DOI:10.1371/journal.pcbi.1003285\"\n"
+        ),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    for expected in [
+        "resolved = \"s2:12b056fd90c1300c44c4a8cff9f01f0c7a75cab4\"".to_owned(),
+        "title = \"Ten Simple Rules for Reproducible Computational Research\"".to_owned(),
+        "license = \"CC-BY\"".to_owned(),
+        "doi = \"10.1371/journal.pcbi.1003285\"".to_owned(),
+        format!(
+            "{{ path = \"journal.pcbi.1003285.pdf\", size = {}, sha256 = \"{}\", url = \"{}/plos/printable.pdf\" }}",
+            PDF.len(),
+            sha256_hex(PDF),
+            routes.url
+        ),
+    ] {
+        assert!(lock.contains(&expected), "{expected}\n{lock}");
+    }
+    assert_eq!(
+        fs::read(work.join("data/ten-simple-rules/journal.pcbi.1003285.pdf"))?,
+        PDF
+    );
+    assert!(
+        routes
+            .requests()
+            .iter()
+            .all(|head| !head.contains("x-api-key")),
+        "no key went"
+    );
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = command(&sandbox, &routes, &["sync", "--locked"])
+        .current_dir(&teammate)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(routes.targets()[listed..], ["/plos/printable.pdf"]);
+    Ok(())
+}
+
+/// a paper semantic scholar links no pdf of is refused, naming the page that says where it is.
+#[test]
+fn a_semantic_scholar_paper_without_an_open_pdf_is_refused_with_its_page() -> Result {
+    let sandbox = Sandbox::new()?;
+    let id = "240bf8044739451452d2c30780d7d9f031d2d89c";
+    let routes = Routes::start(vec![(s2_paper(id), s2_json(S2_CLOSED))])?;
+    let output = command(&sandbox, &routes, &["--json", "add", &format!("s2:{id}")]).output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "reference.unresolved");
+    assert_eq!(
+        error["message"],
+        format!("semantic scholar links no open-access pdf of \"Deep learning\" (s2:{id})")
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "its page, https://www.semanticscholar.org/paper/{id}, says where it is published, which may need a subscription"
+        )
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
+/// every program without a key shares one pool of semantic scholar's requests, so a refusal for
+/// load ends with a suggestion of a key, whose rate is its own.
+#[test]
+fn a_busy_semantic_scholar_suggests_a_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        s2_paper("CorpusId:2180281"),
+        reply(
+            "429 Too Many Requests",
+            &[("Content-Type", "application/json")],
+            br#"{"message": "Too Many Requests. Please wait and try again or apply for a key for higher rate limits. https://www.semanticscholar.org/product/api#api-key-form", "code": "429"}"#,
+        ),
+    )])?;
+    let output = command(&sandbox, &routes, &["--json", "add", "s2:CorpusId:2180281"])
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.rate_limited");
+    assert_eq!(
+        error["help"],
+        "every program without a key shares one pool of semantic scholar's requests: run `fetchloom --json add s2:CorpusId:2180281` again later, or get a free key at https://www.semanticscholar.org/product/api#api-key-form and sign in with `fetchloom auth login s2`, for a rate of your own"
+    );
+    Ok(())
+}
+
+/// semantic scholar is searched only when named, by relevance, each paper by its corpus id.
+#[test]
+fn semantic_scholar_is_searched_when_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        format!(
+            "/api.semanticscholar.org/graph/v1/paper/search?query=attention+is+all+you+need&limit=3&{S2_FIELDS}"
+        ),
+        s2_json(S2_SEARCH),
+    )])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["search", "attention is all you need", "--source", "s2"],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Searching semantic scholar for \"attention is all you need\""),
+        "{stderr}"
+    );
+    let stdout = text(&output.stdout)?;
+    assert_eq!(
+        stdout.lines().next(),
+        Some("s2:CorpusId:13756489\tAttention is All you Need"),
+        "{stdout}"
+    );
+    assert_eq!(stdout.lines().count(), 3, "{stdout}");
     Ok(())
 }

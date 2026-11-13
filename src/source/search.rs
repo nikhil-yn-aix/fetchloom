@@ -51,10 +51,11 @@ pub(crate) enum Catalog {
     #[value(name = "openneuro")]
     OpenNeuro,
     Arxiv,
+    S2,
 }
 
 impl Catalog {
-    pub(crate) const ALL: [Catalog; 8] = [
+    pub(crate) const ALL: [Catalog; 9] = [
         Catalog::Hf,
         Catalog::Kaggle,
         Catalog::Zenodo,
@@ -63,17 +64,21 @@ impl Catalog {
         Catalog::Dandi,
         Catalog::OpenNeuro,
         Catalog::Arxiv,
+        Catalog::S2,
     ];
 
     /// the sites a search asks, in turn order: those `named` with `--source`, else all but ENA
     /// and dandi, specialist archives slow to answer, so a search without `--source` stays quick,
-    /// and arXiv, whose papers are no datasets.
+    /// and arXiv and semantic scholar, whose papers are no datasets.
     pub(crate) fn asked(named: &[Catalog]) -> Vec<Catalog> {
         Catalog::ALL
             .into_iter()
             .filter(|catalog| {
                 if named.is_empty() {
-                    !matches!(catalog, Catalog::Ena | Catalog::Dandi | Catalog::Arxiv)
+                    !matches!(
+                        catalog,
+                        Catalog::Ena | Catalog::Dandi | Catalog::Arxiv | Catalog::S2
+                    )
                 } else {
                     named.contains(catalog)
                 }
@@ -92,6 +97,7 @@ impl Catalog {
             Catalog::Dandi => "dandi",
             Catalog::OpenNeuro => "openneuro",
             Catalog::Arxiv => "arXiv",
+            Catalog::S2 => "semantic scholar",
         }
     }
 
@@ -106,6 +112,7 @@ impl Catalog {
             Catalog::Dandi => "dandi",
             Catalog::OpenNeuro => "openneuro",
             Catalog::Arxiv => "arxiv",
+            Catalog::S2 => "s2",
         }
     }
 
@@ -125,6 +132,7 @@ impl Catalog {
             Catalog::Dandi => dandi(api, words, limit).await,
             Catalog::OpenNeuro => openneuro(api, words, limit).await,
             Catalog::Arxiv => arxiv(api, words, limit).await,
+            Catalog::S2 => s2(api, words, limit).await,
         }
     }
 }
@@ -601,6 +609,23 @@ async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
             reference: found.reference,
             title: found.title,
             source: Catalog::Arxiv.label(),
+            size: None,
+            downloads: None,
+            note: found.note,
+        })
+        .collect())
+}
+
+/// the papers semantic scholar's relevance search finds, as `super::s2::search` asks; it states
+/// no size or downloads.
+async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    Ok(super::s2::search(api, &plain_words(words), limit)
+        .await?
+        .into_iter()
+        .map(|found| Candidate {
+            reference: found.reference,
+            title: found.title,
+            source: Catalog::S2.label(),
             size: None,
             downloads: None,
             note: found.note,

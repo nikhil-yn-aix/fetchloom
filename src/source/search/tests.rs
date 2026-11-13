@@ -32,6 +32,22 @@ fn arxiv(words: &str, limit: usize) -> [String; 2] {
 const NO_PAPERS: &[u8] =
     b"<feed xmlns=\"http://www.w3.org/2005/Atom\"><totalResults>0</totalResults></feed>";
 
+/// semantic scholar's search for `words`.
+fn s2(words: &str, limit: usize) -> String {
+    let mut url = Url::parse("https://api.semanticscholar.org/graph/v1/paper/search").unwrap();
+    url.query_pairs_mut()
+        .append_pair("query", words)
+        .append_pair("limit", &limit.to_string())
+        .append_pair(
+            "fields",
+            "paperId,corpusId,externalIds,url,title,year,authors,openAccessPdf",
+        );
+    url.to_string()
+}
+
+/// semantic scholar's answer when it finds no paper.
+const NO_S2_PAPERS: &[u8] = br#"{"total":0,"offset":0,"data":[]}"#;
+
 /// openneuro's search for `words`, a GraphQL query sent by GET with the words as a variable.
 fn openneuro(words: &str, first: usize) -> String {
     let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
@@ -79,6 +95,7 @@ fn recorded() -> Recorded {
         .fixture(&openneuro("iris", 3), "search/openneuro.json")
         .on(&arxiv("iris", 3)[0], 200, NO_PAPERS.to_vec())
         .on(&arxiv("iris", 3)[1], 200, NO_PAPERS.to_vec())
+        .on(&s2("iris", 3), 200, NO_S2_PAPERS.to_vec())
 }
 
 /// EBI's search also finds studies add cannot add as they are, so the first runs of each in ENA's
@@ -433,7 +450,8 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://api.dandiarchive.org/api/dandisets/?search=fashion+%28mnist%29%3A*%26&page_size=3&ordering=-stars", 200, br#"{"results":[]}"#.to_vec())
         .on(&openneuro("fashion (mnist):*&", 3), 200, br#"{"data":{"advancedSearch":{"edges":[]}}}"#.to_vec())
         .on(&arxiv("fashion mnist", 3)[0], 200, NO_PAPERS.to_vec())
-        .on(&arxiv("fashion mnist", 3)[1], 200, NO_PAPERS.to_vec());
+        .on(&arxiv("fashion mnist", 3)[1], 200, NO_PAPERS.to_vec())
+        .on(&s2("fashion mnist", 3), 200, NO_S2_PAPERS.to_vec());
     let result = block_on(search(
         &api,
         "fashion (mnist):*&",
@@ -444,7 +462,7 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
     // GEO, having found no series, asks for no summaries, and arXiv asks titles, then anywhere
-    assert_eq!(api.asked().len(), 10);
+    assert_eq!(api.asked().len(), 11);
 }
 
 #[test]
@@ -610,7 +628,7 @@ fn sources_are_asked_concurrently() {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_pending()
         );
-        assert_eq!(api.started.load(Ordering::Relaxed), 8);
+        assert_eq!(api.started.load(Ordering::Relaxed), 9);
         api.can_answer.store(true, Ordering::Relaxed);
         pending.await
     })
@@ -669,10 +687,10 @@ fn invalid_catalog_ids_never_become_candidates() {
     assert!(result.warnings[0].contains("invalid dataset id"));
 }
 
-/// arXiv's papers are no datasets, so a search asks arXiv only when `--source` names it, as it
-/// asks ENA and dandi.
+/// papers are no datasets, so a search asks arXiv and semantic scholar only when `--source` names
+/// them, as it asks ENA and dandi.
 #[test]
-fn arxiv_is_asked_only_by_name() {
+fn paper_catalogs_are_asked_only_by_name() {
     assert_eq!(
         Catalog::asked(&[]),
         [
@@ -684,6 +702,7 @@ fn arxiv_is_asked_only_by_name() {
         ]
     );
     assert_eq!(Catalog::asked(&[Catalog::Arxiv]), [Catalog::Arxiv]);
+    assert_eq!(Catalog::asked(&[Catalog::S2]), [Catalog::S2]);
 }
 
 #[test]
@@ -737,9 +756,10 @@ fn a_limit_asks_each_catalog_for_that_many() {
             "search/dandi.json",
         )
         .fixture(&openneuro("iris", 1), "search/openneuro.json")
-        .fixture(&arxiv("iris", 1)[0], "arxiv/paper.xml");
+        .fixture(&arxiv("iris", 1)[0], "arxiv/paper.xml")
+        .fixture(&s2("iris", 1), "s2/search.json");
     let result = block_on(search(&api, "iris", &Catalog::ALL, Some(1))).unwrap();
-    assert_eq!(result.candidates.len(), 8);
+    assert_eq!(result.candidates.len(), 9);
 }
 
 #[test]

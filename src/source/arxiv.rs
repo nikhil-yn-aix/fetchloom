@@ -13,7 +13,7 @@ use std::time::Duration;
 use url::Url;
 
 pub(crate) use self::month::Month;
-use super::{Reference, Remote, malformed};
+use super::{Found, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
@@ -252,6 +252,19 @@ impl Paper {
     fn newest(id: Id) -> Paper {
         Paper { id, version: None }
     }
+
+    /// the paper an id without a version names, as another index records it: `1706.03762`.
+    pub(super) fn named(text: &str) -> Option<Paper> {
+        match Id::versioned(text)? {
+            (id, None) => Some(Paper::newest(id)),
+            (_, Some(_)) => None,
+        }
+    }
+
+    /// its id, without a version.
+    pub(super) fn id(&self) -> &Id {
+        &self.id
+    }
 }
 
 impl fmt::Display for Paper {
@@ -262,14 +275,6 @@ impl fmt::Display for Paper {
         }
         Ok(())
     }
-}
-
-/// a paper a search found, with what a person tells it by.
-pub(crate) struct Found {
-    pub(crate) reference: Reference,
-    pub(crate) title: String,
-    /// its first author and the year of its first version, as `Vaswani et al. 2017`.
-    pub(crate) note: Option<String>,
 }
 
 /// the papers whose titles hold `words` as a phrase, the most relevant first, and when fewer than

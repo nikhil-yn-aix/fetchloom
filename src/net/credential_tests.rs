@@ -90,6 +90,38 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
     }
 }
 
+/// a semantic scholar key goes to its API alone: never to the links on S3 the API gives for
+/// dataset files, to its website, or over http.
+#[test]
+fn a_semantic_scholar_key_goes_to_its_api_alone() {
+    let var = |name: &str| (name == "S2_API_KEY").then(|| OsString::from("s2-test"));
+    let net = Net::new(
+        Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials: crate::auth::credentials(&var),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    );
+    let client = any_client(&net);
+    let api = Url::parse("https://api.semanticscholar.org/datasets/v1/release/latest").unwrap();
+    let request = net.request(client, &api, true).build().unwrap();
+    assert_eq!(request.headers()["x-api-key"], "s2-test");
+    assert!(request.headers()["x-api-key"].is_sensitive());
+    for url in [
+        "https://ai2-s2ag.s3.amazonaws.com/staging/2026-11-10/tldrs/part.gz",
+        "https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+        "http://api.semanticscholar.org/datasets/v1/release/latest",
+    ] {
+        let url = Url::parse(url).unwrap();
+        let request = net.request(client, &url, true).build().unwrap();
+        assert!(!request.headers().contains_key("x-api-key"), "{url}");
+    }
+}
+
 /// a client that carries the requests `send` shapes to a local server. it installs the crypto
 /// provider itself, since fetchloom installs it only when it first goes online.
 fn transport() -> reqwest::Client {

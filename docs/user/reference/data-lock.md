@@ -164,6 +164,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 | DANDI | `dandi:<id>@<version>`, a published version or `draft` | the asset's blob on `https://dandiarchive.s3.amazonaws.com/blobs/`, else dandi's download link for it |
 | arXiv paper | `arxiv:<id>@v<version>` | the mirror's `https://storage.googleapis.com/arxiv-dataset/arxiv/<archive>/pdf/<month>/<number>v<version>.pdf?generation=<generation>`, else `https://export.arxiv.org/pdf/<id>v<version>` |
 | arXiv month or category month | `arxiv:<month>` or `arxiv:<category>/<month>`, without a version | the same, for each paper's newest version |
+| semantic scholar paper | `s2:<semantic scholar id>`, or the `arxiv:<id>@v<version>` of a paper whose pdf comes from arXiv | the open-access pdf's link semantic scholar gave |
 | OpenNeuro | `openneuro:<accession>@<snapshot>` | a git-annex file's link on `https://s3.amazonaws.com/openneuro.org/` with the `versionId` the snapshot pins, else `https://openneuro.org/crn/datasets/<accession>/objects/<object or key>` |
 | OSF | `osf:<node or file id>` | the download link with a file version |
 | github release | `github:<owner>/<repo>@<tag>` | the file's download link on github.com, `/releases/download/<tag>/<name>` |

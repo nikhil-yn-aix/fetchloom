@@ -534,6 +534,7 @@ fn test_source(url: &Url) -> Option<Url> {
             | "openneuro.org"
             | "export.arxiv.org"
             | "oaipmh.arxiv.org"
+            | "api.semanticscholar.org"
     ) {
         return None;
     }

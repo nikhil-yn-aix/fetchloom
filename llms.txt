@@ -22,7 +22,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [status](docs/user/commands/status.md): what differs from data.lock: `fetchloom status` lists missing, edited and extra files and exits 0 either way; `--check` fails with `data.not_ready` while the data is not ready, `--verify` hashes every placed file
 - [lock](docs/user/commands/lock.md): how to pin without placing: `fetchloom lock`; `--check` compares data.lock with data.toml, `--upgrade` pins newer versions, `-n` previews, and after a git merge `--ours` or `--theirs` chooses a side
 - [get](docs/user/commands/get.md): how to download once without a project: `fetchloom get` into a folder `-d` names, or one checked file at the path `-o` names, replaced only with `--force`; `--sha256` checks a single file, `-i` reads a list of links, `--dry-run` says what it would fetch and where, `--select`, `--exclude` and `--no-extract` choose files
-- [search](docs/user/commands/search.md): how to find a dataset by words: `fetchloom search` asks hugging face, kaggle, zenodo, GEO and openneuro, and ENA, dandi and arXiv when `--source` names them; `--limit` changes the 12 matches it shows
+- [search](docs/user/commands/search.md): how to find a dataset by words: `fetchloom search` asks hugging face, kaggle, zenodo, GEO and openneuro, and ENA, dandi, arXiv and semantic scholar when `--source` names them; `--limit` changes the 12 matches it shows
 - [build](docs/user/commands/build.md): how to make datasets with recipes: `fetchloom build` runs their steps and pins and places what they made; `-n` shows the commands first, `--check` runs them again to compare with data.lock, `--accept` pins a rebuild that differs, `--locked` never writes data.lock, `--prepare` fetches what a build reads
 - [list](docs/user/commands/list.md): what each dataset is: its reference, size, folder and pinned files
 - [export](docs/user/commands/export.md): how to use the pins without fetchloom: `fetchloom export` writes SHA-256 lines for `sha256sum -c`, or links with `--format links` or `--format aria2`; `-o` writes a file and keeps one already there unless `--force`
@@ -70,6 +70,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [DANDI](docs/user/sources/dandi.md): a dandiset's assets at one version, checked against the SHA-256 dandi states
 - [OpenNeuro](docs/user/sources/openneuro.md): a dataset's files at one snapshot, checked against their git-annex keys
 - [arXiv](docs/user/sources/arxiv.md): a paper's pdf at a version, a month's papers from the mirror on google cloud storage, or one category's month through arXiv's API, paced as arXiv asks
+- [semantic scholar](docs/user/sources/semantic-scholar.md): a paper's open-access pdf by its DOI, arXiv id, corpus id or semantic scholar id, without a key; `S2_API_KEY` or `fetchloom auth login s2` gives a rate of your own
 - [github and gitlab releases](docs/user/sources/releases.md): the files of a release at its tag
 - [google drive](docs/user/sources/google-drive.md): shared files and folders, and private ones once `drive_folders` lists them
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips

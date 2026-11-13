@@ -23,21 +23,7 @@ pub(super) struct Entry {
 impl Entry {
     /// its first author's last name and the year of its first version, as `Vaswani et al. 2017`.
     pub(super) fn byline(&self) -> Option<String> {
-        let first = self.authors.first()?;
-        let surname = first.rsplit(' ').next().unwrap_or(first);
-        let who = if self.authors.len() > 1 {
-            format!("{surname} et al.")
-        } else {
-            surname.to_owned()
-        };
-        let year = self
-            .published
-            .get(..4)
-            .filter(|year| year.bytes().all(|byte| byte.is_ascii_digit()));
-        Some(match year {
-            Some(year) => format!("{who} {year}"),
-            None => who,
-        })
+        crate::source::byline(&self.authors, self.published.get(..4))
     }
 }
 

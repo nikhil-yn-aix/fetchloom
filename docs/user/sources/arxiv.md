@@ -105,4 +105,6 @@ arxiv:2501.05730	Element-wise Attention Is All You Need
 
 ## other scholarly data
 
+[semantic scholar](semantic-scholar.md) finds a paper by its DOI or any other id it knows, and pins its open-access pdf: an arXiv paper's through this source.
+
 OpenAlex's snapshot of every work it knows is in its public bucket, which [cloud buckets](buckets.md) lists like any other: `fetchloom add s3://openalex/data/jsonl/works/` lists 1,900 files, 629.1 GiB, in under a second.

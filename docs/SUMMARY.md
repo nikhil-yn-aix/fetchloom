@@ -40,6 +40,7 @@
         - [DANDI](user/sources/dandi.md)
         - [OpenNeuro](user/sources/openneuro.md)
         - [arXiv](user/sources/arxiv.md)
+        - [semantic scholar](user/sources/semantic-scholar.md)
         - [github and gitlab releases](user/sources/releases.md)
         - [google drive](user/sources/google-drive.md)
         - [dropbox](user/sources/dropbox.md)

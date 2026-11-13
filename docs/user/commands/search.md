@@ -19,14 +19,14 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 
 | option | meaning |
 |---|---|
-| `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi`, `openneuro` or `arxiv`. repeat it or separate names with commas. without it, every site but `ena`, `dandi` and `arxiv`, which are searched only when named. any other name is a usage error |
+| `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi`, `openneuro`, `arxiv` or `s2`. repeat it or separate names with commas. without it, every site but `ena`, `dandi`, `arxiv` and `s2`, which are searched only when named. any other name is a usage error |
 | `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives up to 3 and at most 12 show, as [results](#results) says; any other value is a usage error, exit 2 |
 
 [global options](README.md#global-options) apply.
 
 ## results
 
-fetchloom asks hugging face, kaggle, zenodo, GEO and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. ENA and dandi, specialist archives slow to answer, need `--source`, as `--source ena` for sequencing studies or `--source dandi` for neurophysiology, so a search without it stays quick. so does arXiv, `--source arxiv`, since its papers are not datasets. the sites interleave by rank, each site's first match, then each second, and so on; matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's own order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
+fetchloom asks hugging face, kaggle, zenodo, GEO and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. ENA and dandi, specialist archives slow to answer, need `--source`, as `--source ena` for sequencing studies or `--source dandi` for neurophysiology, so a search without it stays quick. so do arXiv, `--source arxiv`, and semantic scholar, `--source s2`, since their papers are not datasets. the sites interleave by rank, each site's first match, then each second, and so on; matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's own order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
 
 without `--limit`, at most 12 matches show, so the list and the picker fit a terminal 24 rows high: each site's best, then matches named as the search words, then each site's next by rank, as interleaved. a hint says when some were left out, and `--limit` shows every match it asks for. JSON keeps the same 12.
 

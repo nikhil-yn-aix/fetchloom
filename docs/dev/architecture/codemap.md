@@ -114,7 +114,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 
 | file | owns | start at | other items |
 |---|---|---|---|
-| `src/source.rs` | `Reference`, a source's identity, routed from what a person typed; `Listing`, what it resolves to, of `Remote` files to download; the checks every listing passes, the guard paged listings share, and per-source transfer rules | `Reference::parse`, `Reference::resolve` | `Parsed`, `Access`, `Unavailable`, `Pages`, `fetch_plan`, `may_wrap`, `refused`, `paced_as`, `spacing` |
+| `src/source.rs` | `Reference`, a source's identity, routed from what a person typed; `Listing`, what it resolves to, of `Remote` files to download; the checks every listing passes, the guard paged listings share, and per-source transfer rules | `Reference::parse`, `Reference::resolve` | `Parsed`, `Access`, `Unavailable`, `Pages`, `Found`, `byline`, `fetch_plan`, `may_wrap`, `refused`, `paced_as`, `spacing` |
 | `src/source/search.rs` | `search` across public catalogs, its candidates interleaved, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `search`, `near` | `Candidate`, `Search`, `is_search`, `Near` |
 | `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere` |
 | `src/source/doi.rs` | DOIs, routed by the host doi.org names, never by their prefix | `Doi::locate` |  |
@@ -138,10 +138,12 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/kaggle/token.rs` | kaggle's credentials, where the kaggle CLI keeps them | `find` |  |
 | `src/source/ena.rs` | ENA runs by run, experiment, sample or study accession; one kind of file per reference, FASTQ unless it names submitted or SRA files; the count asked before the report, which has no pages; runs under controlled access left out | `Accession` | `Files`, `Accession::resolve` |
 | `src/source/geo.rs` | GEO series, samples and platforms from the folder indexes of NCBI's file server, read to at most 64 folders, with no stated hash or exact size; the spacing NCBI's hosts ask for, which `source::spacing` gives the network | `Accession` | `Accession::resolve`, `spacing` |
-| `src/source/arxiv.rs` | arXiv papers by id, version and pasted link, months and categories' months; the mirror lookup; the pace arXiv's hosts share | `parse`, `Paper` | `Id`, `Found`, `search`, `paced_as`, `spacing`, `most_at_once` |
+| `src/source/arxiv.rs` | arXiv papers by id, version and pasted link, months and categories' months; the mirror lookup; the pace arXiv's hosts share | `parse`, `Paper` | `Id`, `search`, `paced_as`, `spacing`, `most_at_once` |
 | `src/source/arxiv/paper.rs` | one paper at its newest version or the one named: its title, license and withdrawal, and its pdf from the mirror or export.arxiv.org | `Paper::resolve` |  |
 | `src/source/arxiv/month.rs` | a month from the mirror's folder, and a category's month paged from the API, joined with the mirror, withdrawals left out | `Month` | `Month::resolve` |
 | `src/source/arxiv/feed.rs` | arXiv's answers: the API's atom feed and the OAI-PMH record of a paper | `ask`, `record` | `Entry`, `Page`, `Record`, `search` |
+| `src/source/s2.rs` | semantic scholar papers by any id its API takes; its search; the pace of its API, with a key or without; refusals naming the key or the account | `parse`, `search`, `spacing`, `most_at_once` | `answer`, `busy` |
+| `src/source/s2/paper.rs` | one paper's open-access pdf, its license and DOI; an arXiv paper through the arXiv source; a paper without a pdf refused with its page | `Paper` | `Paper::resolve`, `license`, `Answer` |
 | `src/source/dandi.rs` | DANDI dandisets at a published version or the draft, with the SHA-256 DANDI states | `Dandiset` |  |
 | `src/source/openneuro.rs` | OpenNeuro snapshots through its GraphQL API, large files from its S3 bucket | `Dataset` |  |
 | `src/source/github.rs` | github release files at a tag or the newest, with the SHA-256 github states; a rate limit worded by whether a key went, and a missing release told from a private repository | `Release` | `Release::resolve`, `limited`, `hidden` |

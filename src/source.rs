@@ -23,6 +23,7 @@ mod openneuro;
 mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
+mod s2;
 pub(crate) mod search;
 mod xml;
 mod zenodo;
@@ -204,6 +205,8 @@ pub(crate) enum Reference {
     Arxiv(arxiv::Paper),
     /// the arXiv papers of a month, or of one category in a month.
     ArxivMonth(arxiv::Month),
+    /// one paper semantic scholar knows, at the open-access pdf it links.
+    S2Paper(s2::Paper),
     /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
     /// pins their bytes, never where they were.
     Local,
@@ -304,10 +307,10 @@ impl Listing {
         }
     }
 
-    /// whether a generated name comes from the title before the one file the listing holds: an
-    /// arXiv paper is known by its title, and its file only by an id, as `1706.03762v7.pdf`.
+    /// whether a generated name comes from the title before the one file the listing holds: a
+    /// paper is known by its title, and its file only by an id, as `1706.03762v7.pdf`.
     pub(crate) fn is_known_by_title(&self) -> bool {
-        matches!(self.resolved, Reference::Arxiv(_))
+        matches!(self.resolved, Reference::Arxiv(_) | Reference::S2Paper(_))
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -427,6 +430,7 @@ impl Reference {
             "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
             "kaggle" => whole(kaggle::parse(rest)?),
             "arxiv" => whole(arxiv::parse(rest)?),
+            "s2" => whole(s2::parse(rest)?),
             "drive" => whole(Reference::Drive(drive::Item::parse(rest)?)),
             "s3" => whole(Reference::Bucket(bucket::Prefix::parse(
                 bucket::Store::S3,
@@ -552,6 +556,7 @@ impl Reference {
             Reference::Bucket(prefix) => prefix.resolve(api).await,
             Reference::Arxiv(paper) => paper.resolve(api).await,
             Reference::ArxivMonth(month) => month.resolve(api).await,
+            Reference::S2Paper(paper) => paper.resolve(api).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
@@ -582,9 +587,35 @@ impl fmt::Display for Reference {
             Reference::Bucket(prefix) => write!(f, "{prefix}"),
             Reference::Arxiv(paper) => write!(f, "{paper}"),
             Reference::ArxivMonth(month) => write!(f, "{month}"),
+            Reference::S2Paper(paper) => write!(f, "{paper}"),
             Reference::Local => f.write_str(local::IMPORTED),
         }
     }
+}
+
+/// a paper or a dataset a search found, with what a person tells it by.
+pub(crate) struct Found {
+    pub(crate) reference: Reference,
+    pub(crate) title: String,
+    /// what tells it apart, such as its first author and year, `Vaswani et al. 2017`.
+    pub(crate) note: Option<String>,
+}
+
+/// a paper's first author's last name and its `year`, as `Vaswani et al. 2017`.
+pub(crate) fn byline(authors: &[String], year: Option<&str>) -> Option<String> {
+    let first = authors.first()?;
+    let surname = first.rsplit(' ').next().unwrap_or(first);
+    let who = if authors.len() > 1 {
+        format!("{surname} et al.")
+    } else {
+        surname.to_owned()
+    };
+    let year =
+        year.filter(|year| year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()));
+    Some(match year {
+        Some(year) => format!("{who} {year}"),
+        None => who,
+    })
 }
 
 /// a download request with the source's response handling.
@@ -612,16 +643,18 @@ pub(crate) fn paced_as(host: &str) -> String {
     arxiv::paced_as(host).map_or_else(|| host.to_owned(), str::to_owned)
 }
 
-/// how far apart requests paced as `name` start, for a host that asks for that, as NCBI's and
-/// arXiv's do.
+/// how far apart requests paced as `name` start, for a host that asks for that, as NCBI's,
+/// arXiv's and semantic scholar's do.
 pub(crate) fn spacing(name: &str) -> Option<std::time::Duration> {
-    geo::spacing(name).or_else(|| arxiv::spacing(name))
+    geo::spacing(name)
+        .or_else(|| arxiv::spacing(name))
+        .or_else(|| s2::spacing(name))
 }
 
 /// how many requests paced as `name` may run at once, for hosts that ask for fewer than the
-/// network allows, as arXiv's ask for one.
+/// network allows, as arXiv's and semantic scholar's ask for one.
 pub(crate) fn most_at_once(name: &str) -> Option<usize> {
-    arxiv::most_at_once(name)
+    arxiv::most_at_once(name).or_else(|| s2::most_at_once(name))
 }
 
 /// a source's own error for a download it refused, when it says more than the status.
@@ -751,6 +784,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
         })
         .or_else(|| kaggle::from_link(&url).map(|(reference, file)| parsed(reference, file)))
         .or_else(|| arxiv::from_link(&url).map(|paper| parsed(Reference::Arxiv(paper), None)))
+        .or_else(|| s2::from_link(&url).map(|reference| parsed(reference, None)))
         .or_else(|| drive::Item::from_link(&url).map(|item| parsed(Reference::Drive(item), None)))
         .or_else(|| {
             dropbox::Link::from_link(&url).map(|link| parsed(Reference::Dropbox(link), None))
@@ -908,6 +942,9 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "dropbox.com" | "www.dropbox.com" => "dropbox",
         "doi.org" | "www.doi.org" | "dx.doi.org" => "doi",
         "arxiv.org" | "www.arxiv.org" | "export.arxiv.org" => "arXiv",
+        "www.semanticscholar.org" | "semanticscholar.org" | "api.semanticscholar.org" => {
+            "semantic scholar"
+        }
         _ => return None,
     })
 }

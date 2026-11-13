@@ -104,6 +104,7 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | DANDI | API: a dandiset, a version's `info/` and its `assets/` with `metadata=true`, in pages | api.dandiarchive.org, its blobs on dandiarchive.s3.amazonaws.com over https |
 | OpenNeuro | GraphQL by GET with `apollo-require-preflight`: a dataset's newest snapshot, a snapshot's description and its folders, one at a time | openneuro.org, its files on s3.amazonaws.com/openneuro.org over https |
 | arXiv | API query (`id_list`, and `cat:` with `submittedDate` 1,000 papers a page) and OAI-PMH `GetRecord` in `arXivRaw`, one request every 3 s; pdfs from cornell's mirror through the cloud storage JSON API, else export.arxiv.org's `/pdf/` | export.arxiv.org, oaipmh.arxiv.org and the `arxiv-dataset` bucket on storage.googleapis.com |
+| semantic scholar | graph API v1: a paper by any id it takes, with `paperId`, `corpusId`, `externalIds`, `url`, `title`, `year`, `authors` and `openAccessPdf`, one request at a time, 1 s apart with a key and 3 s without; a pdf from the link it gives, an arXiv paper through the arXiv source | api.semanticscholar.org without a key, and publishers' hosts for pdfs |
 | osf | API v2 and its file storage links | api.osf.io |
 | hugging face | hub API under `/api` and `resolve` links | huggingface.co |
 | kaggle | public API v1 | api.kaggle.com |
@@ -117,7 +118,7 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 
 google drive and dropbox are read through their shared links rather than an API, and drive's API v3 serves the private items `drive_folders` lists. no live check covers dropbox, and drive's needs google credentials the weekly run does not have.
 
-[search](../commands/search.md) asks each site's own search: hugging face's, kaggle's and dandi's dataset lists, zenodo's records, EBI search's `sra-study` domain for ENA, NCBI's E-utilities `esearch` and `esummary` at eutils.ncbi.nlm.nih.gov for GEO, openneuro's GraphQL `advancedSearch` and arXiv's API query by title, then in every field. the weekly macos journey runs one search naming all eight, which passes while any of them finds a match.
+[search](../commands/search.md) asks each site's own search: hugging face's, kaggle's and dandi's dataset lists, zenodo's records, EBI search's `sra-study` domain for ENA, NCBI's E-utilities `esearch` and `esummary` at eutils.ncbi.nlm.nih.gov for GEO, openneuro's GraphQL `advancedSearch`, arXiv's API query by title, then in every field, and semantic scholar's graph API `paper/search`. the weekly macos journey runs one search naming all nine, which passes while any of them finds a match.
 
 ## keys shared with other tools
 
