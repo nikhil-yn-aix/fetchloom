@@ -233,16 +233,18 @@ error: emb differs from data.lock: 0 of 1 files match
 
 look at the program versions and the files before you choose: `--accept` pins these files for everyone who takes the commit.
 
-the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the pinned file in the data folder; `status --json` gives the cache file of both. this run had the cache in its usual place on linux:
+the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the pinned file in the data folder; `status --json` gives the cache file of both. this run, after a `build --check`, had the cache in its usual place on linux, with the home folder shown as `/home/ada`. its first lines say [what the run spends](../resources.md#see-what-a-run-uses), as every `-v` run of `status` does:
 
 ```text
 $ fetchloom status -v
+  Resources default: 8 downloads at once, 4 to one host, 24 local workers, 4.0 GiB for buffers, 2 hash lanes
+            buffers: 4.0 GiB at most, less than a quarter of the 166.4 GiB available
        Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
-            changed vectors.bin: /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
+            changed vectors.bin: /home/ada/.cache/fetchloom/objects/93/d6625459034dd0efdba5d8894e35f9274cc778ef1f93b8a7449b36f8881d4e
          Ok everything matches data.lock by size and time
-            5 ms in all
-$ cmp data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
-data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef differ: byte 1, line 1
+            6 ms in all
+$ cmp data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/93/d6625459034dd0efdba5d8894e35f9274cc778ef1f93b8a7449b36f8881d4e
+data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/93/d6625459034dd0efdba5d8894e35f9274cc778ef1f93b8a7449b36f8881d4e differ: byte 1, line 1
 ```
 
 a cache file is read-only and others may share it, so copy one before you change it. once you have looked at them, `fetchloom build --accept emb` pins them in `data.lock` and places them in the data folder, without running anything:

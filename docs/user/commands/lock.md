@@ -104,18 +104,20 @@ error: the merge needs a choice for udata
   help: choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat
 ```
 
-`-v` first shows what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. the same merge, on the branch that removed `udata`:
+`-v` also shows, after [what the run spends](../resources.md#see-what-a-run-uses), what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. the same merge, on the branch that removed `udata`:
 
 ```sh
 $ fetchloom -v lock
+  Resources default: 8 downloads at once, 4 to one host, 24 local workers, 4.0 GiB for buffers, 2 hash lanes
+            buffers: 4.0 GiB at most, less than a quarter of the 162.7 GiB available
             udata, ours: not in data.lock
-            udata, theirs: 1 file · 11 B
-              u.csv · 11 B · sha256 2805e4684085
+            udata, theirs: 1 file · 12 B
+              u.csv · 12 B · sha256 6f4b398e3e87
 error: the merge needs a choice for udata
   udata: one side changed it and the other removed it
   help: choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat
   kind: unconfirmed
-            33 ms in all
+            17 ms in all
 ```
 
 run `fetchloom sync` next, then commit `data.toml` and `data.lock` to finish the merge.

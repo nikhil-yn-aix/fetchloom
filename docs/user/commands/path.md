@@ -28,7 +28,7 @@ fetchloom path [options] <name>[/file]
 3. if the dataset is not ready, sync it alone, as `fetchloom sync <name>` does: no other dataset is resolved, downloaded or changed. in a git repository, add the data folder to `.gitignore`, as `sync` does. with `--locked`, first fail as `sync --locked <name>` does when data.lock is missing or the dataset's entry is out of date with data.toml, before any request.
 4. print its absolute location on stdout. JSON returns it as `result.path`.
 
-`-v` adds one line on stderr about where the bytes are: a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache. [placement](../concepts.md#placement) says when you get which.
+`-v` adds, after [what the run spends](../resources.md#see-what-a-run-uses), one line on stderr about where the bytes are: a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache. [placement](../concepts.md#placement) says when you get which.
 
 a ready dataset prints no closing summary, and the check costs what the dataset holds, not what the project holds. a subfolder is accepted when it holds pinned files. when an archive's files are not known yet, a sync may come before the check. a path the dataset does not hold, from a real run:
 
