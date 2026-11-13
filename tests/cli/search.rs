@@ -292,6 +292,19 @@ fn source_and_limit_narrow_the_search() -> Result {
     assert_eq!(candidates.as_ref().map(Vec::len), Some(2), "{document}");
     assert_eq!(catalogs.hf.requests().len(), 0);
     assert_eq!(catalogs.zenodo.requests().len(), 0);
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let output = catalogs
+        .command(
+            &sandbox,
+            &["search", "iris", "--source", "kaggle", "--limit", "1"],
+        )
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("each site's first match is shown; `--limit 20` shows up to 20 from each"),
+        "{stderr}"
+    );
     let output = catalogs
         .command(&sandbox, &["search", "iris", "--source", "figshare"])
         .output()?;

@@ -58,8 +58,13 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             report.candidates.len()
         ));
     } else if each < 20 && more(&report.candidates, each) {
+        let first = if each == 1 {
+            "first match is".to_owned()
+        } else {
+            format!("first {each} matches are")
+        };
         output.hint(&format!(
-            "each site's first {each} matches are shown; `--limit 20` shows up to 20 from each"
+            "each site's {first} shown; `--limit 20` shows up to 20 from each"
         ));
     }
     if report
@@ -327,7 +332,7 @@ fn parts(
                 candidate.size.map(units::size).unwrap_or_default(),
                 candidate
                     .downloads
-                    .map(|count| format!("{} downloads", units::compact(count)))
+                    .map(worded_downloads)
                     .unwrap_or_default(),
                 candidate.note.clone().unwrap_or_default(),
             ]
@@ -438,6 +443,12 @@ fn facts(cells: &[[String; 3]], downloads: bool) -> Vec<String> {
         .collect()
 }
 
+/// a site's download count as a person reads it: `1 download`, `12k downloads`.
+fn worded_downloads(count: u64) -> String {
+    let noun = if count == 1 { "download" } else { "downloads" };
+    format!("{} {noun}", units::compact(count))
+}
+
 fn widest<'a>(texts: impl Iterator<Item = &'a str>) -> usize {
     texts
         .map(console::measure_text_width)
@@ -544,6 +555,14 @@ mod tests {
                 downloads: Some(950),
                 note: None,
             },
+            Candidate {
+                reference: Reference::parse("hf:datasets/c/d").unwrap().reference,
+                title: "c/d".to_owned(),
+                source: "hugging face",
+                size: None,
+                downloads: Some(1),
+                note: None,
+            },
         ];
         let rows = rows(&output, &candidates, None, PICKER_LEAD);
         assert_eq!(
@@ -556,9 +575,11 @@ mod tests {
                     " ".repeat(34)
                 ),
                 format!("hf:datasets/a/b{}950 downloads", " ".repeat(27)),
+                format!("hf:datasets/c/d{}1 download", " ".repeat(30)),
             ]
         );
         assert_eq!(rows[0].len(), rows[2].len(), "downloads end in one column");
+        assert_eq!(rows[0].len(), rows[3].len(), "downloads end in one column");
     }
 
     fn quiet_output() -> Output {
