@@ -1,34 +1,32 @@
-/* fetchloom's site, set like a herbarium sheet: each dataset's data.lock entry is a specimen's
-   label, pinned */
+/* fetchloom's site, set like a herbarium sheet: a dataset's data.lock entry is a specimen's label,
+   pinned to the sheet. the label is the one loud thing; everything else keeps to one scale of type
+   and one measure of space. */
 
-/* geist mono and instrument serif are the files of bench/fonts, which the charts use; source serif 4
-   4.004 is the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes. the OFL file
-   beside each carries its licence and copyright. */
+/* source serif 4 and source code pro are the latin subsets @fontsource-variable/source-serif-4 and
+   @fontsource-variable/source-code-pro 5.3.1 publish, unchanged: the roman with its optical sizes,
+   the italic and the code face with their weights. the OFL file beside each carries its licence
+   and copyright. */
 
 @font-face {
   font-family: "Source Serif 4";
   font-style: normal;
   font-weight: 200 900;
   font-display: swap;
-  src: url("../fonts/source-serif-4-latin-wght-normal.woff2") format("woff2");
+  src: url("../fonts/source-serif-4-latin-opsz-normal.woff2") format("woff2");
 }
 @font-face {
-  font-family: "Instrument Serif";
-  font-weight: 400;
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 200 900;
   font-display: swap;
-  src: url("../fonts/InstrumentSerif.woff2") format("woff2");
+  src: url("../fonts/source-serif-4-latin-wght-italic.woff2") format("woff2");
 }
 @font-face {
-  font-family: "Geist Mono";
-  font-weight: 400;
+  font-family: "Source Code Pro";
+  font-style: normal;
+  font-weight: 200 900;
   font-display: swap;
-  src: url("../fonts/GeistMono-Regular.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Geist Mono";
-  font-weight: 500;
-  font-display: swap;
-  src: url("../fonts/GeistMono-Medium.woff2") format("woff2");
+  src: url("../fonts/source-code-pro-latin-wght-normal.woff2") format("woff2");
 }
 
 /* the palette, in one place: the cli's light and dark themes (src/output/style.rs) are held to
@@ -72,12 +70,24 @@
   color-scheme: dark;
 }
 
+/* one scale, a major third apart, from the 18px of the text; one measure of space, half a line of
+   it. a phone takes the same steps, the largest one step down */
+:root {
+  --fl-text: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --fl-mono: "Source Code Pro", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --fl-s-1: .72rem;
+  --fl-s0: .9rem;
+  --fl-s1: 1.125rem;
+  --fl-s2: 1.406rem;
+  --fl-s3: 1.758rem;
+  --fl-s4: 2.197rem;
+  --fl-u: .72rem;
+  --fl-heading: 560;
+}
+
 [data-md-color-scheme] {
-  --fl-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
-  --fl-display: "Instrument Serif", var(--fl-serif);
-  --fl-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --md-text-font: "Source Serif 4";
-  --md-code-font: "Geist Mono";
+  --md-code-font: "Source Code Pro";
   --md-default-bg-color: var(--fl-paper);
   --md-default-bg-color--light: var(--fl-paper);
   --md-default-bg-color--lighter: var(--fl-paper);
@@ -98,13 +108,13 @@
   --md-typeset-a-color: var(--fl-accent);
   --md-typeset-table-color: var(--fl-hair);
   --md-typeset-table-color--light: transparent;
-  --md-typeset-mark-color: var(--fl-track);
+  --md-typeset-mark-color: var(--fl-band);
   --md-code-fg-color: var(--fl-ink);
-  --md-code-bg-color: transparent;
-  --md-code-bg-color--light: transparent;
-  --md-code-bg-color--lighter: transparent;
-  --md-code-hl-color: var(--fl-track);
-  --md-code-hl-color--light: var(--fl-track);
+  --md-code-bg-color: var(--fl-surface);
+  --md-code-bg-color--light: var(--fl-surface);
+  --md-code-bg-color--lighter: var(--fl-surface);
+  --md-code-hl-color: var(--fl-band);
+  --md-code-hl-color--light: var(--fl-band);
   --md-code-hl-number-color: currentColor;
   --md-code-hl-special-color: currentColor;
   --md-code-hl-function-color: currentColor;
@@ -125,17 +135,17 @@
   --md-shadow-z1: none;
   --md-shadow-z2: none;
   --md-shadow-z3: none;
-  --md-mermaid-font-family: var(--fl-mono);
+  --md-mermaid-font-family: var(--fl-text);
   --md-mermaid-edge-color: var(--fl-muted);
-  --md-mermaid-node-bg-color: var(--fl-paper);
+  --md-mermaid-node-bg-color: var(--fl-surface);
   --md-mermaid-node-fg-color: var(--fl-ink);
   --md-mermaid-label-bg-color: var(--fl-paper);
   --md-mermaid-label-fg-color: var(--fl-ink);
-  --md-mermaid-sequence-actor-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-actor-bg-color: var(--fl-surface);
   --md-mermaid-sequence-actor-fg-color: var(--fl-ink);
-  --md-mermaid-sequence-actor-border-color: var(--fl-ink);
+  --md-mermaid-sequence-actor-border-color: var(--fl-muted);
   --md-mermaid-sequence-actor-line-color: var(--fl-muted);
-  --md-mermaid-sequence-actorman-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-actorman-bg-color: var(--fl-surface);
   --md-mermaid-sequence-actorman-line-color: var(--fl-ink);
   --md-mermaid-sequence-box-bg-color: var(--fl-paper);
   --md-mermaid-sequence-box-fg-color: var(--fl-ink);
@@ -146,7 +156,7 @@
   --md-mermaid-sequence-loop-border-color: var(--fl-muted);
   --md-mermaid-sequence-message-fg-color: var(--fl-ink);
   --md-mermaid-sequence-message-line-color: var(--fl-muted);
-  --md-mermaid-sequence-note-bg-color: var(--fl-paper);
+  --md-mermaid-sequence-note-bg-color: var(--fl-surface);
   --md-mermaid-sequence-note-fg-color: var(--fl-ink);
   --md-mermaid-sequence-note-border-color: var(--fl-muted);
   --md-mermaid-sequence-number-bg-color: var(--fl-ink);
@@ -154,13 +164,13 @@
 }
 
 body {
-  font-family: var(--fl-serif);
+  font-family: var(--fl-text);
   font-feature-settings: "kern";
+  font-optical-sizing: auto;
 }
 
-/* no rounded corners, shadows, blur or gradients anywhere */
+/* no shadows, blur or gradients anywhere; corners round only where a panel holds something */
 *, *::before, *::after {
-  border-radius: 0 !important;
   box-shadow: none !important;
   text-shadow: none !important;
   -webkit-backdrop-filter: none !important;
@@ -172,14 +182,21 @@ body {
   outline-offset: 2px;
 }
 
+/* every page sits on one sheet, a little wider than the theme's, so the home page's label and
+   its two transcripts fit beside each other */
+.md-grid {
+  max-width: 68rem;
+}
+
+/* the header: the pin and the name, then search and the repository */
 .md-header {
   background-color: var(--fl-paper);
   color: var(--fl-ink);
-  border-bottom: 1px solid var(--fl-hair);
 }
 .md-header__title {
-  font-family: var(--fl-mono);
-  font-size: .8rem;
+  font-family: var(--fl-text);
+  font-size: var(--fl-s0);
+  font-weight: 600;
   letter-spacing: 0;
 }
 /* the pin the cli hangs beside its welcome, which python/build_site.py draws from src/output.rs */
@@ -187,9 +204,9 @@ body {
   content: "";
   display: inline-block;
   width: .5em;
-  height: 1.1em;
-  margin-right: .45em;
-  vertical-align: -.2em;
+  height: 1.15em;
+  margin-right: .5em;
+  vertical-align: -.22em;
   background-color: var(--fl-accent);
   -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
   mask: url("../images/pin.svg") center / contain no-repeat;
@@ -206,23 +223,42 @@ body {
   opacity: 1;
 }
 .md-source {
-  font-family: var(--fl-mono);
-  font-size: .6rem;
+  font-family: var(--fl-text);
+  font-size: var(--fl-s-1);
   color: var(--fl-muted);
-  padding: 0 .6rem;
+  padding: 0 var(--fl-u);
   line-height: 2.4rem;
 }
 .md-source:hover {
   color: var(--fl-accent);
   opacity: 1;
 }
+.md-search__button,
+.md-search__button:focus,
+.md-search__button:hover {
+  font-family: var(--fl-text);
+  color: var(--fl-muted);
+  background-color: var(--fl-surface);
+  border: 0;
+  border-radius: 6px;
+}
+.md-search__button:hover {
+  color: var(--fl-ink);
+}
+.md-search__button::before {
+  background-color: var(--fl-muted);
+}
+.md-search__button::after {
+  font-family: var(--fl-text);
+  color: var(--fl-muted);
+  background: none;
+}
 .md-tabs {
   background-color: var(--fl-paper);
   color: var(--fl-muted);
-  border-bottom: 1px solid var(--fl-hair);
 }
 .md-tabs__link {
-  font-size: .7rem;
+  font-size: var(--fl-s-1);
   opacity: 1;
   color: var(--fl-muted);
 }
@@ -230,15 +266,24 @@ body {
 .md-tabs__link:hover {
   color: var(--fl-ink);
 }
+.md-tabs__item--active {
+  border-bottom-color: transparent;
+}
 .md-tabs__item--active .md-tabs__link {
   text-decoration: underline;
   text-decoration-color: var(--fl-accent);
   text-decoration-thickness: 2px;
-  text-underline-offset: .45em;
+  text-underline-offset: .5em;
 }
+
+/* the sidebars: quiet text, the page you are on in ink */
 .md-nav {
-  font-size: .7rem;
-  line-height: 1.35;
+  font-size: var(--fl-s-1);
+  line-height: 1.4;
+}
+.md-nav__title {
+  color: var(--fl-ink);
+  background: none;
 }
 .md-nav__link {
   color: var(--fl-muted);
@@ -261,7 +306,7 @@ body {
   color: var(--fl-ink);
 }
 .md-path {
-  font-size: .65rem;
+  font-size: var(--fl-s-1);
   color: var(--fl-muted);
 }
 .md-path__link {
@@ -271,81 +316,60 @@ body {
   color: var(--fl-accent);
 }
 
-.md-search__button,
-.md-search__button:focus,
-.md-search__button:hover {
-  font-family: var(--fl-serif);
-  color: var(--fl-muted);
-  background-color: var(--fl-paper);
-  border: 1px solid var(--fl-hair);
-}
-.md-search__button:hover {
-  color: var(--fl-ink);
-  border-color: var(--fl-muted);
-}
-.md-search__button::before {
-  background-color: var(--fl-muted);
-}
-.md-search__button::after {
-  font-family: var(--fl-mono);
-  color: var(--fl-muted);
-  background: none;
-}
-
-/* the text: a serif for reading, about 66 characters a line */
+/* the text: a serif for reading, about 66 characters a line, ragged and unhyphenated */
 .md-typeset {
-  font-family: var(--fl-serif);
-  font-size: .9rem;
+  font-family: var(--fl-text);
+  font-size: var(--fl-s0);
   line-height: 1.6;
-  letter-spacing: 0;
-  color: var(--fl-ink);
-  hyphens: auto;
-  -webkit-hyphens: auto;
-  font-variant-numeric: lining-nums;
-}
-.md-typeset :is(p, li) {
-  text-wrap: pretty;
-}
-.md-content__inner > :is(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6, hr) {
-  max-width: 32em;
-}
-.md-typeset :is(h1, h2, h3, h4, h5, h6) {
-  font-family: var(--fl-display);
-  font-weight: 400;
   letter-spacing: 0;
   color: var(--fl-ink);
   hyphens: manual;
   -webkit-hyphens: manual;
+  font-variant-numeric: lining-nums;
+}
+.md-typeset :is(p, ul, ol, dl, blockquote) {
+  margin: 0 0 calc(2 * var(--fl-u));
+}
+.md-typeset :is(p, li) {
+  text-wrap: pretty;
+}
+.md-typeset li {
+  margin-bottom: calc(.5 * var(--fl-u));
+}
+.md-content__inner > :is(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6, hr) {
+  max-width: 34em;
+}
+.md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--fl-text);
+  font-weight: var(--fl-heading);
+  letter-spacing: 0;
+  color: var(--fl-ink);
   text-wrap: balance;
 }
 .md-typeset h1 {
-  font-size: 2.6em;
-  line-height: 1.1;
-  margin: .2em 0 .6em;
+  font-size: var(--fl-s3);
+  line-height: 1.2;
+  margin: var(--fl-u) 0 calc(2 * var(--fl-u));
 }
 .md-typeset h2 {
-  font-size: 1.75em;
-  line-height: 1.2;
-  margin: 1.8em 0 .5em;
-  padding-top: .5em;
-  border-top: 1px solid var(--fl-hair);
-}
-.md-typeset :is(h3, h4, h5, h6) {
-  font-family: var(--fl-serif);
-  font-weight: 600;
+  font-size: var(--fl-s2);
+  line-height: 1.25;
+  margin: calc(4 * var(--fl-u)) 0 var(--fl-u);
 }
 .md-typeset h3 {
-  font-size: 1.12em;
-  line-height: 1.35;
-  margin: 1.6em 0 .35em;
+  font-size: var(--fl-s1);
+  line-height: 1.3;
+  margin: calc(3 * var(--fl-u)) 0 calc(.5 * var(--fl-u));
 }
 .md-typeset :is(h4, h5, h6) {
-  font-size: 1em;
-  margin: 1.4em 0 .3em;
+  font-size: var(--fl-s0);
+  line-height: 1.6;
+  font-weight: 600;
+  margin: calc(2 * var(--fl-u)) 0 calc(.5 * var(--fl-u));
 }
 .md-typeset .headerlink {
-  font-family: var(--fl-mono);
-  font-size: .6em;
+  font-family: var(--fl-text);
+  font-weight: 400;
   color: var(--fl-muted);
 }
 .md-typeset .headerlink:hover,
@@ -356,8 +380,8 @@ body {
   color: var(--fl-accent);
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-underline-offset: .18em;
-  text-decoration-color: color-mix(in srgb, var(--fl-accent) 45%, transparent);
+  text-underline-offset: .2em;
+  text-decoration-color: color-mix(in srgb, var(--fl-accent) 40%, transparent);
 }
 .md-typeset a:hover,
 .md-typeset a:focus {
@@ -369,42 +393,38 @@ body {
 }
 .md-typeset hr {
   border-bottom: 1px solid var(--fl-hair);
-}
-.md-content__button {
-  background: none;
-  color: var(--fl-muted);
-}
-.md-content__button:hover {
-  color: var(--fl-accent);
+  margin: calc(3 * var(--fl-u)) 0;
 }
 
-/* code: geist mono, as the benchmark charts set their numbers */
+/* code and output: source code pro on the label paper */
 .md-typeset code,
 .md-typeset kbd,
 .md-typeset pre {
   font-family: var(--fl-mono);
   font-variant-ligatures: none;
-  hyphens: manual;
-  -webkit-hyphens: manual;
 }
 .md-typeset code {
-  font-size: .8em;
-  padding: 0 .1em;
-  background: none;
+  font-size: .85em;
+  padding: .1em .3em;
+  border-radius: 3px;
+  background-color: var(--fl-surface);
   color: var(--fl-ink);
 }
 .md-typeset a code {
   color: inherit;
 }
+.md-typeset :is(h1, h2, h3, h4, h5, h6) code {
+  font-size: .85em;
+}
 .md-typeset pre {
-  margin: 1.2em 0;
+  margin: 0 0 calc(2 * var(--fl-u));
 }
 .md-typeset pre > code {
-  font-size: .68rem;
+  font-size: var(--fl-s-1);
   line-height: 1.6;
-  padding: .15em 0 .15em 1.1em;
-  background: none;
-  border-left: 2px solid var(--fl-hair);
+  padding: var(--fl-u);
+  border-radius: 6px;
+  background-color: var(--fl-surface);
   scrollbar-color: var(--fl-hair) transparent;
 }
 .md-typeset .highlight {
@@ -425,7 +445,8 @@ body {
 }
 .md-code__nav,
 :hover > .md-code__nav {
-  background-color: var(--fl-paper);
+  background-color: var(--fl-surface);
+  border-radius: 6px;
 }
 .md-code__button,
 :hover > * > .md-code__button {
@@ -436,7 +457,7 @@ body {
   color: var(--fl-accent);
 }
 
-/* transcripts in the colors fetchloom gives each line; bold is geist mono's medium */
+/* transcripts in the colors fetchloom gives each line; its bold is the code face's 600 */
 .fl-transcript code {
   color: var(--fl-ink);
 }
@@ -446,7 +467,7 @@ body {
 .fl-fail,
 .fl-accent,
 .fl-bold {
-  font-weight: 500;
+  font-weight: 600;
 }
 .fl-done {
   color: var(--fl-done);
@@ -467,9 +488,9 @@ body {
   color: var(--fl-muted);
 }
 
-/* tables in the booktabs manner: rules above and below, one under the head, none between rows */
+/* tables: a band for the head and alternate rows on the label paper, no rules */
 .md-typeset__scrollwrap {
-  margin: 1.4em 0;
+  margin: 0 0 calc(2 * var(--fl-u));
   overflow-x: auto;
   scrollbar-color: var(--fl-hair) transparent;
 }
@@ -483,70 +504,76 @@ body {
   width: auto;
   max-width: none;
   min-width: 0;
-  font-size: .75rem;
-  line-height: 1.45;
+  font-size: var(--fl-s-1);
+  line-height: 1.5;
   font-variant-numeric: tabular-nums lining-nums;
-  hyphens: manual;
-  -webkit-hyphens: manual;
   background: none;
   border: 0;
-  border-top: 1.5px solid var(--fl-ink);
-  border-bottom: 1.5px solid var(--fl-ink);
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 6px;
+  overflow: hidden;
 }
 /* words and code names stay whole in a cell; a table too wide for them scrolls */
 .md-typeset table:not([class]) :is(code, kbd) {
   word-break: normal;
+  background: none;
+  padding: 0;
 }
 .md-typeset table:not([class]) th {
   font-weight: 600;
   text-align: left;
   vertical-align: bottom;
-  padding: .55em 1.1em .45em 0;
-  border-bottom: 1px solid var(--fl-ink);
-  background: none;
+  padding: calc(.6 * var(--fl-u)) var(--fl-u);
+  border: 0;
+  background-color: var(--fl-band);
   min-width: 0;
 }
 .md-typeset table:not([class]) td {
   vertical-align: top;
-  padding: .4em 1.1em .4em 0;
+  padding: calc(.6 * var(--fl-u)) var(--fl-u);
   border: 0;
 }
-.md-typeset table:not([class]) :is(th, td):last-child {
-  padding-right: 0;
-}
-.md-typeset table:not([class]) tbody tr:first-child td {
-  padding-top: .6em;
-}
-.md-typeset table:not([class]) tbody tr:last-child td {
-  padding-bottom: .6em;
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+  background-color: var(--fl-surface);
 }
 .md-typeset table:not([class]) tr:hover {
-  background: none;
-  box-shadow: none;
+  background-color: inherit;
 }
 
 /* diagrams take the column's width, scrolling in their own box when they need more */
 .md-typeset .mermaid {
   overflow-x: auto;
-  margin: 1.4em 0;
-  hyphens: manual;
-  -webkit-hyphens: manual;
+  margin: 0 0 calc(2 * var(--fl-u));
 }
 
+/* the footer: the page before and after, in words alone, with no rule above them */
 .md-footer {
   background-color: var(--fl-paper);
   color: var(--fl-ink);
-  border-top: 1px solid var(--fl-hair);
+  border-top: 0;
+}
+.md-footer__button {
+  display: none;
 }
 .md-footer__link {
+  flex-grow: 1;
   opacity: 1;
+  padding-top: calc(2 * var(--fl-u));
+  padding-bottom: calc(2 * var(--fl-u));
+}
+.md-footer__title {
+  max-width: none;
+  padding: 0 var(--fl-u);
+  font-size: var(--fl-s0);
+  white-space: normal;
 }
 .md-footer__link:hover .md-footer__title,
 .md-footer__link:focus .md-footer__title {
   color: var(--fl-accent);
 }
 .md-footer__direction {
+  font-size: var(--fl-s-1);
   color: var(--fl-muted);
   opacity: 1;
 }
@@ -554,19 +581,257 @@ body {
   background-color: var(--fl-paper);
 }
 
+/* the home page: what fetchloom does and how to start on the left, the label it pins on the
+   right, then the same bytes landing on two machines, then where to read on */
+.md-content:has(.fl-home) .md-content__inner {
+  padding-top: calc(2 * var(--fl-u));
+}
+.md-content:has(.fl-home) .md-content__inner > :is(p, h1) {
+  max-width: none;
+}
+.md-main:has(.fl-home) ~ .md-footer {
+  display: none;
+}
+/* the home page leaves its sidebars to the other pages; a phone's menu still opens */
+@media screen and (min-width: 60em) {
+  .md-main:has(.fl-home) .md-sidebar--secondary {
+    display: none;
+  }
+}
+@media screen and (min-width: 76.25em) {
+  .md-main:has(.fl-home) .md-sidebar--primary {
+    display: none;
+  }
+}
+.md-typeset .fl-home {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  grid-template-areas:
+    "intro label"
+    "mine theirs"
+    "routes routes";
+  column-gap: calc(3 * var(--fl-u));
+  row-gap: calc(5 * var(--fl-u));
+  align-items: start;
+}
+.md-typeset .fl-intro {
+  grid-area: intro;
+}
+.md-typeset .fl-intro h1 {
+  max-width: 14em;
+  font-size: var(--fl-s3);
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0 0 var(--fl-u);
+}
+.md-typeset .fl-lede {
+  max-width: 30em;
+  margin: 0 0 calc(3 * var(--fl-u));
+}
+.md-typeset .fl-step {
+  font-weight: 600;
+  margin: 0 0 calc(.5 * var(--fl-u));
+}
+.md-typeset .fl-step code {
+  white-space: nowrap;
+}
+.md-typeset .fl-intro pre {
+  margin-bottom: calc(2 * var(--fl-u));
+}
+.md-typeset .fl-intro pre:last-child {
+  margin-bottom: 0;
+}
+.md-typeset .fl-where pre {
+  margin: 0;
+}
+/* output is read, not run, so it carries no copy button; a line too long for its box goes on
+   under its own text, past the verb, as a narrow terminal wraps it */
+.md-typeset .fl-where .md-code__nav {
+  display: none;
+}
+.md-typeset .fl-run .fl-line {
+  display: block;
+  white-space: pre-wrap;
+  padding-left: 12ch;
+  text-indent: -12ch;
+}
+.md-typeset .fl-mine {
+  grid-area: mine;
+}
+.md-typeset .fl-theirs {
+  grid-area: theirs;
+}
+
+/* the label, pinned through its corner to the sheet */
+.md-typeset figure.fl-label {
+  grid-area: label;
+  position: relative;
+  display: block;
+  text-align: left;
+  width: auto;
+  max-width: 30em;
+  margin: calc(2 * var(--fl-u)) 0 0;
+  padding: calc(2 * var(--fl-u)) calc(2.5 * var(--fl-u)) calc(2 * var(--fl-u));
+  background-color: var(--fl-surface);
+  border-radius: 2px;
+  container-type: inline-size;
+}
+.md-typeset figure.fl-label::before {
+  content: "";
+  position: absolute;
+  top: calc(-1.5 * var(--fl-u));
+  left: calc(2.5 * var(--fl-u));
+  width: calc(.9 * var(--fl-u));
+  height: calc(4 * var(--fl-u));
+  background-color: var(--fl-accent);
+  -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
+  mask: url("../images/pin.svg") center / contain no-repeat;
+}
+.md-typeset .fl-label-file {
+  margin: 0 0 0 calc(1.5 * var(--fl-u));
+  font-size: var(--fl-s-1);
+  color: var(--fl-muted);
+}
+.md-typeset .fl-label-name {
+  margin: 0 0 calc(1.5 * var(--fl-u));
+  font-size: var(--fl-s4);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.15;
+}
+.md-typeset .fl-label dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: calc(1.5 * var(--fl-u));
+  row-gap: calc(.5 * var(--fl-u));
+  margin: 0 0 calc(2 * var(--fl-u));
+}
+.md-typeset .fl-label :is(dt, dd) {
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+}
+.md-typeset .fl-label dt {
+  color: var(--fl-muted);
+}
+.md-typeset .fl-label .fl-hash {
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  column-gap: 1ch;
+  font-family: var(--fl-mono);
+  font-size: var(--fl-s-1);
+  line-height: 1.8;
+}
+/* a narrow label puts each name above its value, and the hash in two columns if it must */
+@container (max-width: 20rem) {
+  .md-typeset .fl-label dl {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+  .md-typeset .fl-label dd {
+    margin-bottom: calc(.5 * var(--fl-u));
+  }
+}
+@container (max-width: 15.5rem) {
+  .md-typeset .fl-label .fl-hash {
+    grid-template-columns: repeat(2, max-content);
+  }
+}
+.md-typeset .fl-label figcaption {
+  max-width: none;
+  margin: 0;
+  font-size: var(--fl-s-1);
+  font-style: normal;
+  line-height: 1.5;
+  color: var(--fl-muted);
+}
+
+/* where to read on: a word for each guide, a line under it saying what it holds */
+.md-typeset .fl-routes {
+  grid-area: routes;
+}
+.md-typeset .fl-routes ul {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  column-gap: calc(2 * var(--fl-u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.md-typeset .fl-routes ul li {
+  margin: 0;
+  color: var(--fl-muted);
+  font-size: var(--fl-s-1);
+  line-height: 1.5;
+}
+.md-typeset .fl-routes a {
+  display: block;
+  margin-bottom: calc(.25 * var(--fl-u));
+  font-size: var(--fl-s0);
+}
+
+@media screen and (max-width: 60em) {
+  .md-typeset .fl-home {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "intro"
+      "label"
+      "mine"
+      "theirs"
+      "routes";
+    row-gap: calc(4 * var(--fl-u));
+  }
+  .md-typeset .fl-routes ul {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: calc(1.5 * var(--fl-u));
+  }
+}
+
 @media screen and (max-width: 44.984375em) {
-  .md-typeset {
-    font-size: .85rem;
+  .md-typeset h1,
+  .md-typeset .fl-intro h1 {
+    font-size: var(--fl-s2);
   }
   .md-typeset h2 {
-    padding-left: .75em;
+    font-size: var(--fl-s1);
   }
-  .md-typeset h2::before {
-    left: 0;
+  .md-typeset h3 {
+    font-size: var(--fl-s0);
+  }
+  .md-typeset .fl-intro pre > code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  /* a phone selects text to copy it, so code goes without its button there */
+  .md-code__nav {
+    display: none;
+  }
+  .md-typeset .fl-label-name {
+    font-size: var(--fl-s3);
+  }
+  .md-typeset figure.fl-label {
+    padding: calc(2 * var(--fl-u)) calc(1.25 * var(--fl-u)) calc(1.5 * var(--fl-u));
+  }
+  .md-typeset figure.fl-label::before {
+    left: calc(1.25 * var(--fl-u));
+  }
+  /* a phone scrolls a transcript sideways, as a terminal does, rather than stack its lines */
+  .md-typeset .fl-run .fl-line {
+    white-space: pre;
+    padding-left: 0;
+    text-indent: 0;
   }
   .md-content__inner > pre,
   .md-content__inner > .highlight {
     margin-left: 0;
     margin-right: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block extrahead %}
-  <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-wght-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-opsz-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
 {% endblock %}
 {% block scripts %}
   <script>
@@ -31,6 +31,31 @@
     }
     window.addEventListener("load", scrollable);
     window.addEventListener("resize", scrollable);
+    // the theme draws a nav for each section and each code block's buttons, which a screen reader
+    // lists by name: each gets the name of its section, told apart where two would match
+    function named() {
+      document.querySelectorAll(".md-code__nav").forEach(function (nav) {
+        nav.setAttribute("role", "none");
+      });
+      var seen = {};
+      document.querySelectorAll("nav").forEach(function (nav) {
+        var name = nav.getAttribute("aria-label");
+        if (!name && nav.hasAttribute("aria-labelledby")) {
+          var item = nav.closest("li");
+          var link = item && item.querySelector(".md-nav__link");
+          name = link ? link.textContent.trim().replace(/\s+/g, " ") : "";
+        }
+        if (!name) {
+          return;
+        }
+        seen[name] = (seen[name] || 0) + 1;
+        nav.removeAttribute("aria-labelledby");
+        nav.setAttribute("aria-label", seen[name] > 1 ? name + ", " + seen[name] : name);
+      });
+    }
+    window.addEventListener("load", function () {
+      setTimeout(named);
+    });
   </script>
   {% if page and page.content and 'class="mermaid"' in page.content %}
     <script src="{{ 'assets/javascripts/mermaid.tiny.js' | url }}"></script>

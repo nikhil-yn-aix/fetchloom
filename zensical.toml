@@ -31,11 +31,9 @@ font = false
 # the pin of src/output.rs, which python/build_site.py draws there after zensical
 favicon = "assets/images/favicon.svg"
 features = [
-  "content.action.edit",
   "content.code.copy",
   "navigation.footer",
   "navigation.indexes",
-  "navigation.path",
   "navigation.tabs",
   "search.highlight",
 ]
