@@ -38,6 +38,8 @@ pub(crate) enum Account {
     Dryad,
     GitHub,
     GitLab,
+    /// semantic scholar's API: its key gives a rate of its own, and the files of its datasets.
+    S2,
     /// one installation's host, with its port when that is not 443: a dataverse key works only
     /// on the server that made it.
     Dataverse(String),
@@ -48,9 +50,13 @@ pub(crate) enum Account {
 const EARTHDATA: &str = "urs.earthdata.nasa.gov";
 const PHYSIONET: &str = "physionet.org";
 const HARVARD: &str = "dataverse.harvard.edu";
+/// semantic scholar's API, the only host its key goes to.
+pub(crate) const S2_HOST: &str = "api.semanticscholar.org";
+/// where semantic scholar gives a person a key.
+pub(crate) const S2_KEYS: &str = "https://www.semanticscholar.org/product/api#api-key-form";
 
 /// what a person types after `fetchloom auth login`.
-pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, dataverse, earthdata, physionet or a host name";
+pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata, physionet or a host name";
 
 /// what a refused request needs: the account to sign in to, and a page whose terms the person
 /// must accept first, when a key alone is not enough.
@@ -139,6 +145,7 @@ impl Account {
             "dryad" | "datadryad.org" => Account::Dryad,
             "github" | "github.com" => Account::GitHub,
             "gitlab" | "gitlab.com" => Account::GitLab,
+            "s2" | "semanticscholar" | "semantic-scholar" | S2_HOST => Account::S2,
             "dataverse" => match host {
                 None => Account::Dataverse(HARVARD.to_owned()),
                 Some(host) => Account::Dataverse(dataverse_host(host).ok_or_else(|| {
@@ -192,6 +199,7 @@ impl Account {
             "datadryad.org" => Account::Dryad,
             "api.github.com" => Account::GitHub,
             "gitlab.com" => Account::GitLab,
+            S2_HOST => Account::S2,
             _ => return None,
         })
     }
@@ -207,6 +215,7 @@ impl Account {
             Account::Dryad => "dryad".to_owned(),
             Account::GitHub => "github".to_owned(),
             Account::GitLab => "gitlab".to_owned(),
+            Account::S2 => "s2".to_owned(),
             Account::Dataverse(host) => format!("dataverse:{host}"),
             Account::Login(host) => format!("login:{host}"),
         }
@@ -284,6 +293,11 @@ impl Account {
                 join("gitlab.com"),
                 Step::Open("https://gitlab.com/-/user_settings/personal_access_tokens".into()),
                 Step::Do("add a token with the read_api scope".into()),
+            ],
+            Account::S2 => vec![
+                Step::Open(S2_KEYS.into()),
+                Step::Do("ask for a key with the form there; semantic scholar sends it by email".into()),
+                Step::Do("papers and search work without one, at a rate everyone shares; the files of its datasets need it".into()),
             ],
             Account::Dataverse(host) => vec![
                 Step::Open(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
@@ -369,6 +383,8 @@ impl Account {
                 bearer(token),
                 false,
             ),
+            // the API alone: the links it gives to its files on S3 carry their own signature
+            Account::S2 => (S2_HOST.to_owned(), "x-api-key", token.to_owned(), false),
             Account::Dataverse(host) => (host.clone(), "x-dataverse-key", token.to_owned(), false),
             // a login answers wherever its host is reached, as curl's netrc does: earthdata's
             // archives send a person to urs.earthdata.nasa.gov and back
@@ -455,6 +471,12 @@ impl Account {
             Account::Kaggle => ("https://api.kaggle.com/v1/hello".into(), |v| {
                 text(&v["userName"])
             }),
+            // any request with a key it does not know is refused with 403, and the answer names
+            // nobody
+            Account::S2 => (
+                format!("https://{S2_HOST}/datasets/v1/release/latest"),
+                |_| None,
+            ),
             Account::Login(_) => return None,
         };
         Some(Check {
@@ -515,6 +537,7 @@ impl Account {
                 .or_else(|| set("GITHUB_TOKEN"))
                 .or_else(|| stored(&self.id())),
             Account::GitLab => set("GITLAB_TOKEN").or_else(|| stored(&self.id())),
+            Account::S2 => set("S2_API_KEY").or_else(|| stored(&self.id())),
             Account::Dataverse(host) => {
                 let named = var("DATAVERSE_URL")
                     .and_then(|value| value.into_string().ok())
@@ -580,6 +603,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
         Account::Dryad,
         Account::GitHub,
         Account::GitLab,
+        Account::S2,
     ];
     // the index of saved keys is read once here, rather than again for each account
     let saved = store::saved(var);
@@ -641,6 +665,7 @@ pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
         Account::Dryad,
         Account::GitHub,
         Account::GitLab,
+        Account::S2,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut logins: Vec<String> = netrc::read(var)

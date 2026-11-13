@@ -21,6 +21,7 @@ fetchloom auth
 | `dryad` | every download | `DRYAD_TOKEN` |
 | `github` | more than 60 requests an hour | `GH_TOKEN` or `GITHUB_TOKEN` |
 | `gitlab` | private projects | `GITLAB_TOKEN` |
+| `s2` | semantic scholar's dataset files, and a rate of your own for papers and search | `S2_API_KEY` |
 | `dataverse` | restricted files, on the installation `--host` names | `DATAVERSE_API_TOKEN`, for the installation `DATAVERSE_URL` names |
 | `earthdata`, `physionet` or a host name | a server that asks for a username and password | a `machine` line in `.netrc` |
 
@@ -56,6 +57,6 @@ in a script or CI there is nobody to ask: set the source's variable from the CI 
 
 ## where a key goes
 
-a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, which earthdata needs: its archives send you to `urs.earthdata.nasa.gov` to sign in. an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are.
+a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, which earthdata needs: its archives send you to `urs.earthdata.nasa.gov` to sign in. an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. a github key goes to `api.github.com` only, never to github.com, where release files are. a semantic scholar key goes to `api.semanticscholar.org` only, never to the links on S3 it gives for dataset files.
 
 no key appears in data.toml, data.lock, the cache, logs or `--json` output. wherever a link is shown, its query and fragment values are masked unless their names are known to be harmless, such as `dl` or `version`, and recognized secrets, such as `token=`, are refused in a project's references. a key holding a character no request can carry, such as a line break, is left out of every request, and [`fetchloom auth`](commands/auth.md#status) warns about it.

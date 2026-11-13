@@ -118,6 +118,7 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | zenodo, figshare, osf, dryad | `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`, `DRYAD_TOKEN`; then a key saved by `fetchloom auth login` |
 | github | `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them; then a key saved by `fetchloom auth login github` |
 | gitlab | `GITLAB_TOKEN`; then a key saved by `fetchloom auth login gitlab` |
+| semantic scholar | `S2_API_KEY`, as semantic scholar's examples read it; then a key saved by `fetchloom auth login s2` |
 | dataverse | `DATAVERSE_API_TOKEN` for the installation `DATAVERSE_URL` names, as pyDataverse reads them; then a key saved for that host |
 | a host's login | the `machine` entry for that host in `.netrc`, or the file `NETRC` names; on windows `_netrc` when `.netrc` does not exist. `default` entries are ignored |
 

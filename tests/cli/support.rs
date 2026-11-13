@@ -563,6 +563,7 @@ fn leaks(name: &str) -> bool {
         || name.starts_with("ONEDRIVE")
         || name.starts_with("KAGGLE_")
         || name.starts_with("HF_")
+        || name.starts_with("S2_")
         || name.starts_with("DATAVERSE_")
         || name.starts_with("AWS_")
         || name.starts_with("GOOGLE_")

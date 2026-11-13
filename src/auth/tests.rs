@@ -81,6 +81,7 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
             ("DRYAD_TOKEN", "d"),
             ("GITHUB_TOKEN", "gh"),
             ("GITLAB_TOKEN", "gl"),
+            ("S2_API_KEY", "s2"),
             ("DATAVERSE_URL", "https://demo.dataverse.org/"),
             ("DATAVERSE_API_TOKEN", "dv"),
         ],
@@ -94,6 +95,7 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
         ("api.figshare.com", "authorization", "token f", false),
         ("api.github.com", "authorization", "Bearer gh", false),
         ("api.osf.io", "authorization", "Bearer o", false),
+        ("api.semanticscholar.org", "x-api-key", "s2", false),
         ("datadryad.org", "authorization", "Bearer d", false),
         ("demo.dataverse.org", "x-dataverse-key", "dv", false),
         ("files.osf.io", "authorization", "Bearer o", true),
@@ -420,6 +422,9 @@ fn names_people_type_find_their_account() {
     );
     assert_eq!(parse("github"), Account::GitHub);
     assert_eq!(parse("GitLab"), Account::GitLab);
+    for name in ["s2", "SemanticScholar", "api.semanticscholar.org"] {
+        assert_eq!(parse(name), Account::S2, "{name}");
+    }
     assert_eq!(
         Account::parse("bitbucket", None).unwrap_err().kind,
         Kind::Usage
@@ -464,6 +469,7 @@ fn a_sign_in_command_keeps_each_host_one_literal_word() {
         (Account::Dryad, &["dryad"]),
         (Account::GitHub, &["github"]),
         (Account::GitLab, &["gitlab"]),
+        (Account::S2, &["s2"]),
         (Account::Dataverse(HARVARD.into()), &["dataverse"]),
         (
             Account::Dataverse("a;b$(c)".into()),

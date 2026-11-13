@@ -54,7 +54,7 @@ fn auth_alone_lists_every_account() -> Result {
     let story = text(&plain.stderr)?;
     assert!(
         story.lines().any(|line| line
-            == "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure"),
+            == "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet, aws, google, azure"),
         "{story}"
     );
     let status = sandbox.run(&["--json", "auth", "status", "--offline"])?;
@@ -1231,7 +1231,7 @@ fn auth_names_where_azure_credentials_would_come_from() -> Result {
             vec![row("azure:lab", "AZURE_STORAGE_KEY", None, "key"), none.clone()],
             vec![
                 "Signed in to azure account lab with its key \u{b7} AZURE_STORAGE_KEY".to_owned(),
-                "Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure".to_owned(),
+                "Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet, aws, google, azure".to_owned(),
             ],
         ),
         (

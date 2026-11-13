@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 
@@ -37,14 +37,14 @@ save it to ~/.cache/huggingface/token? [Y/n] yes
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
-it asks before replacing a saved key; `--yes` answers both questions yes, and a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github and earthdata check a key without naming whose it is, and a login for any other host is not checked. a source that gives no answer, as a host this machine cannot reach, leaves a key unchecked: it is saved all the same, and the last line says `Saved a key for <source> to <file>, not checked` instead of `Signed in`, with a hint that `fetchloom auth` checks it once the host answers.
+it asks before replacing a saved key; `--yes` answers both questions yes, and a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo, github, s2 and earthdata check a key without naming whose it is, and a login for any other host is not checked. a source that gives no answer, as a host this machine cannot reach, leaves a key unchecked: it is saved all the same, and the last line says `Saved a key for <source> to <file>, not checked` instead of `Signed in`, with a hint that `fetchloom auth` checks it once the host answers.
 
 | account | where the key goes | also read by |
 |---|---|---|
 | hugging face | `$HF_TOKEN_PATH`, else `token` in `$HF_HOME`, else `huggingface/token` in `$XDG_CACHE_HOME`, else `~/.cache/huggingface/token` | the `hf` command, `datasets`, `transformers` |
 | kaggle | `~/.kaggle/access_token` for a key starting `KGAT_`; a pasted `kaggle.json` is saved where the kaggle command reads it: `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux `kaggle` in `XDG_CONFIG_HOME` | the `kaggle` command, `kagglehub` |
 | nasa earthdata, physionet, any host | `.netrc` in your home folder, or the file `NETRC` names; `_netrc` on windows when it already exists | curl, wget, python's requests |
-| zenodo, figshare, osf, dryad, github, gitlab, dataverse | the system's credential store: windows credential manager, the macos keychain or the linux secret service | nothing else; these sources have no shared file |
+| zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse | the system's credential store: windows credential manager, the macos keychain or the linux secret service | nothing else; these sources have no shared file |
 
 a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=false`, or `0`, skips the credential store.
 
@@ -102,7 +102,7 @@ it lists each account with a key, where the key came from and, online, who the s
 
 ```text
   Signed in to hf as ada · ~/.cache/huggingface/token
-  Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet, aws, google, azure
+  Signed in to none of kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet, aws, google, azure
 ```
 
 `aws`, `google` and `azure` are the keys [private buckets](../signing-in.md#private-buckets-and-folders), containers and drive folders are read with. `auth` names them from the files and variables alone: it never runs a program, asks a server or shows a secret.
@@ -120,7 +120,7 @@ keys your AWS settings send to another endpoint are listed for it, as `s3 at htt
   Signed in to google as loader@lab-project.iam.gserviceaccount.com · ~/keys/lab.json
   Signed in to azure account lab with its key · AZURE_STORAGE_KEY
   Signed in to azure as ada@lab.example · the az cli at /usr/bin/az, which runs when a container needs a token
-  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, earthdata, physionet
+  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet
 ```
 
 a key the source refuses is marked `Refused` with the command to sign in again, and a key whose source gives no answer, as a host this machine cannot reach, ends its line with `not checked, as <host> gave no answer`. `--offline` skips asking the sources. a key is never printed, in any output. a key that holds a character no request can carry, such as a line break, is never sent, and `auth` and the offer to sign in after a refusal warn about it, naming where the key is. on linux and macos, `auth` also warns when other users can open the `.netrc` it reads.
