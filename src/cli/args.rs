@@ -22,7 +22,7 @@ on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git pr
 
     pub(super) const REMOVE: &str = "examples:
   fetchloom remove iris
-  fetchloom remove iris --dry-run
+  fetchloom remove iris wine --dry-run
   fetchloom remove flowers --json
 
 on disk: edits data.toml and data.lock, and deletes the unchanged files it placed in data/. --dry-run writes nothing";
@@ -508,7 +508,7 @@ pub(crate) enum Command {
     Add(Add),
 
     /// remove a dataset and the unchanged files fetchloom placed for it
-    #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
+    #[command(override_usage = "fetchloom remove [options] <name>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
     Remove(Remove),
 
     /// leave files out of their dataset for good, such as bad samples
@@ -854,9 +854,9 @@ pub(crate) struct Add {
 /// remove a dataset and the unchanged files fetchloom placed for it
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Remove {
-    /// the dataset's name in data.toml
+    /// the datasets' names in data.toml
     #[arg(value_name = "name", help_heading = "arguments")]
-    pub(crate) name: Option<String>,
+    pub(crate) names: Vec<String>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

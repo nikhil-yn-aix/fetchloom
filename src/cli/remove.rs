@@ -13,14 +13,15 @@ use crate::project::lock;
 use crate::project::manifest::{self, Entry, Manifest};
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
-    let Some(name) = args.name else {
+    if args.names.is_empty() {
         return Err(unnamed(context));
-    };
+    }
+    let names = distinct(args.names);
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
     if !dry_run {
         // asked before the project is held, so other runs never wait on the answer
-        ask_import(context, &project, &name)?;
+        ask_import(context, &project, &names)?;
     }
     let _held = if dry_run {
         None
@@ -28,18 +29,27 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         Some(hold(context, &project, "remove").await?)
     };
     let (text, manifest) = project.manifest()?;
-    known(&manifest, &name, "remove")?;
-    unread(&manifest, &name)?;
-    let updated = manifest::without_dataset(&text, &name)?;
+    for name in &names {
+        known(&manifest, name, "remove")?;
+    }
+    for name in &names {
+        unread(&manifest, name, &names)?;
+    }
+    let updated = names
+        .iter()
+        .try_fold(text, |text, name| manifest::without_dataset(&text, name))?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
-    let imported: Vec<Sha256> = lock
-        .get(&name)
-        .filter(|_| manifest.datasets[&name].is_import())
-        .map(|locked| locked.files.iter().map(|file| file.sha256).collect())
-        .unwrap_or_default();
-    lock.datasets.retain(|dataset| dataset.name != name);
-    lock.derived.retain(|result| result.name != name);
+    let imported: Vec<Sha256> = names
+        .iter()
+        .filter(|name| manifest.datasets[name.as_str()].is_import())
+        .filter_map(|name| lock.get(name))
+        .flat_map(|locked| locked.files.iter().map(|file| file.sha256))
+        .collect();
+    lock.datasets
+        .retain(|dataset| !names.contains(&dataset.name));
+    lock.derived.retain(|result| !names.contains(&result.name));
+    let listed = crate::units::listed(&names, "and");
     let cache = if dry_run {
         peek_cache()?
     } else {
@@ -60,7 +70,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         let preview = placing.preview_removal();
         context.output.step(
             "Would remove",
-            &format!("{name} from data.toml and data.lock"),
+            &format!("{listed} from data.toml and data.lock"),
         );
         place::tell_preview(&context.output, &new_manifest, &Scope::All, &preview);
         dry_run_done(&context.output, None);
@@ -69,7 +79,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             pins: Vec::new(),
             placed: preview,
         };
-        return Ok(Report::dry(project.root, vec![name], outcome));
+        return Ok(Report::dry(project.root, names, outcome));
     }
     // a stop asked while the data folder was read leaves the project as it was; once the files
     // change, the removal runs to its end
@@ -89,29 +99,41 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             super::project::command("sync")
         ))
     })?;
-    context.output.done("Removed", &name);
+    context.output.done("Removed", &listed);
     context.output.next(&format!(
         "commit {}; after pulling, other clones remove unchanged files with `fetchloom sync`",
         committed(&project)
     ));
     Ok(Report {
         project: project.root,
-        datasets: vec![name],
+        datasets: names,
         lock_changed: true,
         placement: Some(placement),
         ..Report::default()
     })
 }
 
-/// refuses to remove `name` while a recipe in `manifest` is made from it.
-fn unread(manifest: &Manifest, name: &str) -> Result<(), Error> {
+/// `asked` without the names given twice, in the order given.
+fn distinct(asked: Vec<String>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::with_capacity(asked.len());
+    for name in asked {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// refuses to remove `name` while a recipe in `manifest` other than those `removed` is made from it.
+fn unread(manifest: &Manifest, name: &str, removed: &[String]) -> Result<(), Error> {
     let readers: Vec<&str> = manifest
         .datasets
         .iter()
-        .filter(|(_, entry)| {
-            entry
-                .recipe()
-                .is_some_and(|recipe| recipe.from.iter().any(|from| from == name))
+        .filter(|(reader, entry)| {
+            !removed.contains(reader)
+                && entry
+                    .recipe()
+                    .is_some_and(|recipe| recipe.from.iter().any(|from| from == name))
         })
         .map(|(name, _)| name.as_str())
         .collect();
@@ -131,21 +153,41 @@ fn unread(manifest: &Manifest, name: &str) -> Result<(), Error> {
     )
 }
 
-/// asks before removing `name` when it is an import: no source can give its files back, so once
+/// asks before removing the imports among `names`: no source can give their files back, so once
 /// they leave the data folder only the cache keeps them, until gc frees them. with nobody to ask it
 /// refuses, unless `--yes`.
-fn ask_import(context: &Context, project: &Project, name: &str) -> Result<(), Error> {
+fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<(), Error> {
     let Ok((_, manifest)) = project.manifest() else {
         return Ok(());
     };
-    if context.yes || !manifest.datasets.get(name).is_some_and(Entry::is_import) {
+    let imports: Vec<&str> = names
+        .iter()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(name.as_str())
+                .is_some_and(Entry::is_import)
+        })
+        .map(String::as_str)
+        .collect();
+    if context.yes || imports.is_empty() {
         return Ok(());
     }
-    let why = format!("{name} was imported from files, and no source can give them back");
+    let name = crate::units::listed(&imports, "and");
+    let (was, it, its) = if imports.len() == 1 {
+        ("was", "it", "its")
+    } else {
+        ("were", "them", "their")
+    };
+    let folders: Vec<String> = imports
+        .iter()
+        .map(|import| crate::plan::folder(&manifest, import))
+        .collect();
+    let why = format!("{name} {was} imported from files, and no source can give them back");
     let cancel = format!("the removal of {name}");
     let question = format!(
-        "{why} once {} and the cache's copy are gone. remove it anyway?",
-        crate::plan::folder(&manifest, name)
+        "{why} once {} and the cache's copy are gone. remove {it} anyway?",
+        crate::units::listed(&folders, "and")
     );
     match context
         .output
@@ -160,11 +202,11 @@ fn ask_import(context: &Context, project: &Project, name: &str) -> Result<(), Er
         ),
         None => Err(Error::new(
             Kind::Unconfirmed,
-            format!("{why}, so removing it needs a yes"),
+            format!("{why}, so removing {it} needs a yes"),
         )
         .help(format!(
-            "answer yes at a terminal, or run `{}` once you keep its files elsewhere",
-            super::project::command(&format!("remove {name} --yes"))
+            "answer yes at a terminal, or run `{}` once you keep {its} files elsewhere",
+            super::project::command(&format!("remove {} --yes", names.join(" ")))
         ))),
     }
 }

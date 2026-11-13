@@ -371,7 +371,8 @@ async fn one_link(
     if is_search(&link) {
         link = super::search::pick(context, net.as_ref(), &link, "get").await?;
     }
-    let parsed = Reference::parse(&link)?;
+    let parsed =
+        Reference::parse(&link).map_err(|error| super::typed::scheme_meant(error, &link, "get"))?;
     engine::tell_raw(&context.output, &link, &parsed.reference);
     let cache = open_cache()?;
     let key = remembered::key(args, &parsed);

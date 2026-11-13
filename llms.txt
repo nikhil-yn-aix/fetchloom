@@ -27,7 +27,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [list](docs/user/commands/list.md): what each dataset is: its reference, size, folder and pinned files
 - [export](docs/user/commands/export.md): how to use the pins without fetchloom: `fetchloom export` writes SHA-256 lines for `sha256sum -c`, or links with `--format links` or `--format aria2`; `-o` writes a file and keeps one already there unless `--force`
 - [push](docs/user/commands/push.md): how to fill a folder mirror: `fetchloom push` copies the pinned files into the folder `--to` names; `--inputs` adds what recipes are made from, `-n` previews
-- [remove](docs/user/commands/remove.md): how to take a dataset out: `fetchloom remove` drops it and the unchanged files it placed; `-n` previews
+- [remove](docs/user/commands/remove.md): how to take a dataset out: `fetchloom remove <name>...` drops one or more and the unchanged files they placed; `-n` previews
 - [drop](docs/user/commands/drop.md): how to leave files out of a dataset for good: `fetchloom drop` writes patterns to data.toml; `-n` previews
 - [cache](docs/user/commands/cache.md): where the cache's space goes; `cache gc` frees what no project needs, `--now` also what is under a day old, `--inputs` raw data only builds read once a folder mirror holds it, `-n` previews; `cache verify` hashes every cached file
 - [settings](docs/user/commands/settings.md): which value each setting has and where it came from

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{ArgMatches, CommandFactory};
+use clap::{ArgMatches, CommandFactory, ValueEnum};
 
 use super::{Context, args, finish, level};
 use crate::error::{Error, Kind};
@@ -43,12 +43,38 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
         .as_ref()
         .and_then(named_command)
         .filter(|name| name != "help");
+    let shell = std::env::var_os("SHELL");
+    let line: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    let error = describe(err, (command.as_deref(), &line), shell.as_deref());
     finish::<()>(
         &Context::new(output),
         command.as_deref(),
-        Err(describe(err, command.as_deref())),
+        Err(error),
         started,
     )
+}
+
+/// the command `line` names after `argument`, an option clap could not place, as `sync` in
+/// `--dry-run sync`, or `cache gc` a level down.
+fn command_after(line: &[String], argument: &str) -> Option<String> {
+    let root = args::Args::command();
+    let at = line.iter().position(|word| word == argument)?;
+    let mut command = &root;
+    let mut names = Vec::new();
+    for word in &line[at + 1..] {
+        match command.find_subcommand(word) {
+            Some(inner) => {
+                names.push(inner.get_name());
+                command = inner;
+            }
+            None if names.is_empty() && word.starts_with('-') => {}
+            None => break,
+        }
+    }
+    (!names.is_empty()).then(|| names.join(" "))
 }
 
 /// whether the command line asks for `--json`, read from the arguments themselves, since clap
@@ -164,7 +190,43 @@ fn habit(command: &str) -> Option<&'static str> {
     })
 }
 
-fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
+/// what a missing argument of `command` may be, when that is a short closed list, as a help that
+/// lists it, the shell `shell` names first for `completions`, with the first in an example.
+fn choices(command: &str, shell: Option<&std::ffi::OsStr>) -> Option<String> {
+    let mut values: Vec<String> = match command {
+        "auth login" | "auth logout" => {
+            return Some(format!(
+                "use one of {}, as in `fetchloom {command} hf`",
+                crate::auth::NAMES
+            ));
+        }
+        "completions" => clap_complete::Shell::value_variants()
+            .iter()
+            .filter_map(|shell| Some(shell.to_possible_value()?.get_name().to_owned()))
+            .collect(),
+        _ => return None,
+    };
+    // a shell named by its path, as /usr/bin/zsh, or a windows one by its file, as pwsh.exe
+    let own = shell
+        .and_then(|shell| std::path::Path::new(shell).file_stem()?.to_str())
+        .map(|own| if own == "pwsh" { "powershell" } else { own });
+    if let Some(at) = own.and_then(|own| values.iter().position(|value| value == own)) {
+        let first = values.remove(at);
+        values.insert(0, first);
+    }
+    Some(format!(
+        "use one of {}, as in `fetchloom {command} {}`",
+        crate::units::listed(&values, "or"),
+        values.first()?
+    ))
+}
+
+/// `err` as fetchloom's own error: `parent` is the command clap read, `line` the words typed.
+fn describe(
+    err: &clap::Error,
+    (parent, line): (Option<&str>, &[String]),
+    shell: Option<&std::ffi::OsStr>,
+) -> Error {
     if let Some((message, help)) = explained(err) {
         return Error::new(Kind::Usage, message).help(help);
     }
@@ -198,10 +260,22 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         _ => message(err),
     };
     let placement = (err.kind() == ErrorKind::UnknownArgument)
-        .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg, parent)))
+        .then(|| {
+            let arg = named(ContextKind::InvalidArg)?;
+            let raw = typed(err, ContextKind::InvalidArg).into_iter().next()?;
+            let after = parent
+                .map(str::to_owned)
+                .or_else(|| command_after(line, &raw));
+            misplaced_option(&arg, after.as_deref())
+        })
+        .flatten();
+    let choices = (err.kind() == ErrorKind::MissingRequiredArgument)
+        .then(|| parent.and_then(|parent| choices(parent, shell)))
         .flatten();
     let help = if let Some(placement) = placement {
         placement
+    } else if let Some(choices) = choices {
+        choices
     } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand)
         .then(|| named(ContextKind::InvalidSubcommand))
         .flatten()
@@ -418,6 +492,16 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
             "{parent} has no --{long}; it is an option of {commands}, as in {example}"
         ));
     }
+    // before the command it belongs to, the line with it moved after that command is the fix
+    let flag = !option.get_action().takes_values() || argument.contains('=');
+    if let Some(parent) = parent.filter(|_| flag) {
+        let mut typed = vec![argument];
+        typed.extend(parent.split(' '));
+        let mut meant: Vec<&str> = parent.split(' ').collect();
+        meant.push(argument);
+        let line = super::meant(&typed, &meant, format!("fetchloom {parent} {argument}"));
+        return Some(format!("did you mean `{line}`?"));
+    }
     Some(format!(
         "--{long} is an option of {commands}, so it goes after the command, as in {example}"
     ))
@@ -448,6 +532,14 @@ mod tests {
     use super::*;
 
     fn problem(arguments: &[&str]) -> Result<Error, Box<dyn std::error::Error>> {
+        problem_in(arguments, None)
+    }
+
+    /// [`problem`] where `SHELL` is `shell`.
+    fn problem_in(
+        arguments: &[&str],
+        shell: Option<&str>,
+    ) -> Result<Error, Box<dyn std::error::Error>> {
         let error = args::Args::command()
             .try_get_matches_from(arguments)
             .err()
@@ -455,7 +547,72 @@ mod tests {
         let parsed = args::Args::command()
             .ignore_errors(true)
             .try_get_matches_from(arguments)?;
-        Ok(describe(&error, named_command(&parsed).as_deref()))
+        let line: Vec<String> = arguments[1..]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        Ok(describe(
+            &error,
+            (named_command(&parsed).as_deref(), &line),
+            shell.map(std::ffi::OsStr::new),
+        ))
+    }
+
+    /// a command that needs one of a few values lists them, the shell `SHELL` names first, so the
+    /// fix needs no second run for the list.
+    #[test]
+    fn a_missing_choice_lists_what_it_may_be() -> Result<(), Box<dyn std::error::Error>> {
+        let accounts = "use one of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata, physionet or a host name";
+        for (arguments, shell, help) in [
+            (
+                &["fetchloom", "completions"][..],
+                Some("/usr/bin/zsh"),
+                "use one of zsh, bash, elvish, fish or powershell, as in `fetchloom completions zsh`".to_owned(),
+            ),
+            (
+                &["fetchloom", "completions"],
+                None,
+                "use one of bash, elvish, fish, powershell or zsh, as in `fetchloom completions bash`".to_owned(),
+            ),
+            (
+                &["fetchloom", "auth", "login"],
+                None,
+                format!("{accounts}, as in `fetchloom auth login hf`"),
+            ),
+            (
+                &["fetchloom", "auth", "logout"],
+                None,
+                format!("{accounts}, as in `fetchloom auth logout hf`"),
+            ),
+        ] {
+            let error = problem_in(arguments, shell)?;
+            assert_eq!(error.help.as_deref(), Some(help.as_str()), "{arguments:?}");
+        }
+        Ok(())
+    }
+
+    /// an option of the command typed after it, put before it, gets that very line with the
+    /// option moved, as other typos do.
+    #[test]
+    fn an_option_before_its_command_is_moved_after_it() -> Result<(), Box<dyn std::error::Error>> {
+        for (arguments, meant) in [
+            (
+                &["fetchloom", "--dry-run", "sync"][..],
+                "fetchloom sync --dry-run",
+            ),
+            (
+                &["fetchloom", "--now", "cache", "gc"],
+                "fetchloom cache gc --now",
+            ),
+        ] {
+            let error = problem(arguments)?;
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("did you mean `{meant}`?").as_str()),
+                "{arguments:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -469,7 +626,7 @@ mod tests {
             ),
             (
                 "--force",
-                vec!["fetchloom", "--force", "sync"],
+                vec!["fetchloom", "--force"],
                 "--force is an option of sync, export and get, so it goes after the command, as in fetchloom sync --force",
             ),
         ] {

@@ -387,6 +387,33 @@ pub(crate) struct Remote {
     pub(crate) etag: Option<String>,
 }
 
+/// the prefixes [`Reference::parse`] reads before a `:`, which a guess at a typo picks from.
+pub(crate) const SCHEMES: [&str; 23] = [
+    "http",
+    "https",
+    "doi",
+    "zenodo",
+    "dryad",
+    "mendeley",
+    "github",
+    "gitlab",
+    "ena",
+    "geo",
+    "dandi",
+    "openneuro",
+    "figshare",
+    "dataverse",
+    "osf",
+    "hf",
+    "kaggle",
+    "arxiv",
+    "s2",
+    "drive",
+    "s3",
+    "gs",
+    "azure",
+];
+
 impl Reference {
     /// reads a reference as a person writes it: an id such as `zenodo:3608990`, a DOI, or a link
     /// pasted from a browser.
@@ -1153,6 +1180,21 @@ fn malformed(text: &str, expected: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// every prefix a guess may offer is one the parser reads, so a guess never names another
+    /// unknown one.
+    #[test]
+    fn every_scheme_a_guess_offers_is_read() {
+        for scheme in SCHEMES {
+            if let Err(error) = Reference::parse(&format!("{scheme}:x")) {
+                assert!(
+                    !error.message.starts_with("fetchloom cannot read"),
+                    "{scheme}: {}",
+                    error.message
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_refusal_names_the_account_that_lifts_it() {

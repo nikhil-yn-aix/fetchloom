@@ -96,7 +96,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 | files only on this machine | `fetchloom add ./folder --json` pins them with `ref = "local"`. a clone whose cache lacks them exits 10 with `reference.unresolved`; ask the user where they are, then `fetchloom add <folder> --as <name> --json` checks them against data.lock |
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json` |
 | leave bad samples out for good | `fetchloom drop <path>... --dry-run --json`, then without `--dry-run`: paths in data/, never patterns. `result.dropped` names each file and the pattern written to data.toml |
-| stop using a dataset | `fetchloom remove <name> --dry-run --json`, then without `--dry-run` |
+| stop using datasets | `fetchloom remove <name>... --dry-run --json`, then without `--dry-run` |
 | newer versions | `fetchloom lock --upgrade <name> --dry-run --json` shows them; only the user decides to pin them |
 | a git merge left `<<<<<<<` lines | `fetchloom lock --json` merges both sides. on `unconfirmed`, `result.merge.conflicts` names the datasets to choose for: ask the user, then `fetchloom lock --ours <name>` or `--theirs <name>`. in a rebase, ours is the branch rebased onto |
 | what the project uses | `fetchloom list --json`: each dataset's `ref`, `files`, `bytes`, `folder`, `placed`, `access` (`public`, `login`, `terms` or `unknown`) and `locked_files` |

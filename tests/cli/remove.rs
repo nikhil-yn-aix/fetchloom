@@ -228,3 +228,28 @@ fn removing_an_import_asks_at_a_terminal() -> Result {
     assert!(!work.join("data/precious").exists(), "{screen}");
     Ok(())
 }
+
+/// remove takes several names, as sync and drop do: every one is checked before any changes.
+#[test]
+fn remove_takes_several_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        "[datasets.iris]\nref = \"zenodo:1\"\n\n[datasets.keep]\nref = \"zenodo:2\"\n\n[datasets.wine]\nref = \"zenodo:3\"\n",
+    )?;
+    let unknown = sandbox.run(&["--json", "remove", "iris", "wien"])?;
+    assert_eq!(unknown.status.code(), Some(2), "{}", text(&unknown.stdout)?);
+    assert!(fs::read_to_string(&manifest)?.contains("[datasets.iris]"));
+    let output = sandbox.run(&["--json", "remove", "iris", "wine"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["result"]["datasets"],
+        serde_json::json!(["iris", "wine"])
+    );
+    assert_eq!(
+        fs::read_to_string(&manifest)?,
+        "[datasets.keep]\nref = \"zenodo:2\"\n"
+    );
+    Ok(())
+}

@@ -212,6 +212,36 @@ fn may_hold_secret(arg: &str) -> bool {
     })
 }
 
+/// `error`, a reference `command` could not read, with this run's line retyped where the prefix of
+/// `typed`, the part before `:`, is one typo from a single prefix fetchloom reads, as `zenodoo:`
+/// is. a link that may hold a secret gets no guess.
+pub(in crate::cli) fn scheme_meant(
+    error: crate::error::Error,
+    typed: &str,
+    command: &str,
+) -> crate::error::Error {
+    if error.kind != crate::error::Kind::ReferenceInvalid || may_hold_secret(typed) {
+        return error;
+    }
+    let Some((scheme, rest)) = typed.trim().split_once(':') else {
+        return error;
+    };
+    let lowered = scheme.to_ascii_lowercase();
+    if crate::source::SCHEMES.contains(&lowered.as_str()) {
+        return error;
+    }
+    let Some(guess) = crate::name::sole_closest(&lowered, crate::source::SCHEMES) else {
+        return error;
+    };
+    let fixed = format!("{guess}:{rest}");
+    let line = meant(
+        &[typed],
+        &[&fixed],
+        format!("fetchloom {command} {}", shell_word(&fixed)),
+    );
+    error.help(format!("did you mean `{line}`?"))
+}
+
 /// the command line as typed with the words `typed` changed to `meant`, so a flag such as
 /// `--dry-run` stays in what a person pastes, or `instead` when that line cannot be repeated.
 pub(in crate::cli) fn meant(typed: &[&str], meant: &[&str], instead: String) -> String {

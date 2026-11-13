@@ -883,7 +883,8 @@ fn validate_add(
     args: &Add,
     link: &str,
 ) -> Result<Parsed, Error> {
-    let parsed = Reference::parse(link)?;
+    let parsed =
+        Reference::parse(link).map_err(|error| super::typed::scheme_meant(error, link, "add"))?;
     engine::tell_raw(&context.output, link, &parsed.reference);
     parsed.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable. the dataset of

@@ -882,6 +882,30 @@ fn a_home_folder_refusal_repeats_the_command_for_the_new_folder() -> Result {
     Ok(())
 }
 
+/// a reference whose prefix is one typo from one fetchloom reads gets the line with it fixed.
+#[test]
+fn a_mistyped_prefix_names_the_one_meant() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (args, meant) in [
+        (
+            &["--json", "add", "zenodoo:3608990", "--offline"][..],
+            "fetchloom --json add zenodo:3608990 --offline",
+        ),
+        (
+            &["--json", "get", "kagle:uciml/iris", "--offline"],
+            "fetchloom --json get kaggle:uciml/iris --offline",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "reference.invalid");
+        assert_eq!(error["help"], format!("did you mean `{meant}`?"));
+    }
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
+    Ok(())
+}
+
 /// the project is named once, at a terminal, and paths are shown from where the person stands.
 #[test]
 fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Result {
