@@ -1277,10 +1277,7 @@ fn with_key_here(error: Error, var: crate::source::Var<'_>) -> Error {
     let Some(found) = account.find(var).filter(|found| account.sendable(found)) else {
         return error;
     };
-    let named = match &found.origin {
-        crate::auth::Origin::Variable(name) => format!("the key in {name}"),
-        origin => format!("the key saved in {}", origin.shown()),
-    };
+    let named = found.origin.named();
     // a detail that names the key already, as one saying it went with the request, is enough
     let key = if error.details.iter().any(|line| line.starts_with(&named)) {
         "the key".to_owned()

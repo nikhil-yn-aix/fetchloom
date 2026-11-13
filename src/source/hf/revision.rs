@@ -148,7 +148,7 @@ impl Repo {
                 ))
                 .unseen(),
             Some(origin) => error
-                .detail(format!("{} went with the request", key(&origin)))
+                .detail(format!("{} went with the request", origin.named()))
                 .help(format!(
                     "check the name at {page}. a private repository needs a key that can read it: sign in again with `fetchloom auth login hf`"
                 ))
@@ -216,7 +216,7 @@ impl Repo {
         };
         Error::new(
             Kind::AuthRequired,
-            format!("huggingface.co refused {} for {self}", key(origin)),
+            format!("huggingface.co refused {} for {self}", origin.named()),
         )
         .help(help)
     }
@@ -289,14 +289,6 @@ fn sent_key() -> Option<Origin> {
         .find(&crate::source::env)
         .filter(|found| account.sendable(found))
         .map(|found| found.origin)
-}
-
-/// a key as messages name it, by where it comes from and never by its value.
-fn key(origin: &Origin) -> String {
-    match origin {
-        Origin::Variable(name) => format!("the key in {name}"),
-        origin => format!("the key saved in {}", origin.shown()),
-    }
 }
 
 /// a full git commit id: 40 hex digits.

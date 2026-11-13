@@ -92,6 +92,15 @@ impl Origin {
             origin => origin.to_string(),
         }
     }
+
+    /// the key as messages name it, by where it comes from and never by its value: `the key in
+    /// HF_TOKEN`, or `the key saved in ~/.cache/huggingface/token`.
+    pub(crate) fn named(&self) -> String {
+        match self {
+            Origin::Variable(name) => format!("the key in {name}"),
+            origin => format!("the key saved in {}", origin.shown()),
+        }
+    }
 }
 
 impl fmt::Display for Origin {

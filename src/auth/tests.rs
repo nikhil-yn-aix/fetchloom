@@ -603,3 +603,15 @@ fn a_guide_starts_with_the_account_and_ends_with_the_terms_a_dataset_needs() {
     assert!(last(Account::HuggingFace).contains("gated dataset also needs its terms accepted"));
     assert!(last(Account::Kaggle).contains("competition also needs its rules accepted"));
 }
+
+/// a key is named by where it comes from, never by its value.
+#[test]
+fn a_key_is_named_by_where_it_comes_from() {
+    assert_eq!(Origin::Variable("HF_TOKEN").named(), "the key in HF_TOKEN");
+    let file = Origin::File(Path::new("/srv/keys/s2").to_path_buf());
+    assert_eq!(file.named(), "the key saved in /srv/keys/s2");
+    assert_eq!(
+        Origin::Keyring.named(),
+        format!("the key saved in {}", keyring_name())
+    );
+}

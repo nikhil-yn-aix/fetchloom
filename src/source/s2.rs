@@ -158,21 +158,15 @@ fn answer<T: serde::de::DeserializeOwned>(about: &str, response: &Response) -> R
 /// semantic scholar refused the key from `origin` as old or wrong. no sign-in is offered, since a
 /// variable would win over the key it saves: the help says how to check or replace the key.
 fn refused_key(about: &str, origin: &Origin) -> Error {
-    let (key, help) = match origin {
-        Origin::Variable(name) => (
-            format!("the key in {name}"),
-            format!(
-                "the key may be old or wrong: set {name} to a current key from {S2_KEYS}, or unset {name} to use the key `fetchloom auth login s2` saves"
-            ),
+    let help = match origin {
+        Origin::Variable(name) => format!(
+            "the key may be old or wrong: set {name} to a current key from {S2_KEYS}, or unset {name} to use the key `fetchloom auth login s2` saves"
         ),
-        origin => (
-            format!("the key saved in {}", origin.shown()),
-            "the key may be old or wrong: `fetchloom auth` shows where it comes from".to_owned(),
-        ),
+        _ => "the key may be old or wrong: `fetchloom auth` shows where it comes from".to_owned(),
     };
     Error::new(
         Kind::AuthRequired,
-        format!("{S2_HOST} refused {key} for {about}"),
+        format!("{S2_HOST} refused {} for {about}", origin.named()),
     )
     .help(help)
 }

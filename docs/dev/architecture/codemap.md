@@ -168,7 +168,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 
 | file | owns | start at | other items |
 |---|---|---|---|
-| `src/auth.rs` | accounts at the sources: which key each takes, where it is kept, how to check it and how to get one | `Account`, `credentials` |  |
+| `src/auth.rs` | accounts at the sources: which key each takes, where it is kept, how to check it and how to get one, and how a message names a key, by where it comes from | `Account`, `credentials` | `Origin::named` |
 | `src/auth/store.rs` | keys for sources whose tools keep no file: the system's credential store, or a private file the person agreed to | `read`, `save` |  |
 | `src/auth/netrc.rs` | `.netrc`, which curl, wget and python's requests also read | `read`, `save` |  |
 | `src/auth/aws.rs` | AWS keys from the environment, the shared profile files or the program a profile names, bound to an endpoint: an S3-compatible one gets them only where the AWS settings say | `find` | `Identity`, `Source` |
