@@ -1,6 +1,5 @@
-//! archives in a run: unpacked a few at a time on threads of their own, checked against
-//! data.lock, and dropped from the cache once their files are in, unless something on this
-//! machine still needs their own bytes, so a 50 GB zip costs 50 GB and not 100.
+//! archives in a run: unpacked a few at a time, checked against data.lock, and dropped from the
+//! cache once their files are in unless still needed, so a 50 GB zip costs 50 GB and not 100.
 
 use std::cell::Cell;
 use std::num::NonZero;
@@ -29,19 +28,16 @@ use crate::units;
 
 /// an archive the cache holds, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
-    /// the key its record goes by: its SHA-256, or for a split archive, the key
-    /// [`parts_key`] gives its parts.
+    /// its record's key: its SHA-256, or for a split archive, [`parts_key`] of its parts.
     pub(in crate::cli) archive: Sha256,
-    /// a split archive's parts, each SHA-256 and size, in order; none for an archive in one
-    /// file.
+    /// a split archive's parts, each SHA-256 and size, in order; empty for one file.
     pub(in crate::cli) parts: Vec<(Sha256, u64)>,
     pub(in crate::cli) size: u64,
     pub(in crate::cli) label: String,
     /// the tree data.lock pins for it, the only one recorded once known.
     pub(in crate::cli) tree: Option<Sha256>,
-    /// a first part with no other part beside it and no tree pinned yet. its bytes may be only
-    /// the start of an archive whose other parts are elsewhere, so when they do not unpack it
-    /// stays packed with a warning rather than failing the run.
+    /// a first part alone with no tree pinned yet, maybe the start of an archive whose other parts
+    /// are elsewhere, so bytes that do not unpack stay packed with a warning, not an error.
     pub(in crate::cli) lone: bool,
 }
 
@@ -99,9 +95,8 @@ impl Unpack {
     }
 }
 
-/// unpacks archives the cache holds and records what each unpacked to: what it holds, or none
-/// for a file whose bytes are no archive after all. a few run at once, each with a bar on a
-/// terminal, while off one plain lines tell the whole batch.
+/// unpacks archives the cache holds and records what each holds, or none for bytes that are no
+/// archive after all; a few run at once, each with a bar on a terminal.
 pub(in crate::cli) async fn unpack_all(
     context: &Context,
     cache: &Cache,
@@ -199,10 +194,8 @@ pub(in crate::cli) async fn unpack_all(
     Ok(results)
 }
 
-/// what an archive shows while it unpacks: its bar and the batch's plain lines count the bytes
-/// read, then, once the readers are done while the files are still written and put in the
-/// cache, the bar says it is finishing, with no total to fill, so it never stands full with no
-/// time left.
+/// what an archive shows while it unpacks: the bytes read, then, while its files are still written,
+/// a finishing bar with no total, so it never stands full with no time left.
 struct Told {
     bar: Bar,
     ticker: Arc<Ticker>,
@@ -259,9 +252,8 @@ fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
         })
 }
 
-/// drops each archive's own bytes from the cache, now that its files are in, unless a project on
-/// this machine, or `current`, still needs them. a registered project whose data.toml is gone
-/// needs none, as gc forgets it; when a data.toml or lock cannot be read, nothing is dropped.
+/// drops each archive's own bytes now that its files are in, unless a project here or `current`
+/// needs them; a project whose data.toml is gone needs none, and an unreadable one keeps them all.
 pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current: Option<&Lock>) {
     if archives.is_empty() {
         return;
@@ -285,9 +277,8 @@ pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current:
 }
 
 impl Loop<'_> {
-    /// hints, before anything downloads, that dataset `name` holds numbered tar shards its
-    /// `draft` would unpack. `added` says it came from `add`'s command line, where --no-extract
-    /// keeps them packed as well.
+    /// hints, before anything downloads, that `name` holds tar shards its `draft` would unpack;
+    /// `added` means `add`'s command line, where `--no-extract` keeps them packed too.
     pub(super) fn hint_shards(&self, name: &str, draft: &Draft, added: bool) {
         if !self.context.output.shows_hints() {
             return;
@@ -359,10 +350,8 @@ impl Loop<'_> {
         );
     }
 
-    /// the archives of `lock`'s datasets in the run that stay packed and that `placing` puts in
-    /// the data folder, each with its dataset and why: those their names keep packed, and those
-    /// named as archives that unpacked to nothing whose bytes are a format fetchloom does not
-    /// unpack.
+    /// the archives `placing` puts in the data folder that stay packed, with dataset and why: kept
+    /// packed by name, or named as archives but of a format fetchloom does not unpack.
     pub(super) fn packed_in<'l>(
         &self,
         manifest: &Manifest,
@@ -409,9 +398,8 @@ impl Loop<'_> {
             .collect()
     }
 
-    /// says that the archive at `path` in the project, a file of `dataset` that came inside its
-    /// archive `outer`, stays packed, with how a person unpacks it beside itself. a run tells
-    /// each once.
+    /// says the archive at `path`, a file of `dataset` that came inside its archive `outer`, stays
+    /// packed, with how a person unpacks it beside itself; a run tells each once.
     pub(super) fn tell_nested(&self, manifest: &Manifest, dataset: &str, path: &str, outer: &str) {
         let folder = format!("{}/", plan::folder(manifest, dataset));
         let inside = path.strip_prefix(&folder).unwrap_or(path);
@@ -437,10 +425,8 @@ impl Loop<'_> {
         );
     }
 
-    /// says that the archive at `path` in `dataset` stays packed and why, with how a person
-    /// unpacks it beside the archive, inside the data folder `manifest` sets, as typed where
-    /// fetchloom runs. git ignores the data folder, so what they unpack stays out of git. a run
-    /// tells each archive once.
+    /// says the archive at `path` in `dataset` stays packed and why, and how to unpack it beside
+    /// itself in the data folder, which git ignores; a run tells each once.
     pub(super) fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
         let first = self
             .told_packed
@@ -498,9 +484,8 @@ impl Loop<'_> {
             .warn_with(Warning::ArchivePacked, &said, &help);
     }
 
-    /// learns what every archive of `pinned`, imports pinned whole, unpacks to, from its bytes in
-    /// the cache, and says which archives stay packed. no link fetches an import's bytes, so an
-    /// archive the cache lacks is files imported elsewhere.
+    /// learns from the cache what every archive of `pinned`, imports pinned whole, unpacks to, and
+    /// says which stay packed; one the cache lacks was imported elsewhere, as no link fetches it.
     pub(super) async fn unpack_pinned(
         &self,
         manifest: &Manifest,
@@ -584,17 +569,15 @@ impl Loop<'_> {
             .collect())
     }
 
-    /// unpacks archives the lock pins whose files this machine lacks, downloading those the
-    /// cache does not hold, and checks that each unpacks to what the lock says. one that does not
-    /// is hashed first: changed bytes stay at their name but no longer count as a cache hit, so
-    /// a download replaces them. only an intact archive that unpacks to other files is an error.
+    /// unpacks the pinned archives whose files this machine lacks, downloading what the cache
+    /// lacks, and checks each against the lock. one that differs is hashed first, so changed bytes
+    /// download again; only an intact archive that unpacks to other files is an error.
     pub(super) async fn unpack_locked(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         archives: &[(String, Archive<'_>)],
     ) -> Result<(), Error> {
-        // says whether every file of the archive is intact, and which of them changed
         let intact = |dataset: &str, archive: &Archive<'_>| {
             let mut whole = true;
             for file in archive.files() {
@@ -619,7 +602,7 @@ impl Loop<'_> {
         };
         let checked = match self.unpack_checked(manifest, lock, archives).await {
             Err(error) if error.kind == Kind::SourceInvalid => {
-                // a checksum can fail before a tree exists to compare with the lock.
+                // a checksum can fail before a tree exists to compare with the lock
                 let mut changed = false;
                 for (dataset, archive) in archives {
                     changed |= !intact(dataset, archive)?;
@@ -699,9 +682,8 @@ impl Loop<'_> {
             .collect())
     }
 
-    /// drops archives whose members are now cached, each part of a split one, including records
-    /// reused after an earlier failed run, unless something on this machine still needs their
-    /// packed bytes.
+    /// drops archives whose members are now cached, each part of a split one, records reused after
+    /// a failed run included, unless something here still needs their packed bytes.
     pub(in crate::cli) fn drop_unpacked(&self, lock: &Lock) {
         let mut unpacked =
             std::mem::take(&mut *self.unpacked.lock().unwrap_or_else(PoisonError::into_inner));
@@ -830,9 +812,8 @@ mod tests {
         }
     }
 
-    /// an archive's bar counts the bytes read. once the readers are done, while its files are
-    /// still to be written and put in the cache, it fills toward nothing, so it never stands full
-    /// with no time left, and it stays so until the unpack returns with the files in the cache.
+    /// once the readers are done the bar fills toward nothing, so it never stands full with no time
+    /// left, and stays so until the files are in the cache.
     #[test]
     fn a_bar_read_to_its_end_is_finishing_until_the_files_are_in() {
         let dir = tempfile::tempdir().unwrap();
@@ -922,9 +903,8 @@ mod tests {
         );
     }
 
-    /// a first part alone may be only the start of an archive whose other parts are elsewhere,
-    /// so one that does not unpack stays packed; parts together that do not unpack are a
-    /// damaged archive, as one file would be.
+    /// a first part alone may be only the start of an archive whose other parts are elsewhere;
+    /// parts together that do not unpack are a damaged archive, as one file would be.
     #[test]
     fn a_lone_first_part_that_does_not_unpack_stays_packed() {
         let dir = tempfile::tempdir().unwrap();

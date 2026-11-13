@@ -1,6 +1,5 @@
-//! datasets data.toml renamed: a name data.lock lacks whose table pins what an entry pins under a
-//! name data.toml no longer has. relocking carries that entry over to the new name, so a rename
-//! never asks the source again and never pins other bytes than the old name had.
+//! datasets data.toml renamed: a new name whose table pins what a gone name's entry pins takes that
+//! entry over, so a rename never asks the source again or pins other bytes.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
@@ -20,9 +19,8 @@ pub(in crate::cli) struct Rename {
     pub(super) moved: bool,
 }
 
-/// `lock` as a relock of every dataset would carry its entries over to the names data.toml gives
-/// them now, with those renames, so a forecast that writes nothing, as status, agrees with what
-/// a sync keeps. results and entries of names data.toml does not have stay as they are.
+/// `lock` with its entries carried to the names data.toml gives them now, as a relock of every
+/// dataset would, so status agrees with what a sync keeps; other entries stay as they are.
 pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Rename>) {
     let (mut derived, dropped, mut renamed) = results(manifest, lock.derived);
     derived.extend(dropped);
@@ -94,13 +92,9 @@ fn rename_to(name: &mut String, new: &str, moved: bool) -> Rename {
     }
 }
 
-/// carries over the entries of fetched datasets data.toml renamed, from `others`, the entries
-/// relocking replaces or drops, or from `kept`, which holds those a run of named datasets leaves
-/// alone, into `kept` under their new names. a new name is one in `scope` that data.lock lacks,
-/// that no command `given` already and that no upgrade asks to resolve again; an old entry
-/// answers it when its spec and `extract` are the ones its table asks for now. an old entry in
-/// `others` moves, and one in `kept` is copied, since a run of named datasets changes no other
-/// entry. both vectors keep data.lock's name order.
+/// carries the entries of renamed fetched datasets into `kept` under their new names, for new names
+/// the run may pin, matched one to one by spec and `extract`: one from `others` moves, and one from
+/// `kept`, which a named run leaves alone, is copied. both keep data.lock's name order.
 pub(super) fn carry(
     manifest: &Manifest,
     scope: &Scope,
@@ -206,10 +200,8 @@ impl<'a> RecipeShape<'a> {
     }
 }
 
-/// data.lock's recipe results `derived` as relocking sorts them: those it keeps, those it drops,
-/// and the renames it made. only `fetchloom build` pins a recipe's result, so one stays while
-/// data.toml has the recipe, moves with a recipe data.toml renamed, and otherwise goes as a
-/// dropped dataset does.
+/// data.lock's recipe results `derived` sorted into kept, dropped and renamed. only a build pins a
+/// result, so one stays while data.toml has its recipe, moves with a renamed one, and else goes.
 pub(super) fn results(
     manifest: &Manifest,
     derived: Vec<Derived>,

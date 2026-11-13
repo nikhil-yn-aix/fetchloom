@@ -110,8 +110,7 @@ fn an_unmatched_select_still_reports_an_example() {
     );
 }
 
-/// a pattern that matches nothing is fixed where it was written: on the command line, as add
-/// and get take one, or in data.toml.
+/// the fix names the command line, as add and get take a pattern, or data.toml.
 #[test]
 fn an_unmatched_select_is_fixed_where_it_was_written() {
     for (cli, help) in [

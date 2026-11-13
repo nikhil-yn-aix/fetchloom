@@ -24,7 +24,6 @@ pub(super) struct Draft {
     name: String,
     reference: String,
     spec: String,
-    /// whether archives unpack, as data.toml says.
     extract: bool,
     /// where the entry's patterns were written, for the help of an error.
     patterns: Patterns,
@@ -44,8 +43,7 @@ struct DraftFile {
     path: String,
     /// the S3 version the bytes were, once known, which the file's link in data.lock pins.
     version: Option<String>,
-    /// the hash and size, once known: stated by the source, carried over from data.lock, or
-    /// learned from the bytes.
+    /// the hash and size once known: stated, carried from data.lock, or learned from the bytes.
     known: Option<(Sha256, u64)>,
     /// for an archive, the tree hash of what it unpacks to, once known.
     unpacks_to: Option<Sha256>,
@@ -57,11 +55,9 @@ struct DraftFile {
 }
 
 impl Draft {
-    /// a dataset's files with every hash known without a download: stated by the source, carried
-    /// over from data.lock, or remembered from an earlier download whose MD5 the source stated.
-    /// an upgrade carries nothing over for a file no checksum pins, since only asking the server
-    /// tells whether its bytes changed, unless the dataset resolved again to the revision
-    /// data.lock pins and that revision's bytes cannot change.
+    /// a dataset's files with every hash known without a download: stated, carried from data.lock
+    /// or remembered from an earlier download. an upgrade carries no pin no checksum backs, since
+    /// only asking the server tells whether its bytes changed.
     pub(super) fn new(
         name: &str,
         entry: &Entry,
@@ -71,9 +67,8 @@ impl Draft {
         upgrading: bool,
         cache: &Cache,
     ) -> Result<Draft, Error> {
-        // the files data.lock pins by their link, so a dataset of many files is not searched
-        // once for each. a link pinned to an object version is found by the link without it,
-        // as the listing gives it
+        // data.lock's files by their link, so a dataset of many files needs no search for each; a
+        // link pinned to an object version goes by the link without it, as the listing gives it
         let versions = listing.resolved.keeps_versions();
         let mut by_url: HashMap<String, Vec<&LockedFile>> = HashMap::new();
         for file in previous.iter().flat_map(|locked| &locked.files) {
@@ -119,10 +114,9 @@ impl Draft {
                 // carried over, a file keeps the path data.lock gave it: a name its server gave,
                 // or the zip its source wrapped it in
                 let path = earlier.map_or_else(|| remote.path.clone(), |file| file.path.clone());
-                // the same bytes unpack to the same files, while the dataset still unpacks and
-                // the name says archive. an upgrade pins what this machine's unpacking recorded
-                // for them instead, so a tree another version of fetchloom pinned can be
-                // replaced without downloading again
+                // the same bytes unpack to the same files while the dataset unpacks and the name
+                // says archive; an upgrade pins this machine's record of them instead, so a tree
+                // another fetchloom version pinned is replaced without downloading again
                 let unpacks = source.extract && archive::by_name(&path) == Some(Packed::Archive);
                 let unpacks_to = earlier
                     .filter(|file| unpacks && known == Some((file.sha256, file.size)))
@@ -171,9 +165,8 @@ impl Draft {
         Ok(draft)
     }
 
-    /// gives each split archive's first part the tree data.lock pinned for it, while every part
-    /// is the one pinned then, or for an upgrade, the tree this machine recorded for those
-    /// parts. a part that changed, came or went makes another archive.
+    /// gives each split archive's first part its pinned tree while every part is the one pinned, or
+    /// for an upgrade the tree recorded here; a changed, new or gone part makes another archive.
     fn carry_split(&mut self, previous: Option<&Locked>, upgrading: bool, cache: &Cache) {
         let pinned = previous.map(|locked| lock::archives::pinned(&locked.files));
         let earlier: HashMap<&str, lock::archives::Archive<'_>> = pinned
@@ -227,9 +220,8 @@ impl Draft {
         }
     }
 
-    /// a dataset whose entry changed only in `extract`, from the files data.lock pins, so it
-    /// needs no listing. what each archive unpacks to is learned again as for any draft: from
-    /// this machine's record of it, or from its bytes, downloaded only when the cache lacks them.
+    /// a dataset whose entry changed only in `extract`, drafted from the files data.lock pins with
+    /// no listing; what each archive unpacks to is learned again as for any draft.
     pub(super) fn switched(
         entry: &Entry,
         source: &Source,
@@ -276,9 +268,8 @@ impl Draft {
     }
 
     /// the downloads this dataset needs, each with the index of the file whose hash it learns:
-    /// every file whose hash is unknown, and every archive whose bytes must be unpacked to learn
-    /// what it unpacks to, each part of a split one. a file no checksum pins is asked about with
-    /// what its URL served before, so bytes the cache already holds are not sent again.
+    /// files of unknown hash and archives to unpack, each part of a split one. a file no checksum
+    /// pins is asked about with what its URL served before, so held bytes are not sent again.
     pub(super) fn jobs(&self, cache: &Cache) -> Vec<(Option<usize>, Job)> {
         let mut unpacking = vec![false; self.files.len()];
         let mut whole = vec![false; self.files.len()];
@@ -336,8 +327,7 @@ impl Draft {
         jobs
     }
 
-    /// records what the bytes of file `index` turned out to be, and the zip they are when their
-    /// source wrapped the file in one.
+    /// records what the bytes of file `index` turned out to be, and the zip a source wrapped it in.
     pub(super) fn learn(&mut self, index: usize, fetched: &Fetched, cache: &Cache) {
         let file = &mut self.files[index];
         file.known = Some((fetched.digest, fetched.size));
@@ -351,11 +341,9 @@ impl Draft {
         file.path = fetch::wrapped(cache, &file.remote, path, &fetched.digest);
     }
 
-    /// the entry as the clash check before any download sees it: each file at the path data.lock
-    /// would pin, with a stand-in for a hash only a download can learn, and each archive with the
-    /// tree this machine recorded for it. a file whose path [`Draft::learn`] may still change,
-    /// and an archive this machine never unpacked, stand as archives with no record, so the
-    /// check after the downloads takes them.
+    /// the entry as the clash check before any download sees it, with a stand-in for each hash only
+    /// a download learns. a file whose path [`Draft::learn`] may change, and an archive never
+    /// unpacked here, stand as archives with no record, left to the check after the downloads.
     pub(super) fn foreseen(&self, cache: &Cache) -> Locked {
         let mut trees: Vec<Option<Sha256>> = self
             .files
@@ -408,9 +396,8 @@ impl Draft {
         }
     }
 
-    /// the archives that must be unpacked to learn what they unpack to, each with the index of
-    /// the file data.lock gives what it unpacks to: the archive, or a split archive's first part.
-    /// an archive this machine unpacked before is known from its record and needs no unpacking.
+    /// the archives to unpack to learn what they hold, each with the index of the file that carries
+    /// its tree, a split archive's first part; one unpacked here before is known from its record.
     pub(super) fn unknown_archives(&mut self, cache: &Cache) -> Vec<(usize, Unpack)> {
         let mut todo = Vec::new();
         for unit in self.archives().unpack {
@@ -441,8 +428,7 @@ impl Draft {
         self.files[index].unpacks_to = tree;
     }
 
-    /// the archives in this dataset that stay packed: the dataset's name, each archive's path
-    /// in it, and why.
+    /// the archives in this dataset that stay packed, each with the dataset, its path and why.
     pub(super) fn left_packed(&self) -> Vec<(&str, &str, Why)> {
         self.archives()
             .packed
@@ -451,9 +437,8 @@ impl Draft {
             .collect()
     }
 
-    /// the numbered tar shards among the dataset's files, while its archives unpack and no
-    /// members table covers one of them: such a table chooses to unpack them, which keeping them
-    /// packed would refuse.
+    /// the numbered tar shards among the dataset's files while its archives unpack and no members
+    /// table covers one, since such a table chooses to unpack them.
     pub(super) fn shards(&self) -> Option<archive::Shards<'_>> {
         if !self.extract {
             return None;
@@ -467,12 +452,9 @@ impl Draft {
         (!tabled).then_some(shards)
     }
 
-    /// the entry a dry run plans with: [`Draft::finish`], with a stand-in for each hash only a
-    /// download can learn and for what each archive not yet unpacked unpacks to. a stand-in
-    /// matches no cached object, so planning treats its file as missing and its archive as never
-    /// unpacked here. it is never written. a file an upgrade asks about again keeps the pin it
-    /// had, since only its bytes could tell a change. also returns the files, as
-    /// `<dataset>/<path>`, whose hash is a stand-in.
+    /// the entry a dry run plans with, never written: [`Draft::finish`] with a stand-in matching no
+    /// cached object for each hash only a download or unpacking learns, and the files, as
+    /// `<dataset>/<path>`, whose hash is one. a file an upgrade asks about again keeps its pin.
     pub(super) fn stand_in(mut self, now: &str) -> Result<(Locked, Vec<String>), Error> {
         let mut guessed = Vec::new();
         for file in &mut self.files {
@@ -568,8 +550,7 @@ pub(super) fn switched_import(source: &Source, locked: &Locked) -> Locked {
 }
 
 /// the pin of `locked` once `source`'s exclude leaves out the files at `paths`, made without a
-/// listing: those files go and the spec follows `source`. it is what relocking the same listing
-/// pins, since a source listing more than one file pins each at its listing path.
+/// listing, as relocking the same listing would pin it.
 pub(in crate::cli) fn without_files(
     locked: &Locked,
     source: &Source,
@@ -584,9 +565,8 @@ pub(in crate::cli) fn without_files(
     kept
 }
 
-/// fills in what each archive of `locked`, an import pinned whole, unpacks to, for a dry run: as
-/// this machine recorded it, or a stand-in. returns the archives, as `<dataset>/<path>`, that a
-/// run would unpack to learn it.
+/// fills in, for a dry run, what each archive of `locked`, an import pinned whole, unpacks to, or a
+/// stand-in, returning the archives a run would unpack to learn it.
 pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> {
     let mut unknown = Vec::new();
     let found = archives(
@@ -609,8 +589,7 @@ pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> 
     unknown
 }
 
-/// the archives among a dataset's files by their names, while the dataset unpacks: what unpacks,
-/// and what stays packed and why.
+/// the archives among a dataset's files, by name: what unpacks, and what stays packed and why.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Archives {
     pub(super) unpack: Vec<Unit>,
@@ -668,8 +647,7 @@ pub(super) enum Why {
     Missing(String),
 }
 
-/// the archives among `paths`, a dataset's files, by their names: none when the dataset keeps
-/// its archives packed.
+/// the archives among `paths`, a dataset's files, by name: none when the dataset keeps them packed.
 pub(super) fn archives<'a>(paths: impl Iterator<Item = &'a str>, extract: bool) -> Archives {
     let mut found = Archives::default();
     if !extract {
@@ -715,7 +693,6 @@ pub(super) fn archives<'a>(paths: impl Iterator<Item = &'a str>, extract: bool) 
     found
 }
 
-/// the link data.lock pins for `file` of `dataset`.
 pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
     Url::parse(&file.url).map_err(|err| {
         Error::new(
@@ -733,15 +710,13 @@ pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
     })
 }
 
-/// a hash no bytes have, standing for one only a download can learn, for a dry run or the clash
-/// check before any download.
+/// a hash no bytes have, standing for one only a download learns, for a dry run or the clash check.
 fn stand_in(what: &str) -> Sha256 {
     crate::digest::sha256(format!("fetchloom dry run stand-in for {what}").as_bytes())
 }
 
-/// whether downloading the file may still change its path, as [`Draft::learn`] changes it: a
-/// server's name for the file replaces a guess from its link, and a source may send it wrapped
-/// in a zip.
+/// whether downloading the file may still change its path, as [`Draft::learn`] does when a server
+/// names the file or a source wraps it in a zip.
 fn renamed_by_download(file: &DraftFile) -> bool {
     file.known.is_none()
         && (file.remote.named_by_server
@@ -761,10 +736,9 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
         .then_some(stated)
 }
 
-/// what this machine's cache recorded the link served, while the listing gives the strong
-/// `ETag` and the size recorded with those bytes and the cache still holds them, or for an
-/// archive that unpacks, the files it unpacked to. this trusts a service to give an object
-/// another `ETag` once its bytes change, as an answer that a file is unchanged is trusted.
+/// what the cache recorded the link served, while the listing gives the strong `ETag` and size
+/// recorded with those bytes and the cache still holds them or, for an archive, its files. this
+/// trusts a service to change an object's `ETag` with its bytes.
 fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
     let etag = remote
         .etag
@@ -781,10 +755,9 @@ fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord>
     .then_some(record)
 }
 
-/// the file data.lock already pins for this remote file, when it is the same file: the same
-/// link, and the same path unless the server names the file or its source wrapped it in a zip.
-/// a listed size says nothing about the zip. a pin made without an MD5 says nothing of whether
-/// its bytes have the one the source now states, unless the source states their SHA-256 too.
+/// the file data.lock pins for this remote file when it is the same file: the same link, and path
+/// unless the server names it or its source zips it, when a listed size says nothing. a pin made
+/// without an MD5 cannot vouch for one now stated, unless the source states the SHA-256 too.
 fn carried<'a>(
     by_url: &HashMap<String, Vec<&'a LockedFile>>,
     remote: &Remote,
@@ -993,11 +966,9 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
     }
 }
 
-/// how to keep only the files inside `archive` that `glob`, a select pattern of dataset `name`
-/// that matched no file the source lists, was most likely meant for: a members table, one for
-/// every shard of `shards` when the source lists numbered tar shards, or drop. a pattern on the
-/// command line may be get's, which keeps no project, so its advice works for get too and
-/// offers a project's tools only for a project.
+/// how to keep only the files inside `archive` that `glob`, a select pattern of `name` matching no
+/// listed file, was likely meant for: a members table, one per shard of `shards`, or drop. advice
+/// for a command-line pattern also works for get, which keeps no project.
 fn inside(
     name: &str,
     glob: &Glob,
@@ -1033,9 +1004,8 @@ mod tests {
     use super::*;
     use crate::cache::Member;
 
-    /// a pattern given on the command line for the files inside an archive gets advice both
-    /// commands that take --select can follow, add and get, with the project's own tools offered
-    /// for a project, while one in data.toml is moved to the dataset's members table.
+    /// advice for a command-line pattern works for add and get alike, offering the project's tools
+    /// only in a project; a pattern in data.toml moves to the members table.
     #[test]
     fn a_pattern_meant_for_inside_an_archive_gets_advice_its_command_can_follow() {
         let glob = Glob::new("*.data").unwrap();
@@ -1196,8 +1166,7 @@ mod tests {
         assert_eq!(archives(paths.into_iter(), false), Archives::default());
     }
 
-    /// a split archive unpacks once from all of its parts, recorded at its first part, and keeps
-    /// the tree data.lock pinned only while every part is the one pinned then: a part that
+    /// a split archive unpacks once from all of its parts, recorded at its first part; a part that
     /// changed, or one more, makes another archive.
     #[test]
     fn a_split_archive_keeps_its_tree_only_while_every_part_is_unchanged() {
@@ -1342,9 +1311,8 @@ mod tests {
         assert_ne!(rewritten.spec, before.spec);
     }
 
-    /// a switch of extract keeps every pin data.lock has and learns only what archives unpack
-    /// to: from this machine's record, with nothing to download or unpack, and nothing at all
-    /// when they stay packed.
+    /// what archives unpack to comes from this machine's record, with nothing to download or
+    /// unpack, and nothing is learned when they stay packed.
     #[test]
     fn an_extract_switch_keeps_the_pins_and_learns_only_trees() {
         let folder = tempfile::tempdir().unwrap();
@@ -1735,9 +1703,8 @@ mod tests {
         assert_eq!(locked.files[0].sha256, stored.digest);
     }
 
-    /// an S3 object is pinned at the version its bytes were: learned from its download, or from
-    /// what an earlier download of the link recorded, and kept by a later lock, which finds the
-    /// pin by the link the listing gives. a plain link keeps its link whatever its server says.
+    /// an S3 object's version comes from its download or an earlier one's record and stays in a
+    /// later lock, found by the listed link; a plain link stays whatever its server says.
     #[test]
     fn an_s3_object_is_pinned_at_the_version_its_bytes_were() {
         use md5::Digest as _;

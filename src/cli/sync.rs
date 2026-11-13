@@ -60,9 +60,8 @@ impl Upgrade {
     }
 }
 
-/// the datasets a run works on: every one, or only those a person named. a run of named
-/// datasets resolves, downloads, places, replaces and removes nothing of any other, and JSON
-/// reports it as `selected`: the names, or null for every dataset.
+/// the datasets a run works on, every one or those a person named; a named run touches nothing of
+/// any other. JSON reports it as `selected`: the names, or null for every dataset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
     All,
@@ -96,7 +95,6 @@ pub(super) enum Given {
     Locked(Locked),
 }
 
-/// a project and what working on it needs.
 pub(super) struct Loop<'a> {
     pub(super) context: &'a Context,
     pub(super) project: &'a Project,
@@ -106,23 +104,16 @@ pub(super) struct Loop<'a> {
     unpacked: Mutex<Vec<Sha256>>,
     /// the archives this run said stay packed, by dataset and path, so each is told once.
     told_packed: Mutex<HashSet<(String, String)>>,
-    /// the exclude patterns of each dataset this run listed that matched no file its source
-    /// listed, for placing's warning about those that name files inside an archive.
+    /// excludes of each dataset this run listed that matched no listed file, for placing's warning.
     unlisted: Mutex<plan::Unlisted>,
-    /// the datasets the command's last lines tell about, so their lock and placement lines stay
-    /// out, but for `-v`.
+    /// datasets the command's last lines tell about, whose lock and placement lines wait for `-v`.
     told: BTreeSet<String>,
-    /// the datasets this run works on.
     pub(super) scope: Scope,
-    /// whether this run wrote data.lock, so a download cancelled later no longer left everything
-    /// as it was.
+    /// whether this run wrote data.lock, after which a cancel no longer leaves all as it was.
     wrote_lock: AtomicBool,
-    /// whether a person said yes to going on though the cache's disk may lack room, which says
-    /// yes to the size of every download in the run as well.
+    /// whether a person said yes despite a short disk, which also covers every download's size.
     roomy: AtomicBool,
-    /// whether a pinned result found nowhere ends a run of every dataset with `build.needed`, as
-    /// `sync --locked` asks, once the rest is in place, rather than being left out with a
-    /// warning.
+    /// whether a pinned result found nowhere ends a run of every dataset, as `sync --locked` asks.
     stops_on_unbuilt: bool,
     /// the command [`Loop::ready`] readies files for, which its help says to run again.
     readying: &'static str,
@@ -158,9 +149,8 @@ impl<'a> Loop<'a> {
         self
     }
 
-    /// a pinned result that neither the cache nor a mirror holds ends the run with
-    /// `build.needed`, when `stop` says so, even where a run of every dataset would leave it out
-    /// with a warning. the caller turns what the placement left out into that error.
+    /// with `stop`, a pinned result found nowhere ends a run of every dataset with `build.needed`
+    /// once the rest is in place; the caller turns what placing left out into that error.
     pub(super) fn stopping_on_unbuilt(mut self, stop: bool) -> Self {
         self.stops_on_unbuilt = stop;
         self
@@ -171,17 +161,14 @@ impl<'a> Loop<'a> {
         self
     }
 
-    /// the run works on `scope` alone: it keeps every other dataset's entry in data.lock and its
-    /// files as they are.
+    /// the run works on `scope` alone, keeping every other dataset's entry and files as they are.
     pub(super) fn within(mut self, scope: Scope) -> Self {
         self.scope = scope;
         self
     }
 
-    /// makes the data folder match `lock`, starting from `survey` of it. what each file needs is
-    /// decided first, so only the bytes placing lacks are downloaded. archives this machine never
-    /// unpacked are unpacked first, since what they hold decides where files go. `synced` names
-    /// data.toml and data.lock as this run leaves them, for the state to record.
+    /// makes the data folder match `lock` from `survey` of it, downloading only what placing lacks;
+    /// `synced` names data.toml and data.lock as this run leaves them.
     pub(super) async fn place(
         &self,
         manifest: &Manifest,
@@ -249,8 +236,7 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
-        // no download can bring bytes of the size data.lock pins for a SHA-256 the cache holds
-        // at another
+        // no download brings a SHA-256's bytes at another size than the cache holds them
         for (dataset, file) in &files {
             if let Some(actual) = place::cached_other_size(&self.cache, &file.sha256, file.size) {
                 let label = format!("{dataset}/{}", file.path);
@@ -263,10 +249,8 @@ impl<'a> Loop<'a> {
         Ok(placing)
     }
 
-    /// what becomes of the results `placing` needs bytes of that `holds` says the cache lacks:
-    /// a run of every dataset leaves them out and places the rest, with a warning, or for `sync
-    /// --locked` without one, since it ends with the build that makes them once the rest is in
-    /// place. a run that names them stops with that build before anything.
+    /// leaves out the results `placing` needs that `holds` says the cache lacks, warning but for
+    /// `sync --locked`, which ends with their build after the rest; a named run stops first.
     fn settle_unbuilt(
         &self,
         placing: &mut Placing<'_>,
@@ -318,8 +302,6 @@ impl<'a> Loop<'a> {
             .insert(name.to_owned(), draft::unlisted(source, listing));
     }
 
-    /// the exclude patterns of each dataset this run listed that matched no file its source
-    /// listed.
     fn unlisted(&self) -> plan::Unlisted {
         self.unlisted
             .lock()
@@ -327,8 +309,7 @@ impl<'a> Loop<'a> {
             .clone()
     }
 
-    /// warns about each recipe in the run's scope whose result `lock` does not pin as building it
-    /// now would make, as [`tell_stale`] says, and returns their names.
+    /// [`tell_stale`] for the run's scope.
     pub(super) fn tell_stale(&self, manifest: &Manifest, lock: &Lock) -> Vec<String> {
         tell_stale(
             &self.context.output,
@@ -339,10 +320,9 @@ impl<'a> Loop<'a> {
         )
     }
 
-    /// puts in the cache every file the fetched datasets `names` of `lock` hold, as a build's
-    /// private copy of them needs: from the data folder where it holds a file's pinned bytes,
-    /// else from the mirrors, else from their sources, an archive unpacked again when a file it
-    /// holds is missing. nothing in the project changes.
+    /// puts in the cache every file of the fetched datasets `names`, as a build's private copy
+    /// needs: from the data folder, else the mirrors, else their sources, unpacking an archive
+    /// again for a missing file. nothing in the project changes.
     pub(super) async fn ready(
         &self,
         manifest: &Manifest,
@@ -427,9 +407,8 @@ impl<'a> Loop<'a> {
         self.unpack_locked(manifest, &sources, &unpacking).await
     }
 
-    /// places what [`Loop::prepare`] readied for `lock`, records `synced` in the state, and says
-    /// how to unpack each archive it put in the data folder packed, as a clone's first sync puts
-    /// a rar there, and each one that came inside another.
+    /// places what [`Loop::prepare`] readied and records `synced`, then says how to unpack each
+    /// archive it placed packed, as a clone's first sync places a rar, or that came inside another.
     pub(super) fn apply(
         &self,
         manifest: &Manifest,
@@ -458,10 +437,8 @@ impl<'a> Loop<'a> {
         Ok(placement)
     }
 
-    /// the lock data.toml asks for, beside data.lock as it was. datasets of the run's scope
-    /// whose entry changed are resolved again, and files whose hash no source states are
-    /// downloaded to learn it; every other entry stays as data.lock has it. `given` holds what a
-    /// command already has for some datasets.
+    /// the lock data.toml asks for beside data.lock: changed entries in scope resolved again, files
+    /// no source hashes downloaded to learn it, the rest kept; `given` is what a command has.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
@@ -525,9 +502,8 @@ impl<'a> Loop<'a> {
         ))
     }
 
-    /// the lock [`Loop::relock`] would make, beside data.lock as it was, found without
-    /// downloading or unpacking, and the work it would do first. a hash only that work can learn
-    /// has a stand-in, so the lock is only for planning.
+    /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and that work;
+    /// a hash only the work learns has a stand-in, so the lock is only for planning.
     pub(super) async fn relock_dry(
         &self,
         manifest: &Manifest,
@@ -587,10 +563,8 @@ impl<'a> Loop<'a> {
         })
     }
 
-    /// datasets whose entry is unchanged or outside the run's scope, moved from data.lock as it
-    /// has them, those data.toml renamed, carried over to their new names, and drafts of the
-    /// others with every hash known without a download: from data.lock's files when only
-    /// `extract` changed, otherwise resolved again.
+    /// data.lock's unchanged or out-of-scope entries as they are, renamed ones under their new
+    /// names, and drafts of the rest with every hash known without a download.
     async fn draft(
         &self,
         manifest: &Manifest,
@@ -699,10 +673,8 @@ impl<'a> Loop<'a> {
         })
     }
 
-    /// sorts data.lock's `datasets`: kept as they are, set to replace or drop, or drafted again
-    /// from their files when only `extract` changed. one outside the run's scope stays, even one
-    /// data.toml changed or dropped, and one a command gave `whole` is replaced by it. an import
-    /// whose `extract` switched joins `whole`, with what its archives unpack to left to learn.
+    /// sorts data.lock's `datasets` into kept, to replace or drop, and drafted again from their
+    /// files when only `extract` changed; one a command gave in `whole` is replaced by it.
     fn sorted(
         &self,
         manifest: &Manifest,
@@ -787,10 +759,9 @@ impl<'a> Loop<'a> {
         Ok(damaged)
     }
 
-    /// what [`Loop::place`] would do, decided without downloading, unpacking or writing, given
-    /// `jobs` relocking would download first. a download an offline run could not make stops the
-    /// preview as it would stop the run. files `guessed` by the dry relock, as `<dataset>/<path>`,
-    /// that something already stands at are told as files to check.
+    /// what [`Loop::place`] would do, without downloading, unpacking or writing, given the `jobs`
+    /// relocking would download first; it stops where an offline run would. files `guessed` by the
+    /// dry relock that something stands at are told as files to check.
     #[expect(
         clippy::too_many_arguments,
         reason = "each is one finding of the dry run that the preview builds on"
@@ -873,8 +844,7 @@ impl<'a> Loop<'a> {
         Ok(Some(text))
     }
 
-    /// writes `text`, `lock` as rendered, to data.lock, and says which datasets it pins anew or
-    /// no longer than `before`. returns the text.
+    /// writes `text`, `lock` rendered, to data.lock, telling what changed since `before`.
     pub(super) fn write_rendered(
         &self,
         before: &Before,
@@ -1019,9 +989,8 @@ impl<'a> Loop<'a> {
         Ok(fetched)
     }
 
-    /// `error`, saying what a stop before any file was placed left: nothing changed, or, once this
-    /// run wrote data.lock, the data folder as it was. a cancel says so through
-    /// [`Loop::as_left`], and any other error stays as it is.
+    /// `error`, saying what a stop before placing left: nothing changed, or once this run wrote
+    /// data.lock, the data folder as it was. a cancel says so through [`Loop::as_left`].
     pub(super) fn before_placing(&self, mut error: Error) -> Error {
         if error.kind == Kind::Interrupted && error.cancelled.is_none() {
             let left = if self.wrote_lock.load(Ordering::Relaxed) {
@@ -1034,18 +1003,14 @@ impl<'a> Loop<'a> {
         error
     }
 
-    /// whether downloads go on without asking: `--yes`, or a person already said yes to going on
-    /// without room, which covers their size too.
+    /// whether downloads go on without asking: `--yes`, or a yes to going on without room.
     fn yes(&self) -> bool {
         self.context.yes || self.roomy.load(Ordering::Relaxed)
     }
 
-    /// asks once, before anything downloads, when the disk holding the cache may lack room for
-    /// all placing needs: the files and archives the cache lacks, and as much again for each
-    /// archive whose files are not known yet, which unpacking adds at the least. each download
-    /// asks for its own part too, which this covers when they only together pass the room. a file
-    /// the disk cannot hold at all, as FAT32 holds none of 4 GiB, is refused first, since no room
-    /// would let it in.
+    /// asks once, before anything downloads, when the cache's disk may lack room for what placing
+    /// needs, as per-download questions miss a sum too big; an archive of unknown files counts
+    /// twice. a file the disk cannot hold, as FAT32 none of 4 GiB, is refused first.
     fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
         if self.yes() || self.net.offline().enabled() {
             return Ok(());
@@ -1199,9 +1164,8 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// refuses, when offline, the jobs whose bytes the cache lacks. a job that learns its file's
-    /// hash finds it there too when the cache holds what its link served last, as after a `get`
-    /// of it, which the download then takes offline.
+    /// refuses, when offline, the jobs whose bytes the cache lacks; one that learns its hash counts
+    /// as held when the cache has what its link served last, as after a `get` of it.
     fn refuse_offline(&self, jobs: &[Job]) -> Result<(), Error> {
         self.refuse_offline_with(jobs, |job| {
             in_cache(&self.cache, &job.fetch)
@@ -1240,10 +1204,8 @@ impl<'a> Loop<'a> {
         Err(self.offline_missing(&missing))
     }
 
-    /// refuses, before any link is read, what the cache still lacks of `lacking` once the data
-    /// folder and the mirrors were asked, when no download may fetch it: anything offline or in
-    /// mirror-only mode, and otherwise the files of an import, which no link fetches. each is
-    /// named as a missing download is, with what each mirror said of it.
+    /// refuses, before any link is read, what `lacking` still lacks after the data folder and
+    /// mirrors that no download may fetch: anything offline or mirror-only, else an import's files.
     fn refuse_unfetchable(
         &self,
         manifest: &Manifest,
@@ -1284,9 +1246,8 @@ impl<'a> Loop<'a> {
             .fold(error, Error::detail))
     }
 
-    /// what an offline run says of the files it needs that the cache lacks: how to get them
-    /// online, and the ways that need no network, a cache or a folder mirror holding them. a web
-    /// mirror is never asked offline, so the help says so rather than leave it looking empty.
+    /// the error for files an offline run lacks, with ways that need no network. offline asks no
+    /// web mirror, so the help says so rather than leave the mirror looking empty.
     fn offline_missing(&self, missing: &[&str]) -> Error {
         let mut error = Error::new(
             Kind::OfflineMissing,
@@ -1320,10 +1281,8 @@ impl<'a> Loop<'a> {
         })
     }
 
-    /// what an offline run says of the files of `import`, of those `lacking`: missing offline as
-    /// any file is, but with no download or run again to offer, since no link fetches an import.
-    /// what is left is bytes from the folder it came from or a folder mirror, neither of which
-    /// needs the network.
+    /// the error for the files of `import` an offline run lacks: no link fetches an import, so its
+    /// help offers only the folder it came from or a folder mirror.
     fn offline_imported(
         &self,
         manifest: &Manifest,
@@ -1369,12 +1328,9 @@ pub(super) fn with_inputs(manifest: &Manifest, mut names: BTreeSet<String>) -> B
     names
 }
 
-/// warns about each recipe in `scope` whose result `lock` does not pin as building it now
-/// would make: one not built yet, and one whose code, command, variables or inputs moved since
-/// it was built, whose pinned result a run places as it is. a run of named datasets relocks none
-/// of the others, so an input data.toml changed since data.lock pinned it is told as changed
-/// too. this reads the code in the project at `root`, data.toml and data.lock, and fetches
-/// nothing. returns the names of the recipes it warned about.
+/// warns about each recipe in `scope` whose pinned result is not what building it now would make:
+/// unbuilt, changed, or reading an input data.toml changed, as a named run relocks no others. it
+/// reads code at `root`, fetches nothing, and returns the names.
 pub(super) fn tell_stale(
     output: &Output,
     root: &std::path::Path,
@@ -1488,8 +1444,7 @@ struct Drafted {
     /// entries whose data.toml entry did not change, moved from data.lock.
     kept: Vec<Locked>,
     drafts: Vec<Draft>,
-    /// whole pins of imports, given or with `extract` switched, whose archives may still need
-    /// unpacking.
+    /// whole pins of imports, given or with `extract` switched, whose archives may need unpacking.
     pinned: Vec<Locked>,
     /// the entries of data.lock not kept: those to replace or drop.
     others: Lock,
@@ -1499,9 +1454,8 @@ struct Drafted {
     renamed: Vec<Rename>,
 }
 
-/// the lock of `kept` and `drafted` entries and the `results` of recipes, by name, and for each
-/// of its datasets whether it was kept. a pin dates from when its data last changed, so
-/// resolving the same data again leaves data.lock as it was.
+/// the lock of `kept` and `drafted` entries and `results`, by name, with whether each dataset was
+/// kept; a pin keeps its date while its data stays, so resolving it again changes nothing.
 fn settled(
     others: &Lock,
     kept: Vec<Locked>,
@@ -1532,7 +1486,6 @@ fn settled(
 /// data.lock as it was before relocking, beside the new lock. entries relocking kept as they
 /// were are moved into the new lock instead of copied, so they are found there.
 pub(super) struct Before {
-    /// whether there was a data.lock.
     existed: bool,
     /// the old entries relocking did not keep: those it replaced or dropped, and the results of
     /// recipes data.toml no longer has.
@@ -1578,8 +1531,7 @@ impl Before {
             && self.others.derived.is_empty()
     }
 
-    /// each entry relocking moved to the name data.toml gives it now, as its old name and its
-    /// new one.
+    /// each entry relocking moved to the name data.toml gives it now, as old and new names.
     pub(super) fn renamed(&self) -> impl Iterator<Item = (&str, &str)> {
         self.renamed
             .iter()
@@ -1624,9 +1576,8 @@ impl Verbs {
     };
 }
 
-/// the datasets whose pins `lock` changes beside data.lock as it was `before`: pinned for the
-/// first time, pinned to other data or files, or no longer pinned, by name. a rename pins its new
-/// name and, when the old entry went, no longer pins the old one.
+/// the names of the datasets whose pins `lock` changes beside `before`: new, moved or gone, a
+/// rename counting its new name and, when the old entry went, its old one.
 pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
     let mut names: Vec<String> = lock
         .datasets
@@ -1658,8 +1609,7 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
 /// the most datasets pinned for the first time that get a line each; the rest are counted.
 const FIRST_PINS: usize = 20;
 
-/// the labels, as `<dataset>/<path>`, of the files among `jobs` whose size only their download
-/// can tell.
+/// the labels of the `jobs` whose size only their download can tell.
 pub(super) fn sizeless(jobs: &[Job]) -> HashSet<String> {
     jobs.iter()
         .filter(|job| job.fetch.expect.size.is_none())
@@ -1667,10 +1617,9 @@ pub(super) fn sizeless(jobs: &[Job]) -> HashSet<String> {
         .collect()
 }
 
-/// says which datasets `lock` pins anew and which it no longer has, beside data.lock as it was
-/// `before`, with `verbs` for each. a dataset pinned for the first time gets a line of its own
-/// with what it pinned, so a typo in data.toml that pins an unrelated record stands out. the
-/// datasets `told` names are left out but for `-v`, since a later line tells about each.
+/// says which datasets `lock` pins anew or no longer, beside `before`, with `verbs`. a first pin
+/// gets its own line with what it pinned, so a typo that pins an unrelated record stands out;
+/// datasets `told` names wait for `-v`, as a later line tells each.
 pub(super) fn tell_lock(
     output: &Output,
     before: &Before,
@@ -1763,9 +1712,8 @@ fn lock_lines(
     lines
 }
 
-/// a dataset data.lock pins for the first time: its name, then what it resolved to, its title,
-/// and how many files and bytes it pins. `sizeless` labels, as `<dataset>/<path>`, the files whose
-/// size only a download can tell, as a dry run does not.
+/// the line for a dataset data.lock pins for the first time; `sizeless` labels the files whose size
+/// only a download can tell, as in a dry run.
 fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> String {
     let resolved = Reference::parse(&locked.resolved).map_or_else(
         |_| locked.resolved.clone(),
@@ -1823,9 +1771,8 @@ pub(super) fn resolves_locally(reference: &Reference) -> bool {
     matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }
 
-/// what to resolve for a dataset whose entry changed. a changed filter resolves the version
-/// already locked, so tidying data.toml never moves data. a new ref, or an upgrade, asks for the
-/// newest.
+/// what to resolve for a changed entry: a changed filter resolves the version already locked, so
+/// tidying data.toml never moves data, while a new ref or an upgrade asks for the newest.
 fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String {
     match previous {
         Some(locked) if !upgrading && locked.reference == source.reference => {
@@ -1883,10 +1830,8 @@ fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     in_cache_where(cache, fetch, |_| true)
 }
 
-/// the bytes `jobs` of known size transfer, which a question about a large download counts, and
-/// the room they need on the disk holding the cache: each one's size, and for one that unpacks an
-/// archive whose files nobody listed, its size once more, the least its files can take. a lower
-/// bound, since an archive may unpack to much more.
+/// the bytes `jobs` of known size transfer, and the room they need on the cache's disk, twice the
+/// size of an archive whose files nobody listed: a lower bound, as it may unpack to much more.
 fn budget<'j>(jobs: impl Iterator<Item = &'j Job>) -> (u64, u64) {
     jobs.filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpack)))
         .fold((0, 0), |(moved, room), (size, unpacks)| {
@@ -1947,8 +1892,7 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
     }
 }
 
-/// a reference pinned to a full 40-digit commit, cut to 7 digits as git shows them. data.lock
-/// keeps all 40.
+/// a reference pinned to a 40-digit commit, shown cut to 7 digits as git does; data.lock keeps 40.
 fn short_revision(reference: String) -> String {
     match reference.rsplit_once('@') {
         Some((head, revision))
@@ -1960,8 +1904,7 @@ fn short_revision(reference: String) -> String {
     }
 }
 
-/// prints what a reference resolved to, before any file of it downloads, then what its source
-/// warned about.
+/// prints what a reference resolved to, before any file downloads, then its source's warnings.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     tell_kept(output, listing, &listing.files);
 }
@@ -2033,9 +1976,8 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     }
 }
 
-/// prints each dataset that moved to another version, beside data.lock as it was `before`, with
-/// `verb`, such as `Upgraded`, and returns their names. files `guessed` by a dry run, as
-/// `<dataset>/<path>`, are not counted as changed, since only their bytes could tell.
+/// prints each dataset that moved to another version since `before` with `verb`, such as
+/// `Upgraded`, and returns their names; files `guessed` by a dry run never count as changed.
 pub(super) fn tell_upgrades(
     output: &Output,
     before: &Before,
@@ -2099,10 +2041,8 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::source::recorded::block_on;
 
-    /// a download that unpacks an archive whose files nobody listed needs room for the archive
-    /// and for its files, at least its size once more, while a question about its size counts
-    /// only what it transfers. a file kept as it came, or one of unknown size, adds nothing more,
-    /// and the sum stops at the largest number rather than wrapping.
+    /// a question about a download's size counts only what it transfers; a file kept as it came, or
+    /// of unknown size, adds no room, and the sum saturates rather than wrapping.
     #[test]
     fn an_archive_to_unpack_needs_room_for_its_files_too() {
         const MB: u64 = 1_000_000;
@@ -2394,9 +2334,8 @@ mod tests {
         }
     }
 
-    /// a run of named datasets resolves only those: every other entry stays as data.lock has
-    /// it, though data.toml changed one, dropped one and added one beside them, and no source
-    /// of theirs is asked anything.
+    /// a named run resolves only its datasets: the others stay as data.lock has them though
+    /// data.toml changed, dropped and added some, and no source of theirs is asked anything.
     #[test]
     fn relock_in_scope_keeps_other_records() {
         use crate::cli::project::tests::{listed, pinned, pinned_file, stated};
@@ -2500,8 +2439,7 @@ mod tests {
         assert_eq!(project.lock().unwrap(), Some(Lock::default()));
     }
 
-    /// a recipe has no source to resolve: relocking keeps its result while data.toml has the
-    /// recipe, offline and asking nothing, and drops the result with the recipe.
+    /// a recipe has no source to resolve, so relocking keeps its result offline, asking nothing.
     #[test]
     fn relocking_keeps_a_recipe_result_only_while_data_toml_has_the_recipe() {
         let dir = tempfile::tempdir().unwrap();
@@ -2663,7 +2601,6 @@ mod tests {
         );
     }
 
-    /// a dry run tells a dataset leaving data.lock with the verb the real run prints.
     #[test]
     fn a_dry_run_tells_a_removal_as_the_real_run_does() {
         let context = context();
