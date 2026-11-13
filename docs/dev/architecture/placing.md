@@ -11,7 +11,7 @@ placement protects existing files while turning locked data and cached archive t
 | file | what it holds | types and functions |
 |---|---|---|
 | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs) | destination expansion and collision checks | `Plan`, `Target`, `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
-| [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
+| [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `unblock`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
 | [cli/sync/place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | batched placement and per-file observations | `Tally`, `put_all` |
 | [cli/sync/place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement summaries | `tell` |
 | [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_hashes` |
@@ -79,11 +79,25 @@ the non-linux pipelined copy uses the same fallible thread helper: a refused rea
 
 copy input opens through `read_unfollowed`. a copy, and on linux and windows a reflink, is made in a hidden file whose name matches `.fetchloom-[0-9a-f]{16}.copy` in the destination folder and published without overwriting an existing name: by a rename that refuses a taken name, `RENAME_NOREPLACE` on linux and `RENAME_EXCL` on macos, else by a link to the name and the hidden name's removal; windows links, or on a disk without links renames through tempfile's `MoveFileExW` without replacement. a linux reflink is created with its final mode before the clone; windows sets the read-only flag through the file's handle once it is named, since naming clears it. a copy's look is read by name once that handle closes, since windows stamps a written file's time at close and fat keeps it coarser than an open handle shows. macos clones through the open parent with one `fclonefileat` call, which never exposes a partial file. replacing a file fetchloom placed removes it first, so an interruption can leave it missing or leave a hidden copy file, but cannot expose a half-written destination. a file `--force` replaces, an edit, a foreign file or a file where a folder belongs, is moved aside first with `Placer::move_aside`, a rename that never replaces, to `.fetchloom-[0-9a-f]{16}.old` beside it; `settle_aside` deletes it once every file placed in its stead is in place, and moves it back with `move_back` when placing failed or stopped. a sync never sweeps those names, so one an interrupted run left stays for a person to find, and status lists it as extra. an adopted file is replaced by a link through `Placer::relink`, which renames over it, and only while it still looks as scanned. `get` ignores those reserved temporary names, `status` does not list them as extra, and the next `sync` deletes those no record or target claims, unless they changed since its scan; a settled project with such a file takes the long path so the sweep runs.
 
+### folder-aware workers
+
+namespace mutations use at most four workers per parent folder. other folders can use the remaining command budget. both staging and publication take the same parent permit; an explicit `FETCHLOOM_THREADS` limit still wins. readonly metadata scans use the shared worker ceiling without taking mutation permits.
+
+the placer checks the opened root's filesystem once. exfat and fat serialize namespace changes across folders, so they use one worker for the whole placement. linux reads `fstatfs` magic values; macos reads its filesystem name. windows uses the safe `sysinfo` disk-only API, without storage/IO refreshes, and matches the longest canonical mount path. unknown or failed probes keep the per-parent limit. an empty placement does not consume the probe before its root exists. the same probe refuses, before copying, an order FAT32 cannot hold: `Order::size` is the pinned size, so the refusal needs no read of the object, and exFAT holds any size.
+
 ### copy durability
 
 sync calls `Placer::flush_copies` after placement and before `Project::write_state`, even when some placements failed. a flush failure stops the state write: state must not vouch for copied payloads that have not reached disk.
 
-on linux 5.8 and later, `batches_copies` opens the destination root before the first copy so one `syncfs` flushes the filesystem and reports write-back failures. copies on that filesystem then skip their own flush; a parent on a nested mount still flushes its own copy. a placement of up to 64 files skips the batch and flushes each copy on its own, as a run of up to 64 downloads does, so placing a few files never waits on other programs' writes. `place_all` keeps such copies under their hidden names, flushes once, and only then names them, reading each one's `Look` right after, as the cache names a batch of downloads only after its flush; a crash before the flush leaves hidden copies, never a name over bytes that may not have reached the disk, and a failed flush names none. `get` places through `place_all` too, after it has checked every target, its parent folders and any required cached object before clearing any existing file, so its copies take their names only after the same flush. when batching is unavailable, each copy calls `sync_all` before publication. macos batches copies with plain `fsync` per file followed by one `F_FULLFSYNC` before naming them. windows flushes each file through its original handle. this ordering is explicit at the sync call site; callers using `Placer` directly must account for its batch flush.
+on linux 5.8 and later, `batches_copies` opens the destination root before the first copy so one `syncfs` flushes the filesystem and reports write-back failures. copies on that filesystem then skip their own flush; a parent on a nested mount still flushes its own copy. a placement of up to 64 files skips the batch and flushes each copy on its own, as a run of up to 64 downloads does, so placing a few files never waits on other programs' writes. `place_all` keeps such copies under their hidden names, flushes once, and only then names them, reading each one's `Look` right after, as the cache names a batch of downloads only after its flush; a crash before the flush leaves hidden copies, never a name over bytes that may not have reached the disk, and a failed flush names none. `get` places through `place_all` too, after it has checked every target, its parent folders and any required cached object before clearing any existing file, so its copies take their names only after the same flush. when batching is unavailable, each copy calls `sync_all` before publication. this ordering is explicit at the sync call site; callers using `Placer` directly must account for its batch flush.
+
+### macos copy durability
+
+macos seals each copy with plain `fsync`, retains one original writer handle for the batch, then issues one `F_FULLFSYNC` before publishing any copy. a filesystem that rejects full-drive flushing keeps the per-file `fsync` guarantee, as cache batches do. a flush error publishes none of the waiting copies. nested filesystems keep per-file full flushing. apfs clones never enter this copy path and need no payload flush. [native checks](../performance/native-checks.md) cover flush calls and cross-volume copy verification; cross-compilation alone does not establish native behavior.
+
+### windows copy durability
+
+copies are written and flushed through their original handles, without reopening them to write. `FlushFileBuffers` remains per file and precedes publication; independent placement workers can flush their own files concurrently. no filesystem-wide batch guarantee is assumed on windows. writable and sync-client placements still skip hardlinks. native ntfs, refs/dev drive and exfat measurements remain separate from cross-compilation.
 
 ### cancellation
 
@@ -98,6 +112,14 @@ a hardlink edit damages the cached object, since every name is one file. the sur
 when a recorded spelling is absent, scans consider exactly one folded alias and verify the recorded path resolves to the same plain file. unix also compares device and inode. ambiguous aliases and distinct case-sensitive files remain separate. retargeting carries edits and hardlink doubts to the wanted spelling.
 
 apfs and hfs+ see `café` written with one character and with an `e` and a combining accent as one name. apfs lists a name in the composition that made it, while hfs+ lists every name decomposed, so a file the lock names composed can be listed decomposed. retargeting carries such a listed file to the wanted spelling even without a placement record, when the two spellings differ only in composition and resolve to the same file, so status never reports it both missing and extra. a name differing in case is joined only through a record. `get` compares the names in its output folder composed on macos for the same reason. see `same_composed` and `as_disk_sees` in [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs).
+
+### verification workers
+
+`Survey::verify` first selects only the files that still need reading. a same-survey `Placed::racy_intact` proof still skips a file unless it is in `damaged`; files outside the requested datasets and already edited or vouched files keep their existing exclusions. scheduling counts the bytes of this filtered list, not every record in the state.
+
+`place::run_hashes` shares these reads by both count and bytes: the larger of one worker per 64 files and one per 4 MiB, bounded by the actual files, available CPUs, eight workers and `FETCHLOOM_THREADS`. a ceiling of one or two keeps the original count-based choice, so lean does not add read buffers to a short list. an empty or single-worker group stays on the caller. a few large files can therefore use spare CPUs without sending every small check to a worker.
+
+the shared runner returns results in file order and joins every worker before returning errors. a refused thread keeps its work for the caller. each active hash uses the existing size-aware read buffer, at most 1 MiB plus page alignment, and reads each file once; no whole file or extra file contents are retained. the hash, damage classification and progress accounting are unchanged.
 
 ## invariants and traps
 
@@ -125,25 +147,3 @@ placement-order tests pause at the first metadata observation before later names
 ## related
 
 [sync loop](sync-loop.md), [cache](cache.md), [archives](archives.md), [filesystem CI](../engineering/ci.md), [copy measurements](../performance/measurements.md#storage-and-memory).
-
-## verification workers
-
-`Survey::verify` first selects only the files that still need reading. a same-survey `Placed::racy_intact` proof still skips a file unless it is in `damaged`; files outside the requested datasets and already edited or vouched files keep their existing exclusions. scheduling counts the bytes of this filtered list, not every record in the state.
-
-`place::run_hashes` shares these reads by both count and bytes: the larger of one worker per 64 files and one per 4 MiB, bounded by the actual files, available CPUs, eight workers and `FETCHLOOM_THREADS`. a ceiling of one or two keeps the original count-based choice, so lean does not add read buffers to a short list. an empty or single-worker group stays on the caller. a few large files can therefore use spare CPUs without sending every small check to a worker.
-
-the shared runner returns results in file order and joins every worker before returning errors. a refused thread keeps its work for the caller. each active hash uses the existing size-aware read buffer, at most 1 MiB plus page alignment, and reads each file once; no whole file or extra file contents are retained. the hash, damage classification and progress accounting are unchanged.
-
-## folder-aware workers
-
-namespace mutations use at most four workers per parent folder. other folders can use the remaining command budget. both staging and publication take the same parent permit; an explicit `FETCHLOOM_THREADS` limit still wins. readonly metadata scans use the shared worker ceiling without taking mutation permits.
-
-the placer checks the opened root's filesystem once. exfat and fat serialize namespace changes across folders, so they use one worker for the whole placement. linux reads `fstatfs` magic values; macos reads its filesystem name. windows uses the safe `sysinfo` disk-only API, without storage/IO refreshes, and matches the longest canonical mount path. unknown or failed probes keep the per-parent limit. an empty placement does not consume the probe before its root exists. the same probe refuses, before copying, an order FAT32 cannot hold: `Order::size` is the pinned size, so the refusal needs no read of the object, and exFAT holds any size.
-
-## macos copy durability
-
-macos seals each copy with plain `fsync`, retains one original writer handle for the batch, then issues one `F_FULLFSYNC` before publishing any copy. a filesystem that rejects full-drive flushing keeps the per-file `fsync` guarantee, as cache batches do. a flush error publishes none of the waiting copies. nested filesystems keep per-file full flushing. apfs clones never enter this copy path and need no payload flush. [native checks](../performance/native-checks.md) cover flush calls and cross-volume copy verification; cross-compilation alone does not establish native behavior.
-
-## windows copy durability
-
-copies are written and flushed through their original handles, without reopening them to write. `FlushFileBuffers` remains per file and precedes publication; independent placement workers can flush their own files concurrently. no filesystem-wide batch guarantee is assumed on windows. writable and sync-client placements still skip hardlinks. native ntfs, refs/dev drive and exfat measurements remain separate from cross-compilation.
