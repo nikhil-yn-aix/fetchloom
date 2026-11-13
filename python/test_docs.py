@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
 
+import docs_index
+
 ROOT = Path(__file__).resolve().parents[1]
 BLOB = "https://github.com/nikhil-yn-aix/fetchloom/blob/main/"
 
@@ -106,6 +108,43 @@ class Readers(unittest.TestCase):
                          "   ```\n\n    ```sh\n    x\n    ```\nlazy continuation\n\na paragraph ends the list\n\n"
                          "  - a list of its own\n     - nested at three past it\n")
         self.assertEqual([number for number, _ in nested_too_shallow(page)], [2, 6, 18])
+
+
+class Indexes(unittest.TestCase):
+    """the index pages python/docs_index.py writes from SUMMARY.md."""
+
+    def docs(self, files):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for name, text in files.items():
+            path = Path(folder.name, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        return Path(folder.name)
+
+    def test_an_index_lists_the_pages_one_level_below_it_with_their_first_sentence(self):
+        docs = self.docs({
+            "SUMMARY.md": "- [Guide](user/README.md)\n    - [Start](user/start/README.md)\n"
+                          "        - [Install](user/start/install.md)\n    - [Notes](user/notes.md)\n",
+            "user/README.md": f"# Guide\n\n{docs_index.MARKER}\n\nold table\n",
+            "user/start/README.md": f"# Start\n\nno `{docs_index.MARKER}`, so nothing is written here:\n\n```sh\nx. y\n```\n",
+            "user/start/install.md": "# Install\n\nrun it.\n",
+            "user/notes.md": "# Notes\n\n`data.toml` names [the](a.md) sets `b. c`\nit keeps. the rest waits.\n",
+        })
+        self.assertEqual(docs_index.stale(docs), ["user/README.md"])
+        self.assertEqual(docs_index.generate(docs), {"user/README.md": (
+            f"# Guide\n\n{docs_index.MARKER}\n\n| Page | Summary |\n|---|---|\n"
+            f"| [Start](start/README.md) | no `{docs_index.MARKER}`, so nothing is written here: |\n"
+            "| [Notes](notes.md) | `data.toml` names the sets `b. c` it keeps. |\n")})
+
+    def test_a_page_that_opens_with_anything_but_a_paragraph_has_no_first_sentence(self):
+        for text in ("# t\n\n## a heading\n", "# t\n\n| a | table |\n", "# t\n\n```sh\nx. y\n```\n",
+                     f"# t\n\n{docs_index.MARKER}\n", "# t\n"):
+            with self.subTest(text=text):
+                self.assertEqual(docs_index.first_sentence(text), "")
+
+    def test_the_indexes_are_what_docs_index_writes(self):
+        self.assertEqual(docs_index.stale(ROOT / "docs"), [], "run python3 python/docs_index.py")
 
 
 class Rendering(unittest.TestCase):
