@@ -149,6 +149,11 @@ fn gather_folders<'p>(folders: &mut HashSet<&'p str>, path: &'p str) {
     }
 }
 
+/// the state size from which a survey reads it on a thread of its own while it walks the data
+/// folder: 24.5 MB, 100,000 files, took a settled sync 0.79 of its time for 2 MiB more memory,
+/// where 2.4 to 12.1 MB took that thread's own heap 11 to 18 MiB more.
+const BESIDE_FROM: u64 = 16 << 20;
+
 impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
@@ -184,18 +189,51 @@ impl Survey {
         threads: Threads,
         stop: &Stop,
     ) -> Result<Survey, Error> {
+        Self::surveyed_from(project, data_dir, within, threads, stop, BESIDE_FROM)
+    }
+
+    /// [`Survey::surveyed`], reading a whole state of `beside_from` bytes or more on a thread of
+    /// its own while it walks the data folder, unless the run keeps to one worker.
+    fn surveyed_from(
+        project: &Project,
+        data_dir: &str,
+        within: Option<&[String]>,
+        threads: Threads,
+        stop: &Stop,
+        beside_from: u64,
+    ) -> Result<Survey, Error> {
         let started = nanos(SystemTime::now());
         let within = within.map(|folders| outermost(data_dir, folders));
-        let (state, written) = match &within {
-            None => project.state(),
-            Some(folders) => project.state_within(folders, &|path| inside_any(path, folders)),
+        let walk = || scan(&project.root, data_dir, within.as_deref(), threads, stop);
+        let ((state, written), scanned) = if let Some(folders) = &within {
+            (
+                project.state_within(folders, &|path| inside_any(path, folders)),
+                walk(),
+            )
+        } else {
+            let opened = project.open_state();
+            let size = opened.as_ref().map_or(0, |(_, found)| found.size);
+            if size >= beside_from && threads.limit(2) >= 2 {
+                let mut opened = Some(opened);
+                std::thread::scope(|scope| {
+                    let reading = crate::threads::scoped(scope, move || {
+                        opened.take().map_or_else(Default::default, |opened| {
+                            Project::read_opened(opened, State::read_whole)
+                        })
+                    });
+                    let scanned = walk();
+                    (reading.join(), scanned)
+                })
+            } else {
+                (Project::read_opened(opened, State::read_whole), walk())
+            }
         };
         let Scanned {
             found: disk,
             temporaries,
             entries,
             writable,
-        } = scan(&project.root, data_dir, within.as_deref(), threads, stop)?;
+        } = scanned?;
         let mut survey = Survey {
             threads,
             started,

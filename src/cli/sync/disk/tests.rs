@@ -120,6 +120,70 @@ fn two_spellings_both_listed_are_two_files() {
     ));
 }
 
+/// a project of four recorded files and one new one, its state written.
+fn recorded_project(dir: &Path) -> Project {
+    let project = Project {
+        root: dir.to_path_buf(),
+    };
+    let root = &project.root;
+    let mut state = State::default();
+    for path in ["data/a/x", "data/a/y", "data/b/z", "data/c"] {
+        fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        fs::write(root.join(path), path).unwrap();
+        let placed = record(root, path, path.as_bytes(), Method::Copy);
+        state.files.insert(path.to_owned(), placed);
+    }
+    fs::write(root.join("data/new"), b"new").unwrap();
+    project.write_state(&state).unwrap();
+    project
+}
+
+/// a state read on a thread of its own while the data folder is walked gives the survey a read
+/// before the walk gives, and so does one whose thread the system refused.
+#[test]
+fn a_state_read_beside_the_walk_is_the_same_survey() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = recorded_project(dir.path());
+    let survey = |beside_from| {
+        let stop = Stop::default();
+        Survey::surveyed_from(
+            &project,
+            "data",
+            None,
+            Threads::default(),
+            &stop,
+            beside_from,
+        )
+        .unwrap()
+    };
+    let before = survey(u64::MAX);
+    assert_eq!(before.state.files.len(), 4);
+    assert_eq!(before.disk.len(), 5);
+    let counting = crate::threads::refuse_after(usize::MAX);
+    let beside = survey(0);
+    assert_eq!(crate::threads::spawns_left(), Some(usize::MAX - 1));
+    drop(counting);
+    let _refusing = crate::threads::refuse_after(0);
+    let refused = survey(0);
+    for survey in [beside, refused] {
+        assert_eq!(survey.state.files, before.state.files);
+        assert_eq!(survey.disk, before.disk);
+        assert_eq!(survey.entries, before.entries);
+    }
+}
+
+/// a run kept to one worker reads the state on its own thread, however large.
+#[test]
+fn one_worker_reads_the_state_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = recorded_project(dir.path());
+    let one = Threads::read(&|_| Some("1".into())).unwrap();
+    let _counting = crate::threads::refuse_after(usize::MAX);
+    let survey = Survey::surveyed_from(&project, "data", None, one, &Stop::default(), 0).unwrap();
+    assert_eq!(survey.state.files.len(), 4);
+    assert_eq!(crate::threads::spawns_left(), Some(usize::MAX));
+}
+
 fn record(root: &Path, path: &str, bytes: &[u8], method: Method) -> crate::project::state::Placed {
     crate::project::state::Placed {
         dataset: "set".to_owned(),

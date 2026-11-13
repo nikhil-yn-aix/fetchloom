@@ -85,6 +85,7 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | a whole read of the state goes through its index a block at a time into one list, which builds the map at once, not the whole document held and parsed into a map one record at a time | settled sync of 100,000 files 0.839 [0.817, 0.849], peak memory 0.834; status 0.838, peak 0.904; `status --verify` 0.882; 10,000 files 0.899 and 0.894, a no-op's peak 2 MiB more | kept | [pinnacle pass](#reading-the-whole-state) |
 | project state | a state of one block, at most 64 KiB, read in one read again, not through its index | the block-wise read had cost a settled sync of 3 files 8 system calls, 1.009 on both libcs: 3 seeks and 2 reads of its 966-byte state, plus a futex, a signal mask and an munmap that vary between runs of either build. one read now, 3 calls fewer than before the pass: 300 interleaved pairs against 5e18256c, musl 0.996 [0.988, 1.003] beside 6ace5b2d at 0.993 and an a/a arm at 1.002; glibc 0.976 [0.972, 0.980], 6ace5b2d 0.996, a/a 1.002; status and settled sync of 100,000 files flat | kept | [a small state](#reading-a-small-state) |
 | project state | the whole state read on a thread of its own beside the data folder walk, and status's data.lock beside both | over the block-wise read below: settled sync of 100,000 files 0.671 against 0.839, status 0.669, 0.501 with data.lock; but 10,000 files' peak memory 1.55 for the no-op and 1.45 for status, the reading thread's own huge pages | dropped, memory | [pinnacle pass](#the-state-beside-the-folder-walk) |
+| project state | a state of 16 MiB or more, some 65,000 files, read on a thread of its own beside the data folder walk, unless a run keeps to one worker; smaller ones read before the walk as before | settled sync of 100,000 files 0.794 [0.788, 0.820], status 0.812, beside a/a arms at 0.994 and 1.001; 1,000,000 files 0.826 and 0.842; 10,000 to 50,000 files the parent's path, 0.999 to 1.027; peak memory at 10,000 files unchanged, at 100,000 2.0 to 3.7 MiB more, 1.035, at 1,000,000 35 to 40 MiB more, 1.059 to 1.072 | kept | [pinnacle pass](#a-large-state-beside-the-walk) |
 | placement | whether a folder in a file's way holds anything, from the folders the scan found something in | the same status: 7.26 to 1.54 s, with the other scans gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | what removing a run's unneeded files frees, worked out once for every blocker | 40,000 folders holding a file where files belong: status 10.45 to 1.75 s, `sync --dry-run` 10.22 to 1.55 s | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | a changed copy's name checked against a set of the target paths | `sync --verify --dry-run` of 10,000 files edited through other links beside 100,000: 0.403 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
@@ -1783,3 +1784,31 @@ the kept version, 12 pairs a case, a musl release build of 7b2248cb with the swi
 | `cache verify`, 10,000 objects, in memory | ext4 | 1.007 [0.989, 1.016] | 0.997 [0.982, 1.027] | 1.000 | 1.006 | 0.997 |
 
 the cold `cache verify` of 10,000 objects shared its rounds with about 6 busy cores of other work; the pass before, with the copied paths, measured it at 0.408 [0.400, 0.413] beside an a/a arm at 0.999. kept: every cold case clears its a/a spread by far, and with the files in memory every case and every peak memory sits within its a/a spread. cold, the peak memory of `cache verify` of 100,000 objects, 1.007 [0.985, 1.011] beside 0.998 [0.979, 1.000], is 0.5 MiB more at the medians, its interval overlapping the a/a arm's.
+
+### a large state beside the walk
+
+[the state beside the folder walk](#the-state-beside-the-folder-walk) was dropped for the memory a project of 10,000 files lost to the reading thread's own heap. read on its own thread from some size up, it can keep a large project's gain while a small one keeps its memory. always on, a musl release build of 7b2248cb with the switch, tmpfs, 10 pairs, 5 at 1,000,000 files, measured beside 4 busy training processes as above:
+
+| files | state | no-op sync | its peak memory | status | its peak memory |
+|---:|---:|---|---|---|---|
+| 10,000 | 2.4 MB | 0.862 [0.841, 0.882], a/a 1.020 | 39.3 to 57.3 MiB, 1.459 | 0.875 [0.861, 0.883], a/a 0.998 | 40.6 to 58.7 MiB, 1.447 |
+| 30,000 | 7.2 MB | 0.816 [0.797, 0.822], a/a 1.000 | 55.3 to 69.2 MiB, 1.251 | 0.852 [0.833, 0.860], a/a 1.001 | 62.8 to 76.7 MiB, 1.224 |
+| 50,000 | 12.1 MB | 0.792 [0.789, 0.798], a/a 0.997 | 81.1 to 66.9 MiB, 0.827 | 0.834 [0.826, 0.853], a/a 0.999 | 68.5 to 79.7 MiB, 1.164 |
+| 100,000 | 24.5 MB | 0.793 [0.778, 0.814], a/a 0.998 | 85.2 to 87.2 MiB, 1.014 | 0.801 [0.797, 0.824], a/a 1.008 | 86.6 to 87.8 MiB, 1.012 |
+| 1,000,000 | 242 MB | 0.825 [0.786, 0.897], a/a 1.001 | 554.9 to 595.9 MiB, 1.063 | 0.866 [0.843, 0.876], a/a 1.016 | 566.4 to 598.9 MiB, 1.064 |
+
+the 30,000 and 50,000-file projects are three and five 10,000-file listings. up to 12.1 MB the thread cost 11 to 18 MiB, as much as a state of 2.4 MB, whatever it saved; the 50,000-file no-op came out lower, but its base peaked above both neighbours, as the 2 MiB pages of mimalloc's huge pages can make a peak, so that one is not read as a saving. from 24.5 MB the cost is small beside the run's own. so a survey of the whole data folder now opens the state and reads one of 16 MiB or more, `BESIDE_FROM`, on a thread of its own, through the run's thread helper, so a refused thread reads it after the walk; a run kept to one worker, as `FETCHLOOM_THREADS=1` or the lean level keeps it, starts no thread. a read within named folders and a smaller state go as before. against its parent, 10 pairs, 14 at 30,000 and the second 50,000 pass, 5 at 1,000,000 files:
+
+| case | wall | a/a wall | peak memory | a/a peak memory |
+|---|---|---|---|---|
+| no-op sync, 10,000 files | 0.999 [0.981, 1.018] | 0.986 [0.968, 1.008] | 0.997, 39.4 MiB both | 0.997 |
+| status, 10,000 files | 1.004 [0.995, 1.012] | 0.994 [0.986, 1.010] | 0.999, 40.7 MiB both | 1.004 |
+| no-op sync, 30,000 files | 1.005 [0.996, 1.010] | 1.006 [0.994, 1.011] | 1.000 | 1.001 |
+| no-op sync, 50,000 files | 1.027 [1.002, 1.050]; again 1.016 [1.006, 1.025] | 1.005 [0.994, 1.017]; 1.001 [0.996, 1.018] | 0.998, 1.003 | 0.999, 1.001 |
+| status, 50,000 files | 1.002 [0.997, 1.014] | 0.992 [0.987, 0.998] | 0.997 | 0.999 |
+| no-op sync, 100,000 files | 0.794 [0.788, 0.820] | 0.994 [0.979, 1.006] | 1.036 [1.022, 1.049], 83.4 to 87.1 MiB | 1.025 [1.000, 1.028] |
+| status, 100,000 files | 0.812 [0.799, 0.827] | 1.001 [0.993, 1.030] | 1.035 [1.014, 1.067], 84.8 to 86.8 MiB | 1.000 [0.997, 1.005] |
+| no-op sync, 1,000,000 files | 0.826 [0.805, 0.845] | 0.991 [0.989, 1.012] | 1.072 [1.042, 1.103], 560.0 to 600.4 MiB | 0.999 [0.989, 1.011] |
+| status, 1,000,000 files | 0.842 [0.826, 0.846] | 1.002 [0.994, 1.005] | 1.059 [1.045, 1.075], 567.2 to 602.6 MiB | 1.003 [0.995, 1.006] |
+
+below 16 MiB the survey takes the parent's path, the same reads in the same order. the 50,000-file no-op's 1.6 to 2.7% is not work: `perf stat` over 15 runs of each build twice counted 1,027.94 million user instructions against 1,027.71 million, 0.02% more, and cycles of 371 to 379 million against 369 to 383 million. kept: 100,000 files and more 0.79 to 0.84 of their time, with 2.0 to 3.7 MiB more peak memory at 100,000 files and 35 to 40 MiB, 6 to 7%, at 1,000,000.
