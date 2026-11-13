@@ -24,6 +24,18 @@
         });
       });
     }).observe(document.body, { childList: true });
+    // a table wider than its column scrolls in its own box, which a keyboard reaches by tab
+    function scrollable() {
+      document.querySelectorAll(".md-typeset__scrollwrap").forEach(function (box) {
+        if (box.scrollWidth > box.clientWidth) {
+          box.tabIndex = 0;
+        } else {
+          box.removeAttribute("tabindex");
+        }
+      });
+    }
+    window.addEventListener("load", scrollable);
+    window.addEventListener("resize", scrollable);
   </script>
   {% if page and page.content and 'class="mermaid"' in page.content %}
     <script src="{{ 'assets/javascripts/mermaid.tiny.js' | url }}"></script>

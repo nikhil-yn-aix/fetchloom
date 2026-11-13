@@ -477,9 +477,8 @@ body {
   width: auto;
   max-width: none;
   min-width: 0;
-  font-size: .8rem;
+  font-size: .75rem;
   line-height: 1.45;
-  hyphens: manual;
   font-variant-numeric: tabular-nums lining-nums;
   background: none;
   border: 0;
@@ -491,14 +490,15 @@ body {
   font-weight: 600;
   text-align: left;
   vertical-align: bottom;
-  padding: .55em 1.4em .45em 0;
+  hyphens: manual;
+  padding: .55em 1.1em .45em 0;
   border-bottom: 1px solid var(--fl-ink);
   background: none;
   min-width: 0;
 }
 .md-typeset table:not([class]) td {
   vertical-align: top;
-  padding: .4em 1.4em .4em 0;
+  padding: .4em 1.1em .4em 0;
   border: 0;
 }
 .md-typeset table:not([class]) :is(th, td):last-child {
