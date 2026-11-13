@@ -841,6 +841,47 @@ fn a_refused_key_is_named_by_where_it_comes_from() -> Result {
     Ok(())
 }
 
+/// `auth` says how to replace a key the source refuses by where it comes from: a variable wins
+/// over a saved key, so signing in again cannot help while it is set.
+#[test]
+fn auth_says_how_to_replace_a_refused_key_by_where_it_comes_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let refused = || reply("401 Unauthorized", &[], b"{}");
+    let refusing = Server::start("/", vec![refused(), refused()])?;
+    let told = |env: &[(&str, &str)]| -> Result<String> {
+        let mut command = sandbox.command(&["auth"]);
+        command
+            .env("FETCHLOOM_TEST_HF_API", &refusing.url)
+            .envs(env.iter().copied());
+        let output = command.output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        text(&output.stderr)
+    };
+    let story = told(&[("HF_TOKEN", "hf_FAKEfakeFAKEfake1234")])?;
+    assert!(
+        story.lines().any(|line| line
+            == "    Refused the key in HF_TOKEN for hf; set HF_TOKEN to a current key, or unset HF_TOKEN to use the key `fetchloom auth login hf` saves"),
+        "{story}"
+    );
+    let token = home(&sandbox).join(".cache/huggingface/token");
+    std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
+    std::fs::write(&token, "hf_FAKEfakeFAKEfake1234\n")?;
+    let shown = std::path::Path::new("~")
+        .join(".cache")
+        .join("huggingface")
+        .join("token");
+    let story = told(&[])?;
+    assert!(
+        story.lines().any(|line| line
+            == format!(
+                "    Refused the key saved in {} for hf; sign in again with `fetchloom auth login hf`",
+                shown.display()
+            )),
+        "{story}"
+    );
+    Ok(())
+}
+
 /// a sign-out has nothing to stop, so it removes the key and says so, with exit 0.
 #[cfg(unix)]
 #[test]

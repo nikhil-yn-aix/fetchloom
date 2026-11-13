@@ -123,7 +123,13 @@ keys your AWS settings send to another endpoint are listed for it, as `s3 at htt
   Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet
 ```
 
-a key the source refuses is marked `Refused` with the command to sign in again, and a key whose source gives no answer, as a host this machine cannot reach, ends its line with `not checked, as <host> gave no answer`. `--offline` skips asking the sources. a key is never printed, in any output. a key that holds a character no request can carry, such as a line break, is never sent, and `auth` and the offer to sign in after a refusal warn about it, naming where the key is. on linux and macos, `auth` also warns when other users can open the `.netrc` it reads.
+a key the source refuses is marked `Refused`, named by where it comes from, with how to replace it: a saved key by signing in again, and a key in a variable, which wins over a saved one, by setting the variable to a current key or unsetting it:
+
+```text
+    Refused the key in HF_TOKEN for hf; set HF_TOKEN to a current key, or unset HF_TOKEN to use the key `fetchloom auth login hf` saves
+```
+
+a key whose source gives no answer, as a host this machine cannot reach, ends its line with `not checked, as <host> gave no answer`. `--offline` skips asking the sources. a key is never printed, in any output. a key that holds a character no request can carry, such as a line break, is never sent, and `auth` and the offer to sign in after a refusal warn about it, naming where the key is. on linux and macos, `auth` also warns when other users can open the `.netrc` it reads.
 
 ## signing out
 

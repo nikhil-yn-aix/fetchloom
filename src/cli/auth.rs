@@ -129,7 +129,11 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 if valid == Some(false) {
                     output.mark(
                         "Refused",
-                        &format!("{text}; sign in again with `{}`", account.command()),
+                        &format!(
+                            "{} for {name}; {}",
+                            found.origin.named(),
+                            replacing(&account, &found.origin)
+                        ),
                     );
                 } else if let Some(host) = &unanswered {
                     output.step(
@@ -1001,6 +1005,18 @@ pub(super) async fn offer(
         .await
         .map_err(|error| error.cancelling(signing))?;
     Ok(true)
+}
+
+/// how to replace a key the source refused: a variable wins over the key a sign-in saves, so a
+/// sign-in helps only once the variable is unset.
+fn replacing(account: &Account, origin: &Origin) -> String {
+    match origin {
+        Origin::Variable(name) => format!(
+            "set {name} to a current key, or unset {name} to use the key `{}` saves",
+            account.command()
+        ),
+        _ => format!("sign in again with `{}`", account.command()),
+    }
 }
 
 /// says a key was found but no request can carry it, naming where it is but never the key.
