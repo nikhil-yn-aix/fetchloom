@@ -11,6 +11,8 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 mod command;
+#[path = "../support/links.rs"]
+mod links;
 #[path = "../support/paths.rs"]
 mod paths;
 #[path = "../support/ports.rs"]
@@ -24,6 +26,7 @@ mod server;
 mod skips;
 
 pub(crate) use command::Fetchloom;
+pub(crate) use links::link_folder;
 pub(crate) use paths::workspace;
 pub(crate) use ports::Refusing;
 pub(crate) use programs::{executable, recipe_step};
@@ -551,21 +554,6 @@ pub(crate) fn delete_folder(path: &Path) -> Result {
         }
     }
     Ok(std::fs::remove_dir(path)?)
-}
-
-/// makes `link` name the folder `target` the way a user can without admin: a junction on
-/// windows, a symlink elsewhere. says whether the filesystem allowed it.
-pub(crate) fn link_folder(target: &Path, link: &Path) -> bool {
-    #[cfg(windows)]
-    let made = Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()
-        .is_ok_and(|output| output.status.success());
-    #[cfg(unix)]
-    let made = std::os::unix::fs::symlink(target, link).is_ok();
-    made
 }
 
 /// whether a variable of the machine running the tests could change what fetchloom does.

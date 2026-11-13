@@ -2,29 +2,9 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 
 use super::tests::hardlinks;
 use super::{Cache, Claim, Validators};
-
-fn link_folder(target: &Path, link: &Path) {
-    #[cfg(windows)]
-    {
-        let output = std::process::Command::new("cmd")
-            .args(["/c", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).unwrap();
-}
 
 /// the name every file of the download of `url` shares in `partial/`.
 fn key(url: &str) -> String {
@@ -52,7 +32,7 @@ fn cache_folders_cannot_be_links_to_another_folder() {
         let outside = dir.path().join("outside");
         fs::create_dir(&root).unwrap();
         fs::create_dir(&outside).unwrap();
-        link_folder(&outside, &root.join(name));
+        crate::test_links::link_folder(&outside, &root.join(name)).unwrap();
         assert!(
             Cache::open(root).is_err(),
             "{name} must not redirect cache writes"
@@ -72,7 +52,7 @@ fn replacing_a_partial_folder_never_redirects_writes() {
     fs::create_dir(&outside).unwrap();
     let partial = cache.root.join("partial");
     fs::rename(&partial, cache.root.join("previous-partial")).unwrap();
-    link_folder(&outside, &partial);
+    crate::test_links::link_folder(&outside, &partial).unwrap();
     if let Ok(Claim::Owned(download)) = cache.claim("https://example.org/data")
         && let Ok(mut writer) = download.writer(0, None, Validators::default(), false, false)
     {
@@ -185,7 +165,7 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     let folder = cache.root.join("changed");
     fs::create_dir_all(&folder).unwrap();
     fs::rename(&folder, cache.root.join("old-changed")).unwrap();
-    link_folder(&outside, &folder);
+    crate::test_links::link_folder(&outside, &folder).unwrap();
 
     assert!(cache.mark_changed(&digest).is_err());
     assert!(cache.marks().is_err());
@@ -215,7 +195,7 @@ fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
     let folder = cache.root.join("tmp");
     fs::create_dir_all(&folder).unwrap();
     fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
-    link_folder(&outside, &folder);
+    crate::test_links::link_folder(&outside, &folder).unwrap();
 
     let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
 
@@ -243,7 +223,7 @@ fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
     let folder = cache.root.join("tmp");
     fs::create_dir_all(&folder).unwrap();
     fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
-    link_folder(&outside, &folder);
+    crate::test_links::link_folder(&outside, &folder).unwrap();
 
     let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
 

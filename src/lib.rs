@@ -32,6 +32,9 @@ mod work;
 #[cfg(test)]
 mod manual;
 #[cfg(test)]
+#[path = "../tests/support/links.rs"]
+mod test_links;
+#[cfg(test)]
 #[path = "../tests/support/paths.rs"]
 mod test_paths;
 #[cfg(test)]

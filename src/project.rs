@@ -1473,17 +1473,7 @@ mod tests {
         }
         let outside = tempfile::tempdir().unwrap();
         let link = project.own_folder();
-        let output = std::process::Command::new("cmd")
-            .args(["/c", "mklink", "/J"])
-            .arg(&link)
-            .arg(outside.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        crate::test_links::link_folder(outside.path(), &link).unwrap();
 
         let held = project.hold("sync");
         let written = project.write_state(&State::default());

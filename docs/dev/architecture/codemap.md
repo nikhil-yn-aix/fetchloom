@@ -308,10 +308,11 @@ the cli tests run the real binary in a sandbox; [building and testing](../engine
 | `tests/cli/support/running.rs` | a command running beside its test, its stderr read as it comes | `Running` |  |
 | `tests/cli/support/server.rs` | listeners and connections, stopped and joined with their test server | `ServerTask` |  |
 | `tests/cli/support/programs.rs` | the fetchloom binary and the `recipe_step` example the tests run | `executable`, `recipe_step` |  |
+| `tests/support/links.rs` | a folder that links to another, a junction on windows, shared by unit and cli tests | `link_folder` |  |
 | `tests/support/paths.rs` | the workspace folder, shared by unit and cli tests | `workspace` |  |
 | `tests/support/ports.rs` | an address where every connection is refused, shared by unit and cli tests | `Refusing` |  |
 | `tests/support/skips.rs` | a skip that fails instead where `FETCHLOOM_TEST_REQUIRE` names the missing capability | `skip` |  |
 | `examples/recipe_step.rs` | the step program cli tests put in recipes | `main` |  |
 | `src/net/scripted.rs` | a local server that answers each connection with scripted bytes, for network unit tests | `serve` |  |
-| `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `block_on` |
+| `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests, and the real network the `live_` tests reach | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `block_on`, `live` |
 | `src/archive/samples.rs` | archives built at test time, and a scratch cache to unpack them into | `Scratch` |  |

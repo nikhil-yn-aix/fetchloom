@@ -1217,7 +1217,7 @@ fn a_link_at_the_root_is_never_followed() {
     let outside = folder.path().join("outside");
     fs::create_dir(&outside).unwrap();
     let root = folder.path().join("data");
-    if !link_folder(&outside, &root) {
+    if crate::test_links::link_folder(&outside, &root).is_err() {
         return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let mut placer = Placer::new(&root);
@@ -1238,7 +1238,7 @@ fn a_link_inside_the_root_is_never_followed() {
     fs::create_dir_all(&root).unwrap();
     fs::create_dir_all(&outside).unwrap();
     let link = root.join("dataset");
-    if !link_folder(&outside, &link) {
+    if crate::test_links::link_folder(&outside, &link).is_err() {
         return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let mut placer = Placer::new(&root);
@@ -1250,20 +1250,6 @@ fn a_link_inside_the_root_is_never_followed() {
     assert!(error.to_string().contains("is a link"), "{error}");
     assert!(!outside.join("placed.csv").exists());
     assert!(placer.check_folders(&link.join("old.csv"), false).is_err());
-}
-
-/// makes `link` point at the folder `target`: a junction on windows, which needs no admin.
-pub(super) fn link_folder(target: &Path, link: &Path) -> bool {
-    #[cfg(windows)]
-    let made = std::process::Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()
-        .is_ok_and(|output| output.status.success());
-    #[cfg(unix)]
-    let made = std::os::unix::fs::symlink(target, link).is_ok();
-    made
 }
 
 #[test]
@@ -1675,7 +1661,7 @@ fn aliases_above_the_selected_root_keep_their_filesystem_meaning() {
     let real = folder.path().join("real");
     let alias = folder.path().join("alias");
     fs::create_dir(&real).unwrap();
-    if !link_folder(&real, &alias) {
+    if crate::test_links::link_folder(&real, &alias).is_err() {
         return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }
     let root = alias.join("data");

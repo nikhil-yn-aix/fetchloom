@@ -355,7 +355,7 @@ mod tests {
         let onedrive = home.path().join("OneDrive");
         fs::create_dir(&onedrive).unwrap();
         let link = home.path().join("linked");
-        assert!(crate::place::tests::link_folder(&onedrive, &link));
+        crate::test_links::link_folder(&onedrive, &link).unwrap();
         let root_through_link = env(&[("OneDrive", &link)]);
         assert_eq!(
             client(&onedrive.join("data"), &root_through_link, &unmounted),

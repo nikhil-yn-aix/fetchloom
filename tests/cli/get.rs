@@ -1538,7 +1538,7 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     let newer = b"sepal_length,species\n5.1,setosa\n";
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
     let real = sandbox.folder("real")?;
-    if !link_folder(&real, &sandbox.work().join("linked")) {
+    if link_folder(&real, &sandbox.work().join("linked")).is_err() {
         return crate::support::skipped("symlinks", "no symbolic link can be made here");
     }
     for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
@@ -2127,7 +2127,7 @@ fn a_folder_reached_through_a_link_is_not_filled_twice() -> Result {
     let sandbox = Sandbox::new()?;
     let one = sandbox.work().join("one");
     fs::create_dir_all(&one)?;
-    if !link_folder(&one, &sandbox.work().join("two")) {
+    if link_folder(&one, &sandbox.work().join("two")).is_err() {
         return crate::support::skipped("symlinks", "no symbolic link can be made here");
     }
     let zipped = |bytes: &[u8]| -> Result<Vec<u8>> { zip_of(&[("data.csv", bytes)]) };
