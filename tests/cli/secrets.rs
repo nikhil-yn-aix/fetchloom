@@ -1,4 +1,5 @@
-//! links that carry secrets: never written into data.toml or data.lock, never printed.
+//! links that carry secrets, kept out of data.toml, data.lock and every output, and the servers
+//! a link may reach.
 
 use std::fs;
 
@@ -34,11 +35,8 @@ impl Carried {
     }
 }
 
-/// a link that carries a secret, a signature, a token or a name and password, is refused with
-/// exit 10 before any request, whether it is typed for `add` or `get` or written in data.toml:
-/// nothing is written, and neither output nor trace shows the secret. a refusal of a link in
-/// data.toml names its line. `a_token_in_a_link_a_source_reads_is_refused_too` covers a link a
-/// source reads by its own reference.
+/// `a_token_in_a_link_a_source_reads_is_refused_too` covers a link a source reads by its own
+/// reference.
 #[test]
 fn a_secret_in_a_link_is_refused_before_any_request() -> Result {
     let mut failures = Vec::new();
@@ -119,11 +117,8 @@ fn a_secret_in_a_link_is_refused_before_any_request() -> Result {
     Ok(())
 }
 
-/// a source reads a zenodo record by its own reference and drops a token its link carries, but
-/// data.toml keeps the link as written and data.lock copies it, so the token is refused there as
-/// in any link, and an add of the link is refused alike, before any request. a catalog on this
-/// machine stands in for zenodo, which debug builds alone allow, so a run that let the token
-/// through asks it rather than zenodo.
+/// the zenodo source drops the token, but data.toml and data.lock keep the link as written. only
+/// debug builds let a local catalog stand in for zenodo, so a leaked token never reaches zenodo.
 #[cfg(debug_assertions)]
 #[test]
 fn a_token_in_a_link_a_source_reads_is_refused_too() -> Result {
@@ -206,7 +201,7 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
             .command(&["--json", "add", &format!("dataverse:{address}/doi:10.1/X")])
             .env("FETCHLOOM_RETRIES", "0")
             .output();
-        // a refusal before connecting must still release the observer, with no TLS hello.
+        // a refusal before connecting must still release the observer, with no TLS hello
         let mut wake = TcpStream::connect(address).ok();
         if let Some(wake) = &mut wake {
             let _ = wake.write_all(&[0]);
@@ -229,9 +224,8 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
     Ok(())
 }
 
-/// a cloned project's data.toml names a server on this machine, which neither a sync nor the
-/// build of a recipe that reads it reaches until `allowed_origins` lists it. neither takes a link
-/// on its command line, so the help names that setting alone.
+/// a cloned project's data.toml may name a server on this machine. sync and build take no link
+/// on their command line, so the help names `allowed_origins` alone.
 #[test]
 fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -294,8 +288,7 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     Ok(())
 }
 
-/// the settings file fetchloom reads in `sandbox`, as `fetchloom settings` names it.
-/// the settings file as a help names it, below the home folder as `~/…`.
+/// the settings file `fetchloom settings` names in `sandbox`, as a help writes it: `~/…`.
 fn settings_file(sandbox: &Sandbox) -> Result<String> {
     let document = json(&sandbox.run(&["--json", "settings"])?)?;
     let path = document["result"]["file"]["path"]
@@ -310,8 +303,7 @@ fn trusted_alone(trusted: &str, host: &str) -> String {
     format!("only {trusted} is trusted on {host}, and trust covers that origin alone")
 }
 
-/// another port of a host that `allowed_origins` lists is another origin, which nobody trusted: it
-/// may reach public addresses only, so this machine's is refused once the name is looked up.
+/// an untrusted origin may reach public addresses only, so `localhost` is refused once looked up.
 #[test]
 fn another_port_of_an_allowed_host_reaches_no_private_address() -> Result {
     let sandbox = Sandbox::new()?;
@@ -356,9 +348,8 @@ fn pinned(sandbox: &Sandbox, body: &[u8]) -> Result<Routes> {
     Ok(source)
 }
 
-/// a mirror a person names is trusted at its own origin alone. in a clone, a mirror on another
-/// port of the same host lets data.lock reach no server on this machine that `allowed_origins`
-/// does not list, and the refusal names the mirror's origin.
+/// a mirror on another port of the same host lets data.lock reach no server there that
+/// `allowed_origins` does not list.
 #[test]
 fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -398,8 +389,7 @@ fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
     Ok(())
 }
 
-/// a link typed in a clone is trusted at its own origin alone: the server data.lock pins on
-/// another port of the same host stays out of reach.
+/// the server data.lock pins on another port of the same host stays out of reach.
 #[test]
 fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -427,8 +417,7 @@ fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
     Ok(())
 }
 
-/// a link data.lock gives that carries a secret, as a hand edit or a mistaken commit leaves one,
-/// stops each command that reads data.lock before it asks any server, and none shows the secret.
+/// a hand edit or a mistaken commit can leave a secret in data.lock; no command may show it.
 #[test]
 fn a_secret_in_a_link_data_lock_gives_stops_every_command_before_any_request() -> Result {
     let sandbox = Sandbox::new()?;
@@ -495,9 +484,7 @@ fn a_secret_in_a_link_data_lock_gives_stops_every_command_before_any_request() -
     Ok(())
 }
 
-/// data.toml alone names a server on this machine that `allowed_origins` does not list. a link to
-/// another port of the same host, typed for `add`, leaves that server out of reach, and the add
-/// says why.
+/// an add syncs all of data.toml, and the typed link's trust must not reach the server it names.
 #[test]
 fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -809,10 +796,8 @@ fn secret_link_surfaces(suffix: &str, mode: &[&str]) -> Result<Vec<(String, Vec<
     Ok(surfaces)
 }
 
-/// a secret in a link's query shows on no surface a download leaves: stdout, stderr, a trace
-/// or the cache's record of the link. `net::shown::tests` holds every spelling of a secret's
-/// name; a token, a signature and a name no list knows, as dataverse's `key`, stand for them
-/// here.
+/// `net::shown::tests` holds every spelling of a secret's name; a token, a signature and a name
+/// no list knows, as dataverse's `key`, stand for them here.
 #[test]
 fn query_secrets_stay_out_of_each_output_surface() -> Result {
     let mut failures = Vec::new();
@@ -857,9 +842,7 @@ fn fragment_secrets_stay_out_of_each_output_surface() -> Result {
     Ok(())
 }
 
-/// a link whose fragment carries a key is refused for a project with exit 10, with or without
-/// `--dry-run` and before any request: data.toml and data.lock are never written, and neither
-/// output nor trace shows the key.
+/// `get` may use a link with a key in its fragment, but `add` refuses one, dry run or not.
 #[test]
 fn a_fragment_key_never_enters_a_project() -> Result {
     let mut failures = Vec::new();
@@ -967,9 +950,8 @@ fn generated_output_roots_refuse_links_outside_the_working_directory() -> Result
     Ok(())
 }
 
-/// `FETCHLOOM_OFFLINE` takes `true` as `FETCHLOOM_MIRRORS_ONLY` does, and a value it cannot read
-/// stops a command before any request, where it used to go online without a word. help and
-/// version still answer.
+/// `FETCHLOOM_OFFLINE` reads values as `FETCHLOOM_MIRRORS_ONLY` does, and a value it cannot read
+/// is an error rather than a run that goes online without a word.
 #[test]
 fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
     let sandbox = Sandbox::new()?;
@@ -999,10 +981,8 @@ fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
     Ok(())
 }
 
-/// a link's query or fragment may hold a secret under a name no list knows, such as the `rlkey`
-/// of a dropbox link, and a notebook keeps the error it printed. help that says to run the
-/// command again never repeats a line holding one, in text or in json, and says to run the same
-/// command instead.
+/// a query or fragment may hold a secret under a name no list knows, and a notebook keeps the
+/// errors it printed, so a retry hint never repeats a link that has either.
 #[test]
 fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
     const SENTINEL: &str = "s3ntinel";
@@ -1030,9 +1010,7 @@ fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
     Ok(())
 }
 
-/// in mirror-only mode a web mirror that sends fetchloom on to another origin is refused there,
-/// and the refusal names that origin with its port and the mirror's that sent it, since both may
-/// be on one host, where it named the host alone.
+/// both origins may be on one host, as here, so the refusal names each with its port.
 #[test]
 fn a_mirror_that_sends_fetchloom_elsewhere_names_both_origins() -> Result {
     let sandbox = Sandbox::new()?;
