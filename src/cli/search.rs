@@ -89,8 +89,7 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
 }
 
 /// refuses `text`, given to add or get, before any request when it names something on this
-/// machine: a path, or words that name a file or folder in the current folder. `pins` says the
-/// command can pin that file or folder, as add can, while get, which keeps no project, cannot.
+/// machine, a path or a name in the current folder; `pins` says the command can pin it, as add can.
 pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     if local::is_path(text) {
         return Err(local::refused(text));
@@ -306,12 +305,10 @@ struct Shown {
 const TITLE_LEAST: usize = 12;
 const TITLE_MOST: usize = 52;
 
-/// each candidate as what to type, its title and its facts, padded so every row has the same
-/// columns: title, size, downloads, note. a cell the catalog leaves out stays blank and a column
-/// nobody fills is left out. hugging face titles are the repository id the reference already
-/// shows, so they stay blank. on a terminal `width` columns wide, with `lead` columns before each
-/// reference, the download count gives way first, then the title; the size and the access note
-/// never do, and take a line of their own under the reference when they do not fit beside it.
+/// each candidate as what to type, its title and its facts, in columns every row shares: title,
+/// size, downloads, note, a missing cell blank and an empty column left out. hugging face titles
+/// stay blank, as the reference names the repository. in `width` columns after `lead`, downloads
+/// give way first, then the title; size and note go under the reference when they do not fit.
 fn parts(
     output: &Output,
     candidates: &[Candidate],
@@ -595,10 +592,8 @@ mod tests {
         )
     }
 
-    /// matches as j5's picker showed them at 60, 80 and 100 columns: what to type, whether the
-    /// data needs access and its size stay whole in every row, at the cost of the download count
-    /// and the title, and the size and access go on a line of their own when even they do not
-    /// fit beside the reference.
+    /// at 60, 80 and 100 columns every row keeps its reference, access note and size whole,
+    /// dropping downloads, then the title, and moves note and size under it when they do not fit.
     #[test]
     fn narrow_rows_keep_the_access_note_and_the_size_whole() {
         let candidate = |reference: &str, title: &str, size, downloads, gated: bool| Candidate {
