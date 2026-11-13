@@ -6,9 +6,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// the open files a run asks for when its soft limit is lower, as many downloads, archive
-/// writers and placement workers can hold a file each. uv, openjdk and graalvm stop here too:
-/// some code breaks past it, and code that walks every possible descriptor slows down.
+/// the open files a run asks for when its soft limit is lower, a file for each download, archive
+/// writer and placer. uv, openjdk and graalvm stop here too: past it some code breaks or slows.
 #[cfg(unix)]
 const OPEN_FILES: u64 = 1 << 20;
 /// what macos grants one process when it refuses [`OPEN_FILES`].
@@ -224,9 +223,8 @@ fn raise_open_files() -> Option<u64> {
     None
 }
 
-/// the program `file` in the first absolute folder of `path`, a PATH value, that holds it as a
-/// file this user may run. a relative folder is passed over, since it would be whatever folder
-/// fetchloom runs in.
+/// the program `file` in the first absolute folder of `path`, a PATH value, that holds it as a file
+/// this user may run. a relative folder would be wherever fetchloom runs, so it is passed over.
 pub(crate) fn installed(path: &OsStr, file: &str) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter(|folder| folder.is_absolute())
@@ -324,7 +322,6 @@ mod tests {
         assert_eq!(bytes(root.path()), Some(1_000_000_000));
     }
 
-    /// a cgroup with more room than the system has available does not hold the run's memory.
     #[test]
     fn a_roomy_cgroup_leaves_the_available_memory_in_charge() {
         let root = root(&[
@@ -414,9 +411,8 @@ mod tests {
         );
     }
 
-    /// a program is the first file by its name this user may run in an absolute folder of PATH,
-    /// in PATH's order. a relative folder, a folder by that name and, on unix, a file with no
-    /// execute bit are passed over.
+    /// in PATH's order, passing over a relative folder, a folder by that name and, on unix, a file
+    /// with no execute bit.
     #[test]
     fn a_program_is_the_first_runnable_file_in_an_absolute_folder_of_path() {
         let root = tempfile::tempdir().unwrap();
