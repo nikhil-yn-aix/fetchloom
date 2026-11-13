@@ -114,9 +114,8 @@ fn a_broken_link_in_the_lock_is_pinned_again_by_an_upgrade() -> Result {
     Ok(())
 }
 
-/// a run cut off after it replaced a file and before it wrote the state leaves the new, locked
-/// bytes recorded as the old file. a file whose size is the locked size is hashed, so status and
-/// sync take it as placed instead of as an edit only `--force` would clear.
+/// the cut leaves the new, locked bytes recorded as the old file; a file of the locked size is
+/// hashed, so status and sync take it as placed, not as an edit only `--force` would clear.
 #[test]
 fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -245,9 +244,8 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
     Ok(())
 }
 
-/// the table and the one list part data.lock keeps for `name`, a recipe's result holding `files`
-/// made from iris, written as fetchloom writes them: the table's text, the part's path below the
-/// project and the part's text.
+/// data.lock's table and one list part for `name`, a recipe's result holding `files` made from
+/// iris, as fetchloom writes them: the table's text, the part's path in the project and its text.
 fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
     let mut tree = String::new();
     for (path, bytes) in files {
@@ -267,9 +265,8 @@ fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
     (table, part, part_text)
 }
 
-/// a recipe's result pinned in data.lock, which only `fetchloom build` makes, stays as it is
-/// while data.toml has the recipe, when another command writes data.lock, and a list that does
-/// not hold it is refused with advice that works.
+/// only `fetchloom build` makes a result, so another command writing data.lock keeps its pin
+/// while data.toml has the recipe, and a damaged list's refusal gives advice that works.
 #[test]
 fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -328,10 +325,8 @@ fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
     Ok(())
 }
 
-/// no link fetches an import, so offline a clone whose cache lacks one is told where its bytes
-/// can come from without a network, never to download them or to run the same sync again, which
-/// would only fail the same way. copying the files from the folder they came from, as the help
-/// says, then syncing works offline.
+/// no link fetches an import, so the help offers only ways without a network and no rerun, and
+/// copying the files from the folder they came from, as it says, lets the sync work offline.
 #[test]
 fn an_import_missing_offline_is_never_offered_a_download() -> Result {
     let sandbox = Sandbox::new()?;
@@ -370,9 +365,8 @@ fn an_import_missing_offline_is_never_offered_a_download() -> Result {
     Ok(())
 }
 
-/// offline, a run asks no web mirror, so the error for the files the cache lacks says the web
-/// mirror was not asked, not that it lacks them, and names a folder mirror beside a cache as the
-/// ways that need no network. a folder mirror a push filled then serves the same run offline.
+/// offline asks no web mirror, so the error never claims it lacks the files, and a folder mirror
+/// a push filled then serves the same run offline.
 #[test]
 fn offline_says_a_web_mirror_was_not_asked_and_names_a_folder_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -419,9 +413,8 @@ fn offline_says_a_web_mirror_was_not_asked_and_names_a_folder_mirror() -> Result
     Ok(())
 }
 
-/// an edit made in place through a hardlink changed the cache's copy, so sync must fetch the
-/// pinned bytes again. when it cannot, as offline, its error still says why it needed them and
-/// the edit stays; once it can, the file is put back with the edit kept beside it.
+/// an edit in place through a hardlink changed the cache's copy too; offline the edit stays, and
+/// online the file is put back with the edit kept beside it.
 #[test]
 fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
     let sandbox = Sandbox::new()?;

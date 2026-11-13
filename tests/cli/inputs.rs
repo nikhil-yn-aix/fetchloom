@@ -1,7 +1,5 @@
-//! a project's inputs, against servers on this machine: the dataset names and members tables
-//! data.toml and data.lock may give, the names of the files inside datasets, and
-//! `cache gc --inputs`, which frees the cache's copy of raw data that only builds read where a
-//! folder mirror holds a copy that hashes to its name in the same run.
+//! a project's inputs: dataset names, members tables, file names, and `cache gc --inputs`, which
+//! frees raw data only builds read once it checks that a folder mirror holds a copy.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,9 +11,8 @@ use crate::project::{IRIS, PATH};
 use crate::recipes::{WRITE, object, unplace};
 use crate::support::{Result, Sandbox, Server, edit, file, json, text, zip_of};
 
-/// a project in the sandbox's work folder with iris from `server`, set to `place = false`, and
-/// the recipe [`WRITE`] built from it, then pushed with what it is made from into a folder
-/// mirror, whose folder this gives.
+/// a project with iris from `server` set to `place = false` and [`WRITE`] built from it, pushed
+/// with its inputs into a folder mirror, whose folder this returns.
 fn built_and_pushed(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
     with(sandbox, server, WRITE)?;
     unplace(&sandbox.work(), "iris")?;
@@ -30,8 +27,7 @@ fn built_and_pushed(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
     Ok(mirror)
 }
 
-/// with a copy on a folder mirror that hashes to its name, the raw input goes from the cache and
-/// the result stays; the run names the mirror it relied on and what freeing costs.
+/// the result stays in the cache, and the run names the mirror it relied on.
 #[test]
 fn gc_inputs_frees_raw_input_with_a_verified_mirror_and_names_the_costs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -49,8 +45,8 @@ fn gc_inputs_frees_raw_input_with_a_verified_mirror_and_names_the_costs() -> Res
     Ok(())
 }
 
-/// a dry run reads the copies and says what it would free, as a run would, and frees and asks
-/// nothing. a copy that does not hash to its name keeps the file, with the mirror it is on.
+/// the dry run still reads the copies, and a copy that does not hash to its name keeps the file,
+/// with the mirror it is on.
 #[test]
 fn gc_inputs_dry_run_frees_and_asks_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -139,8 +135,7 @@ fn gc_inputs_dry_run_frees_and_asks_nothing() -> Result {
     Ok(())
 }
 
-/// freeing raw input takes a yes: a script without `--yes` gets `unconfirmed` with what a yes
-/// would free and no command to run, since only a person may agree, and nothing changes.
+/// a script gets `unconfirmed`, with what a yes would free and no fix, as only a person may agree.
 #[test]
 fn gc_inputs_needs_yes_without_a_terminal() -> Result {
     let sandbox = Sandbox::new()?;
@@ -168,7 +163,7 @@ fn gc_inputs_needs_yes_without_a_terminal() -> Result {
     Ok(())
 }
 
-/// at a terminal, gc shows what it would free and asks; no keeps everything as it was.
+/// the question at a terminal shows what gc would free.
 #[cfg(target_os = "linux")]
 #[test]
 fn no_at_the_question_frees_nothing() -> Result {
@@ -189,9 +184,8 @@ fn no_at_the_question_frees_nothing() -> Result {
     Ok(())
 }
 
-/// what freeing costs, end to end: the project still syncs and builds as it is, while a check
-/// that runs clean again takes iris back from the mirror, offline, and without the mirror has
-/// nowhere to turn.
+/// the project still syncs and builds offline, while a check that runs clean again needs the
+/// mirror, without which it has nowhere to turn.
 #[test]
 fn a_check_after_gc_inputs_takes_the_raw_input_back_from_the_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -249,9 +243,8 @@ fn a_check_after_gc_inputs_takes_the_raw_input_back_from_the_mirror() -> Result 
     Ok(())
 }
 
-/// a dataset's name is its folder on every machine that syncs the project, so a name windows
-/// keeps for a device is refused wherever data.toml or a cloned data.lock gives it, before any
-/// request or write, while the name add makes from a file called that works.
+/// a dataset's name is its folder on every machine, so neither data.toml nor a cloned data.lock
+/// may give a device name, while the name add makes from a file called that works.
 #[test]
 fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
     let sandbox = Sandbox::new()?;
@@ -319,8 +312,7 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
     Ok(())
 }
 
-/// a file name windows or a fat disk cannot store is pinned and placed here as it is, with one
-/// warning for each dataset naming its files that have one, imported, downloaded or unpacked.
+/// the files are placed here as they are, and each warning names them, imported or unpacked alike.
 #[cfg(unix)]
 #[test]
 fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Result {
@@ -355,9 +347,7 @@ fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Resul
     Ok(())
 }
 
-/// a members table left under a dataset's old name when only its own table was renamed is told
-/// as a rename to finish, not as a dataset without a ref, and once it is renamed too the pin
-/// stays without a request.
+/// once the members table is renamed too, the pin stays without a request.
 #[test]
 fn members_left_under_an_old_name_ask_to_finish_the_rename() -> Result {
     let sandbox = Sandbox::new()?;
@@ -404,8 +394,7 @@ fn members_left_under_an_old_name_ask_to_finish_the_rename() -> Result {
     Ok(())
 }
 
-/// two archives of one dataset that unpack a file to one path are refused naming both and the
-/// path, with a dataset for each beside keeping them packed.
+/// the error names the path too, and the help offers a dataset for each or keeping them packed.
 #[test]
 fn a_clash_between_two_archives_names_both() -> Result {
     let sandbox = Sandbox::new()?;
