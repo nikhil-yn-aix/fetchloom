@@ -278,7 +278,10 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
             path.display()
         )
     );
-    assert_eq!(document["errors"][0]["help"], "did you mean `jobs`?");
+    assert_eq!(
+        document["errors"][0]["help"],
+        "did you mean `jobs`? --no-config runs without the settings file"
+    );
     for arguments in [
         &["--version"][..],
         &["-v", "--version"],
@@ -297,6 +300,10 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
             "jobs in the settings file {} is \"0\", which is not a number from 1 to 256",
             path.display()
         )
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "remove jobs from the settings file to use the default of 8, or set it to a number from 1 to 256; --no-config runs without the settings file"
     );
     // the variable wins over the file, so it also works around a bad value there
     let output = sandbox

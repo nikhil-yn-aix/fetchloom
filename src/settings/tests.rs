@@ -219,6 +219,30 @@ fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {
     assert!(!error.message.contains("hunter2"), "{}", error.message);
 }
 
+/// a setting only its variable sets, as threads, is refused in the file by that variable's name,
+/// rather than as no setting at all, which `fetchloom settings` lists it as.
+#[test]
+fn a_key_only_a_variable_sets_is_named_with_that_variable() {
+    let refused = file("threads = 4\n").unwrap_err();
+    assert_eq!(refused.kind, Kind::Usage);
+    assert_eq!(
+        refused.message,
+        "threads is set by FETCHLOOM_THREADS, not the settings file /home/ada/.config/fetchloom/settings.toml"
+    );
+    assert_eq!(
+        refused.help.as_deref(),
+        Some("remove threads from the settings file and set FETCHLOOM_THREADS instead")
+    );
+    let split = file("split = true\n").unwrap_err();
+    assert!(
+        split
+            .message
+            .starts_with("split is set by FETCHLOOM_SPLIT, "),
+        "{}",
+        split.message
+    );
+}
+
 /// an unknown key far from every setting gets the list of settings.
 #[test]
 fn a_mistyped_key_is_told_the_setting_it_is_near() {

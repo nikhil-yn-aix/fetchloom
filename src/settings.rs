@@ -305,6 +305,19 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
         .into_iter()
         .map(|(key, value)| {
             if !KEYS.iter().any(|(known, _)| *known == key) {
+                let variable = format!("FETCHLOOM_{}", key.to_ascii_uppercase());
+                if OTHERS.contains(&variable.as_str()) {
+                    return Err(Error::new(
+                        Kind::Usage,
+                        format!(
+                            "{key} is set by {variable}, not the settings file {}",
+                            path.display()
+                        ),
+                    )
+                    .help(format!(
+                        "remove {key} from the settings file and set {variable} instead"
+                    )));
+                }
                 let error = invalid(format!(
                     "the settings file {} has \"{key}\", which is not a setting",
                     path.display()

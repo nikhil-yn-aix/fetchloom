@@ -34,6 +34,9 @@ struct Shown {
     /// the value as a person reads it.
     #[serde(skip)]
     said: String,
+    /// whether only its variable sets it, never the settings file.
+    #[serde(skip)]
+    only_variable: bool,
 }
 
 #[derive(Serialize)]
@@ -186,6 +189,7 @@ fn rows(context: &Context) -> Vec<Shown> {
             || "none: set FETCHLOOM_CACHE".to_owned(),
             |path| path.display().to_string(),
         ),
+        only_variable: false,
     });
     shown.push(count("jobs", settings.jobs.value, settings.jobs.origin));
     shown.push(count(
@@ -204,6 +208,7 @@ fn rows(context: &Context) -> Vec<Shown> {
         origin: vec![settings.timeout.origin],
         variable: "FETCHLOOM_TIMEOUT",
         said: format!("{} s", settings.timeout.value.as_secs()),
+        only_variable: false,
     });
     shown.push(size("ask_above", settings.ask_above));
     shown.push(size("memory", settings.memory));
@@ -243,6 +248,7 @@ fn rows(context: &Context) -> Vec<Shown> {
         origin: vec![settings.mirrors_only.origin],
         variable: crate::settings::variable("mirrors_only"),
         said: settings.mirrors_only.value.to_string(),
+        only_variable: false,
     });
     let push_to = settings.push_to.value.as_ref();
     shown.push(Shown {
@@ -251,6 +257,7 @@ fn rows(context: &Context) -> Vec<Shown> {
         origin: vec![settings.push_to.origin],
         variable: crate::settings::variable("push_to"),
         said: push_to.map_or_else(|| "none".to_owned(), |folder| folder.display().to_string()),
+        only_variable: false,
     });
     shown.push(build_floor);
     shown.extend(variables(context));
@@ -276,6 +283,7 @@ fn floor(settings: &crate::settings::Settings, cache: Option<&std::path::Path>) 
         origin: vec![origin],
         variable: crate::settings::variable("build_floor"),
         said: units::size(value),
+        only_variable: false,
     }
 }
 
@@ -302,6 +310,7 @@ fn variables(context: &Context) -> Vec<Shown> {
         }],
         variable: "FETCHLOOM_THREADS",
         said: threads.to_string(),
+        only_variable: true,
     });
     shown.push(Shown {
         name: "rate",
@@ -315,6 +324,7 @@ fn variables(context: &Context) -> Vec<Shown> {
             || "no limit".to_owned(),
             |rate| format!("{}/s", units::size(rate.per_second())),
         ),
+        only_variable: true,
     });
     let (mode, said) = match context.split {
         Splitting::Never => ("never", "never"),
@@ -327,6 +337,7 @@ fn variables(context: &Context) -> Vec<Shown> {
         origin: vec![from_env("FETCHLOOM_SPLIT")],
         variable: "FETCHLOOM_SPLIT",
         said: said.to_owned(),
+        only_variable: true,
     });
     let accessible = crate::settings::is_on(&var, "FETCHLOOM_ACCESSIBLE");
     shown.push(Shown {
@@ -335,6 +346,7 @@ fn variables(context: &Context) -> Vec<Shown> {
         origin: vec![from_env("FETCHLOOM_ACCESSIBLE")],
         variable: "FETCHLOOM_ACCESSIBLE",
         said: accessible.to_string(),
+        only_variable: true,
     });
     shown
 }
@@ -349,6 +361,7 @@ where
         origin: vec![origin],
         variable: crate::settings::variable(name),
         said: value.try_into().map(units::grouped).unwrap_or_default(),
+        only_variable: false,
     }
 }
 
@@ -374,6 +387,7 @@ fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Vec<Ori
         value: json!(items),
         origin,
         variable: crate::settings::variable(name),
+        only_variable: false,
     }
 }
 
@@ -407,6 +421,7 @@ fn size(name: &'static str, set: Set<u64>) -> Shown {
         origin: vec![set.origin],
         variable: crate::settings::variable(name),
         said: units::size(set.value),
+        only_variable: false,
     }
 }
 
@@ -417,6 +432,7 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
         origin: vec![set.origin],
         variable: crate::settings::variable("resources"),
         said: set.value.name().to_owned(),
+        only_variable: false,
     }
 }
 
@@ -425,8 +441,9 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
 const VALUE: usize = 24;
 
 /// the settings as aligned columns, one per line, for a person or for `grep`. a terminal `width`
-/// shows a home path from `~`, and too narrow leaves out the variable, `FETCHLOOM_` and the name,
-/// then puts each origin under its value.
+/// shows a home path from `~`, puts what follows a long value on a line of its own, and too
+/// narrow leaves out the variable, `FETCHLOOM_` and the name, then puts each origin under its
+/// value.
 fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()
@@ -437,15 +454,26 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
                 }
                 _ => setting.said.clone(),
             };
-            [
-                setting.name.to_owned(),
-                said,
+            // nobody set a setting only its variable sets, and the settings file cannot
+            let unset = setting.only_variable
+                && setting
+                    .origin
+                    .iter()
+                    .all(|origin| matches!(origin, Origin::Default | Origin::Machine));
+            let origin = if unset {
+                "variable only".to_owned()
+            } else {
                 setting
                     .origin
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
-                    .join(", "),
+                    .join(", ")
+            };
+            [
+                setting.name.to_owned(),
+                said,
+                origin,
                 setting.variable.to_owned(),
             ]
         })
@@ -480,7 +508,10 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
         .map(|row| {
             let mut line = format!("{:<name$}  ", row[0], name = widths[0]);
             let value = units::columns(&row[1]);
-            if value > widths[1] {
+            if value > widths[1] && width.is_none() {
+                // a pipe gets each row on one line, so `grep` finds its origin
+                let _ = write!(line, "{}  ", row[1]);
+            } else if value > widths[1] {
                 // the origin and variable go under their columns, on a line of their own
                 let _ = write!(
                     line,
@@ -528,6 +559,7 @@ mod tests {
             origin: vec![Origin::Default],
             variable,
             said: said.to_owned(),
+            only_variable: false,
         };
         let cache = "/scratch/a-very-long-group-name/someone/fetchloom-cache";
         let shown = [
@@ -535,7 +567,7 @@ mod tests {
             row("jobs", "8", "FETCHLOOM_JOBS"),
         ];
         assert_eq!(
-            table(&shown, None),
+            table(&shown, Some(120)),
             format!(
                 "cache  {cache}\n          default  FETCHLOOM_CACHE\njobs   8  default  FETCHLOOM_JOBS"
             )
@@ -559,6 +591,47 @@ mod tests {
         );
     }
 
+    /// a setting only its variable sets says so where nobody set it, and a pipe keeps each row on
+    /// one line, a long value with it, so `grep` finds its origin.
+    #[test]
+    fn a_variable_only_setting_says_so_and_a_pipe_keeps_each_row_whole() {
+        let cache = "/scratch/a-very-long-group-name/someone/fetchloom-cache";
+        let shown = [
+            Shown {
+                name: "cache",
+                value: json!(cache),
+                origin: vec![Origin::Environment],
+                variable: "FETCHLOOM_CACHE",
+                said: cache.to_owned(),
+                only_variable: false,
+            },
+            Shown {
+                name: "threads",
+                value: json!(24),
+                origin: vec![Origin::Machine],
+                variable: "FETCHLOOM_THREADS",
+                said: "24".to_owned(),
+                only_variable: true,
+            },
+            Shown {
+                name: "rate",
+                value: json!(1024),
+                origin: vec![Origin::Environment],
+                variable: "FETCHLOOM_RATE",
+                said: "1.0 KiB/s".to_owned(),
+                only_variable: true,
+            },
+        ];
+        assert_eq!(
+            table(&shown, None),
+            format!(
+                "cache    {cache}  environment    FETCHLOOM_CACHE\n\
+                 threads  24         variable only  FETCHLOOM_THREADS\n\
+                 rate     1.0 KiB/s  environment    FETCHLOOM_RATE"
+            )
+        );
+    }
+
     /// a terminal too narrow for a value and its origin side by side gets each origin under its
     /// value, so every line fits, as list leaves out columns to fit.
     #[test]
@@ -569,6 +642,7 @@ mod tests {
             origin: vec![origin],
             variable: "FETCHLOOM_SPLIT",
             said: said.to_owned(),
+            only_variable: false,
         };
         let shown = [
             row("azure_containers", "none", Origin::Default),

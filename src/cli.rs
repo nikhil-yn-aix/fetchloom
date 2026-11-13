@@ -356,6 +356,23 @@ fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Erro
     }
 }
 
+/// `error`, when it is about the settings file, which every message about it names, with how to
+/// run without the file, since a bad one stops every named command, `settings` included.
+fn bypassable(mut error: Error, var: crate::settings::Var<'_>) -> Error {
+    let named = File::bypassed(var, "")
+        .path
+        .is_some_and(|path| error.message.contains(&path.display().to_string()));
+    if named {
+        let help = match error.help.as_deref() {
+            Some(help) if help.ends_with('?') => format!("{help} "),
+            Some(help) => format!("{help}; "),
+            None => String::new(),
+        };
+        error.help = Some(format!("{help}--no-config runs without the settings file").into());
+    }
+    error
+}
+
 /// what leaves the settings file unread: `--no-config`, as `flag` says, or `FETCHLOOM_NO_CONFIG`.
 fn no_config(flag: bool, value: Option<&std::ffi::OsStr>) -> Result<Option<&'static str>, Error> {
     if flag {
@@ -653,7 +670,7 @@ pub(crate) fn run() -> ExitCode {
     }
     let file = match settings_file(global.no_config, &var) {
         Ok(file) => file,
-        Err(error) => return finish::<()>(&context, name, Err(error), started),
+        Err(error) => return finish::<()>(&context, name, Err(bypassable(error, &var)), started),
     };
     let _ = SETTINGS_FILE.set(file.clone());
     match Settings::read(&var, file, Machine::read()) {
@@ -664,7 +681,7 @@ pub(crate) fn run() -> ExitCode {
             share(&settings, context.threads);
             context.settings = settings;
         }
-        Err(error) => return finish::<()>(&context, name, Err(error), started),
+        Err(error) => return finish::<()>(&context, name, Err(bypassable(error, &var)), started),
     }
     match fetch::mirrors::read(&global.mirror, &context.settings) {
         Ok(mirrors) => context.mirrors = fetch::mirrors::Mirrored::new(mirrors),
