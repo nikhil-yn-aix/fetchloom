@@ -544,6 +544,15 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
         json(&output)
     };
     let untracked = run(&["--json", "add", "./flowers"])?;
+    // a drive that cannot link, as ci's fat32 and exfat passes have, adds its copy warning too
+    let noted = |document: &serde_json::Value| {
+        let mut kept = document.clone();
+        if let Some(warnings) = kept["warnings"].as_array_mut() {
+            warnings.retain(|warning| warning["kind"] != "place.copied");
+        }
+        kept
+    };
+    let untracked = noted(&untracked);
     assert_eq!(untracked["warnings"][0]["kind"], "git.import_in_tree");
     assert_eq!(
         warned(&untracked),
@@ -551,7 +560,7 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
             "./flowers is still in the project, and git will take it; delete it, or add /flowers/ to .gitignore"
         ]
     );
-    let tracked = run(&["--json", "add", "./tracked"])?;
+    let tracked = noted(&run(&["--json", "add", "./tracked"])?);
     assert_eq!(
         warned(&tracked),
         [
@@ -561,7 +570,7 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     let mut ignore = fs::read_to_string(work.join(".gitignore"))?;
     ignore.push_str("/flowers/\n");
     fs::write(work.join(".gitignore"), ignore)?;
-    let ignored = run(&["--json", "add", "./flowers"])?;
+    let ignored = noted(&run(&["--json", "add", "./flowers"])?);
     assert_eq!(warned(&ignored), Vec::<String>::new());
     Ok(())
 }
