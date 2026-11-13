@@ -38,6 +38,17 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(len([name for name in made[0] if name.startswith("src/files/")]), 10)
         self.assertEqual(made[0]["src/links.txt"].decode().splitlines()[0], "http://127.0.0.1:9/links/l00000.bin")
 
+    def test_the_shared_files_are_made_again_only_for_another_scale_seed_or_origin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            made = recheck.sources(root, 0.0001, 7, "http://127.0.0.1:9")
+            kept = root / "www" / "kept"
+            kept.write_text("")
+            self.assertEqual(recheck.sources(root, 0.0001, 7, "http://127.0.0.1:9"), made)
+            self.assertTrue(kept.exists())
+            recheck.sources(root, 0.0001, 7, "http://127.0.0.1:10")
+            self.assertFalse(kept.exists())
+
     def test_the_drop_names_one_file_of_every_dataset(self):
         with tempfile.TemporaryDirectory() as folder:
             project = Path(folder)

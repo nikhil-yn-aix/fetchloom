@@ -67,11 +67,13 @@ class ServerTests(unittest.TestCase):
 
 
 class SummaryTests(unittest.TestCase):
-    def test_ratios_pair_rounds_and_name_a_clear_win(self):
+    def test_ratios_pair_rounds_and_name_a_clear_win_or_loss(self):
         result = native.summarize([2.0, 2.2, 1.8, 2.1, 1.9], [1.0, 1.1, 0.9, 1.05, 0.95], "seed")
         self.assertAlmostEqual(result["ratio"], 0.5)
         self.assertEqual(result["verdict"], "candidate faster")
         self.assertEqual(result["pairs"], 5)
+        result = native.summarize([1.0, 1.1, 0.9, 1.05, 0.95], [2.0, 2.2, 1.8, 2.1, 1.9], "seed")
+        self.assertEqual((result["ratio"], result["verdict"]), (2.0, "candidate slower"))
 
     def test_equal_builds_show_no_clear_difference(self):
         result = native.summarize([1.0, 1.1, 0.9, 1.0, 1.05], [1.05, 1.0, 0.95, 1.0, 1.1], "seed")
@@ -111,7 +113,8 @@ class ProbeTests(unittest.TestCase):
         with mock.patch.object(native.platform, "system", return_value="Windows"), \
              mock.patch.object(native, "probe", side_effect=lambda argv: said[argv[2] if argv[1] == "fsinfo" else argv[1]]):
             self.assertEqual(native.filesystem(Path("D:/bench")), dict(type="ReFS", dev_drive="This is a trusted developer volume."))
-        mounts = ("/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n"
+        # mount's listing may hold a line that names no mount
+        mounts = ("\n/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n"
                   "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, nobrowse)\n"
                   "map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)\n"
                   "/dev/disk5s1 on /Volumes/Scratch (exfat, local, nodev, nosuid, noowners)\n")

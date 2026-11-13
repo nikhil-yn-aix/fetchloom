@@ -49,19 +49,23 @@ class TimerTests(unittest.TestCase):
 
     def test_timer_setup_failure_kills_reaps_and_restores_handler(self):
         previous = signal.getsignal(signal.SIGALRM)
-        with tempfile.TemporaryDirectory() as folder, \
-             mock.patch.object(run.os, "posix_spawn", return_value=987654), \
-             mock.patch.object(run.os, "wait4", return_value=(987654, 0, USAGE)) as wait, \
-             mock.patch.object(run.os, "killpg") as kill, \
-             mock.patch.object(run.signal, "signal") as handler, \
-             mock.patch.object(run.signal, "setitimer", side_effect=[ValueError("timer setup failed"), None]), \
-             mock.patch.object(lab, "end_group"):
-            root = Path(folder)
-            with self.assertRaisesRegex(ValueError, "timer setup failed"):
-                run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log")
-        kill.assert_called_with(987654, signal.SIGKILL)
-        wait.assert_called_once_with(987654, 0)
-        self.assertEqual(handler.call_args, mock.call(signal.SIGALRM, previous))
+        # gone: the command ended and was reaped before the cleanup reached it
+        for gone in (False, True):
+            with self.subTest(gone=gone), tempfile.TemporaryDirectory() as folder, \
+                 mock.patch.object(run.os, "posix_spawn", return_value=987654), \
+                 mock.patch.object(run.os, "wait4", return_value=(987654, 0, USAGE),
+                                   side_effect=ChildProcessError if gone else None) as wait, \
+                 mock.patch.object(run.os, "killpg", side_effect=ProcessLookupError if gone else None) as kill, \
+                 mock.patch.object(run.signal, "signal") as handler, \
+                 mock.patch.object(run.signal, "setitimer", side_effect=[ValueError("timer setup failed"), None]), \
+                 mock.patch.object(lab, "end_group") as ended:
+                root = Path(folder)
+                with self.assertRaisesRegex(ValueError, "timer setup failed"):
+                    run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log")
+            kill.assert_called_with(987654, signal.SIGKILL)
+            wait.assert_called_once_with(987654, 0)
+            ended.assert_called_once_with(987654)
+            self.assertEqual(handler.call_args, mock.call(signal.SIGALRM, previous))
 
     def test_spawn_failure_restores_cwd_and_leaves_no_usage_file(self):
         before = os.getcwd()
@@ -74,7 +78,8 @@ class TimerTests(unittest.TestCase):
         self.assertEqual(os.getcwd(), before)
 
     def test_alarm_escalation_uses_fixed_events(self):
-        for interrupt in (None, 10):
+        # gone: each stage finds what it would kill already ended
+        for interrupt, gone in ((None, False), (10, False), (None, True)):
             handler = {}
             def install(signum, callback):
                 handler[signum] = callback
@@ -84,11 +89,11 @@ class TimerTests(unittest.TestCase):
                 alarm(None, None)
                 alarm(None, None)
                 return 987654, 9, USAGE
-            with self.subTest(interrupt=interrupt), tempfile.TemporaryDirectory() as folder, \
+            with self.subTest(interrupt=interrupt, gone=gone), tempfile.TemporaryDirectory() as folder, \
                  mock.patch.object(run.os, "posix_spawn", return_value=987654), \
                  mock.patch.object(run.os, "wait4", side_effect=wait), \
-                 mock.patch.object(run.os, "killpg") as kill_group, \
-                 mock.patch.object(run.os, "kill") as kill_child, \
+                 mock.patch.object(run.os, "killpg", side_effect=[None, ProcessLookupError] if gone else None) as kill_group, \
+                 mock.patch.object(run.os, "kill", side_effect=ProcessLookupError if gone else None) as kill_child, \
                  mock.patch.object(run, "group", return_value=[987654, 987655]), \
                  mock.patch.object(run.signal, "signal", side_effect=install), \
                  mock.patch.object(run.signal, "setitimer") as timer, \
@@ -105,6 +110,28 @@ class TimerTests(unittest.TestCase):
             self.assertEqual(timer.call_args_list[0], mock.call(signal.ITIMER_REAL, 18 if interrupt is None else 8))
             self.assertIn(mock.call(signal.ITIMER_REAL, 5), timer.call_args_list)
             self.assertIn(mock.call(signal.ITIMER_REAL, 1), timer.call_args_list)
+
+    def test_a_command_gone_by_its_deadline_is_not_a_timeout(self):
+        handler = {}
+
+        def wait(*args):
+            handler[signal.SIGALRM](None, None)
+            return 987654, 0, USAGE
+
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(run.os, "posix_spawn", return_value=987654), \
+             mock.patch.object(run.os, "wait4", side_effect=wait), \
+             mock.patch.object(run.os, "killpg", side_effect=ProcessLookupError) as kill, \
+             mock.patch.object(run.signal, "signal", side_effect=handler.__setitem__), \
+             mock.patch.object(run.signal, "setitimer") as timer, \
+             mock.patch.object(lab, "end_group") as ended:
+            root = Path(folder)
+            result = run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log", 20)
+        self.assertEqual((result["timeout"], result["interruption_sent"], result["exit_code"]), (False, False, 0))
+        kill.assert_called_once_with(987654, signal.SIGINT)
+        # nothing escalates, and no group is waited out
+        self.assertEqual(timer.call_args_list[1:], [mock.call(signal.ITIMER_REAL, 0)])
+        ended.assert_not_called()
 
 
 class ProvenanceTests(unittest.TestCase):
@@ -280,6 +307,14 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(run.repo_head(), "unavailable")
         self.assertEqual([argv[0] for argv in commands], ["wslpath", "git", "git.exe"])
         self.assertEqual(commands[-1], ["git.exe", "-C", "C:\\fetchloom", "rev-parse", "HEAD"])
+        commands.clear()
+        with mock.patch.object(run.shutil, "which", return_value=None), \
+             mock.patch.object(run.subprocess, "check_output", side_effect=output):
+            self.assertEqual(run.repo_head(), "unavailable")
+        self.assertEqual([argv[0] for argv in commands], ["git"])
+        with mock.patch.object(run.shutil, "which", return_value=None), \
+             mock.patch.object(run.subprocess, "check_output", return_value="04966698\n"):
+            self.assertEqual(run.repo_head(), "04966698")
 
     def test_the_package_inventory_says_what_is_installed_missing_or_unreadable(self):
         listed = "curl\tinstalled\t8.5.0\nwget\tconfig-files\t1.21\n"
@@ -337,6 +372,26 @@ class HelperTests(unittest.TestCase):
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             process.stdout.close()
+
+    def test_free_space_is_what_a_user_without_root_may_still_write(self):
+        # 3 available fragments of 4 KiB; the 50 free blocks include those kept for root
+        shown = os.statvfs_result((8192, 4096, 100, 50, 3, 10, 5, 5, 0, 255))
+        with mock.patch.object(run.os, "statvfs", return_value=shown) as statvfs:
+            self.assertEqual(run.free_bytes("/lab"), 12288)
+        statvfs.assert_called_once_with("/lab")
+
+    def test_a_process_group_is_read_from_the_fields_after_each_command_name(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = Path(folder)
+            # a name may hold ") ", and the field before the group is the parent, here 77 too
+            for entry, line in [("12", "12 (a) b) S 1 77 77 0"), ("13", "13 (sh) S 77 78 78 0"), ("14", "14 (cut"),
+                                ("self", "15 (fl) S 1 77 77 0")]:
+                (proc / entry).mkdir()
+                (proc / entry / "stat").write_text(line)
+            # a process that ended between the listing and the read
+            (proc / "16").mkdir()
+            with mock.patch.object(run, "Path", lambda path: proc if path == "/proc" else Path(path)):
+                self.assertEqual(run.group(77), [12])
 
     def test_a_run_without_gnu_time_is_refused_before_it_starts(self):
         with mock.patch.object(run, "TIME", "/no/such/time"), mock.patch.object(run.os, "posix_spawn") as spawn, \
@@ -399,6 +454,12 @@ class OneRunTests(unittest.TestCase):
         self.assertEqual(row["download_ratio"], 6 / 4)
         self.assertEqual(row["checks"], ["no expected outputs", "first attempt ended before the prescribed interruption"])
         self.assertEqual(row["status"], "failed")
+        attempts = iter([dict(wall_seconds=10, user_seconds=1, sys_seconds=2, maxrss_bytes=7, exit_code=130, timeout=False,
+                              interruption_sent=True),
+                         dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, exit_code=0, timeout=False,
+                              interruption_sent=False)])
+        row = self.one_run(Downloader("unused"), measured, dict(self.case, id="s7", profile="home"))
+        self.assertEqual(row["checks"], ["no expected outputs"])
 
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):

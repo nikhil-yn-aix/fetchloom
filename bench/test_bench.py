@@ -1,7 +1,11 @@
 import argparse
+import contextlib
 import errno
+import io
+import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -569,6 +573,21 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in (self.work / "first-project").iterdir()), ["s2"])
         self.assertEqual(sorted(path.name for path in (self.work / "project").iterdir()), ["s5"])
 
+    def test_dvc_pulls_into_a_copy_of_its_prepared_project_with_its_cache_in_the_work_folder(self):
+        prepared = self.work / "prepared"
+        (prepared / "dvc" / ".dvc").mkdir(parents=True)
+        (prepared / "dvc" / "data.dvc").write_text("outs: []\n")
+        workdir = self.work / "run"
+        dvc = tools.Dvc("unused")
+        with mock.patch.object(tools.subprocess, "run") as configured:
+            dvc.prepare(dict(id="s1", prepared=str(prepared)), workdir)
+        self.assertEqual((workdir / "project/data.dvc").read_text(), "outs: []\n")
+        # the cache is in the measured folder, so its disk use counts as fetchloom's does
+        self.assertEqual(configured.call_args.args[0], ["dvc", "config", "cache.dir", str(workdir / "cache/dvc")])
+        self.assertEqual((configured.call_args.kwargs["cwd"], configured.call_args.kwargs["check"]), (workdir / "project", True))
+        self.assertEqual(dvc.cwd(workdir), workdir / "project")
+        self.assertEqual(dvc.command(dict(id="s1"), workdir), ["dvc", "pull", "-j", "4"])
+
 
 class LabHelperTests(unittest.TestCase):
     def test_cpu_lists_name_available_cpus(self):
@@ -612,6 +631,8 @@ class LabHelperTests(unittest.TestCase):
         with mock.patch.object(lab.os, "geteuid", return_value=1000), \
              self.assertRaisesRegex(SystemExit, "the lab needs root for namespaces, mounts and drop_caches"):
             lab.require_root()
+        with mock.patch.object(lab.os, "geteuid", return_value=0):
+            self.assertIsNone(lab.require_root())
 
     def test_the_lab_writes_out_its_root_and_the_test_filesystems_mounted_under_it(self):
         root = Path("/srv/fl-bench")
@@ -621,6 +642,151 @@ class LabHelperTests(unittest.TestCase):
         with self.assertRaises(OSError) as raised:
             lab._syncfs(-1)
         self.assertEqual(raised.exception.errno, errno.EBADF)
+        with tempfile.TemporaryFile() as written:
+            self.assertIsNone(lab._syncfs(written.fileno()))
+
+    def test_dropping_caches_writes_out_the_lab_first_then_reads_the_given_files_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            drop, served = root / "drop_caches", root / "served.bin"
+            served.write_bytes(b"abc")
+            flushed = []
+            with mock.patch.object(lab, "require_root"), mock.patch.object(lab, "DROP", drop), \
+                 mock.patch.object(lab, "filesystems", return_value=[root]), \
+                 mock.patch.object(lab, "flush", side_effect=lambda *paths: flushed.append((paths, drop.exists()))):
+                lab.drop_caches([served])
+                # the kernel drops only clean pages, so the writes go out before the drop
+                self.assertEqual((flushed, drop.read_text()), ([((root,), False)], "3\n"))
+                with self.assertRaises(FileNotFoundError):
+                    lab.drop_caches([root / "gone.bin"])
+
+
+class LabLifecycleTests(unittest.TestCase):
+    """setup, teardown and profiles, with the machine paths moved to a scratch folder and ip and tc
+    stood in."""
+
+    def setUp(self):
+        self.fresh()
+
+    def fresh(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root, self.ca, self.hosts = Path(folder.name) / "lab", Path(folder.name) / "fl-bench.crt", Path(folder.name) / "hosts"
+        self.hosts.write_text("127.0.0.1 localhost\n")
+
+    @contextlib.contextmanager
+    def machine(self, networks="", link=1, shown=None):
+        """the lab's paths in the scratch folder; ip lists ``networks``, ``link`` is the exit of a
+        look for the client link, and tc shows ``shown`` for each device."""
+        def show(argv, **_):
+            return shown[argv[-2]] if argv[-5:-2] == ["qdisc", "show", "dev"] else networks
+        with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "CA", self.ca), \
+             mock.patch.object(lab, "HOSTS", self.hosts), mock.patch.object(lab, "require_root"), \
+             mock.patch.object(lab.subprocess, "check_output", side_effect=show), \
+             mock.patch.object(lab.subprocess, "run", return_value=subprocess.CompletedProcess([], link, "", "")):
+            yield
+
+    def test_setup_refuses_to_replace_what_it_did_not_make(self):
+        for name, made, networks, link, said in [
+            ("a folder with files", lambda: (self.root / "results").mkdir(parents=True), "", 1, "refusing to overwrite unowned {root}$"),
+            ("a ca", lambda: self.ca.write_text("ca"), "", 1, "lab.flb or its CA already exists without an ownership marker"),
+            ("a hosts line", lambda: self.hosts.write_text(lab.HOST_LINE), "", 1, "lab.flb or its CA already exists"),
+            ("a namespace", lambda: None, f"{lab.NS} (id: 0)\n", 1, "unowned benchmark network already exists"),
+            ("a link", lambda: None, "", 0, "unowned benchmark network already exists"),
+        ]:
+            with self.subTest(name):
+                self.fresh()
+                made()
+                with self.machine(networks, link), mock.patch.object(lab, "call") as call, \
+                     self.assertRaisesRegex(SystemExit, said.format(root=self.root)):
+                    lab.setup()
+                call.assert_not_called()
+                self.assertFalse((self.root / "owned.json").exists())
+
+    def test_a_setup_step_that_fails_tears_down_the_lab_it_replaced_and_what_it_made(self):
+        self.root.mkdir()
+        (self.root / "owned.json").write_text("{}")
+        seen = []
+
+        def teardown():
+            seen.append(json.loads((self.root / "owned.json").read_text()))
+            shutil.rmtree(self.root)
+
+        with self.machine(), mock.patch.object(lab, "teardown", side_effect=teardown), \
+             mock.patch.object(lab, "call", side_effect=subprocess.CalledProcessError(1, "openssl")) as call, \
+             self.assertRaises(subprocess.CalledProcessError):
+            lab.setup(image_gib=3)
+        # the old lab first, then the new one, whose marker lets teardown know it is the lab's
+        self.assertEqual(seen, [{}, {"image_gib": 3}])
+        self.assertEqual(call.call_args.args[0][:2], ["openssl", "req"])
+        self.assertEqual(self.hosts.read_text(), "127.0.0.1 localhost\n")
+
+    def test_teardown_removes_what_setup_made_and_leaves_the_rest_of_the_machine(self):
+        with self.machine(), contextlib.redirect_stdout(io.StringIO()) as said:
+            lab.teardown()
+        self.assertEqual(said.getvalue(), "lab is already absent\n")
+        (self.root / "fs/ext4").mkdir(parents=True)
+        (self.root / "owned.json").write_text("{}")
+        self.ca.write_text("ca")
+        self.hosts.write_text("127.0.0.1 localhost\n" + lab.HOST_LINE + "10.0.0.9 other\n")
+        steps = []
+
+        def ran(argv, **_):
+            steps.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "4242 4243\n" if argv[:3] == ["ip", "netns", "pids"] else "", "")
+
+        with self.machine(), mock.patch.object(lab.subprocess, "run", side_effect=ran), \
+             mock.patch.object(lab, "call", side_effect=lambda argv, **_: steps.append(argv)), \
+             mock.patch.object(lab.os.path, "ismount", side_effect=lambda path: Path(path).name == "ext4"), \
+             mock.patch.object(lab.os, "kill", side_effect=[None, ProcessLookupError]) as kill, \
+             mock.patch.object(lab.time, "sleep"), contextlib.redirect_stdout(io.StringIO()) as said:
+            lab.teardown()
+        self.assertEqual(steps, [["umount", self.root / "fs/ext4"], ["ip", "netns", "pids", lab.NS], ["ip", "netns", "del", lab.NS],
+                                 ["ip", "link", "del", lab.CLIENT], ["update-ca-certificates"]])
+        self.assertEqual(kill.call_args_list, [mock.call(4242, 15), mock.call(4243, 15)])
+        self.assertEqual(self.hosts.read_text(), "127.0.0.1 localhost\n10.0.0.9 other\n")
+        self.assertEqual((self.ca.exists(), self.root.exists()), (False, False))
+        self.assertEqual(said.getvalue(), "lab removed, including its results; copy wanted results before teardown\n")
+
+    def test_a_profile_starts_from_no_shaping_and_must_take_at_both_ends(self):
+        with self.machine(), mock.patch.object(lab, "call") as call, \
+             self.assertRaisesRegex(RuntimeError, "run lab.py setup before changing a profile"):
+            lab.profile("far")
+        call.assert_not_called()
+        self.root.mkdir()
+        (self.root / "owned.json").write_text("{}")
+        server = ["ip", "netns", "exec", lab.NS]
+        plain = "qdisc netem 8001: root refcnt 2 limit 1000 delay 75ms loss 1%"
+        for name, shown, said in [("far", {lab.CLIENT: plain, lab.SERVER: plain + " rate 50Mbit"}, None),
+                                  ("far", {lab.CLIENT: plain, lab.SERVER: plain}, f"{lab.SERVER} did not take the far profile: {plain}"),
+                                  # a cap the last profile set and this one leaves out
+                                  ("lan", {lab.CLIENT: plain, lab.SERVER: plain + " rate 50Mbit"}, f"{lab.SERVER} did not take the lan profile")]:
+            steps = []
+            with self.subTest(name=name, said=said), self.machine(shown=shown), \
+                 mock.patch.object(lab.subprocess, "run", side_effect=lambda argv, **_: steps.append(argv)), \
+                 mock.patch.object(lab, "call", side_effect=lambda argv, **_: steps.append(argv)):
+                if said:
+                    with self.assertRaisesRegex(RuntimeError, said):
+                        lab.profile(name)
+                else:
+                    lab.profile(name)
+                    self.assertEqual(steps, [["tc", "qdisc", "del", "dev", lab.CLIENT, "root"],
+                                             ["tc", "qdisc", "add", "dev", lab.CLIENT, "root", "netem", "delay", "75ms", "loss", "1%"],
+                                             [*server, "tc", "qdisc", "del", "dev", lab.SERVER, "root"],
+                                             [*server, "tc", "qdisc", "add", "dev", lab.SERVER, "root", "netem", "delay", "75ms",
+                                              "loss", "1%", "rate", "50mbit"]])
+
+    def test_the_command_sets_up_tears_down_or_changes_the_profile_under_the_lock(self):
+        for argv, calls in [(["setup", "--image-gib", "3"], [mock.call.setup(3, (1,))]),
+                            (["teardown"], [mock.call.teardown()]),
+                            (["profile", "--profile", "far"], [mock.call.exclusive(), mock.call.exclusive().__enter__(),
+                                                               mock.call.profile("far"), mock.call.exclusive().__exit__(None, None, None)])]:
+            stood = mock.MagicMock()
+            with self.subTest(argv[0]), mock.patch.object(sys, "argv", ["lab.py", *argv, "--cpus", "1"]), \
+                 mock.patch.object(lab.os, "sched_getaffinity", return_value={0, 1}), \
+                 mock.patch.multiple(lab, setup=stood.setup, teardown=stood.teardown, profile=stood.profile, exclusive=stood.exclusive):
+                lab.main()
+            self.assertEqual(stood.mock_calls, calls)
 
 
 if __name__ == "__main__":

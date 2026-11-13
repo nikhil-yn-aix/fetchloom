@@ -81,6 +81,28 @@ class CpuTests(unittest.TestCase):
             self.assertEqual(set_mask.call_args_list, [mock.call(tid, (1, 2)) for tid in (31, 32, 33)])
             self.assertEqual(result, {"31": [1, 2], "32": [1, 2], "33": [1, 2]})
 
+    def test_a_process_gone_while_pinning_is_passed_over_and_a_mask_that_did_not_take_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = Path(folder)
+            for pid in (31, 32):
+                (proc / str(pid) / "task" / str(pid)).mkdir(parents=True)
+                (proc / str(pid) / "comm").write_text("nginx\n")
+
+            def pin(tid, cpus):
+                if tid == 32:
+                    raise ProcessLookupError
+
+            # 30 ended after ip listed it, and 32 before its thread was pinned
+            with mock.patch.object(lab.subprocess, "check_output", return_value="30\n31\n32\n"), \
+                 mock.patch.object(lab.os, "sched_setaffinity", side_effect=pin), \
+                 mock.patch.object(lab.os, "sched_getaffinity", return_value={1, 2}):
+                self.assertEqual(lab.pin_server((2, 1), proc=proc), {"31": [1, 2]})
+            with mock.patch.object(lab.subprocess, "check_output", return_value="31\n"), \
+                 mock.patch.object(lab.os, "sched_setaffinity"), \
+                 mock.patch.object(lab.os, "sched_getaffinity", return_value={0, 1, 2}), \
+                 self.assertRaisesRegex(RuntimeError, r"nginx thread 31 has CPU mask \[0, 1, 2\], expected \[1, 2\]"):
+                lab.pin_server((2, 1), proc=proc)
+
     def test_missing_nginx_cannot_silently_leave_the_server_unpinned(self):
         with mock.patch.object(lab.subprocess, "check_output", return_value=""):
             with self.assertRaisesRegex(RuntimeError, "nginx"):
@@ -139,6 +161,9 @@ class IslandCheckTests(unittest.TestCase):
             root = Path(folder)
             args = SimpleNamespace(target=root, ready=root / "ready", worktree=root, cpus=(0,))
             with self.assertRaises(FileNotFoundError):
+                island.build_load(args)
+            island.write_state(root / ".fl-bench-island.json", dict(output=str(root / "another-check"), worktree=str(root)))
+            with self.assertRaisesRegex(ValueError, "compiler target does not belong to this island check"):
                 island.build_load(args)
             compile.assert_not_called()
 
@@ -262,6 +287,12 @@ class CampaignTests(unittest.TestCase):
             self.campaign(f"import time\ntime.sleep(1)\nopen({str(finished)!r}, 'w').close()", load=ended)
         # stopped as soon as the load was seen to end, not when the campaign was done
         self.assertFalse(finished.exists())
+        (self.root / "quiet-island").rename(self.root / "second")
+        # the load ends as the campaign ends, after the last look while the campaign ran
+        late = mock.Mock(returncode=4)
+        late.poll.side_effect = lambda: 4 if finished.exists() else None
+        with self.assertRaisesRegex(RuntimeError, "compiler load ended during measurement; exit 4"):
+            self.campaign(f"import time\ntime.sleep(.3)\nopen({str(finished)!r}, 'w').close()", load=late)
 
     def test_a_process_that_will_not_stop_is_killed(self):
         island.stop(None)
@@ -293,6 +324,86 @@ class CampaignTests(unittest.TestCase):
         state = json.loads(ready.read_text())
         self.assertEqual((state["iteration"], state["cpu_affinity"], state["command"]),
                          (1, list(args.cpus), [str(cargo), "build", "--locked", "--release", "--jobs", "2", "--target-dir", str(target)]))
+
+
+class CheckTests(unittest.TestCase):
+    """a whole check, from the quiet campaigns to island.json, with each case's campaign and the
+    compiler load stood in."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name).resolve()
+        (self.root / "lab").mkdir()
+        (self.root / "source").mkdir()
+        (self.root / "fetchloom").write_bytes(b"build")
+        self.noise = self.root / "noise.json"
+        self.noise.write_text(json.dumps(dict(results=[aa(case) for case in island.DEFAULT_CASES])))
+
+    def check(self, name, ready=None, ended=None, loaded=aa, monotonic=None):
+        """the check's exit, report, campaigns and load, the load writing ``ready`` as its state or
+        having exited with ``ended``."""
+        args = SimpleNamespace(cases=None, cpus=(0, 1), build_cpus=(2, 3), rounds=20, jobs=2, effect=.03, noise_multiple=2,
+                               out=self.root / "lab" / name, target=self.root / f"target-{name}", worktree=self.root / "source",
+                               fetchloom=self.root / "fetchloom", noise=self.noise, seed=1729, cargo="cargo")
+        measured = []
+
+        def campaign_case(args, output, load=None, case=None):
+            measured.append((output.relative_to(args.out).as_posix(), load))
+            return [(aa if load is None else loaded)(case)]
+
+        load = mock.Mock(returncode=ended)
+
+        looks = []
+
+        def poll():
+            # the load reports its state by the second look after it starts
+            looks.append(load.command)
+            if ready is not None and len(looks) == 2:
+                island.write_state(Path(load.command[load.command.index("--ready") + 1]), ready)
+            return ended
+
+        load.poll.side_effect = poll
+
+        def start(command, **_):
+            load.command = command
+            return load
+
+        clock = mock.patch.object(island.time, "monotonic", side_effect=monotonic) if monotonic else contextlib.nullcontext()
+        with mock.patch.object(lab, "require_root"), mock.patch.object(lab, "ROOT", self.root / "lab"), \
+             mock.patch.object(island, "campaign_case", side_effect=campaign_case), \
+             mock.patch.object(island.subprocess, "Popen", side_effect=start), \
+             mock.patch.object(island, "stop") as stopped, clock, contextlib.redirect_stdout(io.StringIO()) as shown:
+            code = island.check(args)
+        stopped.assert_called_once_with(load)
+        report = json.loads((args.out / "island.json").read_text())
+        return code, report, measured, load, shown.getvalue()
+
+    def test_a_check_passes_when_the_loaded_island_keeps_the_quiet_noise(self):
+        state = dict(cpu_affinity=[2, 3], iteration=0)
+        code, report, measured, load, shown = self.check("holds", ready=state)
+        self.assertEqual((code, report["passed"], "error" in report), (0, True, False))
+        cases = [case.replace("/", "-") for case in island.DEFAULT_CASES]
+        self.assertEqual(measured, [(f"quiet-island/{case}", None) for case in cases] + [(f"loaded-island/{case}", load) for case in cases])
+        self.assertEqual(load.command[load.command.index("build-load"):],
+                         ["build-load", "--cpus", "2,3", "--worktree", str(self.root / "source"), "--target", str(self.root / "target-holds"),
+                          "--jobs", "2", "--cargo", "cargo", "--ready", str(self.root / "lab/holds/build-ready.json")])
+        self.assertEqual((report["build_start"], report["build_end"]), (state, state))
+        self.assertTrue(shown.startswith("quiet-island: ext4/lan/s2\n"))
+        self.assertEqual(json.loads(shown[shown.index("{"):]), report)
+        # an island that shifts a/a timings under load is a failed check, not a broken one
+        code, report, _, _, _ = self.check("drifts", ready=state, loaded=lambda case: aa(case, median_ratio=1.02))
+        self.assertEqual((code, report["passed"], "error" in report), (1, False, False))
+        self.assertTrue(all(any(reason.startswith("loaded A/A bias shifted") for reason in case["reasons"]) for case in report["cases"]))
+
+    def test_a_compiler_load_that_cannot_run_ends_the_check_with_its_reason(self):
+        for name, changes, said in [("exited", dict(ended=1), "RuntimeError: compiler load failed to start; exit 1"),
+                                    ("elsewhere", dict(ready=dict(cpu_affinity=[0, 1])), "RuntimeError: compiler load has the wrong CPU affinity"),
+                                    ("silent", dict(monotonic=[0, 61]), "RuntimeError: compiler load did not report readiness")]:
+            with self.subTest(name):
+                code, report, measured, _, _ = self.check(name, **changes)
+                self.assertEqual((code, report["passed"], report["error"]), (1, False, said))
+                self.assertTrue(all(output.startswith("quiet-island/") for output, _ in measured))
 
 
 class NoiseTests(unittest.TestCase):

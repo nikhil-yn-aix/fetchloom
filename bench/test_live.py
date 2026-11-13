@@ -13,6 +13,10 @@ class LiveTests(unittest.TestCase):
         try:
             (root / "value").write_bytes(b"abc")
             (root / "generated" / "checksums123.json").write_text("{}")
+            # what a client keeps for itself is no part of what it fetched
+            for cache in (".cache", "sub/.fetchloom"):
+                (root / cache).mkdir(parents=True)
+                (root / cache / "entry").write_bytes(b"kept")
             actual = live.fingerprint(root, client="datahugger")
             self.assertEqual(actual, {"value": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"})
             self.assertEqual(len(live.fingerprint(root)), 2)
@@ -111,6 +115,95 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "passed")
             self.assertEqual(len(json.loads((out / "meta.json").read_text())["commands"]), 2)
 
+    def campaign(self, root, argv, **patches):
+        """live.main with the lab, the services and the measuring stood in; its exit and output."""
+        import contextlib
+        import io
+        import sys
+        from unittest import mock
+        import lab
+        import live
+        import run
+        metadata = dict(commands={}, orders=[], cases=[], tool_versions={})
+        stood = dict(pin_server=mock.patch.object(lab, "pin_server", return_value={}),
+                     drop_caches=mock.patch.object(lab, "drop_caches"), flush=mock.patch.object(lab, "flush"),
+                     metadata=mock.patch.object(run, "metadata", return_value=metadata),
+                     versions=mock.patch.object(live, "versions", return_value={}),
+                     free_bytes=mock.patch.object(run, "free_bytes", return_value=100))
+        stood.update(patches)
+        with contextlib.ExitStack() as stack:
+            for patch in stood.values():
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch.object(sys, "argv", ["live.py", "--fetchloom", "/unused", *argv]))
+            stack.enter_context(mock.patch.object(lab, "ROOT", root))
+            stack.enter_context(mock.patch.object(lab, "require_root"))
+            shown = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            told = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            try:
+                code = live.main()
+            except SystemExit as stopped:
+                code = stopped.code
+        return code, shown.getvalue(), told.getvalue()
+
+    def test_a_campaign_skips_a_service_it_cannot_reach_and_compares_each_round(self):
+        import json
+        from pathlib import Path
+        from unittest import mock
+        import live
+        import run
+
+        def catalog(service, quick):
+            if service == "kaggle":
+                raise ValueError("the public API returned no matching files")
+            return self.dataset()
+
+        def measured(argv, work, env, logfile, *args, **kwargs):
+            # the native client fails; fetchloom passes
+            return dict(wall_seconds=1, exit_code=int("zenodo_get" in argv[0]), timeout=False)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / "owned.json").write_text("{}")
+            out = root / "results"
+            code, shown, _ = self.campaign(root, ["--quick", "--services", "kaggle,zenodo", "--out", str(out)],
+                                           catalog=mock.patch.object(live, "catalog", side_effect=catalog),
+                                           reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
+                                           measure=mock.patch.object(run, "measure", side_effect=measured),
+                                           fingerprint=mock.patch.object(live, "fingerprint", return_value={"input.bin": "digest"}))
+            rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
+            meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual(code, 1)
+        reason = "public metadata or reference unavailable: ValueError: the public API returned no matching files"
+        self.assertEqual(rows[0], dict(kind="live", service="kaggle", status="skipped", reason=reason, quick=True))
+        self.assertTrue(shown.startswith(f"kaggle: skipped: {reason}\n"))
+        self.assertEqual(sorted((row["tool"], row["status"]) for row in rows[1:3]), [("fetchloom", "passed"), ("zenodo_get", "failed")])
+        self.assertEqual((rows[3]["kind"], rows[3]["service"], rows[3]["round"], rows[3]["comparison"]["status"]),
+                         ("comparison", "zenodo", 1, "identical"))
+        self.assertEqual(len(rows), 4)
+        self.assertEqual([dataset["service"] for dataset in meta["datasets"]], ["zenodo"])
+        self.assertEqual([order["tools"] for order in meta["orders"]], [[row["tool"] for row in rows[1:3]]])
+
+    def test_a_campaign_that_cannot_be_kept_apart_never_starts(self):
+        from pathlib import Path
+        from unittest import mock
+        import live
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            out = root / "results"
+            for changes, said in [(dict(out=root.parent / "elsewhere"), f"write results under {root}"),
+                                  (dict(), "run lab.py setup first"),
+                                  (dict(owned=True, runs=True), "output already contains runs")]:
+                with self.subTest(said):
+                    if changes.get("owned"):
+                        (root / "owned.json").write_text("{}")
+                    if changes.get("runs"):
+                        out.mkdir()
+                        (out / "runs.jsonl").write_text("")
+                    with mock.patch.object(live, "catalog") as catalog:
+                        code, _, told = self.campaign(root, ["--out", str(changes.get("out", out))])
+                    self.assertEqual((code, told.splitlines()[-1]), (2, f"live.py: error: {said}"))
+                    catalog.assert_not_called()
+
     def test_checker_exception_is_a_failed_record(self):
         import json
         from pathlib import Path
@@ -130,6 +223,40 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(row["status"], "failed")
             self.assertIn("checker read failed", row["error"])
             self.assertEqual(json.loads((root / "runs.jsonl").read_text())["status"], "failed")
+
+
+class RequestTests(unittest.TestCase):
+    def test_a_request_names_the_benchmark_and_its_json_is_read(self):
+        import http.server
+        import threading
+        import urllib.request
+        from unittest import mock
+        import live
+        agents = []
+
+        class Answer(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                agents.append(self.headers["User-Agent"])
+                body = b'{"files": [{"key": "iris.csv"}]}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Answer)
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .05}, daemon=True).start()
+        # a direct opener, so no proxy of the machine stands between
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with mock.patch.object(live.urllib.request, "urlopen", direct.open):
+                answer = live.get_json(f"http://127.0.0.1:{server.server_address[1]}/api/records/1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual((answer, agents), ({"files": [{"key": "iris.csv"}]}, ["fetchloom-benchmark/1"]))
 
 
 class CatalogTests(unittest.TestCase):
@@ -321,15 +448,22 @@ class ClientTests(unittest.TestCase):
         dataset = dict(service="kaggle", native="uciml/iris/versions/2", select=["Iris.csv"], quick=True,
                        expected_sha256={"Iris.csv": "e" * 64}, bytes=5107)
 
+        said = ["kagglehub.exceptions.UnauthenticatedError: 401 Client Error\n"]
+
         def refused(argv, work, env, logfile, *args, **kwargs):
-            logfile.write_text("kagglehub.exceptions.UnauthenticatedError: 401 Client Error\n")
+            logfile.write_text(said[-1])
             return dict(wall_seconds=1, exit_code=1, timeout=False)
 
         with mock.patch.object(lab, "drop_caches"), mock.patch.object(run, "measure", side_effect=refused), \
              mock.patch.object(run, "free_bytes", return_value=100), mock.patch.object(live.lab, "flush"):
             row = live.one_run("kagglehub", dataset, self.work / "work", self.work, 1, "/bin/fetchloom", dict(commands={}), 30)
-        self.assertEqual((row["status"], row["reason"]), ("skipped", "kagglehub refused anonymous access; see command log"))
-        self.assertEqual(json.loads((self.work / "runs.jsonl").read_text())["status"], "skipped")
+            self.assertEqual((row["status"], row["reason"]), ("skipped", "kagglehub refused anonymous access; see command log"))
+            # any other failure of the same client is a failure
+            said.append("OSError: [Errno 28] No space left on device\n")
+            row = live.one_run("kagglehub", dataset, self.work / "work", self.work, 2, "/bin/fetchloom", dict(commands={}), 30)
+            self.assertEqual((row["status"], "reason" in row), ("failed", False))
+        self.assertEqual([json.loads(line)["status"] for line in (self.work / "runs.jsonl").read_text().splitlines()],
+                         ["skipped", "failed"])
 
 
 if __name__ == "__main__":

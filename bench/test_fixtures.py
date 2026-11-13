@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -114,6 +115,12 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(self.prepare("fetchloom").called)
         (self.root / "fetchloom").write_bytes(b"another build")
         self.assertTrue(self.prepare("fetchloom").called)
+
+    def test_a_tool_with_nothing_to_prepare_is_only_marked_ready(self):
+        self.assertFalse(self.prepare("curl").called)
+        target = self.root / "prepared/case/curl"
+        self.assertEqual([path.name for path in target.iterdir()], [".ready"])
+        self.assertEqual(json.loads((target / ".ready").read_text())["tool"], "curl")
 
     def test_dvc_and_datalad_must_download_what_they_were_prepared_with(self):
         dvc = [call.args[0] for call in self.prepare("dvc").call_args_list]
