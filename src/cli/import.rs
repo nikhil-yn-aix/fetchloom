@@ -78,9 +78,14 @@ pub(super) async fn import_held(
             dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
         }
     };
+    let retaken = if supplied.is_none() && args.name.is_none() {
+        retaken(manifest, old.as_ref(), (&own, shown), &walked.files)?
+    } else {
+        None
+    };
     let net = Arc::new(context.net());
     if dry_run {
-        let supplying = supplied.is_some();
+        let supplying = supplied.is_some() || retaken.is_some();
         let name = if supplying {
             own
         } else {
@@ -117,6 +122,11 @@ pub(super) async fn import_held(
         context.output.step("Imported", &format!("{own} · {told}"));
         already_imported(&work, adding, old, &own, here).await
     } else {
+        if let Some(entry) = retaken {
+            let difference = current(old.as_ref(), &own, entry)
+                .and_then(|pinned| first_other_bytes(&copied.files, &pinned.files));
+            return Err(other_import(manifest, &own, shown, difference));
+        }
         let name = new_name(&context.output, manifest, args, own)?;
         context.output.step("Imported", &format!("{name} · {told}"));
         let work = Loop::new(context, project, net, cache).telling(&name);
@@ -129,6 +139,56 @@ pub(super) async fn import_held(
     }?;
     warn_in_git(&context.output, &project.root, (&start, shown));
     Ok(report)
+}
+
+/// the import data.toml has under `own`, the name the files `found` in `shown` would take, which
+/// is theirs only when they are its pinned files: other paths or sizes are refused before a byte
+/// is copied, and other bytes once they are.
+fn retaken<'m>(
+    manifest: &'m Manifest,
+    old: Option<&Lock>,
+    (own, shown): (&str, &str),
+    found: &[Found],
+) -> Result<Option<&'m manifest::Entry>, Error> {
+    let Some(entry) = manifest.datasets.get(own).filter(|entry| entry.is_import()) else {
+        return Ok(None);
+    };
+    let difference = current(old, own, entry).map_or_else(
+        || Some("data.lock holds no pin of it".to_owned()),
+        |pinned| first_difference(found, &pinned.files),
+    );
+    match difference {
+        Some(difference) => Err(other_import(manifest, own, shown, Some(difference))),
+        None => Ok(Some(entry)),
+    }
+}
+
+/// the refusal of the files `shown` holds, other than those data.toml's import `name` pins, as
+/// `difference` says: a number would leave the scripts that read its folder on the old files, so
+/// the person chooses whether these replace them or join them under another name.
+fn other_import(manifest: &Manifest, name: &str, shown: &str, difference: Option<String>) -> Error {
+    let difference =
+        difference.unwrap_or_else(|| "data.toml chooses its files with other patterns".to_owned());
+    let free = (2..100)
+        .map(|number| format!("{name}-{number}"))
+        .find(|numbered| !manifest.datasets.contains_key(numbered))
+        .unwrap_or_else(|| "<name>".to_owned());
+    let path = super::shell_word(shown);
+    let keep = super::meant(
+        &[shown],
+        &[shown, "--as", &free],
+        super::project::command(&format!("add {path} --as {free}")),
+    );
+    Error::new(
+        Kind::Usage,
+        format!("{name} pins other files than {shown} holds"),
+    )
+    .detail(difference)
+    .help(format!(
+        "to pin these instead, run `{}`, then `{}`; to keep both, run `{keep}`",
+        super::project::command(&format!("remove {name}")),
+        super::project::command(&format!("add {path}"))
+    ))
 }
 
 /// the name a new import takes: the one `--as` gives, or `own`, with the next number when

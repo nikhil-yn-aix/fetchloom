@@ -105,7 +105,15 @@ error: data/raw is in the data folder, where fetchloom places what data.lock pin
   help: move it out first, with `mv data/raw raw`, then run `fetchloom add ./raw` to place its files in data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder
 ```
 
-the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
+the same files imported again under their own name change nothing and say `<name> is already in data.toml`. other files under the name of an import data.toml has, as a folder that gained a file, are refused with `usage`, exit 2, rather than given the next number, which would leave a second copy beside the folder your scripts read. the help gives both ways on, as stderr after `flowers` gained `b.csv`:
+
+```text
+error: flowers pins other files than ./flowers holds
+  b.csv is not in data.lock
+  help: to pin these instead, run `fetchloom remove flowers`, then `fetchloom add ./flowers`; to keep both, run `fetchloom add ./flowers --as flowers-2`
+```
+
+paths and sizes are compared before anything is copied, so a dry run is refused the same way; the same paths and sizes holding other bytes are refused once they are read. files under the name of a dataset that is not an import take the next number, as a link does.
 
 no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, but once a cached archive is unpacked its own bytes leave the cache, so a switch to `extract = false` then needs them supplied again.
 

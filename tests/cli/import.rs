@@ -518,6 +518,74 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     Ok(())
 }
 
+/// a folder imported again with other files, under the name its import has, is refused with both
+/// ways on: a number would leave data/flowers-2 beside the data/flowers scripts read.
+#[test]
+fn a_changed_folder_imported_again_keeps_its_name_and_says_how_to_go_on() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = flowers(&sandbox)?;
+    let added = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    let before = [
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    ];
+    let help = |keep: &str| {
+        format!(
+            "to pin these instead, run `fetchloom remove flowers`, then `fetchloom add ../flowers`; to keep both, run `{keep}`"
+        )
+    };
+    fs::write(folder.join("petals/white.csv"), b"length\n1.6\n")?;
+    for (args, keep) in [
+        (
+            &["--json", "add", "../flowers"][..],
+            "fetchloom --json add ../flowers --as flowers-2",
+        ),
+        (
+            &["--json", "add", "../flowers", "--dry-run"],
+            "fetchloom --json add ../flowers --as flowers-2 --dry-run",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            error["message"],
+            "flowers pins other files than ../flowers holds"
+        );
+        assert_eq!(
+            error["details"],
+            serde_json::json!(["petals/white.csv is not in data.lock"])
+        );
+        assert_eq!(error["help"], help(keep));
+        assert_eq!(error["fix"], serde_json::Value::Null);
+    }
+    // the same paths and sizes holding other bytes are refused once they are read
+    fs::remove_file(folder.join("petals/white.csv"))?;
+    fs::write(folder.join("petals/red.csv"), b"length\n9.9\n")?;
+    let output = sandbox.run(&["--json", "add", "../flowers"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["petals/red.csv holds other bytes than data.lock pins"])
+    );
+    assert_eq!(
+        error["help"],
+        help("fetchloom --json add ../flowers --as flowers-2")
+    );
+    assert_eq!(
+        before,
+        [
+            fs::read(work.join("data.toml"))?,
+            fs::read(work.join("data.lock"))?
+        ]
+    );
+    assert!(!work.join("data/flowers-2").exists());
+    Ok(())
+}
+
 /// the help retypes the command with the near name from the same folder, quoted for a shell.
 #[test]
 fn a_mistyped_path_suggests_the_near_name_and_asks_no_server() -> Result {
