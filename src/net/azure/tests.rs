@@ -110,8 +110,8 @@ fn azure_net_at(listed: &[&str], set: &[(&str, &str)], identity: Option<Url>) ->
     .with_azure(azure)
 }
 
-/// a client that carries the requests `send` shapes to a server on this machine instead of
-/// their hosts. it is the test's own, so it installs the crypto provider itself.
+/// a client that carries the requests `send` shapes to a local server. it installs the crypto
+/// provider itself, since fetchloom installs it only when it first goes online.
 fn transport() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
@@ -157,9 +157,8 @@ fn sent(response: &reqwest::Response) -> Option<&Sent> {
     }
 }
 
-/// a listed container is asked without the SAS first; once refused, the request goes again
-/// with it, and later requests for that container carry it from the start. every request asks
-/// for azure's version.
+/// the request goes again with it, and later requests for that container carry it from the
+/// start. every request asks for azure's version.
 #[test]
 fn a_sas_goes_to_a_listed_container_once_it_refused_a_request_without_one() {
     let (local, asked) = blob_host("shared%3d");
@@ -191,9 +190,8 @@ fn a_sas_goes_to_a_listed_container_once_it_refused_a_request_without_one() {
     assert!(asked.lock().unwrap().iter().all(|asked| asked.versioned));
 }
 
-/// a container nobody listed, a container in another account than the one the environment's
-/// SAS is kept to, and a link that carries a SAS of its own get no SAS of the settings, and a
-/// refusal says how the request went.
+/// not to a container nobody listed, one in another account than the environment's SAS is kept
+/// to, or a link with a SAS of its own; a refusal says how the request went.
 #[test]
 fn a_sas_never_goes_where_the_settings_do_not_send_it() {
     let (local, asked) = blob_host("own%3d");
@@ -252,9 +250,8 @@ fn a_sas_never_goes_where_the_settings_do_not_send_it() {
     );
 }
 
-/// the environment's SAS without `AZURE_STORAGE_ACCOUNT` is refused, before it reaches any
-/// container, when the listed containers it would go to are in more than one account. a
-/// container with a SAS of its own takes none of it, so it does not count.
+/// before it reaches any container. a container with a SAS of its own takes none of it, so it
+/// does not count.
 #[test]
 fn a_sas_without_its_account_is_refused_for_containers_in_two_accounts() {
     let (local, asked) = blob_host("shared%3d");
@@ -284,9 +281,7 @@ fn a_sas_without_its_account_is_refused_for_containers_in_two_accounts() {
     assert_eq!(answer.status(), 200);
 }
 
-/// a container's entry may carry a SAS of its own, which it gets before the environment's. a
-/// SAS azure refuses is not sent again for that request, and the refusal names where it came
-/// from.
+/// a refused SAS is not sent again for that request, and the refusal names where it came from.
 #[test]
 fn a_containers_own_sas_comes_first_and_a_refused_one_is_the_answer() {
     let (local, asked) = blob_host("own%3d");
@@ -327,8 +322,7 @@ fn a_containers_own_sas_comes_first_and_a_refused_one_is_the_answer() {
     );
 }
 
-/// the SAS goes with the request to the container's own host alone, never on to where a
-/// redirect sends it, and only that first request asks for azure's version.
+/// and only the first request asks for azure's version.
 #[test]
 fn a_sas_never_follows_a_redirect() {
     let (local, asked) = server(|_, count| match count {
@@ -352,8 +346,7 @@ fn a_sas_never_follows_a_redirect() {
     );
 }
 
-/// an environment that holds no SAS fetchloom can read fails the request that would need it,
-/// without repeating what it holds, and asks nothing more.
+/// it fails the request that needs it and asks nothing more.
 #[test]
 fn an_unreadable_sas_fails_without_repeating_it() {
     let (local, asked) = blob_host("shared%3d");
@@ -371,10 +364,8 @@ fn an_unreadable_sas_fails_without_repeating_it() {
     assert_eq!(lines(&asked), ["get /raw/a.csv http/1.1"]);
 }
 
-/// a key of the account `AZURE_STORAGE_ACCOUNT` names signs a listed container's requests in that
-/// account once azure refused one without a credential: a `SharedKey` authorization of the
-/// account, with the time in `x-ms-date`. the key itself is never sent, and a container in
-/// another account gets no signature.
+/// once azure refused one without a credential: a `SharedKey` authorization with the time in
+/// `x-ms-date`. the key itself is never sent, and another account's container gets no signature.
 #[test]
 fn an_account_key_signs_requests_to_its_own_account_alone() {
     let (local, asked) = server(|head, _| {
@@ -444,7 +435,6 @@ fn az(folder: &std::path::Path) -> std::path::PathBuf {
     runs
 }
 
-/// the az cli's login reads a listed container once it refused a request without credentials:
 /// its token goes in `authorization`, for the container's later requests too, from one run of
 /// the az cli, and never to a container nobody listed.
 #[cfg(unix)]
@@ -485,8 +475,7 @@ fn the_az_clis_login_reads_a_listed_container_once_refused() {
     assert_eq!(heads, [false, true, true, false]);
 }
 
-/// a token azure turns away with 401, as an expired one, is asked of the az cli again, once,
-/// and the request goes again with the new one.
+/// as a 401 turns an expired one away, and the request goes again with the new one.
 #[cfg(unix)]
 #[test]
 fn a_token_azure_turns_away_is_asked_for_again_once() {
@@ -528,10 +517,8 @@ fn metadata_service() -> (Url, Arc<Mutex<Vec<Asked>>>) {
     })
 }
 
-/// this machine's managed identity, which `AZURE_TOKEN_CREDENTIALS` asks for, reads a listed
-/// container once it refused a request without credentials: a token asked of the instance
-/// metadata service, with `metadata: true`, for azure storage and the identity `AZURE_CLIENT_ID`
-/// names, goes in `authorization`. the service's address stays refused to any other request.
+/// when `AZURE_TOKEN_CREDENTIALS` asks for it, with a token for the identity `AZURE_CLIENT_ID`
+/// names. the service's address stays refused to any other request.
 #[test]
 fn the_machines_managed_identity_reads_a_listed_container_once_refused() {
     let (identity, identity_asked) = metadata_service();

@@ -1,6 +1,5 @@
-//! azure storage's shared key: a request signed with its account's key, as azure defines the
-//! signature for the blob service from version 2015-02-21. the key only derives the signature
-//! and is never sent.
+//! azure storage's shared key: a request signed with its account's key, as azure defines it for
+//! the blob service from version 2015-02-21. the key only derives the signature and is never sent.
 
 use std::fmt::Write as _;
 
@@ -112,9 +111,8 @@ mod tests {
         headers
     }
 
-    /// the example azure's page on shared key signs, line for line, and signatures the
-    /// azure-storage-blob library computes for the same requests, or, with a `Range` its
-    /// library sends otherwise, what the page's rules give.
+    /// azure's own example, line for line, and the signatures azure-storage-blob computes for the
+    /// same requests, or the page's rules for a `Range` that library sends otherwise.
     #[test]
     fn a_signature_is_the_one_azure_computes() {
         let key = AccountKey::parse(KEY).unwrap();
@@ -158,7 +156,7 @@ mod tests {
         );
     }
 
-    /// a parameter given twice signs once, its values in order and parted by commas.
+    /// its values in order, parted by commas.
     #[test]
     fn a_repeated_parameter_signs_its_values_together() {
         let url = Url::parse("https://lab.blob.core.windows.net/raw?include=b&comp=list&Include=a")

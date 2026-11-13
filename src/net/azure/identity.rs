@@ -1,8 +1,6 @@
 //! this machine's managed identity: a token for azure storage from the instance metadata service
-//! azure gives every virtual machine. the service answers plain http at 169.254.169.254, a
-//! link-local address the network refuses for every link, so its token is asked through a client
-//! of its own, with no proxy, no redirect, no cookie and no other credential, and only once
-//! `AZURE_TOKEN_CREDENTIALS` names the identity. no other request is let through to the address.
+//! at 169.254.169.254, asked through a client of its own and only once `AZURE_TOKEN_CREDENTIALS`
+//! names the identity. no other request is let through to that private address.
 
 use std::time::{Duration, SystemTime};
 
@@ -39,10 +37,8 @@ struct Answer {
 }
 
 impl Net {
-    /// a token that reads azure storage, of this machine's managed identity, or of the
-    /// user-assigned one `client_id` names, from the service at `endpoint` when it names one, as
-    /// a test's stand-in does, and how long it lives. a failure another try may get past is tried
-    /// again, as any request's is.
+    /// a token that reads azure storage, of this machine's managed identity or the user-assigned
+    /// one `client_id` names, and how long it lives. `endpoint` names a test's stand-in service.
     ///
     /// # Errors
     ///
@@ -86,10 +82,9 @@ impl Net {
         }
     }
 
-    /// one GET of the service at `url`, with `metadata: true` as it asks, and the status and
-    /// body of its answer, unless it is one another try may get past: 404 and 410, which it
-    /// sends while it starts, and the statuses any request retries. a service that does not
-    /// answer at all fails at once: off azure, nothing ever will.
+    /// one GET of the service at `url`, with `metadata: true`: the status and body of its answer,
+    /// unless another try may get past it, as for the 404 and 410 it sends while it starts. a
+    /// service that does not answer fails at once: off azure, nothing ever will.
     async fn ask_identity(&self, url: &Url) -> Result<(u16, Vec<u8>), Failure> {
         if self.offline.enabled() {
             return Err(Failure::Final(

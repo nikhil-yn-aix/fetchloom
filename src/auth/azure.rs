@@ -1,9 +1,6 @@
-//! azure storage's credentials where the az cli reads them: a SAS in `AZURE_STORAGE_SAS_TOKEN`
-//! or an account key in `AZURE_STORAGE_KEY`, each kept to the account `AZURE_STORAGE_ACCOUNT`
-//! names, else a token of the az cli's login, from `az account get-access-token`, run as
-//! [`process`] runs a program. `AZURE_TOKEN_CREDENTIALS` chooses the sign-in as it does for
-//! azure's own libraries. [`crate::net`] decides which request carries which; the key only signs
-//! and is never sent.
+//! azure storage's credentials where the az cli reads them: a SAS or an account key kept to the
+//! account `AZURE_STORAGE_ACCOUNT` names, else a token of the sign-in `AZURE_TOKEN_CREDENTIALS`
+//! chooses, as for azure's own libraries. the key only signs and is never sent.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -91,9 +88,8 @@ impl fmt::Debug for AccountKey {
 /// # Errors
 ///
 /// `auth.required` for a variable that holds no SAS, account or key fetchloom can read, a key
-/// without its account, or a SAS without its account while the listed containers it may go to,
-/// those without a SAS of their own, are in two or more accounts, since a SAS is one account's.
-/// none of them repeats what a variable holds.
+/// without its account, or a SAS without its account while the listed containers without a SAS
+/// of their own are in two or more accounts. none of them repeats what a variable holds.
 pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, Error> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
     let sign_in = sign_in(var);
@@ -177,13 +173,8 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
     })
 }
 
-/// how `AZURE_TOKEN_CREDENTIALS` asks for a token, read as azure's own libraries read it, any
-/// case alike: unset, `AzureCliCredential` or `dev` take the az cli's login, the one developer
-/// tool fetchloom reads, which a folder on PATH named by its full path must hold, and
-/// `ManagedIdentityCredential` or `prod` take this machine's managed identity, the user-assigned
-/// one `AZURE_CLIENT_ID` names when it names one. unset, no az cli means no sign-in, and no
-/// managed identity is ever asked for unless the variable names it, since its metadata service
-/// answers at an address on this machine's own network.
+/// how `AZURE_TOKEN_CREDENTIALS` asks for a token, read as azure's own libraries read it. the
+/// managed identity is asked for only when named, since its service is on this machine's network.
 ///
 /// # Errors
 ///
@@ -499,9 +490,8 @@ mod tests {
         }
     }
 
-    /// the az cli's profile says whether it is signed in, and as whom: the default
-    /// subscription's user, else the first's. a profile fetchloom cannot read leaves that to the
-    /// az cli.
+    /// and as whom: the default subscription's user, else the first's. a profile fetchloom cannot
+    /// read leaves that to the az cli.
     #[test]
     fn the_az_clis_profile_says_whether_it_is_signed_in() {
         let folder = tempfile::tempdir().unwrap();
@@ -546,8 +536,7 @@ mod tests {
         }
     }
 
-    /// a key is kept to the account `AZURE_STORAGE_ACCOUNT` names, needs it, and a key or
-    /// account fetchloom cannot read fails without repeating what it holds.
+    /// a key or account fetchloom cannot read fails without repeating what it holds.
     #[test]
     fn a_key_needs_its_account_and_never_shows() {
         let found = find(
@@ -612,9 +601,8 @@ mod tests {
         (folder, az)
     }
 
-    /// `AZURE_TOKEN_CREDENTIALS` chooses the sign-in as azure's libraries read it: the az cli
-    /// when unset and on PATH, or when asked for by name or as `dev`, in any case. asked for and
-    /// missing, or another credential, is an error.
+    /// as azure's libraries read it: the az cli when unset and on PATH, or asked for by name or as
+    /// `dev`, in any case. asked for and missing, or another credential, is an error.
     #[test]
     fn azure_token_credentials_chooses_the_sign_in() {
         let (folder, az) = az_folder();
@@ -654,10 +642,8 @@ mod tests {
         );
     }
 
-    /// `ManagedIdentityCredential`, or `prod`, takes this machine's managed identity, the one
-    /// `AZURE_CLIENT_ID` names when it names one, and never the az cli. `prod` refuses when the
-    /// environment names a service principal's secret or a federated token, which azure's
-    /// libraries would sign in with first.
+    /// by `ManagedIdentityCredential` or `prod`, never the az cli. `prod` refuses beside a service
+    /// principal's secret or a federated token, which azure's libraries would sign in with first.
     #[test]
     fn azure_token_credentials_may_ask_for_the_machines_identity() {
         let chosen = |pairs: &[(&'static str, &'static str)]| sign_in(&environment(pairs));
@@ -738,9 +724,8 @@ mod tests {
         path
     }
 
-    /// the token comes from `az account get-access-token` for azure storage's resource, and an
-    /// az cli that fails, as it does without a login, or gives an expired token, says to sign in
-    /// without repeating what it printed.
+    /// from `az account get-access-token` for azure storage's resource. one that fails, as without
+    /// a login, or gives an expired token says to sign in without repeating what it printed.
     #[cfg(unix)]
     #[test]
     fn the_az_cli_gives_a_token_or_says_to_sign_in() {

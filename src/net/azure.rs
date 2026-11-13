@@ -1,14 +1,6 @@
-//! which requests to azure's blob hosts carry a credential: those for a container the
-//! `azure_containers` setting lists, once azure refused one without a credential this run, and
-//! only to the container's own blob host over https, before any redirect. the credential is the
-//! SAS the container's entry gives, else what the environment gives as the az cli reads it: the
-//! SAS in `AZURE_STORAGE_SAS_TOKEN`, or the key in `AZURE_STORAGE_KEY`, kept to the account
-//! `AZURE_STORAGE_ACCOUNT` names, else a token of the az cli's login or, when
-//! `AZURE_TOKEN_CREDENTIALS` names it, of this machine's managed identity, as [`identity`] asks,
-//! as [`crate::auth::azure`] finds them. a key signs the request, as [`shared_key`] does, and is
-//! never sent; a token is asked for when first needed and again shortly before it expires, by
-//! one request while the others wait. every first request to a blob host asks for the version
-//! of azure's API that listings are read in.
+//! which requests to azure's blob hosts carry a credential: those to a listed container's own
+//! blob host over https, once azure refused one without a credential this run, and never after a
+//! redirect. a key signs the request and is never sent.
 
 mod identity;
 mod shared_key;
@@ -42,8 +34,7 @@ pub(crate) struct Azure {
     refused: Mutex<HashSet<String>>,
     /// the sign-in's token, which reads every listed container its identity may read.
     token: Lease<Bearer>,
-    /// in debug builds, a server on this machine that stands in for the instance metadata
-    /// service.
+    /// a server on this machine that stands in for the instance metadata service.
     #[cfg(debug_assertions)]
     identity_endpoint: Option<Url>,
 }
@@ -199,9 +190,8 @@ impl Azure {
             .find(|entry| entry.account() == account && entry.name() == container)
     }
 
-    /// the credential for `located`: its entry's own SAS, else the environment's SAS, unless
-    /// that is kept to another account, else the key of its account, else a token of the
-    /// sign-in, asked for when none is held or the one held is due for renewal. none for a
+    /// the credential for `located`: its entry's own SAS, else the environment's SAS unless kept
+    /// to another account, else its account's key, else a token of the sign-in. none for a
     /// container nobody listed, or a link with a secret of its own.
     ///
     /// # Errors
@@ -482,9 +472,8 @@ impl Blobbed<'_> {
         headers
     }
 
-    /// `request`, made last, signed with the key the hop carries at `now`: the time in
-    /// `x-ms-date`, then the signature of all it holds by then, the headers its shape added
-    /// among them. any other request goes as it is.
+    /// `request`, made last, signed with the hop's key at `now`: `x-ms-date`, then the signature
+    /// of all it holds by then, its shape's headers included. any other request goes as it is.
     ///
     /// # Errors
     ///
@@ -525,8 +514,7 @@ impl Blobbed<'_> {
 
 impl Net {
     /// the hop after `redirects` redirects of a request for `located`: only the first asks for
-    /// azure's version and, once its container refused a request without one, carries a
-    /// credential.
+    /// azure's version and, once its container refused one without, carries a credential.
     pub(super) async fn azure_hop<'r>(
         &self,
         located: Option<&'r Located>,
@@ -560,10 +548,9 @@ impl Net {
         })
     }
 
-    /// whether the request goes again after `response`: once, with a credential, when azure
-    /// refused it without one for a listed container one was found for, and once with a new
-    /// token when azure turned one away with 401, as an expired or revoked one is, which is then
-    /// forgotten. otherwise the response is told how the request went.
+    /// whether the request goes again after `response`: once with a credential, when one was
+    /// found, after azure refused a listed container without, and once with a new token after a
+    /// 401 turned the token away. otherwise the response is told how the request went.
     ///
     /// # Errors
     ///
@@ -612,7 +599,7 @@ impl Net {
 }
 
 /// the server on this machine that `FETCHLOOM_TEST_AZURE_IDENTITY` names to stand in for the
-/// instance metadata service, read once when the network is made. release builds never read it.
+/// instance metadata service, read once when the network is made.
 #[cfg(debug_assertions)]
 pub(crate) fn test_identity_endpoint() -> Option<Url> {
     super::api::local_test_server("FETCHLOOM_TEST_AZURE_IDENTITY")
