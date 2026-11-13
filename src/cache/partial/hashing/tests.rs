@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::cache::Validators;
@@ -9,7 +9,12 @@ pub(super) fn wait_for_release(ready: &SyncSender<()>, release: &Receiver<()>) {
     release.recv().unwrap();
 }
 
+/// holds the writer's hash worker until the returned sender is used. a writer records its
+/// progress every second, and a record waits for that worker, so the next one is put off past
+/// the test: on a slow disk a test's writes took a second, and the record waited on the held
+/// worker while the worker waited on the test.
 fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
+    writer.saved = Instant::now() + Duration::from_secs(3600);
     let (release, paused) = mpsc::sync_channel(1);
     let (ready, entered) = mpsc::sync_channel(1);
     assert!(
