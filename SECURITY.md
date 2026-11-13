@@ -10,7 +10,7 @@ use github's private vulnerability reporting: [report a vulnerability](https://g
 - the output of `fetchloom --version -v` and your system
 - the smallest steps that show it
 
-please do not open a public issue, discussion or pull request about it until a fix is out. [what leaves your machine](https://nikhil-yn-aix.github.io/fetchloom/user/concepts.html#what-leaves-your-machine) says what fetchloom sends and to whom.
+please do not open a public issue, discussion or pull request about it until a fix is out. [what leaves your machine](https://nikhil-yn-aix.github.io/fetchloom/user/concepts/privacy/#what-leaves-your-machine) says what fetchloom sends and to whom.
 
 ## supported versions
 

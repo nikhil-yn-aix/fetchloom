@@ -30,4 +30,4 @@ global options:
 on disk: nothing. prints the exact reference of each match, such as
 zenodo:3608990, and downloads nothing
 
-docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/search.html
+docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/search/

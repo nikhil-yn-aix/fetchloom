@@ -8,7 +8,7 @@ fetchloom keeps one copy of each file in its cache and links it into each projec
 
 ```text
 warning: the cache is on another drive than the project, so files were copied
-  help: to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html
+  help: to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive
 ```
 
 pick one of these:

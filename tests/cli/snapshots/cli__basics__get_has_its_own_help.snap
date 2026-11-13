@@ -50,4 +50,4 @@ global options:
 on disk: writes one folder for each link, or with -o the one file it names,
 through the cache. does not create data.toml or data.lock
 
-docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/get.html
+docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/get/

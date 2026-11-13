@@ -79,7 +79,7 @@ a listed bucket with no keys on this machine:
 
 ```text
 error: s3://lab-raw/2026/ is private: S3 refused to list it without a key, and no AWS keys were found
-  help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets
+  help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets
 ```
 
 cloud storage says the same of a bucket `gcs_buckets` does not list, `gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials`, with help to add it to `gcs_buckets` or `FETCHLOOM_GCS_BUCKETS`, and of a listed one with none on this machine, `... and no google application default credentials were found`, with help to run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account's key file.

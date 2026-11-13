@@ -151,7 +151,7 @@ impl Unlinked {
             Self::OtherDrive => Because {
                 said: format!("the cache is on another drive than {place}, so {subject} copied"),
                 help: Some(format!(
-                    "to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+                    "to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
                 )),
             },
         }

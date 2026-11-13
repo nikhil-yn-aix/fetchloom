@@ -154,7 +154,7 @@ the machine's managed identity, as AZURE_TOKEN_CREDENTIALS chooses. drive needs
 the google login made through an oauth client of your own: see the google
 drive page.
 
-more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/";
 
 /// `fetchloom help exit-codes`: what each exit code means, for a script deciding what to do.
 const EXIT_CODES: &str = "fetchloom exit codes
@@ -176,7 +176,7 @@ const EXIT_CODES: &str = "fetchloom exit codes
 with --json, errors[0].kind names the exact cause and errors[0].fix, when
 present, the command to run next.
 
-more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes.html";
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes/";
 
 /// `fetchloom help recipes`: how to write a recipe in data.toml, with an example to copy. the
 /// docs page has the details; a test reads the example as data.toml.
@@ -210,7 +210,7 @@ data/clean like any dataset: commit both.
 
 place = false on iris keeps raw data that only recipes read out of data/.
 
-more: https://nikhil-yn-aix.github.io/fetchloom/user/recipes.html";
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/recipes/";
 
 /// help topics that are not commands, each with its text.
 const TOPICS: [(&str, &str); 4] = [

@@ -769,7 +769,7 @@ fn a_listed_bucket_without_keys_says_which_keys_to_set() -> Result {
     );
     assert_eq!(
         error["help"],
-        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets"
+        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets"
     );
     assert_eq!(routes.targets().len(), 1);
     assert_anonymous(&routes);

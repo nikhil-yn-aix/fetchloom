@@ -464,7 +464,7 @@ fn a_refused_s3_listing_says_whether_a_key_went_with_it_and_what_to_do() {
             }),
             (
                 "s3://lab-raw/raw/ is private: S3 refused to list it without a key, and no AWS keys were found",
-                "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets",
+                "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets",
             ),
         ),
         (

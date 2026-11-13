@@ -391,11 +391,11 @@ const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";
 /// report a bug.
 fn linked(root: clap::Command) -> clap::Command {
     let page = |name: &str| match name {
-        "help" => format!("{SITE}/user/commands/README.html"),
-        "cache gc" => format!("{SITE}/user/commands/cache.html#gc"),
-        "cache verify" => format!("{SITE}/user/commands/cache.html#verify"),
-        "auth login" | "auth logout" => format!("{SITE}/user/commands/auth.html"),
-        _ => format!("{SITE}/user/commands/{name}.html"),
+        "help" => format!("{SITE}/user/commands/"),
+        "cache gc" => format!("{SITE}/user/commands/cache/#gc"),
+        "cache verify" => format!("{SITE}/user/commands/cache/#verify"),
+        "auth login" | "auth logout" => format!("{SITE}/user/commands/auth/"),
+        _ => format!("{SITE}/user/commands/{name}/"),
     };
     let append = |command: clap::Command, line: String| {
         let before = command

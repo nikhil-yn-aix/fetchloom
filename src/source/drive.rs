@@ -18,8 +18,7 @@ use crate::error::{Error, Kind};
 use crate::net::{Api, Divert};
 
 /// where fetchloom's docs say how to let it read private drive items.
-pub(crate) const GUIDE: &str =
-    "https://nikhil-yn-aix.github.io/fetchloom/user/sources/google-drive.html";
+pub(crate) const GUIDE: &str = "https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files";
 /// the login that grants the drive scope, which google keeps gcloud's own oauth client from.
 pub(crate) const LOGIN: &str = "`gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`";
 

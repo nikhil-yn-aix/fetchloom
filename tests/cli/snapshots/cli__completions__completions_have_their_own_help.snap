@@ -21,4 +21,4 @@ global options:
 
 on disk: nothing. it prints the script on stdout, for a file your shell loads
 
-docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/completions.html
+docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/completions/

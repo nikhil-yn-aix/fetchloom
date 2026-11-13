@@ -535,7 +535,7 @@ fn a_folder_gets_a_token_only_when_listed_and_signed_in() -> Result {
     );
     assert_eq!(
         signed_out["help"],
-        "set GOOGLE_APPLICATION_CREDENTIALS to the key file of a service account it is shared with, or sign in with an oauth client of your own: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/sources/google-drive.html"
+        "set GOOGLE_APPLICATION_CREDENTIALS to the key file of a service account it is shared with, or sign in with an oauth client of your own: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files"
     );
     assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
@@ -571,7 +571,7 @@ fn a_refusal_names_the_account_and_what_to_do() -> Result {
     );
     assert_eq!(
         error["help"],
-        "sign in again with an oauth client of your own, since google keeps gcloud's own from drive: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/sources/google-drive.html"
+        "sign in again with an oauth client of your own, since google keeps gcloud's own from drive: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files"
     );
     let key = service_account(&sandbox)?;
     let unshared = command(
@@ -623,7 +623,7 @@ fn a_refusal_names_the_account_and_what_to_do() -> Result {
     );
     assert_eq!(
         error["help"],
-        "sign in again with an oauth client of your own, as drive needs: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/sources/google-drive.html"
+        "sign in again with an oauth client of your own, as drive needs: `gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`. how: https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files"
     );
     let said = format!(
         "{}{}{}{}",

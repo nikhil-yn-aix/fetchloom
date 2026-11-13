@@ -1,4 +1,4 @@
-"""check a built site: every docs address fetchloom prints reaches a page and its heading, every
+"""check a built site: every docs address fetchloom prints is a page's own and reaches its heading, every
 heading keeps the id github gives it, no link names a markdown file, and no page loads anything
 from another host."""
 
@@ -59,21 +59,21 @@ def parsed(page):
 
 
 def printed(root):
-    """every docs address in src/ and tests/: written out, or put together from the SITE constant of
-    src/cli/args.rs, where {name} stands for each command's page."""
+    """every docs address in src/, tests/, README.md and the python helper: written out, or put
+    together from the SITE constant of src/cli/args.rs, where {name} stands for each command's page."""
     commands = sorted(page.stem for page in (root / "docs/user/commands").glob("*.md")
                       if page.stem not in ("README", "global-options"))
+    paths = [path for folder in ("src", "tests") for path in sorted((root / folder).rglob("*"))]
     found = set()
-    for folder in ("src", "tests"):
-        for path in sorted((root / folder).rglob("*")):
-            try:
-                text = path.read_text(encoding="utf-8") if path.is_file() else ""
-            except UnicodeDecodeError:
-                continue
-            found.update(match.rstrip(".,;:") for match in PRINTED.findall(text))
-            if f'const SITE: &str = "{SITE_URL}";' in text:
-                for tail in re.findall(r'\{SITE\}(/[^"\s\\]*)', text):
-                    found.update(SITE_URL + tail.replace("{name}", name) for name in commands)
+    for path in paths + [root / "README.md", root / "python/fetchloom/__init__.py"]:
+        try:
+            text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        except UnicodeDecodeError:
+            continue
+        found.update(match.rstrip(".,;:") for match in PRINTED.findall(text))
+        if f'const SITE: &str = "{SITE_URL}";' in text:
+            for tail in re.findall(r'\{SITE\}(/[^"\s\\]*)', text):
+                found.update(SITE_URL + tail.replace("{name}", name) for name in commands)
     return found
 
 
@@ -88,9 +88,9 @@ def page_file(site, path):
     return candidate if candidate.is_file() else None
 
 
-def unreached(site, url):
-    """what is wrong with a docs address fetchloom prints, or none when it reaches a page, through a
-    moved page's address if need be, with its #fragment on that page."""
+def unreached(site, url, final=False):
+    """what is wrong with a docs address, or none when it reaches a page, through a moved page's
+    address unless ``final`` asks for the page's own, with its #fragment on that page."""
     path, _, fragment = url[len(SITE_URL):].partition("#")
     address = SITE_URL + path
     file = page_file(site, path.lstrip("/"))
@@ -99,6 +99,8 @@ def unreached(site, url):
         if moved:
             here = file.parent.relative_to(site).as_posix()
             target = posixpath.normpath(posixpath.join(here, moved[1]))
+            if final:
+                return f"{address} is an old address of {SITE_URL}/{'' if target == '.' else target + '/'}"
             file = page_file(site, "" if target == "." else target)
     if not file:
         return f"{address} reaches no page"
@@ -158,7 +160,7 @@ def main():
     parser.add_argument("site", type=Path, nargs="?", default=ROOT / "site")
     site = parser.parse_args().site.resolve()
     addresses = sorted(printed(ROOT))
-    problems = [problem for problem in (unreached(site, url) for url in addresses) if problem]
+    problems = [problem for problem in (unreached(site, url, final=True) for url in addresses) if problem]
     problems += markdown_links(site) + github_ids(ROOT, site) + external(site)
     for problem in problems:
         print(problem)

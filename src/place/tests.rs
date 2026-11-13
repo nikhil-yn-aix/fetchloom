@@ -67,13 +67,13 @@ fn a_cache_on_another_drive_explains_the_copy_and_both_ways_to_links() {
         Unlinked::OtherDrive
             .copied_because("the project", "files were")
             .to_string(),
-        "the cache is on another drive than the project, so files were copied. to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+        "the cache is on another drive than the project, so files were copied. to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
     assert_eq!(
         Unlinked::OtherDrive
             .copied_because("iris", "the file was")
             .to_string(),
-        "the cache is on another drive than iris, so the file was copied. to link files instead, put both on one drive: move iris to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+        "the cache is on another drive than iris, so the file was copied. to link files instead, put both on one drive: move iris to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
 }
 

@@ -304,7 +304,7 @@ fn folders_are_taken_as_written_so_shell_shorthand_is_refused() {
             assert_eq!(
                 error.help.as_deref(),
                 Some(
-                    "to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+                    "to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive"
                 )
             );
         }

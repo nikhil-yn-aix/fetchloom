@@ -333,8 +333,12 @@ class BuiltSite(Folder):
                                              'format!("{SITE}/user/commands/README.html"); format!("{SITE}/user/commands/{name}.html");')
         self.write(root / "src/source/gitlab.rs", 'const SITE: &str = "https://gitlab.com";\nformat!("{SITE}/api/v4/projects")')
         self.write(root / "src/place.rs", '"see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html".to_owned()')
+        self.write(root / "docs/user/commands/global-options.md")
         self.write(root / "tests/cli/snapshots/help.snap",
                    "docs: https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets.\n")
+        self.write(root / "README.md", "[install](https://nikhil-yn-aix.github.io/fetchloom/user/start/install/)\n")
+        self.write(root / "python/fetchloom/__init__.py",
+                   '"""https://nikhil-yn-aix.github.io/fetchloom/user/reference/python-helper/ describes them."""\n')
         self.assertEqual(check_site.printed(root), {
             "https://nikhil-yn-aix.github.io/fetchloom",
             "https://nikhil-yn-aix.github.io/fetchloom/user/commands/README.html",
@@ -342,6 +346,8 @@ class BuiltSite(Folder):
             "https://nikhil-yn-aix.github.io/fetchloom/user/commands/sync.html",
             "https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html",
             "https://nikhil-yn-aix.github.io/fetchloom/user/sources/buckets.html#private-s3-buckets",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/start/install/",
+            "https://nikhil-yn-aix.github.io/fetchloom/user/reference/python-helper/",
         })
 
     def test_an_address_reaches_its_page_and_heading_through_a_moved_page(self):
@@ -356,6 +362,14 @@ class BuiltSite(Folder):
                          f"{check_site.SITE_URL}/user/gone.html reaches no page")
         self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/hpc.html#nodes"),
                          f"{check_site.SITE_URL}/user/hpc.html has no #nodes on user/hpc/index.html")
+
+    def test_an_address_fetchloom_prints_is_the_page_itself(self):
+        site = self.folder()
+        self.page(site, "user/hpc/index.html", '<h2 id="scratch">scratch</h2>')
+        self.moved(site, "user/hpc.html", "hpc/")
+        self.assertIsNone(check_site.unreached(site, check_site.SITE_URL + "/user/hpc/#scratch", final=True))
+        self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/hpc.html#scratch", final=True),
+                         f"{check_site.SITE_URL}/user/hpc.html is an old address of {check_site.SITE_URL}/user/hpc/")
 
     def test_a_link_to_a_markdown_file_is_found(self):
         site = self.folder()

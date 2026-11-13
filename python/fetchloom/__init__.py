@@ -3,9 +3,9 @@
 each helper runs ``fetchloom --json --progress`` and returns a :class:`pathlib.Path`, or raises
 :class:`Error` with the kind and message of the JSON error. each warning goes on as a python
 warning, and the progress lines a long download prints go to ``sys.stderr`` as they come.
-https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md describes the
-helpers, and https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/exit-codes.md
-lists the kinds with their exit codes.
+https://nikhil-yn-aix.github.io/fetchloom/user/reference/python-helper/ describes the helpers, and
+https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes/ lists the kinds with their exit
+codes.
 """
 
 import collections

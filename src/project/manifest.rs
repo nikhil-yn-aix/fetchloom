@@ -1035,7 +1035,7 @@ impl Reader<'_> {
                 "the data folder"
             };
             return Err(refused(&format!("fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"))
-                .help("to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"));
+                .help("to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive"));
         }
         if text == DATA_FOLDER_ITSELF {
             return match key {
