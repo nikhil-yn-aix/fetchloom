@@ -329,4 +329,6 @@ pub(crate) fn netscape(text: &str) -> (Vec<Cookie>, usize) {
 }
 
 #[cfg(test)]
+mod profile_tests;
+#[cfg(test)]
 mod tests;
