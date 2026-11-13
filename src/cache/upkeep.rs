@@ -1010,10 +1010,13 @@ mod tests {
             .map(|digest| digest.hex()[..2].to_owned())
             .collect();
         assert!(fans.len() >= 2 * FANS_PER_WORKER, "{} fans", fans.len());
-        // a name in capitals still names its object, at its own path
+        // a name in capitals still names its object, at its own path. the rename goes through
+        // another name, since fat and exfat volumes ignore one that changes only the case
         let shouted = cache.object_path(&digests[0]);
         let loud = shouted.with_file_name(digests[0].hex()[2..].to_uppercase());
-        fs::rename(&shouted, &loud).unwrap();
+        let aside = shouted.with_file_name("renaming");
+        fs::rename(&shouted, &aside).unwrap();
+        fs::rename(&aside, &loud).unwrap();
         let fan = shouted.parent().unwrap();
         fs::write(fan.join("notes.txt"), b"not an object").unwrap();
         let free = (0..=255u8)
