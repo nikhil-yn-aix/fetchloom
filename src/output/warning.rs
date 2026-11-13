@@ -187,8 +187,7 @@ mod tests {
         }};
     }
 
-    /// the JSON reference names every kind of warning, and no kind that does not exist, so a
-    /// script can look up each one it meets.
+    /// and no kind that does not exist, so a script can look up each one it meets.
     #[test]
     fn every_warning_kind_is_documented() {
         let kinds = every_kind![

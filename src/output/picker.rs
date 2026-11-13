@@ -42,9 +42,8 @@ pub(super) fn choose(
     answer
 }
 
-/// a choice for a person who reads the screen a line at a time, as with a screen reader: the
-/// options listed once with their numbers, then the number typed, read as a yes or no answer is.
-/// nothing is drawn over again.
+/// a choice for a person who reads a line at a time, as with a screen reader: the options listed
+/// once with their numbers, then the number typed. nothing is drawn over again.
 pub(super) fn numbered(
     question: &str,
     options: &[String],
@@ -270,10 +269,9 @@ fn cancelled() -> Error {
         .help("run it again to choose, or give a link or an id instead")
 }
 
-/// one option: the reference, then from `column` on its title and facts, dim unless the cursor
-/// is on it, or right after a reference too long for the column. the reference is never cut; the
-/// rest gives way on a narrow terminal, or takes a line of its own under the reference when it
-/// does not fit beside it but fits there.
+/// one option: the reference, then from `column` its title and facts, dim unless the cursor is on
+/// it. the reference is never cut; the rest gives way on a narrow terminal, or goes on the line
+/// under it when it fits only there.
 fn row(
     option: &str,
     index: usize,

@@ -405,9 +405,8 @@ fn meter(done: u64, total: u64, color: bool) -> String {
 /// the fewest columns a name keeps beside its counters before the counters give way.
 const NAME_LEAST: usize = 16;
 
-/// facts before decoration: as the terminal narrows, the bar gives way first, then the verb, then
-/// the name shortens in the middle down to [`NAME_LEAST`] columns, and only then do the counters
-/// drop from the end. a name with no room for any counter is shortened to fit alone.
+/// facts before decoration: as the terminal narrows, the bar goes first, then the verb, then the
+/// name down to [`NAME_LEAST`], then the counters from the end; a name alone is cut to fit.
 fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: bool) -> String {
     let dim = super::paint(color, anstyle::Style::new().dimmed());
     let line = |parts: &[&str], amount: &str| {
@@ -481,10 +480,8 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
-/// elapsed time stays visible until a settled rate can estimate the time left, and a download
-/// that has received nothing for [`STALL`] says so instead of showing a fading rate. one with
-/// every byte in says it waits for the disk. `quiet`, how long since a download last received
-/// bytes, is none for local work. once the run is `stopping`, the bar says that alone.
+/// the counters: elapsed time until a settled rate gives a time left, `no data` once `quiet`, which
+/// local work leaves none, passes [`STALL`], the disk once every byte is in, and `stopping` alone.
 fn measure(
     done: u64,
     total: Option<u64>,
@@ -553,9 +550,8 @@ fn whole_up(wait: Duration) -> Duration {
     )
 }
 
-/// what a download's bar says while it waits on something other than the server's bytes: the
-/// try it makes next after one failed, as `next_try` says it, which a server that refused one
-/// answered at once, or the disk, which has been `behind` for that long taking what arrived.
+/// what a bar says while it waits on something other than the server's bytes: its next try after
+/// one failed, as [`next_try`] says it, or the disk, `behind` for that long taking what arrived.
 fn waiting(
     done: u64,
     total: Option<u64>,
@@ -622,9 +618,8 @@ fn fraction(done: u64, total: u64) -> String {
 }
 
 /// where bars draw: stderr, with the cursor back at the start of the last bar's line after each
-/// frame. indicatif pads every line to the last column, which leaves the cursor waiting to wrap,
-/// so the ^C a terminal echoes at a stop went onto a line of its own, and clearing the bars then
-/// cleared that line and left the bar's last frame on the screen.
+/// frame. indicatif pads lines to the last column, so a ^C echoed at a stop went onto a line of
+/// its own, which clearing the bars then cleared, leaving their last frame on screen.
 pub(super) fn terminal() -> ProgressDrawTarget {
     let rested = Rested {
         term: console::Term::buffered_stderr(),
@@ -690,9 +685,8 @@ impl TermLike for Rested {
     }
 }
 
-/// a step a command takes before its own work, such as taking the project lock, which a slow
-/// disk or a network filesystem can make last seconds. at a terminal a live line names it once
-/// it has lasted [`UNTOLD`], until it ends, so the screen is never blank for long.
+/// a step before a command's own work, such as taking the project lock: at a terminal a live line
+/// names it once it has lasted [`UNTOLD`], so the screen is never blank for long.
 pub(crate) struct Setup {
     ended: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<JoinHandle<()>>,
@@ -765,9 +759,8 @@ pub(crate) struct Wait {
     pub(super) _ticker: Ticker,
 }
 
-/// a batch of work told in plain lines where no bar shows it, as in a log or a pipe: what it
-/// does, as [`first`] says when, then how far it got every 10 s, never a line per file. it stops
-/// when dropped.
+/// a batch told in plain lines where no bar shows it: what it does, when [`first`] says, then how
+/// far it got every 10 s, never a line per file. it stops when dropped.
 pub(crate) struct Ticker {
     shared: Option<Arc<Shared>>,
     thread: Option<JoinHandle<()>>,
@@ -814,9 +807,8 @@ impl Shared {
     }
 }
 
-/// how long a batch runs before its first plain line, or none for no lines. debug builds read
-/// `FETCHLOOM_TEST_TICKER`, which only tests set, since how busy the machine is decides when the
-/// lines come: `off` drops them, and either value tells the first after a tenth of a second.
+/// how long a batch runs before its first plain line, or none for no lines. debug builds take
+/// `FETCHLOOM_TEST_TICKER` from tests: `off` drops the lines, any other value waits 0.1 s.
 #[cfg_attr(
     not(debug_assertions),
     expect(
@@ -840,9 +832,8 @@ impl Ticker {
         }
     }
 
-    /// tells `verb` and `what` through `say` once the batch lasts `moment`, for a batch whose
-    /// known sizes add up to `total`, with `unknown` more files whose downloads have yet to tell
-    /// theirs.
+    /// tells `verb` and `what` through `say` once the batch lasts `moment`, its known sizes adding
+    /// up to `total`, with `unknown` more files whose downloads have yet to tell theirs.
     pub(super) fn start(
         verb: &'static str,
         what: String,
@@ -894,9 +885,8 @@ impl Ticker {
         }
     }
 
-    /// adds the size of a file whose download just told it. a download that knows its whole
-    /// batch's size now says what it does, unless it told none, as one refused before its body,
-    /// which then never began.
+    /// adds the size a download just told. a download that knows its whole batch's size now says
+    /// what it does, unless it told none, as one refused before its body, which never began.
     pub(crate) fn sized(&self, bytes: u64) {
         if let Some(shared) = &self.shared
             && shared
@@ -970,11 +960,8 @@ fn tick(shared: &Shared, (moment, every): (Duration, Duration)) {
     }
 }
 
-/// the line a batch tells once it has run `elapsed`: the `first` time what it does, after that
-/// how far it got of `total`, which is known once every file's size is. a download with every
-/// byte in waits only for the disk to keep its files, so it says that, and an unpack that has
-/// read every byte of its archives says it is finishing, as its bar does, while their files are
-/// written and put in the cache.
+/// the line a batch tells once it has run `elapsed`: what it does the `first` time, then how far it
+/// got of `total`, or once every byte is in, that a download waits on the disk or an unpack ends.
 fn report(
     verb: &'static str,
     what: &str,
@@ -1020,9 +1007,8 @@ fn report(
 mod tests {
     use super::*;
 
-    /// a bar whose download waited for a person's answer counts that wait neither as data
-    /// that stopped coming nor toward its time: 4 s of waiting in a bar born 5 s ago leave it
-    /// neither quiet nor 2 s old, so it says no `no data for` and shows no time.
+    /// neither as data that stopped coming nor in its time: 4 s of waiting in a bar born 5 s ago
+    /// leave it neither quiet nor 2 s old.
     #[test]
     fn a_bar_leaves_out_the_wait_for_an_answer() {
         let five = Duration::from_secs(5);
@@ -1068,8 +1054,7 @@ mod tests {
         (heard, reported, say)
     }
 
-    /// a download that goes on from 900 bytes an earlier run kept, then moves 100, rates and
-    /// times only those 100: the estimate behind its speed and time left counts this run's bytes.
+    /// going on from 900 bytes an earlier run kept and moving 100, it rates and times only the 100.
     #[test]
     fn a_resumed_bar_rates_only_the_bytes_this_run_moved() {
         let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
@@ -1155,8 +1140,6 @@ mod tests {
         }
     }
 
-    /// a step before a command's own work that lasts its moment gets a live line naming it, and
-    /// one that ends sooner draws nothing.
     #[test]
     fn a_long_setup_step_gets_a_line_and_a_short_one_none() {
         let screen = Drawn::default();
@@ -1184,8 +1167,7 @@ mod tests {
         drop(setup);
     }
 
-    /// a first ctrl-c redraws every bar at once to say it is stopping, rather than at its next
-    /// tick, which a busy machine once put off for 6 s while the bar kept saying `9 s left`.
+    /// rather than at its next tick, which a busy machine once put off for 6 s of `9 s left`.
     #[test]
     fn a_stop_shows_on_every_bar_at_once() {
         let style = super::super::Style {
@@ -1214,9 +1196,7 @@ mod tests {
         assert!(drawn.contains("452/1000 B - stopping"), "{drawn}");
     }
 
-    /// a transfer's time counts from its start, not from when its bar appeared, as when the bar
-    /// waited for the server or checked what an earlier run kept: a bar that showed 5 s before
-    /// its transfer started shows no more than the time since the start was asked for.
+    /// as when the bar waited for the server or checked what an earlier run kept.
     #[test]
     fn a_transfer_counts_its_time_from_its_start_not_from_its_bar() {
         let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
@@ -1238,8 +1218,7 @@ mod tests {
         assert!(shown <= asked.elapsed(), "{shown:?}");
     }
 
-    /// a transfer's rate starts over once, a second in, leaving out the bytes that arrived at
-    /// once as it began, which once read as `58.5 MiB/s` from a server sending 38.1.
+    /// leaving out bytes that arrived at once, once read as `58.5 MiB/s` from a server at 38.1.
     #[test]
     fn the_rate_starts_over_once_a_second_into_a_transfer() {
         let moved = Moved::new(Arc::default());
@@ -1256,8 +1235,7 @@ mod tests {
         assert!((rate - 38.0 * 1_048_576.0).abs() < 1.0, "{rate}");
     }
 
-    /// a rate covers the last 10 to 20 s of a transfer, so a link that slows from 38 MiB a
-    /// second to 19 shows 19 within 20 s.
+    /// it covers the last 10 to 20 s, so a link slowing from 38 MiB a second to 19 shows 19.
     #[test]
     fn the_rate_follows_a_link_that_slows_within_twenty_seconds() {
         let moved = Moved::new(Arc::default());
@@ -1363,8 +1341,7 @@ mod tests {
         );
     }
 
-    /// a narrow terminal drops decoration before facts: the bar first, then the verb, then the
-    /// name shortens in the middle, while the size, the speed and the time left keep their room.
+    /// the bar first, then the verb, then the middle of the name, while the counters keep room.
     #[test]
     fn narrow_progress_drops_decoration_before_facts() {
         let name = "train-00000-of-00004.parquet";
@@ -1438,9 +1415,7 @@ mod tests {
         }
     }
 
-    /// a batch that waits on the network says what it does before its moment, even one too
-    /// quick for any later line, so plain output tells at once that it began: a download as
-    /// soon as it knows its size, a lookup as it starts.
+    /// even one too quick for a later line: a download once it knows its size, a lookup at once.
     #[test]
     fn a_network_batch_tells_its_start_at_once() {
         let pace = (Duration::from_mins(1), Duration::from_mins(2));
@@ -1472,7 +1447,7 @@ mod tests {
         }
     }
 
-    /// work on this machine says nothing until it lasts a moment, so a quick batch adds no line.
+    /// work on this machine says nothing until it lasts a moment.
     #[test]
     fn a_quick_batch_adds_no_line() {
         let (heard, _reported, say) = ear();
@@ -1510,8 +1485,7 @@ mod tests {
         );
     }
 
-    /// a bar tells how far it got in the unit of its total all the way, with two decimals
-    /// below one of it, so the count never jumps from `1002.0 MiB/2.0 GiB` to `1.0/2.0 GiB`.
+    /// with two decimals below one, so it never jumps from `1002.0 MiB/2.0 GiB` to `1.0/2.0 GiB`.
     #[test]
     fn a_fraction_counts_in_the_unit_of_its_total() {
         let mib = 1024 * 1024;
@@ -1628,8 +1602,7 @@ mod tests {
         );
     }
 
-    /// a download whose disk is behind taking what arrived says it waits for the disk, not
-    /// that no data came, which would send a person to check the network.
+    /// not that no data came, which would send a person to check the network.
     #[test]
     fn a_download_held_by_the_disk_says_so() {
         let second = Duration::from_secs(1);
@@ -1650,8 +1623,7 @@ mod tests {
         );
     }
 
-    /// a bar whose download has every byte in waits on the disk to keep the file, so it says
-    /// that, and for how long once it has waited a moment, rather than that no data came.
+    /// and for how long once it has waited a moment, not that no data came.
     #[test]
     fn a_full_bar_says_it_waits_for_the_disk() {
         let second = Duration::from_secs(1);
@@ -1681,8 +1653,7 @@ mod tests {
         );
     }
 
-    /// the plain line says what a batch does the first time, then how far it got. once every
-    /// byte of a download is in, what is left is the disk's, so the line says it waits for that.
+    /// the first line says what a batch does, the later ones how far it got.
     #[test]
     fn a_plain_line_says_a_download_waits_for_the_disk_once_every_byte_is_in() {
         let ten = Duration::from_secs(10);
@@ -1713,9 +1684,7 @@ mod tests {
         );
     }
 
-    /// an unpack that has read every byte of its archives still writes their files and puts
-    /// them in the cache, so its plain line says it is finishing, as its bar does, rather than
-    /// a count that stands full.
+    /// as its bar does, while its files are written, rather than a count that stands full.
     #[test]
     fn a_plain_line_says_an_unpack_that_read_every_byte_is_finishing() {
         let ten = Duration::from_secs(10);
@@ -1734,8 +1703,7 @@ mod tests {
         );
     }
 
-    /// a download waiting to try again says which try comes next, of how many, and when, and
-    /// whose rate limit it waits for, rather than that no data came: the server answered.
+    /// of how many, and whose rate limit it waits for, not that no data came: the server answered.
     #[test]
     fn a_bar_waiting_to_try_again_says_which_try_and_when() {
         let second = Duration::from_secs(1);
@@ -1773,8 +1741,7 @@ mod tests {
         );
     }
 
-    /// once a stop is asked for, a bar says so, rather than that no data came or a rate and time
-    /// left that no longer apply, however long the stop takes.
+    /// rather than no data or a rate and time left that no longer apply, however long it takes.
     #[test]
     fn a_bar_says_it_is_stopping_once_a_stop_is_asked_for() {
         let second = Duration::from_secs(1);
@@ -1887,8 +1854,7 @@ mod tests {
         );
     }
 
-    /// a rate too slow to count what is left in a duration gives the longest one, where the
-    /// conversion panicked, which a release build turns into an abort.
+    /// where the conversion panicked, which a release build turns into an abort.
     #[test]
     fn a_time_left_beyond_counting_is_the_longest() {
         assert_eq!(time_left(u64::MAX, 1e-6), Duration::MAX);

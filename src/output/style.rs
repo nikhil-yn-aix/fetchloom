@@ -6,8 +6,7 @@ use std::sync::OnceLock;
 
 use anstyle::{Ansi256Color, AnsiColor, Color, RgbColor};
 
-/// what a color means. a line's subject is bold and its facts are dim, so a tone always means
-/// the same thing wherever it appears.
+/// what a color means, the same wherever it appears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
     /// finished work
@@ -299,9 +298,8 @@ fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool
         && !by_agent(var)
 }
 
-/// whether `name`, a variable a CI service or a coding agent sets, marks this run: any value
-/// but empty, false or 0, read as an on/off variable is, so a service's own word counts too, as
-/// drone's `CI=drone` does.
+/// whether `name`, a variable a CI service or a coding agent sets, marks this run: any value but
+/// empty, false or 0, so a service's own word counts too, as drone's `CI=drone` does.
 fn marks(name: &str, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
     !matches!(
         crate::settings::switched(name, var(name).as_deref()),
@@ -309,9 +307,8 @@ fn marks(name: &str, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
     )
 }
 
-/// variables coding agents set on the commands they run, often in a real terminal where a
-/// question would wait for an answer nobody gives. ones also set in a person's own terminal,
-/// such as cursor's trace id, are left out.
+/// variables coding agents set on the commands they run, often in a real terminal where a question
+/// would wait forever. ones a person's own terminal sets too, as cursor's trace id, are left out.
 const AGENT_VARIABLES: [&str; 10] = [
     "AI_AGENT",
     "VSCODE_AGENT",

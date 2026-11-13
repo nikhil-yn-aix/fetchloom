@@ -53,9 +53,8 @@ pub(crate) struct Output {
     level: Level,
     json: bool,
     bars: Option<MultiProgress>,
-    /// lines told while a person answers a question, written once the answer is in. every line
-    /// is written while holding it, a batch's plain lines too, so a first ctrl-c holding it keeps
-    /// all others back.
+    /// lines told while a person answers a question, written once the answer is in. every line goes
+    /// out holding it, so a first ctrl-c holding it keeps all others back.
     held: Arc<Mutex<Option<Vec<String>>>>,
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
@@ -86,9 +85,8 @@ pub(crate) struct Output {
     untold: Duration,
     /// how long a batch runs before its first plain line, or none when a test turns them off.
     moment: Option<Duration>,
-    /// the last closing line told, such as `Added iris`, and whether a ctrl-c that let the run
-    /// finish came after it. a terminal drops what a program wrote but it had not yet shown when
-    /// a ctrl-c comes, so that line is told once more at the end.
+    /// the last closing line, such as `Added iris`, and whether a finishing ctrl-c came after it: a
+    /// terminal drops what it had not yet shown at a ctrl-c, so the line is told again at the end.
     closing: Mutex<(Option<String>, bool)>,
     /// every line told, in the order it went out, for tests.
     #[cfg(test)]
@@ -128,9 +126,8 @@ impl Alone<'_> {
         }
     }
 
-    /// says that a first ctrl-c or SIGTERM was heard once the run had marked its work as
-    /// finishing, so it finishes, and what a second one does. a closing line told before it is
-    /// told again at the end.
+    /// says that a first ctrl-c or SIGTERM came once the run marked its work as finishing, so it
+    /// finishes, and what a second one does. a closing line told before it is told again later.
     pub(crate) fn finishing(&mut self) {
         {
             let mut closing = self
@@ -228,21 +225,15 @@ struct Problem<'a> {
     message: &'a str,
     details: &'a [String],
     help: Option<&'a str>,
-    /// the command `help` names, ready to run, for a script or an agent to act on
+    /// the command `help` names, ready to run, for a script or an agent to act on.
     fix: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failures: Option<&'a [crate::error::FileFailure]>,
 }
 
-/// the first `fetchloom` command quoted in `help`, without its backticks. an example ("as in"),
-/// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
-/// running it would act on a dataset nobody named or ask the same question again. a command
-/// that first needs a broken file deleted, a file edited by hand or the errors listed above fixed
-/// is not ready to run either. one that deletes, overwrites or repins what a person keeps, or
-/// runs the project's code, is a choice only a person makes, and so is what a help names after
-/// it, often the step that follows it, and so is one of the ways a help offers with `or`. in a
-/// run that is `locked`, a command that may write data.lock is no fix either, since a script
-/// running it would undo `--locked`.
+/// the first `fetchloom` command quoted in `help`, without its backticks, when a script may run it
+/// as the next step. json-output.md's `errors[].fix` lists what never is: an example, a guess, a
+/// person's choice, one of the ways offered with `or`, or under `locked` a write to data.lock.
 fn fix(help: &str, locked: bool) -> Option<&str> {
     const NOT_A_FIX: [&str; 9] = [
         "as in",
@@ -285,11 +276,9 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
     None
 }
 
-/// whether the clause of `help` that holds the quoted command starting at byte `at` offers a
-/// choice of ways: `or` after a comma, at the clause's start, or between two quoted commands. a
-/// clause ends at a full stop, a colon, a semicolon or a question mark of the prose, so an `or`
-/// in a reason before it, as in "was refused, or has no access to it: `fetchloom auth` shows
-/// whose it is", offers none.
+/// whether the clause of `help` holding the quoted command at byte `at` offers a choice of ways:
+/// `or` after a comma, at its start, or between two quoted commands. a clause ends at `.`, `:`,
+/// `;` or `?`, so an `or` in a reason before it, as "was refused, or has no access", offers none.
 fn offers_choice(help: &str, at: usize) -> bool {
     const ENDS: [&str; 4] = [". ", ": ", "; ", "? "];
     // what backticks quote is blanked, byte for byte, so only the prose is read
@@ -420,7 +409,7 @@ impl Output {
         }
     }
 
-    /// the warnings told so far, each as a person reads it, for tests.
+    /// [`Output::warned`] under another name.
     #[cfg(test)]
     pub(crate) fn told(&self) -> Vec<String> {
         self.warned()
@@ -624,10 +613,8 @@ impl Output {
             .then(|| usize::from(console::Term::stdout().size().1))
     }
 
-    /// one match of a search: what to type, padded to `pad`, then its title and dim facts, both
-    /// already padded into columns, the facts on a line of their own under what to type when
-    /// `below` says so. it has no number, since nothing reads one. what is cut on a narrow
-    /// terminal is the end, never what to type.
+    /// one match of a search: what to type, padded to `pad`, then its padded title and dim facts,
+    /// the facts on a line of their own when `below`. a narrow terminal cuts the end, not the name.
     pub(crate) fn candidate(
         &self,
         typed: &str,
@@ -721,8 +708,7 @@ impl Output {
     }
 
     /// a failure: the sentence, its supporting lines, and what to do next. a cancel the person
-    /// chose is no failure, so it is one plain line of what was cancelled, then the help as a
-    /// hint, and neither is a stop they asked for, which is one plain line of where it stopped.
+    /// chose, or a stop they asked for, is one line of what was cancelled or where it stopped.
     pub(crate) fn error(&self, error: &Error) {
         if !self.json {
             self.line(&failure_text(error, self.level, self.style.color));
@@ -749,9 +735,8 @@ impl Output {
         bar
     }
 
-    /// a step a command takes before its own work, as `verb` and `what`, such as `Locking the
-    /// project`: a debug line as it begins, and at a terminal a live line once it lasts a second,
-    /// for a slow disk or a network filesystem that makes such a step take seconds.
+    /// a step before a command's own work, as `verb` and `what`, such as `Locking the project`: a
+    /// debug line as it begins, and at a terminal a live line once it lasts a second.
     pub(crate) fn setup(&self, verb: &'static str, what: &'static str) -> Setup {
         tracing::debug!(step = %format!("{verb} {what}").to_lowercase(), "setting up");
         self.untold(verb, what.to_owned())
@@ -771,9 +756,8 @@ impl Output {
         }
     }
 
-    /// work that is usually quick but grows with its size, such as placing many files: at a
-    /// terminal a live line once it lasts a second, and where no bar shows, the plain lines a
-    /// long batch tells, which `--progress` keeps beside `--json`.
+    /// work that is usually quick but grows with its size, such as placing many files: a live line
+    /// once it lasts a second, or where no bar shows, a long batch's plain lines.
     pub(crate) fn lasting(&self, verb: &'static str, what: String) -> Lasting {
         Lasting {
             _setup: self.untold(verb, what.clone()),
@@ -800,9 +784,8 @@ impl Output {
         }
     }
 
-    /// plain lines about a batch of work where no bar shows it, such as `Downloading 3 files`,
-    /// also beside `--json` when `--progress` asks. `sizes` holds each file's size, or none for
-    /// one whose download tells it.
+    /// plain lines about a batch where no bar shows it, such as `Downloading 3 files`, beside
+    /// `--json` too with `--progress`. `sizes` holds each file's size, or none for one not known.
     pub(crate) fn ticker(
         &self,
         verb: &'static str,
@@ -870,7 +853,7 @@ impl Output {
                 let _ = terminal.write_str(&format!("{question} {choices} "));
                 let mut shown = 0_usize;
                 // read ctrl-c as a key on both platforms instead of leaving a blocking read
-                // waiting after the signal handler asks network tasks to stop.
+                // waiting after the signal handler asks network tasks to stop
                 let answer = answer(
                     || terminal.read_key_raw(),
                     |edit| {
@@ -898,9 +881,8 @@ impl Output {
         self.asking(ask)
     }
 
-    /// asks for a line of text, such as a username, or returns none when nobody can answer.
-    /// with `hidden`, nothing typed or pasted shows until enter, then a masked echo confirms it
-    /// arrived. a blank answer is asked again, twice at most. ctrl-c cancels the question.
+    /// asks for a line of text, such as a username, or none when nobody can answer. `hidden` shows
+    /// nothing until enter, then a masked echo; a blank answer is asked again, twice at most.
     pub(crate) fn ask_text(&self, prompt: &str, hidden: bool) -> Result<Option<String>, Error> {
         if !self.can_ask() {
             return Ok(None);
@@ -1003,10 +985,8 @@ impl Output {
         self.detail(&work_line(counts, elapsed));
     }
 
-    /// prints the `--json` document for a run, whatever its outcome.
-    ///
-    /// # Errors
-    /// reports an unencodable result or a failed stdout write, including earlier text answers.
+    /// prints the `--json` document for a run, whatever its outcome. fails for an unencodable
+    /// result or a failed stdout write, earlier text answers' included.
     pub(crate) fn document<T: Serialize>(
         &self,
         command: Option<&str>,
@@ -1053,7 +1033,7 @@ impl Output {
                 elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
             },
         };
-        // encoding can fail on a non-unicode path; stdout cannot retract a partial document.
+        // encoding can fail on a non-unicode path; stdout cannot retract a partial document
         let encoded = if self.indented {
             serde_json::to_vec_pretty(&document)
         } else {
@@ -1083,7 +1063,7 @@ impl Output {
             out.write_all(b"\n")
         })
         .inspect_err(|error| {
-            // stdout is unusable, so its failure can only be reported on stderr.
+            // stdout is unusable, so its failure can only be reported on stderr
             self.line(&error_text(error, self.level, self.style.color));
         })
     }
@@ -1092,10 +1072,8 @@ impl Output {
         !self.json && self.level >= level
     }
 
-    /// runs `ask`, a question to a person, with the bars cleared and hidden but free to move.
-    /// holding their lock until a person answers, as suspending them does, would stop every
-    /// download that reports progress meanwhile. lines told meanwhile wait for the answer, with
-    /// bars or without, as in accessible output.
+    /// runs `ask`, a question to a person, with the bars cleared and hidden but free to move, since
+    /// suspending them would stall every download's progress until the answer. lines told wait.
     fn asking<R>(&self, ask: impl FnOnce() -> R) -> R {
         let _alone = self.question.lock().unwrap_or_else(PoisonError::into_inner);
         *self.held.lock().unwrap_or_else(PoisonError::into_inner) = Some(Vec::new());
@@ -1113,9 +1091,8 @@ impl Output {
         answer
     }
 
-    /// the output for a first ctrl-c or SIGTERM to decide and tell what it does, every other
-    /// line waiting meanwhile, so the stop can be asked before `Stopping` shows without any line
-    /// the stopping work tells coming first.
+    /// the output for a first ctrl-c or SIGTERM to decide and tell what it does while every other
+    /// line waits, so no line of the stopping work comes before `Stopping`.
     pub(crate) fn alone(&self) -> Alone<'_> {
         Alone {
             output: self,
@@ -1130,7 +1107,6 @@ impl Output {
             .store(interrupt == Interrupt::Terminate, Ordering::Relaxed);
     }
 
-    /// the interrupt that stopped the run, when one did.
     pub(crate) fn stopped_by(&self) -> Option<Interrupt> {
         self.stopped_by.get().copied()
     }
@@ -1241,9 +1217,8 @@ impl Output {
 }
 
 impl Output {
-    /// one row of a report on stdout, as `mark` draws it on stderr: a verb in its column, such
-    /// as `Missing`, then its subject, so a pipe or a file gets the rows while the story stays on
-    /// stderr. quiet and `--json` print none.
+    /// one row of a report on stdout, as `mark` draws it on stderr, such as `Missing` and its
+    /// subject, so a pipe or a file gets the rows. quiet and `--json` print none.
     pub(crate) fn report(&self, verb: &str, text: &str) {
         let Some(line) = self.report_text(verb, text) else {
             return;
@@ -1342,10 +1317,7 @@ pub(crate) fn story_columns() -> Option<usize> {
         .map(|(_, columns)| usize::from(columns))
 }
 
-/// prints help with the chosen palette and terminal width.
-///
-/// # Errors
-/// returns stdout failures other than a reader closing its pipe.
+/// prints help with the chosen palette and terminal width. a reader closing its pipe is no failure.
 pub(crate) fn help(text: &str, choice: ColorChoice) -> Result<(), Error> {
     let terminal = std::io::stdout().is_terminal();
     let width = if terminal {
@@ -1376,10 +1348,9 @@ fn write_answer(
     }
 }
 
-/// help as wide as `width`: a row of a table wraps under its own description column and prose
-/// wraps flush. a command line under `examples:`, or on a line of its own, stays whole, so it can
-/// be copied, but at a `terminal`, which would wrap it inside a word, it goes on after the mark a
-/// shell continues it at, with its comment below it.
+/// help as wide as `width`: a table row wraps under its description column, prose flush. a command
+/// line stays whole to copy, but at a `terminal`, which would wrap it inside a word, it goes on
+/// after a shell's continuation mark, its comment below it.
 pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
@@ -1545,9 +1516,8 @@ fn paint(color: bool, style: Paint) -> Paint {
     if color { style } else { Paint::new() }
 }
 
-/// the palette: green for what finished, cyan for work under way and for anything a person
-/// types, yellow for what needs attention, red for what failed. a line's subject is bold and its
-/// facts are dim, so color always means the same thing.
+/// the palette: green for what finished, cyan for work under way and anything a person types,
+/// yellow for what needs attention, red for what failed.
 fn verb_color(verb: &str) -> Tone {
     match verb {
         "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" | "Searching" => {
@@ -1661,13 +1631,10 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
     text
 }
 
-/// the lines a person reads for the detail `line`, shown `indent` columns in: a comparison of
-/// two whole SHA-256 values, as `expected sha256 <a>, got <b>`, or MD5 values, as
-/// `stated md5 <a>, got <b>`, with every digit, one value under the other, since a person checks
-/// them against a published checksum. a label leads its value, without the `sha256` that 64 hex
-/// digits make plain, where both lines fit in 80 columns, at which a terminal would wrap through
-/// a hash, else stands on a line of its own above it. any other line as [`hashes_apart`] shows
-/// it.
+/// the lines a person reads for the detail `line`, `indent` columns in: two whole SHA-256 or MD5
+/// values compared, as `expected sha256 <a>, got <b>`, one under the other with every digit, to
+/// check against a published checksum, each label on its own line where 80 columns would wrap a
+/// hash. any other line as [`hashes_apart`] shows it.
 fn readable(line: &str, indent: usize) -> Vec<Cow<'_, str>> {
     const COLUMNS: usize = 80;
     let pair = [64, 32]
@@ -1727,9 +1694,8 @@ fn whole_hashes(line: &str, digits: usize) -> Vec<(usize, &str)> {
     hashes
 }
 
-/// `line` as a person reads it: each whole SHA-256 on it, a word of 64 hex digits, cut to its
-/// first 12 digits, or to one past the first digit where it differs from another hash on the
-/// line, so two hashes that differ late still read apart. `--json` gives them whole.
+/// `line` with each whole SHA-256 cut to its first 12 digits, or one past where it differs from
+/// another on the line, so hashes that differ late still read apart. `--json` keeps them whole.
 fn hashes_apart(line: &str) -> Cow<'_, str> {
     const WHOLE: usize = 64;
     const SHORT: usize = 12;
@@ -1774,13 +1740,11 @@ fn help_line(text: &str, color: bool) -> String {
     )
 }
 
-/// the one color for what a person types, commands and options, wherever they appear. the stream
-/// drops it, like every color, when color is off.
+/// the one color for what a person types, commands and options, wherever they appear.
 fn accent() -> Paint {
     tinted(Tone::Accent)
 }
 
-/// text in the color of `tone`.
 fn tinted(tone: Tone) -> Paint {
     Paint::new().fg_color(Some(style::color(tone)))
 }
@@ -1846,10 +1810,9 @@ enum Edit {
     Erased(char),
 }
 
-/// a line typed at a prompt, read one key at a time from `key` until enter, with each change
-/// told to `edited`. ctrl-c arrives as a key, so it cancels the line on every system: a terminal
-/// reading whole lines turns it into a signal, which only asks the work to stop while the read
-/// goes on waiting, and leaves echo off on unix if a second ctrl-c ends the run.
+/// a line typed at a prompt, read one key at a time from `key` until enter, each change told to
+/// `edited`. ctrl-c arrives as a key and cancels it everywhere; read as whole lines, it would be a
+/// signal that leaves the read waiting, and echo off on unix after a second ctrl-c.
 fn typed_line(
     mut key: impl FnMut() -> std::io::Result<console::Key>,
     mut edited: impl FnMut(Edit),
@@ -1873,10 +1836,8 @@ fn typed_line(
     }
 }
 
-/// one answer to a yes or no question, a line typed with `key` and each change told to
-/// `edited`: y or yes, n or no in any case, or enter alone for `default`. any other line, such as
-/// q typed to quit, is none, so the question is asked again rather than taking the default.
-/// ctrl-c cancels the question, and a terminal that closed answers no.
+/// one answer to a yes or no question, typed with `key`: y or yes, n or no, or enter for `default`.
+/// any other line, as q typed to quit, is none and asked again; a closed terminal answers no.
 fn answer(
     key: impl FnMut() -> std::io::Result<console::Key>,
     edited: impl FnMut(Edit),
@@ -1935,9 +1896,8 @@ fn masked(secret: &str) -> String {
     )
 }
 
-/// `text` with control characters, bidi controls among them, written out as escapes, so text from
-/// a server or a quoted line cannot move the cursor, recolor the terminal or show its words in
-/// another order than they are.
+/// `text` with control characters, bidi controls among them, written as escapes, so text from a
+/// server cannot move the cursor, recolor the terminal or reorder its words.
 fn plain(text: &str) -> Cow<'_, str> {
     if !text.contains(crate::name::is_control) {
         return Cow::Borrowed(text);
@@ -1953,9 +1913,8 @@ fn plain(text: &str) -> Cow<'_, str> {
     Cow::Owned(shown)
 }
 
-/// `json` as it goes to a terminal: c1 controls, which some terminals act on as escape codes, and
-/// bidi controls, which show the text around them in another order, written as `\u` escapes,
-/// which any reader of json reads back as the same characters. json holds them only in strings.
+/// `json` as it goes to a terminal, with c1 and bidi controls, which a terminal may act on or show
+/// out of order, written as `\u` escapes, which json holds only in strings and reads back alike.
 fn escaped_for_terminal(json: Vec<u8>) -> Vec<u8> {
     let steers = |c: char| matches!(c, '\u{80}'..='\u{9f}') || crate::name::is_bidi_control(c);
     let text = match String::from_utf8(json) {
@@ -2064,9 +2023,8 @@ mod tests {
         );
     }
 
-    /// at 60 columns an example's comment goes below its command, every one in the block once one
-    /// does not fit beside its command, and a command too long for a line goes on after the mark
-    /// a shell continues it at, an option with its value. at 80 columns they all fit as written.
+    /// at 60 columns comments go below their commands, every one in the block once one does not
+    /// fit, and a long command goes on after a shell's continuation mark. at 80 all fit as written.
     #[test]
     fn help_examples_wrap_as_a_shell_reads_them() {
         let examples = "examples:\n  fetchloom add iris    # at a terminal, pick one from a list\n  fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run\n  fetchloom add ./flowers    # files on this machine, copied into the cache\n  fetchloom add -i links.txt    # a dataset for each link in a list";
@@ -2081,7 +2039,7 @@ mod tests {
         assert_eq!(super::wrap_help(examples, 60, false), examples);
     }
 
-    /// a word wider than the help's width, such as a link, goes on a line of its own, whole.
+    /// such as a link, which goes on a line of its own.
     #[test]
     fn help_keeps_a_word_wider_than_the_terminal_whole() {
         let link = "https://huggingface.co/datasets/ILSVRC/imagenet-1k/resolve/main/train.tar";
@@ -2117,9 +2075,8 @@ mod tests {
         );
     }
 
-    /// a stop the person asked for is no failure, as a cancel they chose is not: a `Stopped`
-    /// line in the warning color made from the error's sentence, its supporting lines dim under
-    /// it and its help as a hint, never `error:`, even with -v.
+    /// as a cancel they chose is not: a `Stopped` line in the warning color, its supporting lines
+    /// dim and its help a hint, never `error:`, even with -v.
     #[test]
     fn a_stop_is_a_plain_line_not_an_error() {
         use crate::error::{Error, Kind};
@@ -2218,8 +2175,8 @@ mod tests {
         );
     }
 
-    /// a row for each rule in `fix`'s doc: placeholders, examples, guesses, a person's terminal,
-    /// hand fixes first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
+    /// a row for each rule: placeholders, examples, guesses, a person's terminal, hand fixes
+    /// first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
@@ -2317,8 +2274,8 @@ mod tests {
         );
     }
 
-    /// signing in needs a person at a terminal to paste the key, so `auth login` is never a fix,
-    /// even as the one command a help names: an agent that ran it only failed.
+    /// it needs a person to paste the key, even as the one command a help names: an agent that
+    /// ran it only failed.
     #[test]
     fn signing_in_is_never_a_fix() {
         assert_eq!(
@@ -2330,10 +2287,8 @@ mod tests {
         );
     }
 
-    /// a help that offers a choice, ways joined by `or`, has no fix, since which way to go is the
-    /// person's call: a fix that pinned a folder named like the search a person meant copied it
-    /// whole into the cache. an `or` inside one way's clause, or between two of its words, offers
-    /// no choice.
+    /// which way to go is the person's call: a fix that pinned a folder named like the search they
+    /// meant copied it whole into the cache. an `or` within one way's clause offers no choice.
     #[test]
     fn a_help_that_offers_a_choice_has_no_fix() {
         for (help, fix) in [
@@ -2362,10 +2317,8 @@ mod tests {
         }
     }
 
-    /// a command that deletes, overwrites or repins what a person keeps, runs the project's code
-    /// or says yes for them is never a fix, and a help that names one first has none: an agent
-    /// ran the fix of an add whose name data.toml had, and the dataset was gone. a dry run of one
-    /// only shows.
+    /// nor says yes for a person, and a help naming one first has none: an agent ran the fix of an
+    /// add whose name data.toml had, and the dataset was gone. a dry run of one only shows.
     #[test]
     fn a_fix_never_deletes_overwrites_repins_or_runs_code() {
         for help in [
@@ -2386,9 +2339,8 @@ mod tests {
         );
     }
 
-    /// every command, alone and with each option of its own, is a fix exactly when this table
-    /// says so, so a command or an option added later is no fix until someone decides here that
-    /// a script may run it without asking a person.
+    /// every command, alone and with each option, so one added later is no fix until someone
+    /// decides here that a script may run it without asking a person.
     #[test]
     fn a_fix_is_only_a_command_the_table_allows() {
         // each command, whether it is a fix alone, and the options it stays one with
@@ -2463,9 +2415,8 @@ mod tests {
         }
     }
 
-    /// command lines fetchloom takes for the command `name`: alone, then with each option of its
-    /// own, beside the option each adds. an option gets a value where it takes one, and another
-    /// option where it needs one, as `export --force` needs `--output`.
+    /// command lines for `name`: alone, then with each option of its own beside it, given a value
+    /// or the option it needs, as `export --force` needs `--output`.
     fn lines(name: &str, command: &clap::Command) -> Vec<(String, Option<String>)> {
         let values = |arg: &clap::Arg| -> Vec<String> {
             if !arg.get_action().takes_values() {
@@ -2522,8 +2473,7 @@ mod tests {
             .collect()
     }
 
-    /// a report row is a verb line for stdout, colored as stdout decides apart from stderr, and
-    /// quiet or `--json` print none.
+    /// colored as stdout decides apart from stderr; quiet and `--json` print none.
     #[test]
     fn report_rows_follow_stdout_alone() {
         let style = |color| Style {
@@ -2580,9 +2530,8 @@ mod tests {
         }
     }
 
-    /// the `-v` counters say what each counts: a placement from bytes the cache held before is
-    /// not a download that did not happen, and a file the run wrote to the cache, as a one-off
-    /// `get -o` does before moving it out, is not said to be in it still.
+    /// a placement from bytes the cache held is not a skipped download, and a file a one-off
+    /// `get -o` wrote to the cache, then moved out, is not said to be in it still.
     #[test]
     fn work_counters_say_what_happened_in_the_run() {
         let second = Duration::from_secs(2);
@@ -2610,9 +2559,8 @@ mod tests {
         );
     }
 
-    /// a comparison of two hashes, SHA-256 or MD5, shows both whole, one under the other, in 80
-    /// columns with its indent: each label leads its hash where both fit, else stands on a line
-    /// above it. a lone hash reads as [`super::hashes_apart`] cuts it.
+    /// in 80 columns with its indent: each label leads its hash where both fit, else stands above
+    /// it. a lone hash reads as [`super::hashes_apart`] cuts it.
     #[test]
     fn a_hash_comparison_reads_whole_one_value_under_the_other() {
         let wrong = "0".repeat(64);
@@ -2724,8 +2672,7 @@ mod tests {
         assert!(super::wordmark(100, true).contains('\u{1b}'));
     }
 
-    /// a dry run's verb keeps `Would` in the verb column every other verb ends in, however long
-    /// its action is.
+    /// `Would` ends where every other verb does, however long its action.
     #[test]
     fn a_dry_run_verb_sits_in_the_verb_column() {
         let text = "1 file from data/ that no dataset needs";
@@ -2859,9 +2806,7 @@ mod tests {
         }
     }
 
-    /// y or yes and n or no answer a question in any case, and enter alone takes its default.
-    /// anything else, such as q typed to quit, is asked again, so it never saves or downloads
-    /// anything as a yes would.
+    /// y, yes, n and no in any case; q typed to quit is asked again, never taken as a yes.
     #[test]
     fn an_answer_other_than_yes_or_no_is_asked_again_not_taken_as_the_default() {
         for default in [true, false] {
@@ -2888,7 +2833,7 @@ mod tests {
         }
     }
 
-    /// a terminal that closed before an answer came, as at the end of its input, answers no.
+    /// as at the end of its input.
     #[test]
     fn a_question_whose_terminal_closed_is_answered_no() {
         let closed = || Err(std::io::ErrorKind::UnexpectedEof.into());
@@ -3137,9 +3082,7 @@ mod tests {
         output
     }
 
-    /// lines told while a person answers a question wait for the answer, a batch's plain lines
-    /// too, so none is written over the question where no bars hide behind it, as in accessible
-    /// output.
+    /// a batch's plain lines too, so none is written over the question, as in accessible output.
     #[test]
     fn lines_told_during_a_question_wait_for_the_answer() {
         let output = telling(false);
@@ -3158,9 +3101,8 @@ mod tests {
         assert!(said[1].contains("Downloading iris.csv"), "{said:?}");
     }
 
-    /// a terminal drops what a program wrote but had not yet shown when a ctrl-c comes, so a
-    /// closing line told before a ctrl-c that lets the run finish is told again at the end, and
-    /// one told after it, or with no ctrl-c, only once.
+    /// since a terminal drops what it had not yet shown at a ctrl-c. one told after it, or with no
+    /// ctrl-c, is told once.
     #[test]
     fn a_closing_line_before_a_finishing_ctrl_c_is_told_again() {
         let added = "      Added iris, its files are in data/iris";
@@ -3181,10 +3123,8 @@ mod tests {
         assert_eq!(calm.said(), [added]);
     }
 
-    /// a terminal echoes ctrl-c as `^C` at the start of the empty line where its cursor waits, so
-    /// the line told then clears it first, and every line starts from the start of its own line,
-    /// writing over an echo the command's next line once followed, so the verb column stays; a
-    /// pipe gets the lines alone.
+    /// a terminal echoes `^C` where its cursor waits, so that line clears it first and every line
+    /// starts at its own start, keeping the verb column; a pipe gets the lines alone.
     #[test]
     fn a_line_told_at_a_ctrl_c_clears_the_echo() {
         let stopping = "   Stopping (press ctrl-c again to quit at once)";
@@ -3206,8 +3146,7 @@ mod tests {
         assert_eq!(piped.said(), [stopping]);
     }
 
-    /// a SIGTERM, which a scheduler sends a job it ends, says in each line told for it what a
-    /// second SIGTERM does, and a ctrl-c after it is told as a ctrl-c.
+    /// and a ctrl-c after it is told as a ctrl-c.
     #[test]
     fn a_line_told_at_a_sigterm_names_a_second_sigterm() {
         let output = telling(false);
@@ -3228,8 +3167,7 @@ mod tests {
         );
     }
 
-    /// a wait for another program counts its seconds in a live line on a terminal, where a fixed
-    /// line once stood still for as long as the wait, and is one plain line in a log or a pipe.
+    /// where a fixed line once stood still for the whole wait, and is one plain line in a log.
     #[test]
     fn a_wait_for_another_program_counts_on_a_terminal() {
         let text = "for `fetchloom add` (pid 7) working in this project";
@@ -3246,8 +3184,7 @@ mod tests {
         assert_eq!(piped.said(), [format!("    Waiting {text}")]);
     }
 
-    /// work that grows with its size, such as placing many files, gets a live line at a
-    /// terminal once it lasts, where it once went untold for seconds after `Imported`.
+    /// it once went untold for seconds after `Imported`.
     #[test]
     fn lasting_work_is_told_once_it_lasts() {
         let mut terminal = telling(false);

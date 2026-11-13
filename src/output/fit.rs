@@ -8,11 +8,9 @@ const COMMENT: &str = "    # ";
 /// a backtick in powershell.
 pub(super) const MARK: &str = if cfg!(windows) { " `" } else { " \\" };
 
-/// `text` with each of its lines wider than `width` columns wrapped between words, its colors
-/// kept. a line goes on under its own text: past a label such as `error:` or `help:`, past the
-/// verb column of a step, or at its own indent. a command in backticks or a name in double quotes
-/// is never split, and a word wider than the rest of a line goes whole onto a line of its own,
-/// where only the terminal can wrap it.
+/// `text` with each line wider than `width` wrapped between words, colors kept, going on under its
+/// own text as [`hanging`] finds it. a command in backticks or a name in double quotes is never
+/// split, and a word too wide goes whole onto a line of its own, for the terminal to wrap.
 pub(super) fn fit(text: &str, width: usize) -> String {
     text.split('\n')
         .map(|line| fit_line(line, width))
@@ -158,9 +156,8 @@ fn hanging(plain: &str) -> usize {
     }
 }
 
-/// a line of help's examples as lines `width` wide: its comment on lines of its own below the
-/// command, when `below` asks it of the whole block, and a command too long for a line broken
-/// between its words.
+/// a line of help's examples as lines `width` wide: its comment below the command when `below`
+/// asks it of the whole block, and a command too long for a line broken between its words.
 pub(super) fn example(line: &str, width: usize, below: bool) -> Vec<String> {
     let (command, comment) = match line.split_once(COMMENT) {
         Some((command, comment)) if below => (command, Some(comment)),
@@ -184,9 +181,8 @@ pub(super) fn comments_below<'a>(
         .any(|line| line.contains(COMMENT) && line.chars().count() > width)
 }
 
-/// `command`, a line of help two spaces in, broken between its words where it is wider than
-/// `width`, each line but the last ending in the [`MARK`] that continues it in a shell, the rest
-/// two spaces further in. an option keeps its value, and a word in quotes stays whole.
+/// `command`, a help line two spaces in, broken between words where wider than `width`, each line
+/// but the last ending in [`MARK`], the rest further in. an option keeps its value, a quote whole.
 fn continued(command: &str, width: usize) -> Vec<String> {
     if command.chars().count() <= width {
         return vec![command.to_owned()];
