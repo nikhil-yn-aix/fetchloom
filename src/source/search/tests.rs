@@ -290,6 +290,13 @@ fn words_search_but_links_ids_dois_and_punctuation_do_not() {
         "10.5281/zenodo.1",
         " 10.5281/zenodo.1 ",
         "doi:10.5281/zenodo.1",
+        // a mistyped path is never sent as search words
+        "flowerz/",
+        "patients/visits.csv",
+        "data/raw/2024",
+        "raw\\scans",
+        "nonexistent.csv",
+        "Scans.TAR.GZ",
     ] {
         assert!(!is_search(text), "{text}");
     }

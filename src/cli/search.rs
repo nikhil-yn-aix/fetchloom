@@ -96,13 +96,17 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
         return Err(local::refused(text));
     }
     let word = text.trim();
-    if !search::is_search(word) {
+    let written_as_path = local::reads_as_path(word);
+    if !written_as_path && !search::is_search(word) {
         return Ok(());
     }
     let Ok(here) = std::env::current_dir() else {
         return Ok(());
     };
     let Some(what) = local::here(word, &here) else {
+        if written_as_path {
+            return Err(no_such_path(word, &here, pins));
+        }
         return Ok(());
     };
     // a person pins data a project keeps in data/ by moving it out first, which `./<word>` misses
@@ -123,6 +127,37 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
         format!("\"{word}\" is a {what} here, so fetchloom did not search for it"),
     )
     .help(help))
+}
+
+/// the refusal of `word`, written as a path, which names nothing in `here`: a typo of a near name
+/// is likelier than words to search for, and a path is never sent to a search site. `pins` says
+/// the command can import the near name, as add can.
+fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
+    let search = format!(
+        "run `fetchloom search {}` to search for these words",
+        super::shell_word(word)
+    );
+    let guess = pins
+        .then(|| super::import::near(word, &here.join(word)))
+        .flatten();
+    let help = match guess {
+        Some(guess) => {
+            let guess = format!("./{}", guess.trim_end_matches(['/', '\\']));
+            let line = super::meant(
+                &[word],
+                &[&guess],
+                super::project::command(&format!("add {}", super::shell_word(&guess))),
+            );
+            format!("did you mean `{line}`? or {search}")
+        }
+        None if pins => format!("check the path, or {search}"),
+        None => format!("give a link, a DOI or an id, or {search}"),
+    };
+    Error::new(
+        Kind::Usage,
+        format!("there is no file or folder \"{word}\" here"),
+    )
+    .help(help)
 }
 
 pub(super) async fn pick(

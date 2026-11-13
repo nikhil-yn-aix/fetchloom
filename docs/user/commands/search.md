@@ -71,7 +71,12 @@ fetchloom get "fashion mnist"
 
 a search must be the only argument, so quote a multi-word search. `get` takes several links, ids or DOIs, but no search words among them.
 
-paths never reach a search site. a path such as `./flowers.csv`, `~/data` or `file:///data` is imported by `add`, refused by `get` with `reference.invalid`, exit 10, and refused by `search` with `usage`, exit 2. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, makes `add` and `get` exit 2; `fetchloom search iris` still searches for it.
+paths never reach a search site. a path such as `./flowers.csv`, `~/data` or `file:///data` is imported by `add`, refused by `get` with `reference.invalid`, exit 10, and refused by `search` with `usage`, exit 2. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, makes `add` and `get` exit 2; `fetchloom search iris` still searches for it. so does a word written as a path that names nothing here, as a typo would: one that ends with `/`, holds two `/` or a `\`, or ends with a file type such as `.csv` or `.zip`. `add` names the near file or folder, and both say how to search for the words on purpose, which only `search` does. stderr, beside a `flowers` folder:
+
+```text
+error: there is no file or folder "flowerz/" here
+  help: did you mean `fetchloom add ./flowers`? or run `fetchloom search flowerz/` to search for these words
+```
 
 with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns. up/down or j/k moves, enter selects the current row, and 1-9 selects a numbered row. q or esc cancels with exit 2, and ctrl-c with exit 130; either way stderr shows `Cancelled the choice of a dataset, so nothing changed`, not an error. `--yes` approves downloads but never selects a dataset.
 

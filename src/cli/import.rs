@@ -576,7 +576,7 @@ const MOST_NAMES: usize = 10_000;
 
 /// `typed` with its last name changed to the one name in its folder a typo away from it, when
 /// exactly one is. `path` is where `typed` leads, and only its folder is read.
-fn near(typed: &str, path: &Path) -> Option<String> {
+pub(super) fn near(typed: &str, path: &Path) -> Option<String> {
     if typed
         .get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
@@ -584,7 +584,7 @@ fn near(typed: &str, path: &Path) -> Option<String> {
         return None;
     }
     let kept = typed.trim_end_matches(['/', '\\']);
-    let (folder, last) = kept.split_at(kept.rfind(['/', '\\'])? + 1);
+    let (folder, last) = kept.split_at(kept.rfind(['/', '\\']).map_or(0, |at| at + 1));
     if matches!(last, "" | "." | "..") {
         return None;
     }

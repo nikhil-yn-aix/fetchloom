@@ -105,6 +105,20 @@ pub(crate) fn is_path(text: &str) -> bool {
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }
 
+/// whether `word`, though [`is_path`] does not read it as a path, is still written as one: it ends
+/// with `/`, holds two `/` or a `\`, or its last name ends with a file type, as `visits.csv` does.
+/// a link, an id and a DOI are none of these, and such a word is never sent off as search words.
+pub(crate) fn reads_as_path(word: &str) -> bool {
+    let word = word.trim();
+    let last = word.rsplit(['/', '\\']).next().unwrap_or_default();
+    !word.contains(':')
+        && super::doi::Doi::bare(word).is_none()
+        && (word.ends_with('/')
+            || word.matches('/').count() > 1
+            || word.contains('\\')
+            || crate::name::has_file_type(last))
+}
+
 /// what `word` names in `folder`, `file` or `folder`, when it names something there, so a local
 /// file's name is never sent off as search words.
 pub(crate) fn here(word: &str, folder: &Path) -> Option<&'static str> {

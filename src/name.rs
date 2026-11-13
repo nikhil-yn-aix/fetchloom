@@ -354,6 +354,11 @@ fn without_type(name: &str) -> Option<&str> {
     (known && !stem.trim_start_matches('.').is_empty()).then_some(stem)
 }
 
+/// whether `name` ends with a known file type, as `visits.csv` and `scans.tar.gz` do.
+pub(crate) fn has_file_type(name: &str) -> bool {
+    without_type(name).is_some()
+}
+
 /// the compression types a file may take after its own, as `.gz` after `.csv`.
 const COMPRESSIONS: [&str; 6] = ["bz2", "gz", "lz4", "lzma", "xz", "zst"];
 

@@ -819,3 +819,74 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
     assert!(!sandbox.work().join(".fetchloom").exists());
     Ok(())
 }
+
+/// a word written as a path that names nothing here, such as a typo of a folder, is refused on
+/// this machine with the near name, and `search` stays the way to look such words up on purpose.
+#[test]
+fn a_mistyped_path_never_reaches_a_catalog() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    std::fs::create_dir_all(sandbox.work().join("flowers"))?;
+    std::fs::create_dir_all(sandbox.work().join("patients"))?;
+    std::fs::write(sandbox.work().join("patients/visit.csv"), b"id\n1\n")?;
+    let search = |words: &str| format!("run `fetchloom search {words}` to search for these words");
+    for (args, help) in [
+        (
+            &["add", "flowerz/", "--offline"][..],
+            format!(
+                "did you mean `fetchloom --json add ./flowers --offline`? or {}",
+                search("flowerz/")
+            ),
+        ),
+        (
+            &["add", "patients/visits.csv"],
+            format!(
+                "did you mean `fetchloom --json add ./patients/visit.csv`? or {}",
+                search("patients/visits.csv")
+            ),
+        ),
+        (
+            &["add", "nonexistent.csv"],
+            format!("check the path, or {}", search("nonexistent.csv")),
+        ),
+        (
+            &["get", "nonexistent.csv"],
+            format!(
+                "give a link, a DOI or an id, or {}",
+                search("nonexistent.csv")
+            ),
+        ),
+    ] {
+        let output = catalogs
+            .command(&sandbox, &[&["--json"], args].concat())
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(
+            error["message"],
+            format!("there is no file or folder \"{}\" here", args[1]),
+            "{args:?}"
+        );
+        assert_eq!(error["help"], help, "{args:?}");
+        assert_eq!(error["fix"], serde_json::Value::Null, "{args:?}");
+        assert_eq!(document["work"]["requests"], 0, "{args:?}");
+    }
+    for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo]
+        .into_iter()
+        .chain(catalogs.others.iter().map(|(_, catalog)| catalog))
+    {
+        assert_eq!(catalog.requests(), Vec::<String>::new());
+    }
+    let searched = catalogs
+        .command(&sandbox, &["--json", "search", "nonexistent.csv"])
+        .output()?;
+    assert_eq!(
+        searched.status.code(),
+        Some(0),
+        "{}",
+        text(&searched.stdout)?
+    );
+    assert_eq!(catalogs.hf.requests().len(), 1);
+    Ok(())
+}
