@@ -329,21 +329,22 @@ impl Project {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> (State, u64) {
-        self.state_read(|file| State::read_within(file, folders, keep))
+        self.state_read(|file, _| State::read_within(file, folders, keep))
     }
 
+    /// the state as `read` makes it from the file and its length, and when it was written.
     fn state_read(
         &self,
-        read: impl FnOnce(&mut fs::File) -> io::Result<(State, u64)>,
+        read: impl FnOnce(&mut fs::File, u64) -> io::Result<(State, u64)>,
     ) -> (State, u64) {
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
         // a planted link to a device or a fifo would never end; it reads as no state at all
         let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
             |mut file| {
-                let written = Look::of(&file.metadata()?).modified;
-                let (state, bytes) = read(&mut file)?;
+                let found = Look::of(&file.metadata()?);
+                let (state, bytes) = read(&mut file, found.size)?;
                 span.record("bytes", bytes);
-                Ok((state, written))
+                Ok((state, found.modified))
             },
         );
         read.unwrap_or_default()

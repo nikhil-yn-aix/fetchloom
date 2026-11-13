@@ -152,10 +152,34 @@ impl State {
         Ok((State::parse_only(&bytes, keep), reading.bytes))
     }
 
+    /// [`State::parse`] of `file`, `length` bytes from its start, with how many bytes it read. a
+    /// state of one block is one read; a larger one is read [`State::read_blocks`].
+    pub(crate) fn read_whole(
+        file: &mut (impl Read + Seek),
+        length: u64,
+    ) -> io::Result<(State, u64)> {
+        // through the index, its header, tail and block would take three reads and three seeks
+        if length > BLOCK as u64 {
+            return State::read_blocks(file);
+        }
+        let mut bytes = vec![0; usize::try_from(length).unwrap_or_default()];
+        let mut filled = 0;
+        while filled < bytes.len() {
+            match file.read(&mut bytes[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
+        }
+        bytes.truncate(filled);
+        Ok((State::parse(&bytes), filled as u64))
+    }
+
     /// [`State::parse`] of `file`, read a block at a time through its index, so the document is
     /// never held whole, with how many bytes it read; a state whose index does not fit is read
     /// whole.
-    pub(crate) fn read_whole(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
+    fn read_blocks(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
         let mut reading = Reading { file, bytes: 0 };
         match by_blocks(&mut reading) {
             Ok(state) => return Ok((state, reading.bytes)),
@@ -1052,6 +1076,50 @@ mod tests {
         }
     }
 
+    /// a reader that counts the calls a read makes of it.
+    struct Calls<'a> {
+        bytes: io::Cursor<&'a [u8]>,
+        reads: usize,
+        seeks: usize,
+    }
+
+    impl Read for Calls<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.reads += 1;
+            self.bytes.read(buffer)
+        }
+    }
+
+    impl Seek for Calls<'_> {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            self.bytes.seek(to)
+        }
+    }
+
+    /// a state of one block is read in one go, where its index would take three reads and three
+    /// seeks; a torn one reads as the whole read finds it.
+    #[test]
+    fn a_state_of_one_block_is_one_read() {
+        let bytes = crowded().render();
+        assert!(bytes.len() <= BLOCK, "{} bytes", bytes.len());
+        for length in [bytes.len(), bytes.len() / 2] {
+            let mut file = Calls {
+                bytes: io::Cursor::new(&bytes[..length]),
+                reads: 0,
+                seeks: 0,
+            };
+            let (read, counted) = State::read_whole(&mut file, length as u64).unwrap();
+            assert_same(
+                &read,
+                &State::parse(&bytes[..length]),
+                &format!("{length} bytes"),
+            );
+            assert_eq!(counted, length as u64);
+            assert_eq!((file.reads, file.seeks), (1, 0), "{length} bytes");
+        }
+    }
+
     /// `bytes` with its index replaced by `blocks`, the records and `at` untouched.
     fn with_index(bytes: &[u8], blocks: &serde_json::Value) -> Vec<u8> {
         let index = bytes
@@ -1136,7 +1204,7 @@ mod tests {
             .collect();
         sets.push(vec![first]);
         for (number, state) in states.iter().enumerate() {
-            let (read, _) = State::read_whole(&mut io::Cursor::new(state)).unwrap();
+            let (read, _) = State::read_blocks(&mut io::Cursor::new(state)).unwrap();
             assert_same(
                 &read,
                 &State::parse(state),

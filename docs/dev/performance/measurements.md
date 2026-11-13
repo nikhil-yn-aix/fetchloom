@@ -80,6 +80,7 @@ every change measured with the current harness, one row each: what it gained whe
 | project state | an unplaced dataset's files told through a set of the unplaced | status with 40,000 datasets set to `place = false`: 4.42 to 1.38 s, 0.315 | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | each blocker listed once through a set, not a search of those listed | status with 40,000 folders where files belong: 5.04 to 1.54 s, with the scans below already gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | project state | a whole read of the state goes through its index a block at a time into one list, which builds the map at once, not the whole document held and parsed into a map one record at a time | settled sync of 100,000 files 0.839 [0.817, 0.849], peak memory 0.834; status 0.838, peak 0.904; `status --verify` 0.882; 10,000 files 0.899 and 0.894, a no-op's peak 2 MiB more | kept | [pinnacle pass](#reading-the-whole-state) |
+| project state | a state of one block, at most 64 KiB, read in one read again, not through its index | the block-wise read had cost a settled sync of 3 files 8 system calls, 1.009 on both libcs: 3 seeks and 2 reads of its 966-byte state, plus a futex, a signal mask and an munmap that vary between runs of either build. one read now, 3 calls fewer than before the pass: 300 interleaved pairs against 5e18256c, musl 0.996 [0.988, 1.003] beside 6ace5b2d at 0.993 and an a/a arm at 1.002; glibc 0.976 [0.972, 0.980], 6ace5b2d 0.996, a/a 1.002; status and settled sync of 100,000 files flat | kept | [a small state](#reading-a-small-state) |
 | project state | the whole state read on a thread of its own beside the data folder walk, and status's data.lock beside both | over the block-wise read below: settled sync of 100,000 files 0.671 against 0.839, status 0.669, 0.501 with data.lock; but 10,000 files' peak memory 1.55 for the no-op and 1.45 for status, the reading thread's own huge pages | dropped, memory | [pinnacle pass](#the-state-beside-the-folder-walk) |
 | placement | whether a folder in a file's way holds anything, from the folders the scan found something in | the same status: 7.26 to 1.54 s, with the other scans gone | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
 | placement | what removing a run's unneeded files frees, worked out once for every blocker | 40,000 folders holding a file where files belong: status 10.45 to 1.75 s, `sync --dry-run` 10.22 to 1.55 s | kept | [scans](#scans-inside-per-file-loops-2026-11-12) |
@@ -1575,6 +1576,8 @@ a status or a settled sync reads the project's whole state, about 247 bytes a re
 
 the base medians were 0.400 s and 99.1 MiB, 0.399 s and 94.9 MiB, 0.547 s and 133.3 MiB, 0.041 s and 37.1 MiB, 0.048 s and 40.6 MiB. kept: every interval at 100,000 files clears the bar and the a/a spread, and so do the 10,000-file status and the no-op's median; the no-op's peak at 10,000 files is 2 MiB more.
 
+the release recheck later read a `drop --dry-run` across 1,000 datasets at 1.051 [1.046, 1.055] of the peak, 40.0 to 42.1 MiB. it comes from this read, not from workers: its 476 KB state goes through the index, and the list of records, some 0.2 MiB, lands in a 2 MiB huge page of its own. with `MIMALLOC_ALLOW_THP=0` the two builds peak at 21.8 and 22.0 MiB, five runs each. it does not grow with the state: the list takes about 110 bytes a record where the whole read held about 247, so at 100,000 files the same `status` peaks 19.5 MiB lower without huge pages, 83.5 against 64.0 MiB, and 6 to 18 MiB lower with them.
+
 ### the state beside the folder walk
 
 a status or a settled sync reads the state and then walks the data folder, though the walk needs nothing from the state. reading the state on a thread of its own while the walk runs, and for status data.lock on another, cut the time at 100,000 files by a further fifth, and by two fifths with data.lock. but the reading thread's allocations land in memory of its own, which mimalloc backs with 2 MiB huge pages on musl, and at 10,000 files that cost 16 to 20 MiB: a no-op's peak was 38 MiB without the thread and 46 to 63 MiB with it, and 17.5 against 18.7 MiB with `MIMALLOC_ALLOW_THP=0`. over the block-wise read, the base here:
@@ -1681,3 +1684,16 @@ the four kept changes together: a musl release build of the pass's last commit a
 | ext4, cold: `status --verify`, 100,000 files | 6 | 0.973 [0.968, 1.025] | 1.002 [0.999, 1.007] | 0.975 | 0.970 | 1.003 |
 
 the base medians ran from 5.3 ms for `path` to 8.2 s for the cold sync of 100,000 files, and 12.9 to 232.7 MiB. nothing is slower than its a/a arm's spread. the peaks that rose are the archive syncs', from the drop's members checked on the workers, and the 10,000-file no-op's 2 MiB from the block-wise read; the first tmpfs batch, beside the gate, read the zip's peak at 1.118 [1.025, 1.187] and a few large files' at 1.134 [0.938, 1.198], which 16 quieter pairs put at 1.085 and 1.023, the latter inside its a/a arm's spread.
+
+### reading a small state
+
+the release recheck found the [block-wise read](#reading-the-whole-state) slowing a settled sync of 3 files by 0.9% on both libcs, 1.009 [1.001, 1.023] on musl and 1.009 [1.003, 1.017] on glibc against 6ace5b2d, 100 pairs each. strace counted 436 system calls against 428 over six runs of each build: on the 966-byte state, 3 seeks and 2 reads more, as its header, tail and one block were read apart where the whole read took the file at once; the other 3, a futex, a signal mask and an munmap, varied between runs of either build, futexes from 32 to 41 and munmaps from 8 to 9. a state of at most one block, 64 KiB, is now read whole in one read of the length its open file reports, so it takes no `fstat` and `lseek` for a size hint and no read at its end either: 1 call where the pass's first read took 4 and the block-wise read 9.
+
+against 5e18256c, each arm a binary of its own, 300 pairs interleaved in a seeded order under the measure lock on cores 12–23, on the recheck's tiny fixture:
+
+| libc | the fix | 6ace5b2d, before the pass | a/a |
+|---|---|---|---|
+| musl | 0.996 [0.988, 1.003] | 0.993 [0.985, 0.999] | 1.002 [0.994, 1.009] |
+| glibc | 0.976 [0.972, 0.980] | 0.996 [0.994, 1.001] | 1.002 [0.999, 1.006] |
+
+`bench/recheck.py` with its own fixtures per arm, 100 pairs for the 3-file sync and 20 for the status and settled sync of 100,000 files, against 5e18256c: musl 1.008 [0.995, 1.016] beside an a/a arm at 1.010 [0.994, 1.031], status 1.013 beside 1.013, sync 1.005 beside 0.996; glibc 0.996 [0.988, 1.005] beside 0.995. kept: the sync is back to 6ace5b2d's time on musl and below it on glibc, and the large states, which still go through the index, are flat.
