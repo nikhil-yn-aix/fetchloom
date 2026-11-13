@@ -186,7 +186,7 @@ fn credentials_come_from_the_named_file_before_gclouds_own() {
     assert_eq!(shown(&machine(empty.path(), &[]), true), None);
 }
 
-/// so fetchloom never signs in as whoever gcloud's file names instead.
+/// fetchloom never falls back to whoever gcloud's own file names.
 #[test]
 fn a_named_file_that_cannot_be_used_stops_the_search() {
     let home = tempfile::tempdir().unwrap();
@@ -438,7 +438,7 @@ fn a_refused_grant_says_what_google_said_and_how_to_sign_in_again() {
     assert_eq!(noisy.details, ["google said invalid_grant: two\\nlines"]);
 }
 
-/// however the credentials file or the token endpoint's answer is wrong.
+/// every way the credentials file or the token endpoint's answer can be wrong is tried.
 #[test]
 fn no_secret_reaches_a_message() {
     let path = Path::new("/home/ada/key.json");

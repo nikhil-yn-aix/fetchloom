@@ -360,7 +360,7 @@ mod tests {
         }
     }
 
-    /// its help goes to fetchloom's issues, since the record's owner cannot change zenodo's answer.
+    /// the help goes to fetchloom's issues, since the record's owner cannot change zenodo's answer.
     #[test]
     fn a_record_that_cannot_be_trusted_says_why() {
         type Change = fn(&mut serde_json::Value);

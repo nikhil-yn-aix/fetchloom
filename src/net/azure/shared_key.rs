@@ -111,8 +111,8 @@ mod tests {
         headers
     }
 
-    /// azure's own example, line for line, and the signatures azure-storage-blob computes for the
-    /// same requests, or the page's rules for a `Range` that library sends otherwise.
+    /// the cases are azure's own example, line for line, and what azure-storage-blob computes for
+    /// the same requests, or the page's rules for a `Range` that library sends otherwise.
     #[test]
     fn a_signature_is_the_one_azure_computes() {
         let key = AccountKey::parse(KEY).unwrap();
@@ -156,7 +156,7 @@ mod tests {
         );
     }
 
-    /// its values in order, parted by commas.
+    /// the values sign in order, parted by commas.
     #[test]
     fn a_repeated_parameter_signs_its_values_together() {
         let url = Url::parse("https://lab.blob.core.windows.net/raw?include=b&comp=list&Include=a")

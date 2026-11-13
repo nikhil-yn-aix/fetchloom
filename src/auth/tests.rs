@@ -112,7 +112,7 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
     assert_eq!(sent, expected);
 }
 
-/// `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them, then a key saved by a sign-in.
+/// the order is `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them, then a saved key.
 #[test]
 fn a_github_key_is_found_where_the_gh_command_looks_first() {
     let home = tempfile::tempdir().unwrap();
@@ -439,7 +439,7 @@ fn names_people_type_find_their_account() {
     );
 }
 
-/// such as one with a line break, so `auth` says so rather than a request going without it.
+/// a key with a line break cannot go in a header, and `auth` says so rather than drop it silently.
 #[test]
 fn a_key_a_header_cannot_carry_is_not_sendable() {
     let home = tempfile::tempdir().unwrap();

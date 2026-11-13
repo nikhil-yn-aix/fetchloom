@@ -297,8 +297,8 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
     );
 }
 
-/// as NCBI asks of a program without a key, however many try at once, and the waits are too
-/// short to tell. other hosts are not held.
+/// NCBI asks no more than three a second of a program without a key, however many try at once. the
+/// waits are too short to tell, and other hosts are not held.
 #[test]
 fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
     let paces = Paces::default();
@@ -379,7 +379,7 @@ fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
     }
 }
 
-/// by the first request to wait for the reset; a shorter wait passes without a line.
+/// the first request to wait for the reset tells of the wait; a shorter one passes without a line.
 #[test]
 fn a_wait_is_told_once_while_half_a_second_is_left() {
     let paces = Paces::default();

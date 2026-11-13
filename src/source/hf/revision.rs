@@ -309,7 +309,7 @@ mod tests {
     use super::*;
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
-    /// before its commit becomes a pin in data.lock, with both values shown as the hub sent them.
+    /// the answer is refused before its commit becomes a pin, with both values shown as sent.
     #[test]
     fn an_answer_with_an_unreadable_id_or_commit_is_refused() {
         let commit = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
@@ -332,8 +332,8 @@ mod tests {
         }
     }
 
-    /// never by its value: a variable, whose replacement the help names, or the file a sign-in
-    /// saved it to, which `fetchloom auth` checks. no sign-in is offered for either.
+    /// a key is never named by its value: a variable, whose replacement the help names, or the file
+    /// a sign-in saved it to, which `fetchloom auth` checks. no sign-in is offered for either.
     #[test]
     fn a_refused_key_is_named_by_where_it_comes_from() {
         let repo = Repo::parse("datasets/ILSVRC/imagenet-1k").unwrap();

@@ -255,7 +255,7 @@ mod tests {
         }
     }
 
-    /// in any letter case; unset, empty, true or 1 leave the store in use.
+    /// letter case does not matter, and unset, empty, true or 1 leave the store in use.
     #[test]
     fn the_keyring_variable_turns_the_store_off_with_false_or_0() {
         for (value, allowed) in [

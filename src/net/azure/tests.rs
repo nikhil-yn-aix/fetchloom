@@ -190,8 +190,8 @@ fn a_sas_goes_to_a_listed_container_once_it_refused_a_request_without_one() {
     assert!(asked.lock().unwrap().iter().all(|asked| asked.versioned));
 }
 
-/// not to a container nobody listed, one in another account than the environment's SAS is kept
-/// to, or a link with a SAS of its own; a refusal says how the request went.
+/// a container nobody listed, one in another account than the environment's SAS is kept to, and a
+/// link with a SAS of its own get none, and a refusal says how the request went.
 #[test]
 fn a_sas_never_goes_where_the_settings_do_not_send_it() {
     let (local, asked) = blob_host("own%3d");
@@ -250,8 +250,8 @@ fn a_sas_never_goes_where_the_settings_do_not_send_it() {
     );
 }
 
-/// before it reaches any container. a container with a SAS of its own takes none of it, so it
-/// does not count.
+/// the refusal comes before the SAS reaches any container. a container with a SAS of its own takes
+/// none, so it does not count.
 #[test]
 fn a_sas_without_its_account_is_refused_for_containers_in_two_accounts() {
     let (local, asked) = blob_host("shared%3d");
@@ -322,7 +322,7 @@ fn a_containers_own_sas_comes_first_and_a_refused_one_is_the_answer() {
     );
 }
 
-/// and only the first request asks for azure's version.
+/// only the first request asks for azure's version.
 #[test]
 fn a_sas_never_follows_a_redirect() {
     let (local, asked) = server(|_, count| match count {
@@ -346,7 +346,7 @@ fn a_sas_never_follows_a_redirect() {
     );
 }
 
-/// it fails the request that needs it and asks nothing more.
+/// the request that needs the SAS fails, and nothing more is asked.
 #[test]
 fn an_unreadable_sas_fails_without_repeating_it() {
     let (local, asked) = blob_host("shared%3d");
@@ -364,7 +364,7 @@ fn an_unreadable_sas_fails_without_repeating_it() {
     assert_eq!(lines(&asked), ["get /raw/a.csv http/1.1"]);
 }
 
-/// once azure refused one without a credential: a `SharedKey` authorization with the time in
+/// the key signs once azure refused a request without a credential, as `SharedKey` with
 /// `x-ms-date`. the key itself is never sent, and another account's container gets no signature.
 #[test]
 fn an_account_key_signs_requests_to_its_own_account_alone() {
@@ -435,8 +435,8 @@ fn az(folder: &std::path::Path) -> std::path::PathBuf {
     runs
 }
 
-/// its token goes in `authorization`, for the container's later requests too, from one run of
-/// the az cli, and never to a container nobody listed.
+/// the token goes in `authorization`, for the container's later requests too, from one run of the
+/// az cli, and never to a container nobody listed.
 #[cfg(unix)]
 #[test]
 fn the_az_clis_login_reads_a_listed_container_once_refused() {
@@ -475,7 +475,7 @@ fn the_az_clis_login_reads_a_listed_container_once_refused() {
     assert_eq!(heads, [false, true, true, false]);
 }
 
-/// as a 401 turns an expired one away, and the request goes again with the new one.
+/// a 401 turns an expired token away, and the request goes again with the new one.
 #[cfg(unix)]
 #[test]
 fn a_token_azure_turns_away_is_asked_for_again_once() {
@@ -517,8 +517,8 @@ fn metadata_service() -> (Url, Arc<Mutex<Vec<Asked>>>) {
     })
 }
 
-/// when `AZURE_TOKEN_CREDENTIALS` asks for it, with a token for the identity `AZURE_CLIENT_ID`
-/// names. the service's address stays refused to any other request.
+/// `AZURE_TOKEN_CREDENTIALS` asks for the managed identity, and its token is for the one
+/// `AZURE_CLIENT_ID` names. the service's address stays refused to any other request.
 #[test]
 fn the_machines_managed_identity_reads_a_listed_container_once_refused() {
     let (identity, identity_asked) = metadata_service();

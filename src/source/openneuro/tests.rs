@@ -47,8 +47,8 @@ fn listed(reference: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(Reference::parse(reference)?.reference.resolve(recorded))
 }
 
-/// folder by folder, each query with the header openneuro asks for, with their S3 link at the
-/// snapshot's version; files git keeps go by their object, and no `DataLad` folder is listed.
+/// each folder is one query with the header openneuro asks for. annexed files get their S3 link at
+/// the snapshot's version, git's go by their object, and `DataLad`'s folder is left out.
 #[test]
 fn a_snapshot_lists_its_files_with_the_digests_their_annex_keys_state() {
     let recorded = ds000001();
@@ -107,7 +107,7 @@ fn a_snapshot_lists_its_files_with_the_digests_their_annex_keys_state() {
     );
 }
 
-/// asked for first when a reference names no tag.
+/// a reference without a tag asks for the newest snapshot first.
 #[test]
 fn the_newest_snapshot_is_found_and_pinned() {
     let recorded = ds000001().fixture(&latest("ds000001"), "openneuro/latest.json");
@@ -119,8 +119,8 @@ fn the_newest_snapshot_is_found_and_pinned() {
     );
 }
 
-/// with or without the extension an `E` backend adds, and the size. a chunk's key and other
-/// backends state no digest, and anything else is no key.
+/// a key states its digest with or without the extension an `E` backend adds, and its size. a
+/// chunk's key and other backends state no digest, and anything else is no key.
 #[test]
 fn annex_keys_state_the_digest_of_their_backend() {
     let sha = "7cfba08d54744d61204226d47fb1e2004f89bf441af3d48c6a3c05738bcf7369";
@@ -191,7 +191,7 @@ fn annex_keys_state_the_digest_of_their_backend() {
     );
 }
 
-/// a missing dataset, a private one, a missing snapshot and any other error, in openneuro's own
+/// a missing dataset, a private one, a missing snapshot and any other error are told in openneuro's
 /// words, without the stack trace it sends with them.
 #[test]
 fn what_openneuro_says_went_wrong_is_told_as_such() {
@@ -244,8 +244,8 @@ fn what_openneuro_says_went_wrong_is_told_as_such() {
     );
 }
 
-/// another snapshot, a file under no key, a key whose size differs from the listing's, a folder
-/// without a usable id, one listed inside itself, and a name with a `/`.
+/// the cases are another snapshot, a file under no key, a key whose size differs from the
+/// listing's, a folder without a usable id, one listed inside itself, and a name with a `/`.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     let answer = |tag: &str, files: &str| {
@@ -366,8 +366,8 @@ fn live_openneuro() {
     assert!(scan.url.as_str().contains("versionId="), "{}", scan.url);
 }
 
-/// with the folders on the way to them, when they hold every file wanted. a folder the snapshot
-/// lacks has the whole snapshot listed, so a pattern that matches nothing is told against it all.
+/// the folders on the way are listed too, when they hold every file wanted. a missing folder has
+/// the whole snapshot listed, so a pattern matching nothing is told against it all.
 #[test]
 fn selected_folders_are_listed_without_the_rest() {
     let anat = [crate::glob::Glob::new("sub-01/anat/**").unwrap()];

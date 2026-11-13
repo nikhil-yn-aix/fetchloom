@@ -182,8 +182,8 @@ fn an_endpoint_reference_is_a_plain_origin_and_a_bucket() {
     }
 }
 
-/// on AWS by the host or the first segment of the service's own host, and at another service by
-/// the origin and the first segment.
+/// on AWS the host, or the first segment of the service's own host, names the bucket; at another
+/// service the origin and the first segment do.
 #[test]
 fn an_object_link_names_the_bucket_holding_it() {
     for (link, bucket) in [
@@ -642,7 +642,7 @@ fn a_signed_listing_states_no_md5_and_links_objects_in_the_region_it_was_signed_
     assert_eq!(listing.files[0].md5, None);
 }
 
-/// and what would let the next one through.
+/// the error also says what would let the next listing through.
 #[test]
 fn a_refused_cloud_storage_listing_says_whether_credentials_went_with_it() {
     let url = STATES
@@ -753,7 +753,7 @@ fn missing_buckets_are_unresolved() {
     assert!(error.details[0].contains("notFound"));
 }
 
-/// such as 418, rather than reading as a refusal or a missing bucket.
+/// a status no case handles, such as 418, never reads as a refusal or a missing bucket.
 #[test]
 fn a_listing_answered_with_another_status_names_it_and_what_the_service_said() {
     let url = STATES

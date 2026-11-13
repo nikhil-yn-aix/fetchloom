@@ -87,7 +87,7 @@ fn a_pinned_version_follows_each_page_of_its_assets() {
     );
 }
 
-/// since a draft can change.
+/// a draft can change, so the listing warns of it.
 #[test]
 fn a_dandiset_never_published_is_read_at_its_draft_and_says_so() {
     let draft = "https://api.dandiarchive.org/api/dandisets/000012/versions/draft";
@@ -175,7 +175,7 @@ fn an_embargoed_dandiset_is_refused_as_such() {
     }
 }
 
-/// and the help says where to check.
+/// the help says where to check.
 #[test]
 fn a_missing_dandiset_or_version_is_unresolved() {
     let missing = listed(
@@ -212,8 +212,8 @@ fn a_missing_dandiset_or_version_is_unresolved() {
     );
 }
 
-/// an answer naming another version, a page leading off this version's listing or back to
-/// itself, and an asset neither a blob nor a zarr, or whose SHA-256 is no hex.
+/// the cases are an answer naming another version, a page leading off this version's listing or
+/// back to itself, and an asset neither a blob nor a zarr, or whose SHA-256 is no hex.
 #[test]
 fn a_listing_that_cannot_be_trusted_says_why() {
     let info = format!("{VERSION}/info/");

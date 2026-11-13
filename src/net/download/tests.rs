@@ -246,7 +246,7 @@ fn a_refusal_page_reaches_the_divert_with_its_status() {
     assert_eq!(err.message, "/file 403 over quota");
 }
 
-/// so a server cannot hand over an endless page instead of the file.
+/// a server cannot hand over an endless page instead of the file.
 #[test]
 fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
     for (size, read) in [(4 << 20, true), ((4 << 20) + 1, false)] {
@@ -279,8 +279,8 @@ fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
     }
 }
 
-/// such as confirmation forms, so pages that point on and on never become a download. both runs
-/// ask for the same four links; only what the fourth answers differs.
+/// pages, such as confirmation forms, that point on and on never become a download. both runs ask
+/// for the same four links; only what the fourth answers differs.
 #[test]
 fn a_server_may_send_three_pages_before_the_file_but_not_four() {
     for (pages, followed) in [(3, true), (4, false)] {
@@ -406,7 +406,7 @@ fn a_resume_answered_from_another_version_starts_over() {
     }
 }
 
-/// so a long download over a connection that drops every few minutes still finishes.
+/// a long download over a connection that drops every few minutes still finishes.
 #[test]
 fn tries_that_move_the_file_on_earn_the_tries_back() {
     let body = "abcdefg";
@@ -713,8 +713,8 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     );
 }
 
-/// so a stop while it waits for a slot or an answer still counts those bytes as kept. their `ETag`
-/// proves they may be continued, and once the server sends the rest, they can.
+/// a stop while the download waits for a slot or an answer still counts the kept bytes. their
+/// `ETag` proves they may be continued, and once the server sends the rest, they can.
 #[test]
 fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers() {
     let body = "abcdefgh".repeat(1024);
@@ -1153,8 +1153,8 @@ fn a_checksum_restart_reacquires_released_download_slots() {
     assert_eq!(asked.lock().unwrap().len(), 2);
 }
 
-/// from a whole answer, a resume whose range does not name it again, and the record of a link
-/// asked again when the server says nothing changed.
+/// the version comes from a whole answer, a resume whose range does not name it again, or the
+/// record of a link asked again when the server says nothing changed.
 #[test]
 fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
     let version = ("x-amz-version-id", "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY");
@@ -1195,8 +1195,8 @@ fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
     assert_eq!(fetched.size, 8);
 }
 
-/// and its pinned hash decides: other bytes are a mismatch that says the version could not be
-/// read. a file nothing pins keeps the refusal.
+/// the pinned hash decides: other bytes are a mismatch that says the version could not be read. a
+/// file nothing pins keeps the refusal.
 #[test]
 fn an_unreadable_pinned_version_comes_from_the_object_there_now() {
     for (status, now, kind) in [
@@ -1262,8 +1262,8 @@ fn versioned(url: &Url, name: &str, bytes: &[u8]) -> Fetch {
     }
 }
 
-/// once a 401 or 403 to a version was followed by the object there now matching its pin, so three
-/// files cost four requests, not six. a 404 is about one object and changes nothing for the others.
+/// one 401 or 403 to a version, then the object there now matching its pin, is enough: three files
+/// cost four requests, not six. a 404 is about one object and changes nothing for the others.
 #[test]
 fn a_bucket_that_refused_a_version_is_asked_for_its_objects_as_they_are_now() {
     for (refusal, expected) in [
@@ -1333,7 +1333,7 @@ fn a_changed_object_still_reaches_its_pinned_version() {
     );
 }
 
-/// not when the disk kept it, so a slow flush does not make the link look slow.
+/// a slow flush after the last byte does not make the link look slow.
 #[test]
 fn the_transfer_time_ends_with_the_last_byte() {
     let started = Instant::now();
@@ -1354,8 +1354,8 @@ fn the_transfer_time_ends_with_the_last_byte() {
     );
 }
 
-/// so a person's answer does not make the link look slow. a batch ends with its latest download
-/// once each leaves out its own wait, and the time until now keeps what the disk took after.
+/// a person's answer does not make the link look slow. a batch ends with its latest download once
+/// each leaves out its own wait, and the time until now keeps what the disk took after.
 #[test]
 fn the_transfer_time_leaves_out_the_wait_for_an_answer() {
     let started = Instant::now();

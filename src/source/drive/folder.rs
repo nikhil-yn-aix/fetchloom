@@ -239,7 +239,7 @@ mod tests {
     use super::super::{is_id, page};
     use super::*;
 
-    /// any page drive could send: nothing panics, undoing references never lengthens text, every
+    /// with any page drive could send nothing panics, undoing references never lengthens text, each
     /// folder entry links a drive id, and a download page leads on only after a 200, to https.
     #[test]
     fn fuzz_drive_pages() {

@@ -19,8 +19,8 @@ fn paths(listing: &crate::source::Listing) -> Vec<&str> {
         .collect()
 }
 
-/// each with its size, link and `ETag` as a GET quotes it. the empty blobs that only mark a folder
-/// of other blobs are no files.
+/// each blob comes with its size, link and `ETag` as a GET quotes it. the empty blobs that only
+/// mark a folder of other blobs are no files.
 #[test]
 fn a_container_lists_its_blobs_with_the_md5_azure_states() {
     let recorded = Recorded::default().fixture(&format!("{LISTING}&prefix="), "azure/mnist.xml");
@@ -108,7 +108,7 @@ fn a_folder_in_pages_follows_each_marker() {
     assert_eq!(recorded.asked(), [first, second]);
 }
 
-/// since it would keep fetchloom asking.
+/// a repeated marker would keep fetchloom asking forever.
 #[test]
 fn a_marker_sent_twice_is_refused() {
     let page = |marker: &str| {
@@ -127,8 +127,8 @@ fn a_marker_sent_twice_is_refused() {
     assert!(error.message.contains("repeated"), "{}", error.message);
 }
 
-/// as the request went: for a container nobody listed, a listed one with none found, or a SAS
-/// azure refused. what azure's error repeats of the SAS never shows.
+/// the help follows how the request went: a container nobody listed, a listed one with none found,
+/// or a SAS azure refused. what azure's error repeats of the SAS never shows.
 #[test]
 fn a_refused_listing_says_how_to_send_a_sas() {
     let url = "https://lab.blob.core.windows.net/raw?restype=container&comp=list&prefix=scans%2F";
@@ -188,7 +188,7 @@ fn a_refused_listing_says_how_to_send_a_sas() {
     assert!(!said.contains("CANARY"), "{said}");
 }
 
-/// as is a blob a listing cannot describe.
+/// a blob a listing cannot describe is refused with why too.
 #[test]
 fn an_answer_that_is_no_listing_says_why() {
     let url = "https://lab.blob.core.windows.net/raw?restype=container&comp=list&prefix=";

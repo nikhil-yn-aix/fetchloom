@@ -163,7 +163,7 @@ fn a_repository_github_does_not_show_may_be_private() {
     assert!(error.need.is_none(), "a key went already");
 }
 
-/// whether github answers 403 or 429 once its 60 requests an hour without a key are used up.
+/// github answers 403 or 429 once its 60 requests an hour without a key are used up.
 #[test]
 fn the_rate_limit_says_what_a_key_allows() {
     for status in [403, 429] {

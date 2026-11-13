@@ -375,8 +375,8 @@ mod tests {
         assert!(!is_html(&headers(&[])));
     }
 
-    /// any header value: nothing panics, and a file name a response asks for, once made safe, is
-    /// one plain name that every disk can store.
+    /// with any header value nothing panics, and a file name a response asks for, once made safe,
+    /// is one plain name that every disk can store.
     #[test]
     fn fuzz_response_headers() {
         bolero::check!().for_each(|bytes| {

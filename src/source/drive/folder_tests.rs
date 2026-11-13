@@ -149,7 +149,7 @@ fn a_deleted_folder_is_unresolved() {
     assert_eq!(err.kind, Kind::ReferenceUnresolved);
 }
 
-/// rather than as a folder that is private or gone.
+/// an unknown status never reads as a folder that is private or gone.
 #[test]
 fn a_folder_page_answered_with_another_status_names_it() {
     let recorded = Recorded::default().on(&page(DEEP), 418, Vec::new());

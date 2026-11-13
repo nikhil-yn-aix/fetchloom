@@ -61,7 +61,8 @@ fn env(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsStri
     }
 }
 
-/// since requests would go around the proxy; it names the variable, never a login it holds.
+/// the matcher would pass such a value over and send requests around the proxy. the refusal names
+/// the variable, never its login.
 #[test]
 fn a_proxy_setting_that_names_no_proxy_is_refused() {
     for (variable, value) in [
@@ -149,8 +150,8 @@ fn proxies(pairs: &[(&'static str, &'static str)]) -> Proxies {
     }
 }
 
-/// the one for the link's scheme, else `ALL_PROXY`, and by its address without a login. a proxy
-/// no variable names came from the system's settings.
+/// the variable is the one for the link's scheme, else `ALL_PROXY`, and the address shows no login.
+/// a proxy no variable names came from the system's settings.
 #[test]
 fn a_proxy_is_named_by_the_variable_that_set_it() {
     let https = Url::parse("https://data.example.org/iris.csv").unwrap();
@@ -191,8 +192,8 @@ fn a_proxy_is_named_by_the_variable_that_set_it() {
     );
 }
 
-/// checked once a request through it has waited three seconds, the check giving up five later,
-/// rather than after each try's connect timeout. later requests through it are told at once.
+/// the proxy is checked once a request through it has waited three seconds, and the check gives up
+/// five later, not after each try's connect timeout. later requests are told at once.
 #[tokio::test(start_paused = true)]
 async fn a_proxy_that_drops_every_packet_is_found_in_seconds() {
     let proxies = Proxies::with_probe("HTTPS_PROXY", "http://192.0.2.1:8080", |_, _| {

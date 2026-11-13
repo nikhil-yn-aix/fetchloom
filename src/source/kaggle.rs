@@ -196,7 +196,7 @@ mod tests {
             .map(|(dataset, file)| (dataset.to_string(), file))
     }
 
-    /// the dataset or the competition, why, and where to report it.
+    /// the error names the dataset or the competition, why, and where to report it.
     #[test]
     fn an_unusable_listing_names_what_kaggle_listed() {
         let dataset = Dataset::parse("uciml/iris").unwrap();

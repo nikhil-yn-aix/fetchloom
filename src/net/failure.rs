@@ -673,7 +673,7 @@ fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Op
 mod tests {
     use super::*;
 
-    /// and says how to reach this one too.
+    /// a refusal also says how to reach this origin.
     #[test]
     fn a_refusal_names_every_origin_trusted_on_its_host() {
         let url = Url::parse("http://lab.local:9090/a.zip").unwrap();
@@ -851,7 +851,7 @@ mod tests {
         }
     }
 
-    /// and its help says what a refusal means.
+    /// the error's help also says what a refusal means.
     #[test]
     fn a_refused_connection_names_its_host_and_port() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -962,7 +962,7 @@ mod tests {
         assert!(super::untrusted(&reset).is_none());
     }
 
-    /// at once, worded so a person behind a proxy that inspects https knows what to fix. the
+    /// the request ends at once, with words for a person behind a proxy that inspects https. the
     /// server's certificate, from tests/fixtures/tls, signs itself, so no system trusts it.
     #[test]
     fn a_certificate_this_machine_does_not_trust_ends_the_request_and_says_why() {
@@ -1014,7 +1014,8 @@ mod tests {
         );
     }
 
-    /// without retry advice; the system's settings come with the variable that would replace them.
+    /// the error gives no retry advice, and a proxy from the system's settings comes with the
+    /// variable that would replace them.
     #[test]
     fn a_proxy_that_cannot_be_reached_is_named_with_where_it_was_set() {
         let url = Url::parse("https://data.example.org/iris.csv").unwrap();
@@ -1036,8 +1037,8 @@ mod tests {
         );
     }
 
-    /// the one for the link's scheme, and where the proxy settings are listed. a link the proxy
-    /// does not carry, as one `NO_PROXY` names, says nothing of a proxy.
+    /// the setting named is the one for the link's scheme, with where the proxy settings are
+    /// listed. a link the proxy does not carry, as one `NO_PROXY` names, says nothing of a proxy.
     #[test]
     fn running_out_of_tries_through_a_proxy_names_its_setting() {
         let url = Url::parse("http://data.example.org/iris.csv").unwrap();
@@ -1060,8 +1061,8 @@ mod tests {
         assert!(!direct.contains("proxy"), "{direct}");
     }
 
-    /// here a status line with a control character, which a server sends the same every time: it
-    /// is named by its host, without blaming this machine's connection.
+    /// the reply here is a status line with a control character, which a server sends the same
+    /// every time. the error names the host and does not blame this machine's connection.
     #[test]
     fn a_reply_that_is_not_http_is_the_servers_and_is_asked_once() {
         use crate::net::api::Api;
@@ -1093,7 +1094,7 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1);
     }
 
-    /// since the proxy may have sent it and can recover; the retry names the proxy.
+    /// the proxy may have sent the bad reply and can recover, and the retry names the proxy.
     #[test]
     fn a_reply_that_is_not_http_through_a_proxy_is_tried_again() {
         let url = Url::parse("http://data.example.org/iris.csv").unwrap();
@@ -1238,7 +1239,8 @@ mod tests {
         }
     }
 
-    /// even after one wait for the host's rate limit, which the host may never set again.
+    /// after one wait for the host's rate limit, the count still comes from the retries, since the
+    /// host may never set that limit again.
     #[tokio::test(start_paused = true)]
     async fn a_broken_try_is_numbered_by_the_retries_left() {
         use crate::net::{Notice, Options, Splitting};

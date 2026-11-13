@@ -130,8 +130,8 @@ fn drive_api_requests_are_located_strictly() {
     }
 }
 
-/// what they hold being what google's listing, asked with the token, put there. what a lock
-/// names, or a listing of an unlisted folder, teaches nothing.
+/// what an item holds is what google's listing, asked with the token, put there. what a lock names,
+/// or a listing of an unlisted folder, teaches nothing.
 #[test]
 fn a_drive_token_goes_only_to_listed_items_drive_refused_and_what_they_hold() {
     let drive = Drive::new(listed(&[ROOT, SUB]));
@@ -160,7 +160,7 @@ fn a_drive_token_goes_only_to_listed_items_drive_refused_and_what_they_hold() {
     assert!(!Drive::default().may_carry(ROOT));
 }
 
-/// though its folder is listed and refused: only an answer to the token speaks for the account.
+/// only an answer to the token speaks for the account, even for a folder listed and refused.
 #[test]
 fn a_listing_answered_without_the_token_proves_nothing() {
     let (endpoint, _) = tokens();
@@ -190,8 +190,8 @@ fn a_listing_answered_without_the_token_proves_nothing() {
     assert!(net.google.drive.may_carry(FILE));
 }
 
-/// once drive refused the listed file, after one request to the token endpoint. an item nobody
-/// listed never gets it, though drive refused it too.
+/// the token goes once drive refused the listed file, after one request to the token endpoint. an
+/// item nobody listed never gets it, though drive refused it too.
 #[test]
 fn a_drive_token_goes_to_drives_api_alone_and_never_follows_a_redirect() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -231,7 +231,7 @@ fn a_drive_token_goes_to_drives_api_alone_and_never_follows_a_redirect() {
     );
 }
 
-/// as a 401 refuses an expired or revoked one.
+/// a 401 refuses an expired or revoked token.
 #[test]
 fn a_token_drive_refuses_is_replaced_once() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -290,8 +290,8 @@ fn link() -> String {
     format!("https://drive.google.com/open?id={ROOT}")
 }
 
-/// the service account's email to share with, or the gcloud command for a login without the
-/// drive scope, which google says in a header or in its words alone.
+/// a service account gets its email to share with, and a login without the drive scope the gcloud
+/// command, which google says in a header or in its words alone.
 #[test]
 fn a_refusal_names_the_account_and_what_would_let_it_read() {
     let link = link();

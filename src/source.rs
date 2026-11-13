@@ -1075,8 +1075,8 @@ mod tests {
         Reference::parse(text).unwrap()
     }
 
-    /// since data.toml keeps the link as written and data.lock copies it. the help names the
-    /// reference fetchloom reads without it.
+    /// data.toml keeps the link as written and data.lock copies it. the help names the reference
+    /// fetchloom reads without it.
     #[test]
     fn a_secret_in_a_link_is_refused_whichever_source_reads_it() {
         for (link, read) in [
@@ -1121,7 +1121,7 @@ mod tests {
         );
     }
 
-    /// or a long run of pages that bring nothing, each in the words every source's error carries.
+    /// a long run of empty pages is refused too, in the words every source's error carries.
     #[test]
     fn pages_refuse_a_page_named_again_and_more_than_a_listing_needs() {
         let mut pages = Pages::most(2);
@@ -1177,7 +1177,7 @@ mod tests {
         }
     }
 
-    /// where the repository's site has one, never repeating the link's query.
+    /// the help gives the file's own link where the site has one, never repeating the query.
     #[test]
     fn a_git_lfs_pointer_is_answered_with_the_link_of_its_file() {
         for (link, help) in [

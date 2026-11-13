@@ -340,7 +340,7 @@ mod tests {
         }
     }
 
-    /// where it holds a person's api key; elsewhere `key` names a file or a setting.
+    /// dataverse's api takes a person's api key as `key`, which elsewhere names a file or setting.
     #[test]
     fn a_key_is_a_secret_on_dataverse_api_paths() {
         for link in [
@@ -359,7 +359,7 @@ mod tests {
         }
     }
 
-    /// since any other may grant access; a name without a value shows as written.
+    /// any other name may grant access. a name without a value shows as written.
     #[test]
     fn values_show_only_under_names_known_to_be_harmless() {
         for (text, shown) in [

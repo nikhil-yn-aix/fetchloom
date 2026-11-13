@@ -41,8 +41,8 @@ fn index(entries: &[&str]) -> Vec<u8> {
         .into_bytes()
 }
 
-/// each by its path below the series' folder, in index order. NCBI's indexes round sizes, as
-/// `1.3M`, so a file's size is left for its download to tell.
+/// each file goes by its path below the series' folder, in index order. NCBI's indexes round sizes,
+/// as `1.3M`, so a file's size is left for its download to tell.
 #[test]
 fn lists_a_series_files_from_its_folders_without_rounded_sizes() {
     let recorded = series();
@@ -207,7 +207,7 @@ fn an_index_that_cannot_be_trusted_says_why() {
     );
 }
 
-/// so they are never followed.
+/// a link that is no entry is never followed.
 #[test]
 fn links_away_from_the_folder_are_not_entries() {
     let html = r#"<a href="/geo/series/GSE1nnn/">Parent Directory</a>
@@ -234,8 +234,8 @@ fn more_folders_than_a_listing_reads_are_refused() {
     assert_eq!(recorded.asked().len(), MOST_FOLDERS);
 }
 
-/// an accession's page on GEO's site, and its folder on NCBI's file server, whose folder inside it
-/// the link selects. a file's own link stays an ordinary link, as do NCBI's other pages.
+/// GEO's page of an accession and its folder on NCBI's file server name it, a link into a folder
+/// selecting that folder. a file's link and NCBI's other pages stay ordinary links.
 #[test]
 fn accessions_and_pages_name_one_accession_and_other_forms_are_refused() {
     for (text, expected, select) in [

@@ -187,7 +187,7 @@ fn access_refusals_require_authorization() {
     }
 }
 
-/// one whose files figshare keeps confidential, or an answer that does not say, is not.
+/// a confidential article, or an answer that does not say, is not public.
 #[test]
 fn only_a_published_article_with_open_files_is_public() {
     for (published, confidential, access) in [

@@ -425,7 +425,7 @@ fn from_the_start(server: &Server) -> usize {
         .count()
 }
 
-/// and lets its hash decide, while an unpinned file starts over.
+/// a pinned file's hash decides, while an unpinned file starts over.
 #[test]
 fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
     let body = body(4 * MIB);

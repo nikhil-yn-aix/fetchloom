@@ -296,8 +296,8 @@ mod tests {
         }
     }
 
-    /// named with its repository and a page to check it on. the hub answers alike for a repository
-    /// a key cannot read, so the repository is not said to exist.
+    /// the error names the repository and a page to check the revision on. the hub answers alike
+    /// for a repository a key cannot read, so the repository is not said to exist.
     #[test]
     fn a_missing_revision_is_unresolved() {
         let recorded = Recorded::default().on(

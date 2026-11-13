@@ -229,8 +229,8 @@ fn a_token_goes_to_cloud_storage_over_https_alone() {
     }
 }
 
-/// four downloads at once, all with the one token a single request to the token endpoint got. a
-/// bucket nobody listed never gets it.
+/// four downloads at once share the one token a single request to the token endpoint got. a bucket
+/// nobody listed never gets it.
 #[test]
 fn a_listed_bucket_refused_without_a_token_is_asked_again_with_one() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -357,7 +357,7 @@ fn a_token_never_follows_a_redirect() {
     );
 }
 
-/// as a 401 refuses an expired or revoked one; a second refusal is the answer.
+/// a 401 refuses an expired or revoked token; a second refusal is the answer.
 #[test]
 fn a_token_cloud_storage_refuses_is_replaced_once() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -391,8 +391,8 @@ fn a_token_cloud_storage_refuses_is_replaced_once() {
     assert_eq!(asked_for_tokens.lock().unwrap().len(), 3);
 }
 
-/// refused with 403 and google's `insufficient_scope`: no new token would get further, so the
-/// refusal says how to sign in with the scope rather than to ask the owner.
+/// cloud storage refuses such a token with 403 and `insufficient_scope`: no new token would get
+/// further, so the refusal says how to sign in with the scope rather than to ask the owner.
 #[test]
 fn a_token_without_the_storage_scope_says_how_to_get_one() {
     let (endpoint, asked_for_tokens) = tokens();
@@ -475,7 +475,7 @@ fn a_listed_bucket_without_usable_credentials_asks_no_token_endpoint() {
     assert!(asked_for_tokens.lock().unwrap().is_empty());
 }
 
-/// and the rest of the run hears the same without asking again.
+/// the rest of the run hears google's refusal without asking again.
 #[test]
 fn a_refused_login_stops_requests_with_what_google_said() {
     let (endpoint, asked_for_tokens) = server(|_, _| {

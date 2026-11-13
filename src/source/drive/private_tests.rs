@@ -239,7 +239,7 @@ fn a_listing_fetchloom_cannot_trust_is_refused() {
     );
 }
 
-/// otherwise the refusal says what would let it.
+/// without the network's leave, the refusal says what would let the folder through.
 #[test]
 fn a_refused_folder_goes_to_drives_api_only_when_the_network_lets_it() {
     let ready = refused_page(lab(), ROOT).private(Private::Ready);

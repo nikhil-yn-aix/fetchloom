@@ -107,7 +107,7 @@ pub(super) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<
     response
 }
 
-/// so the connection ends after the answer rather than with a reset.
+/// the connection ends after the answer rather than with a reset.
 #[test]
 fn a_request_body_is_read_before_the_answer() {
     let (url, asked) = serve(vec![reply("200 OK", &[], b"token")]);

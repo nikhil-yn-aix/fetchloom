@@ -798,7 +798,7 @@ mod tests {
         );
     }
 
-    /// so the host's other origins, sent by the other client, cannot reach this machine's network.
+    /// the host's other origins go by the other client and cannot reach this machine's network.
     #[test]
     fn a_trusted_name_resolves_privately_for_the_trusted_client_alone() {
         let typed = Typed::default();
@@ -811,8 +811,8 @@ mod tests {
         assert_eq!(on("other.local"), Vec::<String>::new());
     }
 
-    /// for the settings file, with what it lists already, and for one run's variable, or for the
-    /// variable alone while it sets the list, since it then wins over the file.
+    /// the refusal quotes the settings file's line with what it lists already and one run's
+    /// variable, or the variable alone while it sets the list, since it then wins over the file.
     #[test]
     fn a_refusal_quotes_the_whole_setting_that_lifts_it() {
         let origin = Url::parse("http://10.0.0.5:9001/a.zip").unwrap().origin();

@@ -261,7 +261,7 @@ fn an_answer_that_cannot_be_trusted_says_why() {
     }
 }
 
-/// as a file's page, which goes to its raw bytes.
+/// a file's page still goes to its raw bytes.
 #[test]
 fn release_pages_name_releases_and_other_links_stay_as_they_were() {
     for (text, expected) in [

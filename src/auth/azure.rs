@@ -490,8 +490,8 @@ mod tests {
         }
     }
 
-    /// and as whom: the default subscription's user, else the first's. a profile fetchloom cannot
-    /// read leaves that to the az cli.
+    /// the profile's user is the default subscription's, else the first's. a profile fetchloom
+    /// cannot read leaves that to the az cli.
     #[test]
     fn the_az_clis_profile_says_whether_it_is_signed_in() {
         let folder = tempfile::tempdir().unwrap();
@@ -601,8 +601,8 @@ mod tests {
         (folder, az)
     }
 
-    /// as azure's libraries read it: the az cli when unset and on PATH, or asked for by name or as
-    /// `dev`, in any case. asked for and missing, or another credential, is an error.
+    /// the variable is read as azure's libraries read it, in any case: the az cli when unset and on
+    /// PATH, or asked for by name or as `dev`. asked for and missing, or another credential, fails.
     #[test]
     fn azure_token_credentials_chooses_the_sign_in() {
         let (folder, az) = az_folder();
@@ -642,8 +642,8 @@ mod tests {
         );
     }
 
-    /// by `ManagedIdentityCredential` or `prod`, never the az cli. `prod` refuses beside a service
-    /// principal's secret or a federated token, which azure's libraries would sign in with first.
+    /// `ManagedIdentityCredential` and `prod` take the managed identity, not the az cli, and `prod`
+    /// refuses beside a service principal's secret or federated token, which azure tries first.
     #[test]
     fn azure_token_credentials_may_ask_for_the_machines_identity() {
         let chosen = |pairs: &[(&'static str, &'static str)]| sign_in(&environment(pairs));
@@ -724,8 +724,8 @@ mod tests {
         path
     }
 
-    /// from `az account get-access-token` for azure storage's resource. one that fails, as without
-    /// a login, or gives an expired token says to sign in without repeating what it printed.
+    /// the token comes from `az account get-access-token` for azure storage. an az cli that fails,
+    /// as without a login, or gives an expired token says to sign in, never repeating its output.
     #[cfg(unix)]
     #[test]
     fn the_az_cli_gives_a_token_or_says_to_sign_in() {

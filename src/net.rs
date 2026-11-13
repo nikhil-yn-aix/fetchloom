@@ -588,8 +588,9 @@ impl Net {
     }
 
     /// a GET to `url`, shaped by `shape`, following redirects one checked hop at a time and
-    /// waiting out its host's rate limit. which credential, signature or token each hop carries is
-    /// told in docs/dev/architecture/network.md, under trust boundaries.
+    /// waiting out its host's rate limit. a credential goes to its own host alone, and past a
+    /// redirect only when it answers every hop, as a saved login does; the trust boundaries
+    /// section of docs/dev/architecture/network.md has the rest.
     async fn send_on(
         &self,
         lane: Lane,
@@ -1122,7 +1123,7 @@ mod tests {
         assert_eq!(sent, ["new"]);
     }
 
-    /// before the request goes, rather than sent without the header it spoils.
+    /// a bad signature is refused before the request goes, not sent without the header it spoils.
     #[test]
     fn a_signature_no_request_header_can_carry_is_refused() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1146,7 +1147,7 @@ mod tests {
         );
     }
 
-    /// so a sign-in cookie, as earthdata hands out, reaches a split download's added streams too.
+    /// a sign-in cookie, as earthdata hands out, reaches a split download's added streams too.
     #[test]
     fn both_clients_keep_cookies_in_one_jar() {
         use crate::net::scripted::{reply, serve};
@@ -1275,7 +1276,7 @@ mod tests {
             .with_mirrors_only(bases.iter().map(|base| Url::parse(base).unwrap()).collect())
     }
 
-    /// so a host that does not exist is refused rather than unknown.
+    /// a host that does not exist is refused, never reported unknown.
     #[test]
     fn mirror_only_refuses_other_hosts_before_any_lookup() {
         use crate::source::recorded::block_on;

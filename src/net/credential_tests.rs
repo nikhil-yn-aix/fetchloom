@@ -243,7 +243,7 @@ fn keyed(hosts: &[&str]) -> Net {
     )
 }
 
-/// and a key for port 443 never reaches another port of its host, as curl's CVE-2022-27776 let one.
+/// a key for port 443 never reaches another port of its host, as curl's CVE-2022-27776 let one.
 #[test]
 fn a_key_for_another_port_reaches_that_port_only() {
     let net = keyed(&["dv.lab:8443", "dv.lab"]);
