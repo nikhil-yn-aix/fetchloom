@@ -234,7 +234,6 @@ fn assertion_fault(assertion: &str) -> Option<String> {
     (!expected).then(|| format!("unexpected assertion {header} {claims}"))
 }
 
-/// the scope a service account's assertion asks for.
 fn assertion_scope(assertion: &str) -> Option<String> {
     let claims = decode(assertion.split('.').nth(1)?)?;
     let claims: serde_json::Value = serde_json::from_slice(&claims).ok()?;
@@ -285,8 +284,7 @@ fn token(asked: &Asked) -> Vec<u8> {
 }
 
 /// the token endpoint and the private bucket `lab-private`, which lists and serves `raw/a.csv`
-/// to a request with a token the endpoint gave, and refuses the narrow token for its scope, as
-/// google does.
+/// for a token the endpoint gave and refuses the narrow token for its scope, as google does.
 fn google() -> Result<Standin> {
     let page = serde_json::json!({"items": [{
         "name": "raw/a.csv",
@@ -405,10 +403,8 @@ fn assert_no_secret(surfaces: &[(String, Vec<u8>)]) {
     }
 }
 
-/// a private bucket the person lists: the listing goes without credentials, is refused, and
-/// goes again with a token a service account's signed assertion got; the object carries the
-/// token from the start. a teammate's sync reads it with a gcloud login. no secret reaches an
-/// output, a log, a trace or a file.
+/// a service account's signed assertion gets the token, a teammate's sync uses a gcloud login,
+/// and no secret reaches an output, a log, a trace or a file.
 #[test]
 fn a_listed_private_bucket_is_read_with_application_default_credentials() -> Result {
     let sandbox = Sandbox::new()?;
@@ -483,8 +479,7 @@ fn a_listed_private_bucket_is_read_with_application_default_credentials() -> Res
     Ok(())
 }
 
-/// a bucket nobody listed never gets a token, though credentials are on the machine, and a
-/// listed one without credentials says how to sign in. neither asks the token endpoint.
+/// each refusal says how to list the bucket or sign in, and neither asks the token endpoint.
 #[test]
 fn a_bucket_gets_a_token_only_when_listed_and_signed_in() -> Result {
     let sandbox = Sandbox::new()?;
@@ -544,9 +539,8 @@ fn a_bucket_gets_a_token_only_when_listed_and_signed_in() -> Result {
     Ok(())
 }
 
-/// a login google no longer takes, as a revoked one, stops the run with what google said and
-/// the command that signs in again; one whose token lacks the storage scope says how to grant
-/// it. nothing of the login reaches the output.
+/// a revoked login's error carries what google said, a narrow one's says how to grant the scope,
+/// and nothing of either login reaches the output.
 #[test]
 fn a_login_google_refuses_or_without_the_scope_says_how_to_sign_in() -> Result {
     let sandbox = Sandbox::new()?;

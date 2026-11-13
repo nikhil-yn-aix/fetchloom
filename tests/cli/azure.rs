@@ -1,5 +1,5 @@
-//! azure blob containers, listed and downloaded from a server on this machine that stands in for
-//! azure's blob hosts, public ones without a SAS and private ones with the SAS the person gave.
+//! azure blob containers, read from a stand-in for azure's blob hosts on this machine: public ones
+//! with no credential, private ones with the credential the person gave.
 #![cfg(debug_assertions)]
 
 use std::fmt::Write as _;
@@ -21,8 +21,7 @@ pub(crate) const SAS: &str =
 /// what of [`SAS`] must never show: its signature, as it comes and unescaped.
 pub(crate) const SECRETS: [&str; 2] = ["lab-signature%3D", "lab-signature="];
 
-/// the listing fetchloom asks azure for, of `prefix` in `container` at `account`, and with
-/// the SAS when `sas` is given.
+/// the request target of the listing fetchloom asks azure for, as the stand-in sees it.
 fn listing(account: &str, container: &str, prefix: &str, sas: Option<&str>) -> String {
     let mut target = format!(
         "/{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={}",
@@ -72,7 +71,7 @@ fn page(container: &str, blobs: &[(&str, usize, &str)], next: Option<&str>) -> V
     )
 }
 
-/// azure's answer to a request for a private container that carries no SAS.
+/// azure's answer to a request for a private container that carries no credential.
 fn unauthenticated() -> Vec<Part> {
     reply(
         "401 Server failed to authenticate the request. Please refer to the information in the www-authenticate header.",
@@ -146,10 +145,8 @@ fn get(target: &str) -> String {
     format!("get {} http/1.1", target.to_ascii_lowercase())
 }
 
-/// a private container the person lists, with a SAS in the environment as the az cli reads it:
-/// the listing goes without the SAS, is refused, and goes again with it; the blobs carry it from
-/// the start. a teammate's sync, given the container's SAS link in the settings file instead,
-/// does the same. data.lock keeps no SAS, and none reaches an output, a log or a file.
+/// the SAS comes from the environment as the az cli reads it, or a teammate's settings file, and
+/// no output, log or file keeps it.
 #[test]
 fn a_listed_private_container_is_read_with_its_sas_after_a_refusal() -> Result {
     let sandbox = Sandbox::new()?;
@@ -273,9 +270,8 @@ fn base64(bytes: &[u8]) -> String {
     text
 }
 
-/// checks a request head's shared key as azure does, for `resource`: the account, the path at
-/// azure and the query, decoded and sorted. the test server keeps heads in lowercase, so the date
-/// is read back as `x-ms-date` writes it, and the signature compared without its case.
+/// checks a head's shared key as azure does, for `resource`: account, path and decoded, sorted
+/// query. the server lowercases heads, so the date is recased and the signature lowercased too.
 fn signed_for(head: &str, resource: &str) -> Result {
     let header = |name: &str| {
         head.lines()
@@ -308,10 +304,8 @@ fn signed_for(head: &str, resource: &str) -> Result {
     Ok(())
 }
 
-/// a private container the person lists, with a key of its account in the environment as the az
-/// cli reads it: the listing goes without a credential, is refused, and goes again signed with
-/// the key for its path at azure; the blob is signed from the start. the key itself is never
-/// sent, and never shows.
+/// the key comes from the environment as the az cli reads it; the listing is signed once refused
+/// and the blob from the start, and the key itself is never sent or shown.
 #[test]
 fn a_listed_private_container_is_read_with_its_account_key() -> Result {
     let sandbox = Sandbox::new()?;
@@ -348,9 +342,8 @@ fn a_listed_private_container_is_read_with_its_account_key() -> Result {
     Ok(())
 }
 
-/// a listed private container is read with the az cli's login when the environment gives no
-/// SAS or key: `az account get-access-token` runs once, found in a folder PATH names, and its
-/// token goes with the listing once refused, and with the blob. the token never shows.
+/// with no SAS or key in the environment, `az account get-access-token` runs once from PATH, and
+/// its token goes with the listing once refused and with the blob, never shown.
 #[cfg(unix)]
 #[test]
 fn a_listed_private_container_is_read_with_the_az_clis_login() -> Result {
@@ -400,10 +393,8 @@ fn a_listed_private_container_is_read_with_the_az_clis_login() -> Result {
     Ok(())
 }
 
-/// a listed private container is read with this machine's managed identity once
-/// `AZURE_TOKEN_CREDENTIALS` asks for it: the token, from a stand-in for the instance metadata
-/// service asked with `metadata: true`, goes with the listing once refused, and with the blob.
-/// the token never shows.
+/// `AZURE_TOKEN_CREDENTIALS` asks for the identity. its token, from the metadata service asked
+/// with `metadata: true`, goes with the listing once refused and with the blob, never shown.
 #[test]
 fn a_listed_private_container_is_read_with_the_machines_identity() -> Result {
     let sandbox = Sandbox::new()?;
@@ -454,8 +445,7 @@ fn a_listed_private_container_is_read_with_the_machines_identity() -> Result {
     Ok(())
 }
 
-/// a container nobody listed never gets the SAS, though one is on the machine, and the refusal
-/// says how to list it.
+/// the SAS on the machine stays unsent, and the refusal says how to list the container.
 #[test]
 fn a_container_nobody_listed_never_gets_the_sas() -> Result {
     let sandbox = Sandbox::new()?;
@@ -488,8 +478,7 @@ fn a_container_nobody_listed_never_gets_the_sas() -> Result {
     Ok(())
 }
 
-/// a link carrying a SAS is never written to data.toml: add refuses it and says where a SAS
-/// belongs, without repeating it.
+/// the refusal says where a SAS belongs without repeating it, and data.toml stays unwritten.
 #[test]
 fn add_refuses_a_link_that_carries_a_sas() -> Result {
     let sandbox = Sandbox::new()?;
@@ -509,8 +498,7 @@ fn add_refuses_a_link_that_carries_a_sas() -> Result {
     Ok(())
 }
 
-/// `settings` shows the containers a SAS may go to, from the variable or the file, and never a
-/// SAS an entry carries.
+/// the azure containers are those a SAS may go to, named by the variable or the file.
 #[test]
 fn settings_show_the_azure_containers_without_their_sas() -> Result {
     let sandbox = Sandbox::new()?;
@@ -535,9 +523,8 @@ fn settings_show_the_azure_containers_without_their_sas() -> Result {
     Ok(())
 }
 
-/// a public container answers without a SAS, so none is ever sent, though the container is
-/// listed and a SAS is on the machine. a pasted folder link is read as the container's prefix,
-/// its blobs are pinned with the MD5 azure states, and a teammate syncs them from the lock.
+/// the container answers without a SAS, so none goes, though it is listed and one is on the
+/// machine. a pasted folder link is read as the container's prefix.
 #[test]
 fn a_public_container_is_pinned_with_azures_md5_and_never_gets_a_sas() -> Result {
     let sandbox = Sandbox::new()?;
@@ -601,7 +588,7 @@ fn a_public_container_is_pinned_with_azures_md5_and_never_gets_a_sas() -> Result
     Ok(())
 }
 
-/// bytes that differ from the MD5 azure states for a blob are refused, and nothing is placed.
+/// nothing of a refused blob is placed.
 #[test]
 fn bytes_that_differ_from_azures_md5_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
