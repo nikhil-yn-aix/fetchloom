@@ -336,6 +336,35 @@ fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
     );
 }
 
+/// arXiv's terms limit its hosts together, so a request to one waits three seconds after a request
+/// to another, while the mirror on google's storage is not held.
+#[test]
+fn requests_to_arxivs_hosts_start_three_seconds_apart_whichever_they_ask() {
+    let paces = Paces::default();
+    let start = Instant::now();
+    let name = |link: &str| crate::net::paced(&Url::parse(link).unwrap());
+    let first = paces.admit(&name("https://export.arxiv.org/api/query"), start);
+    drop(first.unwrap());
+    let later = start + Duration::from_secs(1);
+    let hold = paces
+        .admit(&name("https://oaipmh.arxiv.org/oai"), later)
+        .unwrap_err();
+    assert_eq!(hold.until, start + Duration::from_secs(3));
+    assert!(
+        paces
+            .admit(
+                &name("https://storage.googleapis.com/arxiv-dataset/x"),
+                later
+            )
+            .is_ok()
+    );
+    assert!(
+        paces
+            .admit(&name("https://arxiv.org/pdf/1706.03762v7"), hold.until)
+            .is_ok()
+    );
+}
+
 /// zenodo's answers once its limit is used up: a 429 whose limit resets a second after its date,
 /// then 429s sent after that reset, which spend no try. the host's clock decides, not this one.
 #[test]

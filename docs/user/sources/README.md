@@ -24,6 +24,8 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [GEO](geo.md) | gene expression series, samples and platforms | `geo:GSE1000` | nothing |
 | [DANDI](dandi.md) | neurophysiology dandisets | `dandi:000027` | nothing; embargoed dandisets are refused |
 | [OpenNeuro](openneuro.md) | neuroimaging datasets | `openneuro:ds000001@1.0.0` | nothing; private datasets are refused |
+| [arXiv](arxiv.md) | papers' pdfs: one paper, a month's or one category's month | `arxiv:1706.03762`, `arxiv:2401`, `arxiv:cs.LG/2401` | nothing |
+| OpenAlex, through [cloud buckets](buckets.md) | OpenAlex's snapshot of scholarly works, authors and venues | `s3://openalex/data/jsonl/works/` | nothing |
 | [github and gitlab releases](releases.md) | the files of a release | `github:jqlang/jq@jq-1.8.2`, `gitlab:gitlab-org/gitlab-runner@v19.3.6` | private gitlab projects, and on github more than 60 requests an hour |
 | [google drive](google-drive.md) | shared files and folders | a shared link, `drive:<id>` or `drive:folders/<id>` | items shared only with some people |
 | [dropbox](dropbox.md) | shared files and folders | a shared link | nothing |
@@ -46,4 +48,4 @@ the limit on how many files a dataset lists applies before filtering, and filter
 
 ## what a pin records
 
-`Resolved` names what a reference resolved to, with the title, file count, size and license a source states; a plain link has no such line. a license holding `-NC` or `-ND`, in any case, gets a warning, so check the license before you use or share those files. [lock records](../reference/data-lock.md#what-each-source-records) gives what each source writes in data.lock.
+`Resolved` names what a reference resolved to, with the title, file count, size and license a source states; a plain link has no such line. a license holding `-NC` or `-ND`, in any case, gets a warning, and so does arXiv's own license, which does not allow sharing copies, so check the license before you use or share those files. [lock records](../reference/data-lock.md#what-each-source-records) gives what each source writes in data.lock.

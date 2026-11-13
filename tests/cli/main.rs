@@ -25,6 +25,7 @@ mod layout;
 mod merge;
 mod mirrors;
 mod moved;
+mod papers;
 mod path;
 mod placing;
 mod progress;

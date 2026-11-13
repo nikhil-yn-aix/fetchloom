@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/ http://www.openarchives.org/OAI/2.0/OAI-PMH.xsd">
+    <responseDate>2026-11-10T06:35:53Z</responseDate>
+                <request verb="GetRecord" identifier="oai:arXiv.org:1706.03762" metadataPrefix="arXivRaw">http://oaipmh.arxiv.org/oai</request>
+
+
+    <GetRecord>
+                <record>
+                <header>
+        <identifier>oai:arXiv.org:1706.03762</identifier>
+        <datestamp>2023-08-03</datestamp>
+            <setSpec>cs:cs:CL</setSpec>
+            <setSpec>cs:cs:LG</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>1706.03762</id>
+        <submitter>Llion Jones</submitter>
+            <version version="v1">
+                <date>Mon, 12 Jun 2017 17:57:34 GMT</date>
+                <size>1102kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v2">
+                <date>Mon, 19 Jun 2017 16:49:45 GMT</date>
+                <size>1124kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v3">
+                <date>Tue, 20 Jun 2017 05:20:02 GMT</date>
+                <size>1124kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v4">
+                <date>Fri, 30 Jun 2017 17:29:30 GMT</date>
+                <size>1124kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v5">
+                <date>Wed, 06 Dec 2017 03:30:32 GMT</date>
+                <size>1123kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v6">
+                <date>Mon, 24 Jul 2023 00:48:54 GMT</date>
+                <size>1124kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v7">
+                <date>Wed, 02 Aug 2023 00:41:18 GMT</date>
+                <size>1124kb</size>
+                    <source_type>D</source_type>
+            </version>
+        <title>Attention Is All You Need</title>
+        <authors>Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin</authors>
+        <categories>cs.CL cs.LG</categories>
+            <comments>15 pages, 5 figures</comments>
+            <license>http://arxiv.org/licenses/nonexclusive-distrib/1.0/</license>
+            <abstract>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+
+    </GetRecord>
+</OAI-PMH>

@@ -1490,7 +1490,9 @@ fn folder_for(
         return chosen.to_path_buf();
     }
     let name = match paths {
-        [only] => name::folder_for(only.rsplit('/').next().unwrap_or(only)),
+        [only] if !listing.is_known_by_title() => {
+            name::folder_for(only.rsplit('/').next().unwrap_or(only))
+        }
         _ => listing
             .naming_title()
             .and_then(name::title_name)

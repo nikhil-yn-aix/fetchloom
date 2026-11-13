@@ -2,6 +2,7 @@
 //! download and how to check it. file bodies are left to the downloader, but kaggle reads a
 //! competition's smallest file to learn whether its rules were accepted.
 
+mod arxiv;
 mod bucket;
 mod dandi;
 mod dataverse;
@@ -199,6 +200,10 @@ pub(crate) enum Reference {
     Drive(drive::Item),
     Dropbox(dropbox::Link),
     Bucket(bucket::Prefix),
+    /// one arXiv paper, at a version or its newest.
+    Arxiv(arxiv::Paper),
+    /// the arXiv papers of a month, or of one category in a month.
+    ArxivMonth(arxiv::Month),
     /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
     /// pins their bytes, never where they were.
     Local,
@@ -294,9 +299,15 @@ impl Listing {
     /// such as `multi_nli`, more than by its card's title, so its name comes from the id.
     pub(crate) fn naming_title(&self) -> Option<&str> {
         match self.resolved {
-            Reference::HuggingFace(_) => None,
+            Reference::HuggingFace(_) | Reference::ArxivMonth(_) => None,
             _ => self.title.as_deref(),
         }
+    }
+
+    /// whether a generated name comes from the title before the one file the listing holds: an
+    /// arXiv paper is known by its title, and its file only by an id, as `1706.03762v7.pdf`.
+    pub(crate) fn is_known_by_title(&self) -> bool {
+        matches!(self.resolved, Reference::Arxiv(_))
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -415,6 +426,7 @@ impl Reference {
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
             "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
             "kaggle" => whole(kaggle::parse(rest)?),
+            "arxiv" => whole(arxiv::parse(rest)?),
             "drive" => whole(Reference::Drive(drive::Item::parse(rest)?)),
             "s3" => whole(Reference::Bucket(bucket::Prefix::parse(
                 bucket::Store::S3,
@@ -538,6 +550,8 @@ impl Reference {
             Reference::Drive(item) => item.resolve(api).await,
             Reference::Dropbox(link) => Ok(link.listing()),
             Reference::Bucket(prefix) => prefix.resolve(api).await,
+            Reference::Arxiv(paper) => paper.resolve(api).await,
+            Reference::ArxivMonth(month) => month.resolve(api).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
@@ -566,6 +580,8 @@ impl fmt::Display for Reference {
             Reference::Drive(item) => write!(f, "{item}"),
             Reference::Dropbox(link) => write!(f, "{link}"),
             Reference::Bucket(prefix) => write!(f, "{prefix}"),
+            Reference::Arxiv(paper) => write!(f, "{paper}"),
+            Reference::ArxivMonth(month) => write!(f, "{month}"),
             Reference::Local => f.write_str(local::IMPORTED),
         }
     }
@@ -590,9 +606,22 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
 }
 
-/// how far apart requests to `host` start, for a host that asks for that, as NCBI's do.
-pub(crate) fn spacing(host: &str) -> Option<std::time::Duration> {
-    geo::spacing(host)
+/// the name requests to `host` are paced and counted under: the host, or for hosts whose source
+/// limits them together, as arXiv's terms do its hosts, the name they share.
+pub(crate) fn paced_as(host: &str) -> String {
+    arxiv::paced_as(host).map_or_else(|| host.to_owned(), str::to_owned)
+}
+
+/// how far apart requests paced as `name` start, for a host that asks for that, as NCBI's and
+/// arXiv's do.
+pub(crate) fn spacing(name: &str) -> Option<std::time::Duration> {
+    geo::spacing(name).or_else(|| arxiv::spacing(name))
+}
+
+/// how many requests paced as `name` may run at once, for hosts that ask for fewer than the
+/// network allows, as arXiv's ask for one.
+pub(crate) fn most_at_once(name: &str) -> Option<usize> {
+    arxiv::most_at_once(name)
 }
 
 /// a source's own error for a download it refused, when it says more than the status.
@@ -721,6 +750,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
             })
         })
         .or_else(|| kaggle::from_link(&url).map(|(reference, file)| parsed(reference, file)))
+        .or_else(|| arxiv::from_link(&url).map(|paper| parsed(Reference::Arxiv(paper), None)))
         .or_else(|| drive::Item::from_link(&url).map(|item| parsed(Reference::Drive(item), None)))
         .or_else(|| {
             dropbox::Link::from_link(&url).map(|link| parsed(Reference::Dropbox(link), None))
@@ -877,6 +907,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "drive.google.com" | "docs.google.com" => "google drive",
         "dropbox.com" | "www.dropbox.com" => "dropbox",
         "doi.org" | "www.doi.org" | "dx.doi.org" => "doi",
+        "arxiv.org" | "www.arxiv.org" | "export.arxiv.org" => "arXiv",
         _ => return None,
     })
 }

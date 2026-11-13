@@ -55,6 +55,12 @@ fn every_real_handle_url_routes_without_getting_the_landing_page() {
             "doi/mendeley.json",
             "mendeley:rscbjbr9sj@2",
         ),
+        (
+            "10.48550/arXiv.1706.03762",
+            "https://doi.org/api/handles/10.48550%2Farxiv.1706.03762",
+            "doi/arxiv.json",
+            "arxiv:1706.03762",
+        ),
     ];
     for (doi, url, fixture, target) in cases {
         let recorded = Recorded::default().fixture(url, fixture);

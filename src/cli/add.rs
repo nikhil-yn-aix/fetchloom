@@ -1585,8 +1585,12 @@ fn choose_name(
         (_, Some(file)) => Some(file.rsplit('/').next().unwrap_or(file).to_owned()),
         _ => None,
     };
-    let name = single
-        .and_then(|file| name::dataset_name(&name::folder_for(&file)))
+    let titled = listing
+        .is_known_by_title()
+        .then(|| listing.naming_title().and_then(name::title_name))
+        .flatten();
+    let name = titled
+        .or_else(|| single.and_then(|file| name::dataset_name(&name::folder_for(&file))))
         .or_else(|| listing.naming_title().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());

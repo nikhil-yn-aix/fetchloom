@@ -1884,6 +1884,9 @@ fn restriction(license: &str) -> Option<&'static str> {
         Some("commercial use")
     } else if upper.contains("-ND") {
         Some("changed copies")
+    } else if upper.contains("ARXIV.ORG/LICENSES/") {
+        // arXiv's own license lets arXiv alone share a paper, and nobody reuse it
+        Some("sharing copies")
     } else {
         None
     }
@@ -2763,7 +2766,24 @@ mod tests {
         assert_eq!(restriction("cc-by-nc-sa-4.0"), Some("commercial use"));
         assert_eq!(restriction("CC-BY-ND-4.0"), Some("changed copies"));
         assert_eq!(restriction("CC-BY-NC-ND-4.0"), Some("commercial use"));
-        for license in ["MIT", "Apache-2.0", "CC-BY-4.0", "CC0-1.0"] {
+        // arXiv's own license, and the one it assumes for papers from before it asked
+        for arxiv in [
+            "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+            "http://arxiv.org/licenses/assumed-1991-2003/",
+        ] {
+            assert_eq!(restriction(arxiv), Some("sharing copies"), "{arxiv}");
+        }
+        assert_eq!(
+            restriction("http://creativecommons.org/licenses/by-nc-sa/4.0/"),
+            Some("commercial use")
+        );
+        for license in [
+            "MIT",
+            "Apache-2.0",
+            "CC-BY-4.0",
+            "CC0-1.0",
+            "http://creativecommons.org/licenses/by/4.0/",
+        ] {
             assert_eq!(restriction(license), None);
         }
     }

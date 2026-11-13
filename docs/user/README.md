@@ -41,6 +41,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [GEO](sources/geo.md) | list the files GEO keeps for a series, a sample or a platform |
 | [DANDI](sources/dandi.md) | list the assets of a dandiset at one version, checked against the SHA-256 dandi states |
 | [OpenNeuro](sources/openneuro.md) | list the files of a dataset's snapshot, checked against the digests their git-annex keys state |
+| [arXiv](sources/arxiv.md) | pin papers' pdfs: one paper, a month's or one category's month |
 | [github and gitlab releases](sources/releases.md) | pin the files of a release at its tag |
 | [google drive](sources/google-drive.md) | use shared files or folders, read private ones you list, and exclude google docs |
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |

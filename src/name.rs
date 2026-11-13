@@ -120,7 +120,7 @@ pub(crate) fn title_name(title: &str) -> Option<String> {
 
 /// a dataset name made from a reference without its version: its last part, as iris for
 /// hf:datasets/scikit-learn/iris, with the parts before it taken one at a time until the name
-/// holds a letter, as pdf-2401 for gs://arxiv-dataset/arxiv/arxiv/pdf/2401/.
+/// holds a letter, as pdf-2401 for `gs://arxiv-dataset/arxiv/arxiv/pdf/2401/`.
 pub(crate) fn reference_name(reference: &str) -> Option<String> {
     let bare = reference.split('@').next().unwrap_or(reference);
     let parts: Vec<&str> = bare

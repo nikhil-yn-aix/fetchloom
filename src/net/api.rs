@@ -122,10 +122,10 @@ impl Api for Net {
 
     async fn get_once(&self, url: &Url) -> Result<Response, Error> {
         let url = self.asking(url)?;
-        if self.paces.holds(
-            &host(&url).to_ascii_lowercase(),
-            tokio::time::Instant::now().into_std(),
-        ) {
+        if self
+            .paces
+            .holds(&super::paced(&url), tokio::time::Instant::now().into_std())
+        {
             return Err(Error::new(
                 Kind::NetworkStatus,
                 format!("{} asked for a pause", host(&url)),
@@ -531,6 +531,8 @@ fn test_source(url: &Url) -> Option<Url> {
             | "ftp.ncbi.nlm.nih.gov"
             | "api.dandiarchive.org"
             | "openneuro.org"
+            | "export.arxiv.org"
+            | "oaipmh.arxiv.org"
     ) {
         return None;
     }

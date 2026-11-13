@@ -906,7 +906,7 @@ impl Net {
         url: &Url,
         mut holding: Option<&mut Holding<'_>>,
     ) -> Result<pace::Ticket, Error> {
-        let name = host(url).to_ascii_lowercase();
+        let name = paced(url);
         loop {
             self.stop.check()?;
             if let Some(holding) = holding.as_mut()
@@ -985,10 +985,13 @@ impl Net {
     }
 
     fn slots(&self, url: &Url) -> Arc<Semaphore> {
+        let name = paced(url);
+        let most = crate::source::most_at_once(&name)
+            .map_or(self.host_jobs, |most| most.min(self.host_jobs));
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
-            .entry(host(url).to_ascii_lowercase())
-            .or_insert_with(|| Arc::new(Semaphore::new(self.host_jobs)))
+            .entry(name)
+            .or_insert_with(|| Arc::new(Semaphore::new(most)))
             .clone()
     }
 }
@@ -1052,6 +1055,12 @@ pub(crate) fn host(url: &Url) -> &str {
     url.host_str().unwrap_or("the server")
 }
 
+/// the name requests to `url`'s host are paced and counted under, which hosts limited together
+/// share, as arXiv's do.
+fn paced(url: &Url) -> String {
+    crate::source::paced_as(&host(url).to_ascii_lowercase())
+}
+
 /// where `response` redirects a request for `from`, when it is a redirect to an http or https
 /// link.
 fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
@@ -1076,6 +1085,36 @@ mod scripted;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// arXiv's terms ask for one request at a time, so its hosts share one slot whatever the
+    /// settings allow, while another host takes as many as they allow.
+    #[test]
+    fn arxivs_hosts_share_one_slot() {
+        let options = Options {
+            offline: Offline::No,
+            jobs: 8,
+            credentials: Vec::new(),
+            split: Splitting::WhenSlow,
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let link = |text: &str| Url::parse(text).unwrap();
+        let held = net.try_permit(&link("https://export.arxiv.org/api/query"));
+        assert!(held.is_some());
+        assert!(
+            net.try_permit(&link("https://oaipmh.arxiv.org/oai"))
+                .is_none()
+        );
+        drop(held);
+        assert!(
+            net.try_permit(&link("https://oaipmh.arxiv.org/oai"))
+                .is_some()
+        );
+        assert_eq!(
+            net.slots(&link("https://zenodo.org/api/records/1"))
+                .available_permits(),
+            crate::settings::HOST_JOBS
+        );
+    }
 
     #[test]
     fn a_run_that_sends_nothing_loads_no_tls_roots() {
