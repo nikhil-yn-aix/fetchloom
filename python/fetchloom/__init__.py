@@ -106,10 +106,9 @@ def path(
     """return the absolute path of a dataset, or of a file or folder inside one.
 
     ``name`` is a dataset name such as ``iris``, or a path inside a dataset such as
-    ``iris/Iris.csv``. ``project`` is the project folder or any folder inside it. when the
-    dataset is not in place yet, fetchloom syncs that dataset alone first and may download its
-    data.
-    ``yes=True`` approves large downloads; ``offline=True`` prevents network requests.
+    ``iris/Iris.csv``. ``project`` is the project folder or any folder inside it. a dataset
+    not in place yet is synced alone first, which may download its data. ``yes=True``
+    approves large downloads, and ``offline=True`` prevents network requests.
     ``locked=True`` never changes data.lock: when that sync would, it raises :class:`Error`
     with kind ``lock.outdated``.
     """
@@ -139,24 +138,23 @@ def sync(
     """make the project's data folder match data.lock and return the project's path.
 
     ``project`` is the project folder or any folder inside it. ``names``, such as ``["iris"]``
-    or ``"iris"``, syncs those datasets alone: the others keep their entries in data.lock and
-    their files as they are, and the next sync without names still checks them all. files
-    edited by hand stay, and each one fetchloom keeps is reported as a python warning.
+    or ``"iris"``, syncs those datasets alone; the others keep their pins and files, and the
+    next sync without names checks them all. files edited by hand stay, each reported as a
+    python warning. a file put back as pinned, such as a link to the cache's copy that was
+    edited in place, matches the lock again, and its warning names the file that keeps the
+    changed copy.
+
     ``strict=True`` raises :class:`Error` with kind ``data.not_ready`` and code 1, as
-    ``sync --strict`` does, when the data is not ready to use once the sync is done: a file
-    it kept, a recipe's result not on this machine, or a dataset data.lock does not pin as
-    data.toml asks. ``details`` names each with what makes it ready, so a notebook never runs
-    on inputs that differ from the lock. a file fetchloom put back as pinned, such as one
-    linked to the cache's copy that was edited in place, matches the lock again: its warning
-    says so and names the file that keeps the changed copy. a download above 1 GiB raises
-    :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
-    ``offline=True`` prevents network requests. ``locked=True`` raises :class:`Error` with
-    kind ``lock.outdated`` instead of updating a data.lock that is missing or out of date
-    with data.toml, for the named datasets alone when ``names`` names some, and with kind
-    ``build.needed`` when data.lock does not pin a recipe as building it now would make,
-    which only ``fetchloom build`` changes. ``verify=True`` checks the SHA-256 of every
-    placed file, as ``sync --verify`` does, and puts back one whose bytes changed though its
-    size and time did not.
+    ``sync --strict`` does, when the data is not ready to use afterwards: a file it kept, a
+    recipe's result not on this machine, or a dataset data.lock does not pin as data.toml
+    asks, each named in ``details`` with what makes it ready. ``yes=True`` approves a
+    download above 1 GiB, which otherwise raises kind ``unconfirmed``. ``offline=True``
+    prevents network requests. ``locked=True`` raises kind ``lock.outdated`` instead of
+    updating a missing or out-of-date data.lock, for the named datasets alone when ``names``
+    names some, and kind ``build.needed`` for a recipe data.lock does not pin as building it
+    now would make, which only ``fetchloom build`` changes. ``verify=True`` checks the
+    SHA-256 of every placed file, as ``sync --verify`` does, and puts back one whose bytes
+    changed though its size and time did not.
     """
     arguments = _options(["sync"], yes, offline, locked)
     if verify:
@@ -184,15 +182,15 @@ def get(
 
     ``link`` is a link, a DOI or an id such as ``zenodo:3608990``. with ``path``, the one
     file the link resolves to is written at exactly that path, writable, and that path is
-    returned, so ``pd.read_csv(fetchloom.get(url, "data.csv"))`` works. a leading ``~`` in
-    ``path`` or ``folder`` is your home folder, as pandas reads it. a file already there that
-    holds the same bytes stays as it is; one holding other bytes raises :class:`Error` with
-    kind ``local.not_empty`` unless ``force=True``, which needs ``path``, replaces it.
+    returned, so ``pd.read_csv(fetchloom.get(url, "data.csv"))`` works. a file already there
+    that holds the same bytes stays as it is; one holding other bytes raises :class:`Error`
+    with kind ``local.not_empty`` unless ``force=True``, which needs ``path``, replaces it.
     without ``path``, the download goes into a new folder named after it, or into
-    ``folder``, and the folder is returned. ``sha256`` is the hash the one file must have; with ``path``, a
-    file already holding it is kept without a download. ``yes=True`` approves large
-    downloads; ``offline=True`` prevents network requests, and keeps a file at ``path`` that
-    still holds what the link served last time.
+    ``folder``, and the folder is returned. a leading ``~`` in ``path`` or ``folder`` is your
+    home folder, as pandas reads it. ``sha256`` is the hash the one file must have, and with
+    ``path`` a file already holding it is kept without a download. ``yes=True`` approves
+    large downloads; ``offline=True`` prevents network requests, and keeps a file at ``path``
+    that still holds what the link served last time.
     """
     if path is not None and folder is not None:
         raise Error(
