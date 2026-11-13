@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use super::{Outcome, Report, State, agree, answered_no};
 use crate::auth::cookies::{self, Picked, Why};
@@ -578,10 +578,7 @@ fn described(saved: &Saved) -> String {
     }
 }
 
-/// the moment `seconds` after 1970 is.
-fn moment(seconds: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).unwrap_or(0))
-}
+use crate::auth::site::moment;
 
 /// the date `seconds` after 1970 is, as `2026-12-01`.
 fn date(seconds: i64) -> String {

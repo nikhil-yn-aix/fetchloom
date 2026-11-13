@@ -79,9 +79,18 @@ pub(crate) struct Cookie {
     pub(crate) expires: Option<i64>,
 }
 
-/// the moment `seconds` after 1970 is, or 1970 itself for a time before it.
-fn at(seconds: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).unwrap_or(0))
+/// the last second of year 9999, which every system's clock can hold, while a later moment, as
+/// one past year 30828 on windows, overflows it.
+const LATEST: u64 = 253_402_300_799;
+
+/// the moment `seconds` after 1970 is: 1970 itself for a time before it, and the last second of
+/// year 9999 for one past that, so a cookie set to last for ever does.
+pub(crate) fn moment(seconds: i64) -> SystemTime {
+    let seconds = u64::try_from(seconds).unwrap_or(0);
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .filter(|_| seconds <= LATEST)
+        .unwrap_or_else(|| UNIX_EPOCH + Duration::from_secs(LATEST))
 }
 
 /// `host` without the `:port` a site's host may end with.
@@ -188,7 +197,7 @@ impl Saved {
                         value: cookie.value.clone(),
                         path: cookie.path.clone(),
                         secure: cookie.secure,
-                        expires: cookie.expires.map(at),
+                        expires: cookie.expires.map(moment),
                     })
                     .collect(),
             ),

@@ -276,6 +276,24 @@ fn a_row_older_than_a_column_reads_its_default() {
     assert_eq!(ours.len(), 2);
 }
 
+/// a statement whose last `)` comes before its `(`, and a row whose header claims more than
+/// memory, are refused rather than panic.
+#[test]
+fn a_broken_statement_or_row_is_refused_without_a_panic() {
+    for sql in [")(", "CREATE TABLE t ) (", ")x(a TEXT", "CREATE TABLE t(a"] {
+        let read: Vec<String> = columns(sql).into_iter().map(|column| column.name).collect();
+        let expected: &[&str] = if sql.ends_with("(a") || sql.ends_with("TEXT") {
+            &["a"]
+        } else {
+            &[]
+        };
+        assert_eq!(read, expected, "{sql}");
+    }
+    // a header of the largest length a varint gives, then a value of one byte
+    let record = [[0xff; 9].as_slice(), &[1]].concat();
+    assert!(decode(&record).is_err());
+}
+
 /// a database with any of its bytes changed, and any log beside it, never panics the reader:
 /// it reads, or refuses.
 #[test]

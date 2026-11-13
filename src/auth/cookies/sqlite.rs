@@ -388,10 +388,13 @@ fn decode(record: &[u8]) -> Result<Vec<Value>, Broken> {
             10 | 11 => return Err(broken("a row holds a value of a reserved kind")),
             _ => usize::try_from((kind - 12) / 2).map_err(|_| broken("a value is too long"))?,
         };
-        let bytes = record
-            .get(body..body + length)
+        let end = body
+            .checked_add(length)
             .ok_or_else(|| broken("a row ends before its values do"))?;
-        body += length;
+        let bytes = record
+            .get(body..end)
+            .ok_or_else(|| broken("a row ends before its values do"))?;
+        body = end;
         values.push(match kind {
             0 => Value::Null,
             8 => Value::Integer(0),
@@ -682,7 +685,9 @@ fn columns(sql: &str) -> Vec<Column> {
     let Some(open) = sql.find('(') else {
         return Vec::new();
     };
-    let body = &sql[open + 1..sql.rfind(')').unwrap_or(sql.len())];
+    // the last `)` after the first `(`, which a broken statement may hold before it
+    let close = sql[open..].rfind(')').map_or(sql.len(), |at| open + at);
+    let body = &sql[open + 1..close];
     let mut parts = Vec::new();
     let (mut depth, mut quote, mut start) = (0_usize, None, 0);
     for (at, c) in body.char_indices() {

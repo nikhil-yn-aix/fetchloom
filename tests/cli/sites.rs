@@ -405,6 +405,30 @@ fn cookies_from_a_file_go_to_their_host_by_path_and_secure_flag() -> Result {
     Ok(())
 }
 
+/// a cookie set to last longer than any clock can count, as a broken export may write it, is
+/// kept and told as lasting to year 9999, rather than crashing the sign-in or the listing.
+#[test]
+fn a_cookie_that_never_ends_is_kept_without_a_crash() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let cookies = line("127.0.0.1", "/", false, i64::MAX, "forever", "f-value");
+    std::fs::write(sandbox.work().join("cookies.txt"), cookies)?;
+    let login = sandbox.run(&["auth", "login", &host, "--cookies", "cookies.txt", "--yes"])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("forever · 127.0.0.1 · expires 9999-12-31"),
+        "{stderr}"
+    );
+    let listed = sandbox.run(&["auth", "--offline"])?;
+    assert!(listed.status.success(), "{}", text(&listed.stderr)?);
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(heard(&site, "cookie"), [Some("forever=f-value".to_owned())]);
+    Ok(())
+}
+
 /// a website's cookies saved in the sandbox's key file as `auth login` writes them, with
 /// `expires` for each.
 fn saved_cookies(sandbox: &Sandbox, host: &str, expires: i64) -> Result {

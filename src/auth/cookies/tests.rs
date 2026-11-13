@@ -79,9 +79,21 @@ fn a_domain_covers_its_own_host_and_those_below_a_leading_dot() {
     }
 }
 
+/// a cookie set to last longer than any clock counts is kept, not refused or a panic.
+#[test]
+fn a_cookie_that_never_ends_is_kept() {
+    let picked = pick(
+        vec![cookie("forever", "data.example.org", Some(i64::MAX))],
+        "data.example.org",
+        SystemTime::now(),
+    );
+    assert_eq!(picked.kept.len(), 1);
+    assert_eq!(picked.left, []);
+}
+
 #[test]
 fn a_host_takes_the_unexpired_sendable_cookies_its_domain_covers() {
-    let now = moment(1_950_000_000);
+    let now = super::super::site::moment(1_950_000_000);
     let mut broken = cookie("broken", "data.example.org", None);
     broken.value = "a;b".to_owned();
     let mut first = cookie("dup", ".example.org", None);

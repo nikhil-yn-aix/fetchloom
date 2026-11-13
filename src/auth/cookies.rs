@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use super::site::{Cookie, without_port};
 use crate::error::{Error, Kind};
@@ -236,7 +236,10 @@ pub(crate) fn pick(found: Vec<Cookie>, host: &str, now: SystemTime) -> Picked {
     for (at, cookie) in found.into_iter().enumerate() {
         let why = if !covers(&cookie.domain, host) {
             Some(Why::Elsewhere)
-        } else if cookie.expires.is_some_and(|expires| moment(expires) <= now) {
+        } else if cookie
+            .expires
+            .is_some_and(|expires| super::site::moment(expires) <= now)
+        {
             Some(Why::Expired)
         } else if !sendable(&cookie) {
             Some(Why::Unsendable)
@@ -264,11 +267,6 @@ pub(crate) fn pick(found: Vec<Cookie>, host: &str, now: SystemTime) -> Picked {
         kept: kept.into_iter().map(|(_, cookie)| cookie).collect(),
         left,
     }
-}
-
-/// the moment `seconds` after 1970 is.
-fn moment(seconds: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).unwrap_or(0))
 }
 
 /// the cookies a cookies.txt file holds, as curl's `-b` and yt-dlp read them and browser

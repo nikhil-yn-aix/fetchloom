@@ -24,6 +24,20 @@ fn cookie(name: &str, domain: &str, expires: Option<i64>) -> Cookie {
     }
 }
 
+/// a time past what a clock can hold, as a cookie set to last for ever has, is the last second
+/// of year 9999, and one before 1970 is 1970, so neither panics.
+#[test]
+fn a_moment_past_any_clock_is_the_end_of_year_9999() {
+    let latest = UNIX_EPOCH + Duration::from_secs(253_402_300_799);
+    assert_eq!(moment(i64::MAX), latest);
+    assert_eq!(moment(253_402_300_800), latest);
+    assert_eq!(
+        moment(1_700_000_000),
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+    );
+    assert_eq!(moment(-5), UNIX_EPOCH);
+}
+
 #[test]
 fn a_site_is_a_host_with_its_port_and_nothing_more() {
     for (typed, expected) in [
