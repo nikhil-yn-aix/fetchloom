@@ -520,6 +520,61 @@ fn pages_and_bytes_are_kept_to_what_the_files_hold() {
     assert!(read.is_err_and(|Broken(why)| why.contains("larger than")));
 }
 
+/// cells that share bytes, as a run of 01 bytes is a cell at every offset, are refused: one leaf
+/// of 64 KiB would otherwise give 21,800 rows.
+#[test]
+fn cells_that_overlap_are_refused() {
+    let size = 65_536;
+    let count = 21_800;
+    let start = 8 + 2 * count;
+    let mut page = vec![0; size];
+    page[0] = 0x0d;
+    page[3..5].copy_from_slice(&u16::try_from(count).unwrap().to_be_bytes());
+    page[5..7].copy_from_slice(&u16::try_from(start).unwrap().to_be_bytes());
+    for at in 0..count {
+        let offset = u16::try_from(start + at).unwrap().to_be_bytes();
+        page[8 + 2 * at..10 + 2 * at].copy_from_slice(&offset);
+    }
+    page[start..].fill(1);
+    let read = Database::parse(laid_out(size, &[page]), None)
+        .unwrap()
+        .rows("t", &["a"]);
+    assert!(
+        read.as_ref()
+            .is_err_and(|Broken(why)| why.contains("overlap")),
+        "{:?}",
+        read.map(|rows| rows.len())
+    );
+}
+
+/// the budget counts what a read builds, not only the bytes it reads: a value for each byte of
+/// a row's header, so a header of nothing but nulls is refused before it is decoded, and each
+/// row handed back with each column asked for.
+#[test]
+fn the_budget_counts_the_values_a_read_builds() {
+    let size = 65_536;
+    // one row whose header holds 60,000 nulls, in 60 KB of the file
+    let mut record = put_varint(60_003);
+    record.extend(vec![0; 60_000]);
+    let nulls = laid_out(size, &[leaf(size, 0, &[(1, record)], None)]);
+    // 5,000 rows of no values, each read for nine columns
+    let empty: Vec<(i64, Vec<u8>)> = (1..=5_000).map(|rowid| (rowid, texts(&[]))).collect();
+    let many = laid_out(size, &[leaf(size, 0, &empty, None)]);
+    let wanted = ["a"; 9];
+    for (case, bytes, stored) in [("nulls", nulls, 60_003), ("rows", many, 5_000)] {
+        assert!(bytes.len() < 1 << 20, "{case}: {stored}");
+        let mut database = Database::parse(bytes, None).unwrap();
+        database.budget = 1 << 20;
+        let read = database.rows("t", &wanted);
+        assert!(
+            read.as_ref()
+                .is_err_and(|Broken(why)| why.contains("larger than")),
+            "{case}: {:?}",
+            read.map(|rows| rows.len())
+        );
+    }
+}
+
 /// a database a fuzzer plans, built as SQLite writes one and then bent as a crafted file would
 /// be, never panics the reader or the browsers' readers over it, nor makes them give more rows
 /// than its pages hold; unbent, it reads as it was built.

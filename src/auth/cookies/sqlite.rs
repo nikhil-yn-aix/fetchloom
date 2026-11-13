@@ -11,6 +11,10 @@ use std::path::Path;
 const LARGEST: u64 = 256 << 20;
 /// the deepest a table's tree may go: a cookie table of millions of rows is five pages deep.
 const DEEPEST: usize = 32;
+/// what a read builds for each value: a record's header holds at least a byte for each.
+const VALUE: u64 = size_of::<Value>() as u64;
+/// what a read builds for each row it hands back, beyond its values.
+const ROW: u64 = size_of::<Vec<Value>>() as u64;
 
 /// a value a column holds.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,8 +74,8 @@ pub(crate) struct Broken(pub(crate) String);
 type Each<'a> = dyn FnMut(i64, &[u8]) -> Result<(), Broken> + 'a;
 
 /// what one read of the file has gone through: each page it reached, which no tree SQLite
-/// writes reaches twice, and the bytes of the rows it took, so a crafted file can make it do no
-/// more work than its own size.
+/// writes reaches twice, and what the rows it took cost, their bytes and what it built of them,
+/// so a crafted file can make it do no more work than its budget.
 #[derive(Default)]
 struct Walk {
     seen: HashSet<u32>,
@@ -79,6 +83,16 @@ struct Walk {
 }
 
 impl Walk {
+    /// adds `cost` to what the read has taken, or refuses it once that passes `budget`.
+    fn charge(&mut self, cost: u64, budget: u64) -> Result<(), Broken> {
+        self.read = self.read.saturating_add(cost);
+        if self.read > budget {
+            Err(broken("its rows are larger than any browser's cookie file"))
+        } else {
+            Ok(())
+        }
+    }
+
     /// marks page `number` reached, or refuses it reached a second time.
     fn reach(&mut self, number: u32) -> Result<(), Broken> {
         if self.seen.insert(number) {
@@ -105,7 +119,8 @@ pub(crate) struct Database {
     pages: u32,
     /// what `PRAGMA user_version` says: firefox numbers its cookie schema with it.
     pub(crate) user_version: u32,
-    /// the most bytes of rows one read takes.
+    /// the most one read takes: the bytes of its rows, and what the values it builds of them
+    /// cost.
     budget: u64,
 }
 
@@ -244,7 +259,7 @@ impl Database {
     pub(crate) fn rows(&self, table: &str, wanted: &[&str]) -> Result<Vec<Vec<Value>>, Broken> {
         let mut walk = Walk::default();
         let mut found = None;
-        self.walk(1, 0, &mut walk, &mut |rowid, record| {
+        self.walk(1, 0, &mut walk, 0, &mut |rowid, record| {
             let _ = rowid;
             let fields = decode(record)?;
             let field = |at: usize| fields.get(at).cloned().unwrap_or(Value::Null);
@@ -281,7 +296,8 @@ impl Database {
             .map(|column| column.and_then(|column| columns.iter().position(|each| each == column)))
             .collect();
         let mut rows = Vec::new();
-        self.walk(root, 0, &mut walk, &mut |rowid, record| {
+        let row = ROW.saturating_add(VALUE.saturating_mul(wanted.len() as u64));
+        self.walk(root, 0, &mut walk, row, &mut |rowid, record| {
             let fields = decode(record)?;
             let mut row = Vec::with_capacity(at.len());
             for (column, position) in at.iter().zip(&positions) {
@@ -306,12 +322,14 @@ impl Database {
     }
 
     /// calls `each` with the rowid and record of every row in the table tree whose root is page
-    /// `number`, `depth` pages below the root, as long as `walk` reaches no page twice.
+    /// `number`, `depth` pages below the root, as long as `walk` reaches no page twice and the
+    /// rows cost no more than the budget, each `row` for what `each` builds beyond its values.
     fn walk(
         &self,
         number: u32,
         depth: usize,
         walk: &mut Walk,
+        row: u64,
         each: &mut Each<'_>,
     ) -> Result<(), Broken> {
         if depth > DEEPEST {
@@ -329,26 +347,79 @@ impl Database {
             0x0d => (false, head + 8),
             _ => return Err(broken(format!("page {number} is not part of a table"))),
         };
-        let mut offsets = HashSet::new();
-        for cell in 0..cells {
-            let offset = usize::from(be16(page, pointers + 2 * cell));
-            if offset >= page.len() {
-                return Err(broken(format!("page {number} points past its end")));
-            }
-            if !offsets.insert(offset) {
-                return Err(broken(format!("page {number} lists a cell twice")));
-            }
+        let offsets = self.cells(page, number, pointers, cells, interior)?;
+        for offset in offsets {
             if interior {
-                self.walk(be32(page, offset), depth + 1, walk, each)?;
+                self.walk(be32(page, offset), depth + 1, walk, row, each)?;
             } else {
                 let (rowid, record) = self.cell(page, offset, walk)?;
+                // the values are paid for before they are built
+                let values = varint(&record, 0).map_or(0, |(header, _)| header);
+                walk.charge(
+                    row.saturating_add(values.saturating_mul(VALUE)),
+                    self.budget,
+                )?;
                 each(rowid, &record)?;
             }
         }
         if interior {
-            self.walk(be32(page, head + 8), depth + 1, walk, each)?;
+            self.walk(be32(page, head + 8), depth + 1, walk, row, each)?;
         }
         Ok(())
+    }
+
+    /// where the `count` cells of page `number` are, in the order its pointers at `pointers` list
+    /// them: each within the page, past its header and pointers, and sharing no byte with
+    /// another, as SQLite lays them out.
+    fn cells(
+        &self,
+        page: &[u8],
+        number: u32,
+        pointers: usize,
+        count: usize,
+        interior: bool,
+    ) -> Result<Vec<usize>, Broken> {
+        let mut offsets = Vec::with_capacity(count);
+        let mut extents = Vec::with_capacity(count);
+        for cell in 0..count {
+            let offset = usize::from(be16(page, pointers + 2 * cell));
+            if offset >= page.len() {
+                return Err(broken(format!("page {number} points past its end")));
+            }
+            let end = if interior {
+                offset + 4 + varint(page, offset + 4)?.1
+            } else {
+                self.extent(page, offset)?
+            };
+            offsets.push(offset);
+            extents.push((offset, end));
+        }
+        extents.sort_unstable();
+        let mut free = pointers + 2 * count;
+        for (at, (start, end)) in extents.iter().enumerate() {
+            if at > 0 && extents[at - 1].0 == *start {
+                return Err(broken(format!("page {number} lists a cell twice")));
+            }
+            if *start < free {
+                return Err(broken(format!("page {number} has cells that overlap")));
+            }
+            free = *end;
+        }
+        if free > self.usable {
+            return Err(broken("a row runs past its page"));
+        }
+        Ok(offsets)
+    }
+
+    /// where the table leaf cell at `offset` of `page` ends: its sizes, the payload the page
+    /// keeps, and the number of its first overflow page when it spills.
+    fn extent(&self, page: &[u8], offset: usize) -> Result<usize, Broken> {
+        let (size, read) = varint(page, offset)?;
+        let (_, read_id) = varint(page, offset + read)?;
+        let size = usize::try_from(size).map_err(|_| broken("a row is larger than memory"))?;
+        let local = self.local(size);
+        let spill = if local < size { 4 } else { 0 };
+        Ok(offset + read + read_id + local + spill)
     }
 
     /// the rowid and whole record of the table leaf cell at `offset` of `page`, its payload
@@ -356,10 +427,7 @@ impl Database {
     fn cell(&self, page: &[u8], offset: usize, walk: &mut Walk) -> Result<(i64, Vec<u8>), Broken> {
         let (size, read) = varint(page, offset)?;
         let (rowid, read_id) = varint(page, offset + read)?;
-        walk.read = walk.read.saturating_add(size);
-        if walk.read > self.budget {
-            return Err(broken("its rows are larger than any browser's cookie file"));
-        }
+        walk.charge(size, self.budget)?;
         let size = usize::try_from(size).map_err(|_| broken("a row is larger than memory"))?;
         let start = offset + read + read_id;
         let local = self.local(size);
