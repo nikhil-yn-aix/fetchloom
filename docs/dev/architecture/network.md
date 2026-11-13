@@ -44,7 +44,7 @@ flowchart TD
     body --> queue["bounded writer queue: 16 batches of 256 KiB"]
     queue --> writer["writer thread: offsets and pending bytes"]
     writer --> disk["partial file"]
-    writer -->|"large or unknown length"| hash["HashPipe: separate hash thread, 16 batches of 1 MiB"]
+    writer -->|"large or unknown length"| hash["HashPipe: separate hash thread, 1 to 16 batches of 1 MiB"]
     writer -->|"known length at most 1 MiB"| inline["hash on the writer thread"]
     disk -->|"read back joined ranges"| hash
     body --> slow{"eligible stream below 1 MB/s?"}
@@ -61,7 +61,7 @@ flowchart TD
 
 known downloads of at most 1 MiB use `HashPipe::inline` on the writer thread. larger files and unknown lengths use the separate worker described below.
 
-`PartialWriter` shares `Bytes` chunks with `HashPipe`, so hashing can run beside disk writes without copying each response chunk. both handoffs carry batches, not single chunks: `read_stream` gathers chunks into a `Batch` of 256 KiB before waking the writer, and `HashPipe` gathers 1 MiB before waking the hash thread. waking a thread for every 16 KiB TLS record cost more than the download on a fast link; see [measurements](../performance/measurements.md#observations-and-rejected-experiments). a range, checkpoint or finish sends what is gathered first, so order holds, and every exit from the read loop flushes its batch, so a resume or split keeps every byte received. the prefix is the contiguous run of bytes from offset zero. out-of-order ranges have separate hashes; when the prefix reaches them, the writer flushes pending bytes before asking the hash worker to read those ranges back.
+`PartialWriter` shares `Bytes` chunks with `HashPipe`, so hashing can run beside disk writes without copying each response chunk. both handoffs carry batches, not single chunks: `read_stream` gathers chunks into a `Batch` of 256 KiB before waking the writer, and `HashPipe` gathers 1 MiB before waking the hash thread. its queue holds 1 to 16 of those batches, the memory budget shared among the downloads that can run at once (`Settings::hash_batches`), which `cli::run` sets once before any download. waking a thread for every 16 KiB TLS record cost more than the download on a fast link; see [measurements](../performance/measurements.md#observations-and-rejected-experiments). a range, checkpoint or finish sends what is gathered first, so order holds, and every exit from the read loop flushes its batch, so a resume or split keeps every byte received. the prefix is the contiguous run of bytes from offset zero. out-of-order ranges have separate hashes; when the prefix reaches them, the writer flushes pending bytes before asking the hash worker to read those ranges back.
 
 on linux, once a download has written 64 MiB, the writer starts the disk on every further 32 MiB it writes, with `fadvise(DONTNEED)` on the ranges written since the last start, so the closing flush finds little left: a 10 GiB `get -o` took 0.53 of the time. the closing flush still decides what is durable.
 
