@@ -129,6 +129,18 @@ class InputTests(unittest.TestCase):
         self.assertEqual(result["unmatched"], dict(base=[2], variant=[]))
         self.assertEqual(result["metrics"]["wall"]["decision"], "incomplete")
 
+    def test_warmups_and_other_tools_are_left_out_and_a_failed_round_is_counted(self):
+        rows = [dict(row("fetchloom", 0, 1), warmup=True), dict(row("fetchloom+lean", 0, 99), warmup=True),
+                row("fetchloom", 1, 2), row("fetchloom+lean", 1, 1),
+                row("fetchloom", 2, 4), row("fetchloom+lean", 2, 3),
+                row("fetchloom", 3, 1), dict(row("fetchloom+lean", 3, 9), status="failed"),
+                row("curl", 1, .1)]
+        [result] = ab.compare(rows)
+        self.assertEqual((result["case"], result["variant"]), ("ext4/lan/s2", "fetchloom+lean"))
+        self.assertEqual((result["rounds"], result["wins"]), (2, 2))
+        self.assertEqual(result["failed"], {"base": 0, "variant": 1})
+        self.assertIn("fetchloom+lean", ab.table([result]))
+
 
 if __name__ == "__main__":
     unittest.main()

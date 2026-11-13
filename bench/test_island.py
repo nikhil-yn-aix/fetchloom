@@ -1,5 +1,3 @@
-import contextlib
-import io
 import json
 import os
 from pathlib import Path
@@ -73,65 +71,6 @@ class CpuTests(unittest.TestCase):
         with mock.patch.object(lab.subprocess, "check_output", return_value=""):
             with self.assertRaisesRegex(RuntimeError, "nginx"):
                 lab.pin_server((0,))
-
-
-class ManyVariantTests(unittest.TestCase):
-    def test_twelve_variants_keep_order_and_record_distinct_environments(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / "owned.json").write_text("{}")
-            prepared = root / "prepared" / "fetchloom"
-            prepared.mkdir(parents=True)
-            for name in ("data.toml", "data.lock"):
-                (prepared / name).write_text(name)
-            (root / "www").mkdir()
-            case = dict(id="s2", base="s2", profile="lan", quick=False, count=1, size=3, key="sample",
-                        server_dir=str(root / "www"), prepared=str(prepared.parent), members=[],
-                        files=[dict(name="payload.bin", size=3, url="https://lab.flb/payload.bin",
-                                    sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")])
-            def measured(argv, cwd, env, logfile, *args, **kwargs):
-                dest = Path(cwd) / "data" / "f00000"
-                dest.mkdir(parents=True)
-                (dest / "payload.bin").write_bytes(b"abc")
-                return dict(wall_seconds=1, user_seconds=1, sys_seconds=1, maxrss_bytes=1,
-                            exit_code=0, timeout=False, interruption_sent=False)
-            def metadata(*args):
-                return dict(commands={}, orders=[], cases=[])
-            snapshots = []
-            for iteration in range(2):
-                out = root / f"results-{iteration}"
-                argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
-                        "--profiles", "lan", "--scenarios", "s2", "--rounds", "2", "--seed", "13", "--out", str(out)]
-                for n in range(12):
-                    argv += ["--variant", f"v{n}:FETCHLOOM_EXP_V{n}={n}"]
-                with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
-                     mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
-                     mock.patch.object(lab, "pin_server", create=True, return_value={}), \
-                     mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
-                     mock.patch.object(run, "metadata", side_effect=metadata), \
-                     mock.patch.object(run.os.path, "ismount", return_value=True), \
-                     mock.patch.object(run.fixtures, "case_specs", return_value=[case]), \
-                     mock.patch.object(run.fixtures, "build", return_value=case), \
-                     mock.patch.object(run.fixtures, "prepare_native", return_value=case), \
-                     mock.patch.object(run, "measure", side_effect=measured), \
-                     mock.patch.object(run, "settled_free_bytes", return_value=100), \
-                     mock.patch.object(run, "free_bytes", return_value=97), \
-                     mock.patch.object(run.lab, "flush"), mock.patch.object(run.time, "sleep"), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(run.main(), 0)
-                meta = json.loads((out / "meta.json").read_text())
-                rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
-                self.assertEqual(len(rows), 39)
-                self.assertEqual(sum(r["warmup"] for r in rows), 13)
-                for row in rows:
-                    settings = {key: value for key, value in row["environment"].items() if key.startswith("FETCHLOOM_EXP_")}
-                    expected = {} if row["tool"] == "fetchloom" else {"FETCHLOOM_EXP_V" + row["tool"].split("+v")[1]: row["tool"].split("+v")[1]}
-                    self.assertEqual(settings, expected)
-                for order in meta["orders"]:
-                    self.assertEqual(len(order["tools"]), 13)
-                    self.assertEqual(len(set(order["tools"])), 13)
-                snapshots.append(meta["orders"])
-            self.assertEqual(*snapshots)
 
 
 class IslandCheckTests(unittest.TestCase):

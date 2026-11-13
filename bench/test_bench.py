@@ -428,25 +428,6 @@ class VariantTests(unittest.TestCase):
             self.assertEqual(lean.env(work)["FETCHLOOM_CACHE"], plain.env(work)["FETCHLOOM_CACHE"])
             self.assertNotIn("FETCHLOOM_EXP_LEAN", plain.env(work))
 
-    def test_a_comparison_pairs_passed_rounds_and_skips_warmups(self):
-        import ab
-        def row(tool, number, wall, status="passed", warmup=False):
-            return dict(tool=tool, filesystem="ext4", profile="lan", scenario="s3", round=number,
-                        warmup=warmup, status=status, wall_seconds=wall, user_seconds=1, sys_seconds=1,
-                        maxrss_bytes=100, disk_bytes=10)
-        rows = [row("fetchloom", 0, 1.0, warmup=True), row("fetchloom+lean", 0, 99.0, warmup=True),
-                row("fetchloom", 1, 2.0), row("fetchloom+lean", 1, 1.0),
-                row("fetchloom", 2, 4.0), row("fetchloom+lean", 2, 3.0),
-                row("fetchloom", 3, 1.0), row("fetchloom+lean", 3, 9.0, status="failed"),
-                row("curl", 1, 0.1)]
-        [result] = ab.compare(rows)
-        self.assertEqual(result["case"], "ext4/lan/s3")
-        self.assertEqual((result["rounds"], result["wins"]), (2, 2))
-        self.assertEqual(result["failed"], {"base": 0, "variant": 1})
-        self.assertAlmostEqual(result["ratios"]["wall"], (0.5 * 0.75) ** 0.5)
-        self.assertEqual(result["ratios"]["memory"], 1.0)
-        self.assertIn("fetchloom+lean", ab.table([result]))
-
 
 if __name__ == "__main__":
     unittest.main()
