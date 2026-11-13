@@ -922,21 +922,22 @@ impl Site {
     }
 }
 
-/// an address on this machine nothing answers at while it lives: its socket holds the port without
-/// listening, so each connection is refused, and no other process can take the port meanwhile, as
-/// one could once a dropped listener freed it.
+/// an address on this machine nothing listens at while it lives, so each connection is refused,
+/// and no other process can take its port meanwhile, as one could once a dropped listener freed
+/// it. the port is the local end of a connection kept open: a socket bound without listening
+/// holds a port too, but macos drops connections to it unanswered.
 pub(crate) struct Refusing {
     pub(crate) address: std::net::SocketAddr,
-    _held: tokio::net::TcpSocket,
+    _held: (TcpListener, TcpStream),
 }
 
 impl Refusing {
     pub(crate) fn new() -> Result<Refusing> {
-        let held = tokio::net::TcpSocket::new_v4()?;
-        held.bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let held = TcpStream::connect(listener.local_addr()?)?;
         Ok(Refusing {
             address: held.local_addr()?,
-            _held: held,
+            _held: (listener, held),
         })
     }
 }
@@ -1290,6 +1291,20 @@ fn dropping_a_server_task_closes_the_listener_its_worker_owns() -> Result {
     );
     Ok(())
 }
+/// a connection to a `Refusing` address is refused at once on every system, not left to time out.
+#[test]
+fn a_refusing_address_refuses_each_connection() -> Result {
+    let refusing = Refusing::new()?;
+    let connected = TcpStream::connect_timeout(&refusing.address, Duration::from_secs(10));
+    assert!(
+        connected
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused),
+        "{connected:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn dropping_a_server_closes_a_connection_waiting_for_a_request() -> Result {
     let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
