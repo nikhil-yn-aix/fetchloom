@@ -102,8 +102,7 @@ fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
     Ok(())
 }
 
-/// with `TERM=dumb`, the way a screen reader's user runs fetchloom, plain words list the matches
-/// first, in rows that fit the terminal, then say why nothing was added, and exit 10.
+/// `TERM=dumb` is how a screen reader's user runs fetchloom; the error comes after the list.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_dumb_terminal_lists_the_matches_first_in_its_width() -> Result {
@@ -322,9 +321,8 @@ fn finding() -> Result<Vec<(&'static str, Server)>> {
     ])
 }
 
-/// GEO and openneuro are searched with the others, and ENA and dandi, slow specialist archives,
-/// only when `--source` names them, each through its own API: GEO finds series, then asks for
-/// their titles, and openneuro gets the header its API asks of a query sent by GET.
+/// ENA and dandi are slow specialist archives. GEO finds series, then asks for their titles, and
+/// openneuro gets the header its API asks of a query sent by GET.
 #[test]
 fn ena_and_dandi_are_searched_when_named_and_geo_and_openneuro_with_the_others() -> Result {
     let sandbox = Sandbox::new()?;
@@ -417,8 +415,7 @@ fn ena_and_dandi_are_searched_when_named_and_geo_and_openneuro_with_the_others()
     Ok(())
 }
 
-/// `--source` names ENA, GEO, dandi and openneuro as references do, and each match carries the
-/// facts its catalog gives.
+/// the names are the ones references use, and each match carries the facts its catalog gives.
 #[test]
 fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -473,9 +470,8 @@ fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
     Ok(())
 }
 
-/// a search without `--limit` shows at most 12 matches, so its list fits a terminal of 24 rows:
-/// each site's best first, by rank, then the next best of each in turn. `--limit` asks each site
-/// for that many, and shows them all.
+/// twelve fit a terminal of 24 rows: each site's best first, by rank, then the next of each in
+/// turn. `--limit` asks each site for that many and shows them all.
 #[test]
 fn a_search_without_a_limit_shows_twelve_matches_and_each_sites_best() -> Result {
     let sandbox = Sandbox::new()?;
@@ -626,9 +622,8 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
     Ok(())
 }
 
-/// the first ctrl-c while one catalog still searches ends add there, as it ends search: a stop,
-/// exit 130, with no warning about the catalog it cut short and no choice from the matches the
-/// others found.
+/// the stop ends add as it ends search, with exit 130, no warning about the catalog it cut short
+/// and no choice from the others' matches.
 #[cfg(unix)]
 #[test]
 fn a_first_stop_while_a_catalog_searches_ends_add() -> Result {
