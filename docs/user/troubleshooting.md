@@ -41,28 +41,18 @@ keys are never logged. a link shows its login as `***`, and each value in its qu
 | `error: the proxy at http://proxy.example.org:8080 asked for a login before it would reach huggingface.co` | the proxy answered 407: it wants a login before it carries any request. one that asks for your windows sign-in, by NTLM or Kerberos, wants what fetchloom cannot send | for a windows sign-in, run a local relay that signs in for you, as [company proxies](#company-proxies) shows; for a name and password, put them in the proxy's address, as the help says |
 | `error: there is no data.lock, so nothing pins the files' bytes yet` | the project's data.toml was committed without its data.lock, so a clone has no pins | ask whoever shares the project to commit data.lock, so you get the bytes they pinned; `fetchloom lock` instead pins what the sources serve today. `status` says `data.lock does not exist` for each dataset |
 | `error: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which is not there` | the commit you cloned has data.lock but not the new list in data.lock.d it names, as `git commit -a` leaves new files out | ask whoever shares the project for the commit that adds data.lock.d, made with `git add data.lock.d`, then pull it. deleting data.lock and running `fetchloom lock` instead pins what the sources serve now and drops every recipe's pin |
-| `error: iris/iris.csv is not the file data.lock records` | the source now serves other bytes than data.lock pins | keep the pinned bytes from a [folder mirror](mirrors.md) that holds them; upgrade only if the change is intended, as below |
+| `error: iris/iris.csv is not the file data.lock records` | the source now serves other bytes than data.lock pins, so fetchloom places nothing and the clone stays without the file | someone who has the pinned bytes, such as whoever pinned them, runs `fetchloom push --to <folder>` into a folder you can read, and `fetchloom sync --mirror <folder>` takes them; if the new bytes are intended, run the `fetchloom lock --upgrade` the help names, sync and commit the lock, as [sync](commands/sync.md#what-happens) shows. the JSON `fix` is null |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here` | a large download needs a yes, and no one is at a terminal to answer | check the size, then pass `--yes` if you want it. at a terminal with `TERM=dumb`, `FETCHLOOM_ACCESSIBLE=1` asks instead |
 | `error: SSL_CERT_FILE names /etc/ssl/corp.pem, which holds no certificates fetchloom can read` | the variable names a missing file, or one without PEM certificates | unset it to use the system's certificates, or set it to a file of PEM certificates |
 | `error: this sync needs at least 170.0 GiB on the disk holding the cache at /home/ada/.cache/fetchloom, which has 150.0 GiB free`, or `error: downloading iris.zip needs at least 7.9 KiB on the disk holding the cache at ...` part way through a file whose server did not say its size | the downloads, and the archives they unpack, need more than the cache's disk has free | free space there, or set `FETCHLOOM_CACHE` to a folder on a bigger disk. downloads already in the cache are kept. `--yes` goes on anyway, as on a disk that compresses |
 | `error: the cache at /media/usb/fetchloom is on a FAT32 disk, which holds no file of 4 GiB or more, and scans.zip is 5.2 GiB` | FAT32 keeps a file's size in 32 bits, so the file cannot be stored there; fetchloom refuses before downloading, copying or unpacking it | set `FETCHLOOM_CACHE` to a folder on a disk formatted as exFAT, NTFS, APFS or ext4. a project on a FAT32 disk gets the same refusal for its data folder: move the project |
 | `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `--dir` |
 | `error: data.csv already exists and holds other bytes than the link serves now` | `get -o` never replaces a file without being asked | choose another name with `-o`, or add `--force` to replace it |
-| `error: huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `error: hf:datasets/scikit-learn/irsi does not exist, or is not public` | the name has a typo, or the dataset is private: the hub answers both alike | when the owner has a public dataset a typo away, `add`'s help gives the command meant, signed in or not, as ``did you mean `fetchloom add hf:datasets/scikit-learn/iris`?``, and exits 10. otherwise check the name at the page the help gives. only for a private dataset does signing in help, with an account that can read it; at a terminal the offer to sign in defaults to no |
-| `error: huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-stack` | `HF_TOKEN` holds an old or wrong key, which goes with every request to huggingface.co | set `HF_TOKEN` to a current key from https://huggingface.co/settings/tokens, or unset it to use the key `fetchloom auth login hf` saves. a refused key in the token file gets ``the key may be old or wrong: `fetchloom auth` shows where it comes from and whose it is`` instead, and `fetchloom auth` marks it `Refused` with the command to sign in again |
+| `error: huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `error: hf:datasets/scikit-learn/irsi does not exist, or is not public` | the name has a typo, or the dataset is private: the hub answers both alike | use the command the help gives for a public dataset a typo away, or check the name at the page it gives; only for a private dataset does signing in help, as [when a download is refused](commands/auth.md#when-a-download-is-refused) says |
+| `error: huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-stack` | `HF_TOKEN` holds an old or wrong key, which goes with every request to huggingface.co | set `HF_TOKEN` to a current key from https://huggingface.co/settings/tokens, or unset it to use the key `fetchloom auth login hf` saves. a refused key in the token file gets ``the key may be old or wrong: `fetchloom auth` shows where it comes from and whose it is`` instead, as [auth](commands/auth.md#when-a-download-is-refused) shows |
 | `error: huggingface.co has no public model scikit-learn/iris, but it has a dataset of that name` | a link without `/datasets/` names a model | use the dataset link the help gives, as `https://huggingface.co/datasets/scikit-learn/iris` |
 | `error: iris has no file or folder called not-a-file.csv` | `path` was given a file the dataset does not hold | use one of the paths the error names |
 | `error: kaggle:epa/epa-historical-air-quality cannot be fetched through kaggle's api` | kaggle lists the dataset, but its api sends none of its files, which a later try does not change | open the dataset's page to see how kaggle offers it, or choose another dataset |
-
-for a size mismatch, the full stderr answer can be:
-
-```text
-error: iris/iris.csv is not the file data.lock records
-  expected 32 bytes, got 15
-  help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`
-```
-
-fetchloom places nothing it cannot check, so the clone stays without the file. to keep the pinned bytes, someone who has them, such as whoever pinned them, runs `fetchloom push --to <folder>` into a folder you can read, and `fetchloom sync --mirror <folder>` takes them from there. if the new bytes are intended, run the upgrade the help names, sync and commit the lock. with `--json` the error's `fix` is null, since only a person may choose other bytes than data.lock pins.
 
 ## warnings and unexpected results
 
@@ -158,13 +148,10 @@ in a new terminal, `fetchloom settings` shows the `rate` row coming from the env
 
 ## project recovery
 
-restore a broken lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version` comes from a newer fetchloom and needs one.
-
-a failed `add` puts `data.toml` and `data.lock` back. if that fails, copy them back from the recovery file the error names under `.fetchloom/`, which holds their bytes as they were; never paste it into a log, since it may hold credentials.
-
-if `remove` changed `data.toml` and `data.lock` but could not delete files, fix the reported error and run `fetchloom sync` to finish.
-
-a command that was killed can leave a record that it holds the project. delete only the exact path a waiting command names, and only once the process it names has ended; [owner record](reference/project-folder.md#owner-record) explains the rules.
+- restore a broken lock from git when you need its exact pins; deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version` comes from a newer fetchloom and needs one.
+- a failed `add` puts `data.toml` and `data.lock` back. if that fails, copy them back from the recovery file the error names under `.fetchloom/`, which holds their bytes as they were; never paste it into a log, since it may hold credentials.
+- a `remove` that changed `data.toml` and `data.lock` but could not delete files finishes with `fetchloom sync` once you fix the reported error.
+- a command that was killed can leave a record that it holds the project. delete only the exact path a waiting command names, and only once the process it names has ended, as [owner record](reference/project-folder.md#owner-record) explains.
 
 ### a project too big for its container
 

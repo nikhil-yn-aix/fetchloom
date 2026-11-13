@@ -84,27 +84,11 @@ no command but `build` runs a step. `sync` places a pinned result like any datas
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
-read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. in a fresh clone the dry run says `Would run clean · its pinned result is not on this machine or a mirror`, and `Would fetch` where the data folder or a [mirror](mirrors.md) holds the result, so nothing runs; [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
-
-```text
-      Needs up to 72 B, besides what clean writes, on the disk holding the cache, which has 341.4 GiB free
-    Running clean · python3 clean.py <build>/in/iris <build>/out
-            kept 2 of 3 rows
-      Built clean · 1 file, 63 B in 32 ms
-     Placed data/clean · 1 file linked to the cache
-         Ok pinned clean's result in data.lock
-```
+read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. in a fresh clone the dry run says `Would run clean · its pinned result is not on this machine or a mirror`, and `Would fetch` where the data folder or a [mirror](mirrors.md) holds the result, so nothing runs; [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`, as [what happens](commands/build.md#what-happens) shows.
 
 the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, never from the data folder, where you may have changed a file, and writes its result into `{out}`: plain files whose names every system can store. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned; a build warns of each file of `code` git does not have. [build](commands/build.md) has the details, the errors and the JSON.
 
-an edit of a placed file, as [`copy = true`](raw-data.md#editing-raw-files) allows, never reaches a step, and `build` says so, naming the file:
-
-```text
-warning: data/m/measure.csv has changed, so it stays, but mc reads the bytes data.lock pins for m, not this edit
-  help: to build from the fix, make it in a step of mc, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for mc to read
-```
-
-an edit of a result's own file, which `copy = true` on the recipe allows, stays too when a build pins another result, so the data folder keeps the earlier version, and the build says so (stderr):
+an edit of a placed file, which `copy = true` allows, never reaches a step, and `build` says so, naming the file, as [editing raw files](raw-data.md#editing-raw-files) shows. an edit of a result's own file, which `copy = true` on the recipe allows, stays too when a build pins another result, so the data folder keeps the earlier version, and the build says so (stderr):
 
 ```text
       Needs up to 51 B on the disk holding the cache, which has 322.2 GiB free
@@ -116,25 +100,7 @@ warning: data/mc/measure_clean.csv has changed, so it stays, but it is an edit o
          Ok pinned mc's result in data.lock
 ```
 
-`fetchloom build --check` runs every step again from the inputs `data.lock` pins and compares what each makes with `data.lock`, file by file, without changing it or the data folder:
-
-```text
-      Needs up to 135 B on the disk holding the cache, which has 329.1 GiB free
-    Running clean · python3 clean.py <build>/in/iris <build>/out
-            kept 2 of 3 rows
-    Checked clean · 1 of 1 file matches data.lock
-         Ok every step made the files data.lock pins
-```
-
-a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, or one run with another version of a program or library, fails with `build.differs` when a check or a rebuild runs it, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
-
-```text
-       Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
-         Ok everything matches data.lock by size and time
-  hint: `fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are
-```
-
-look at them before you choose them; `fetchloom build --accept emb` then pins and places them without running anything, as [a rebuild that differs](commands/build.md#a-rebuild-that-differs) shows.
+[`fetchloom build --check`](commands/build.md#check) runs every step again from the inputs `data.lock` pins and compares what each makes with `data.lock`, file by file, without changing it or the data folder. a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, or one run with another version of a program or library, fails with `build.differs` when a check or a rebuild runs it, and `data.lock` keeps the files it pins. `fetchloom status` lists the files the rerun made as a kept rebuild, as `` Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it ``, with the hint `` `fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are ``. look at them before you choose them, then `fetchloom build --accept emb` pins and places them without running anything, as [a rebuild that differs](commands/build.md#a-rebuild-that-differs) shows.
 
 ## keep only the result
 
@@ -169,16 +135,7 @@ to leave a bad sample of raw out of what clean reads, run [`fetchloom drop`](com
          Ok everything matches data.lock by size and time
 ```
 
-a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out, and `status` names the build, and raw, which it reads and the cache lacks too:
-
-```text
- Not placed raw · place = false in data.toml
-    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is raw, which it is made from
-      Found 1 difference from data.lock
-  hint: `fetchloom build clean` makes it on this machine
-```
-
-their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, and `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
+a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out, and `status` names the build, and raw, which it reads and the cache lacks too, as [status](commands/status.md#what-happens) shows. their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, and `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
 
 raw stays in the cache, since a build that runs clean again reads it. to free the disk it takes, put it on a folder [mirror](mirrors.md), then free the cache's copy, naming that mirror:
 
@@ -187,4 +144,4 @@ fetchloom push --inputs clean --to /mnt/lab/fetchloom
 fetchloom cache gc --inputs --mirror /mnt/lab/fetchloom
 ```
 
-[`cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) reads each copy on the mirror, says what it would free and what that costs, and asks first. clean's result stays, so the project still syncs and `fetchloom build` finds clean up to date; a build that runs clean again, as after a change to clean.py, takes raw from the mirror, or from its source.
+[`cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) reads each copy on the mirror, says what it would free and what that costs, and asks first; clean's result stays, and a build that runs clean again takes raw from the mirror, or from its source.
