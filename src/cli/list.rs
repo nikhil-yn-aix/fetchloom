@@ -1,6 +1,7 @@
 //! `fetchloom list`: the datasets a project has, with where each comes from, how much it holds
 //! and where its files go. it reads data.toml and data.lock and changes nothing.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use serde::Serialize;
@@ -132,8 +133,8 @@ fn heading(dataset: &Listed) -> String {
     facts.extend(
         dataset
             .license
-            .as_ref()
-            .map(|license| format!("license {license}")),
+            .as_deref()
+            .map(|license| format!("license {}", license_shown(license))),
     );
     facts.extend(dataset.doi.as_ref().map(|doi| format!("doi {doi}")));
     facts.join(" \u{b7} ")
@@ -363,6 +364,63 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
 /// a license longer than this is cut, so one long statement does not push the table off screen.
 const LICENSE: usize = 32;
 
+/// a license as `list` shows it: a creative commons license's link, as arXiv states one, by its
+/// id, `CC-BY-NC-ND-4.0`, which a column holds whole; any other as data.lock has it.
+fn license_shown(license: &str) -> Cow<'_, str> {
+    creative_commons(license).map_or(Cow::Borrowed(license), Cow::Owned)
+}
+
+/// the id of the creative commons license `link` names, as `CC-BY-SA-3.0-US` for
+/// `http://creativecommons.org/licenses/by-sa/3.0/us/`, or `CC0-1.0` for its public domain
+/// dedication. none for any other text.
+fn creative_commons(link: &str) -> Option<String> {
+    let url = url::Url::parse(link.trim()).ok()?;
+    let host = url.host_str()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !matches!(host, "creativecommons.org" | "www.creativecommons.org")
+    {
+        return None;
+    }
+    let parts: Vec<&str> = url
+        .path_segments()?
+        .filter(|part| !part.is_empty())
+        .collect();
+    // the deed and the legal code, in any language, name the same license
+    let parts = match parts.split_last() {
+        Some((last, rest)) if last.starts_with("legalcode") || last.starts_with("deed") => rest,
+        _ => parts.as_slice(),
+    };
+    let version = |text: &str| {
+        text.split_once('.').is_some_and(|(major, minor)| {
+            [major, minor]
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+    };
+    match parts {
+        ["publicdomain", "zero", number] if version(number) => Some(format!("CC0-{number}")),
+        ["licenses", terms, number, port @ ..]
+            if version(number)
+                && port.len() <= 1
+                && port
+                    .iter()
+                    .all(|port| port.bytes().all(|byte| byte.is_ascii_alphabetic()))
+                && terms
+                    .to_ascii_uppercase()
+                    .split('-')
+                    .all(|term| matches!(term, "BY" | "NC" | "ND" | "SA")) =>
+        {
+            let mut id = format!("CC-{}-{number}", terms.to_ascii_uppercase());
+            for port in port {
+                id.push('-');
+                id.push_str(&port.to_ascii_uppercase());
+            }
+            Some(id)
+        }
+        _ => None,
+    }
+}
+
 /// the marks the table writes itself, ascii where the terminal or locale shows no unicode: what
 /// parts a file count from its size, and what ends a license cut short.
 #[derive(Clone, Copy)]
@@ -484,7 +542,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool, marks: Ma
             row.extend([contents(dataset, marks), folder(dataset)]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
-                row.push(units::clip(license, LICENSE, marks.more));
+                row.push(units::clip(&license_shown(license), LICENSE, marks.more));
             }
             row
         })
@@ -681,6 +739,63 @@ mod tests {
         assert_eq!(
             starts[0], starts[1],
             "a wide character takes two columns:\n{shown}"
+        );
+    }
+
+    /// arXiv states a paper's license as creative commons' link, which `list` shows by its id,
+    /// whole, piped or not, as its heading does; other licenses show as data.lock has them, and
+    /// `--json` keeps the link.
+    #[test]
+    fn a_creative_commons_link_shows_as_its_id() {
+        let listed = |name: &str, license: &str| Listed {
+            name: name.to_owned(),
+            reference: Some(format!("arxiv:{name}")),
+            from: None,
+            resolved: Some(format!("arxiv:{name}@v1")),
+            files: Some(1),
+            bytes: Some(4551),
+            folder: format!("data/{name}"),
+            placed: true,
+            title: None,
+            license: Some(license.to_owned()),
+            doi: None,
+            access: Some(Access::Public),
+            locked_files: Some(Vec::new()),
+            held: Some(Vec::new()),
+        };
+        let datasets = [
+            listed("a", "http://creativecommons.org/licenses/by-nc-nd/4.0/"),
+            listed("b", "https://creativecommons.org/licenses/by/4.0/legalcode"),
+            listed("c", "http://creativecommons.org/licenses/by-sa/3.0/us/"),
+            listed("d", "http://creativecommons.org/publicdomain/zero/1.0/"),
+            listed("e", "http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+            listed("f", "ODC-By-1.0"),
+        ];
+        let shown = table(&datasets, None, UNICODE);
+        let licenses: Vec<&str> = shown
+            .lines()
+            .map(|line| line.rsplit("  ").next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            licenses,
+            [
+                "CC-BY-NC-ND-4.0",
+                "CC-BY-4.0",
+                "CC-BY-SA-3.0-US",
+                "CC0-1.0",
+                "http://arxiv.org/licenses/nonexc\u{2026}",
+                "ODC-By-1.0",
+            ],
+            "{shown}"
+        );
+        assert_eq!(
+            heading(&datasets[0]),
+            "a \u{b7} 1 file \u{b7} 4.4 KiB \u{b7} license CC-BY-NC-ND-4.0"
+        );
+        let value = serde_json::to_value(&datasets[0]).unwrap();
+        assert_eq!(
+            value["license"],
+            "http://creativecommons.org/licenses/by-nc-nd/4.0/"
         );
     }
 
