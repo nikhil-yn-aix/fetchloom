@@ -2539,12 +2539,17 @@ fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Resu
     assert!(locked.status.success(), "{}", text(&locked.stderr)?);
     let lock = fs::read_to_string(work.join("data.lock"))?;
     site.pace(64 * 1024);
+    let asked = site.requests().len();
     // a cache without the file, as on another machine
     let cache = sandbox.folder("another cache")?;
     let mut sync = sandbox.command(&["sync"]);
     sync.env("FETCHLOOM_CACHE", &cache);
     let running = Running::start(&mut sync)?;
-    wait_until("bytes to arrive", || Ok(partial_bytes(&cache) > 0))?;
+    // the paced answer takes 16 s, so a stop once the sync asks for it lands mid-download; its
+    // first bytes reach the disk only with a whole write batch, seconds in
+    wait_until("the sync to ask for the file", || {
+        Ok(site.requests().len() > asked)
+    })?;
     running.interrupt()?;
     let output = running.finish()?;
     let stderr = text(&output.stderr)?;
