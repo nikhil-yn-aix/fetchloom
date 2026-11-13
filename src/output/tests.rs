@@ -157,6 +157,24 @@ fn help_wraps_rows_under_their_column_and_continues_long_examples() {
     );
 }
 
+/// a row whose name leaves too little room beside it, at a narrow terminal, takes a line of its
+/// own with its description below, so the name never runs into the words that describe it.
+#[test]
+fn a_row_too_wide_for_its_column_puts_its_description_below() {
+    let text = "options:\n  -o, --output <file>       write the downloaded file to <file> as it came\n      --force               replace a file already at <file>\n\n  fetchloom add iris    choose an iris dataset, put it in data/ and pin it";
+    assert_eq!(
+        super::wrap_help(text, 40, true),
+        "options:\n  -o, --output <file>\n          write the downloaded file to\n          <file> as it came\n      --force\n          replace a file already at\n          <file>\n\n  fetchloom add iris\n          choose an iris dataset, put it\n          in data/ and pin it"
+    );
+    // a description below its name may start as a name does, with < or -, and stays plain
+    let shown = super::help_text(&super::wrap_help(text, 40, true), true);
+    assert!(
+        shown.contains("  \u{1b}[36m-o, --output <file>\u{1b}[0m\n"),
+        "{shown}"
+    );
+    assert!(shown.contains("\n          <file> as it came\n"), "{shown}");
+}
+
 /// at 60 columns comments go below their commands, every one in the block once one does not
 /// fit, and a long command goes on after a shell's continuation mark. at 80 all fit as written.
 #[test]

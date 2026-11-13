@@ -1429,9 +1429,10 @@ fn write_answer(
     }
 }
 
-/// help as wide as `width`: a table row wraps under its description column, prose flush. a command
-/// line stays whole to copy, but at a `terminal`, which would wrap it inside a word, it goes on
-/// after a shell's continuation mark, its comment below it.
+/// help as wide as `width`: a table row wraps under its description column, or below its name
+/// when the name takes half the width, and prose flush. a command line stays whole to copy, but
+/// at a `terminal`, which would wrap it inside a word, it goes on after a shell's continuation
+/// mark, its comment below it.
 pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
@@ -1463,17 +1464,25 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
         // part, as in `  -o, --output <dir>       put the download in <dir>`
         // byte offsets for slicing, display widths for columns, since a name may not be ascii
         let indent = line.len() - line.trim_start().len();
-        let split = line[indent..]
-            .find("  ")
-            .map(|gap| {
-                let after = &line[indent + gap..];
-                indent + gap + (after.len() - after.trim_start().len())
-            })
-            .filter(|split| units::columns(&line[..*split]) < width / 2)
-            .unwrap_or(indent);
-        let (head, body) = line.split_at(split);
-        let column = units::columns(head);
-        let mut current = head.to_owned();
+        let gap = line[indent..].find("  ").map(|gap| {
+            let after = &line[indent + gap..];
+            indent + gap + (after.len() - after.trim_start().len())
+        });
+        let (head, body, column) = match gap {
+            Some(split) if units::columns(&line[..split]) < width / 2 => {
+                let (head, body) = line.split_at(split);
+                (head.to_owned(), body, units::columns(head))
+            }
+            // a name too wide to stand beside its description takes a line of its own, and the
+            // descriptions below their names share one column, deeper than a long option's name
+            Some(split) => {
+                out.push(line[..split].trim_end().to_owned());
+                let column = (indent + 4).max(10);
+                (" ".repeat(column), &line[split..], column)
+            }
+            None => (line[..indent].to_owned(), &line[indent..], indent),
+        };
+        let mut current = head;
         let fresh = column;
         for word in body.split(' ').filter(|word| !word.is_empty()) {
             let room = units::columns(&current) + 1 + units::columns(word);
@@ -1587,9 +1596,10 @@ pub(crate) fn help_text(text: &str, color: bool) -> String {
                     let gap = if description.is_empty() { "" } else { "  " };
                     return format!("  {accent}{command}{accent:#}{gap}{description}");
                 }
-                // an option or an argument: its spelling is what a person types
-                if command.trim_start().starts_with(['-', '<']) {
-                    let indent = &command[..command.len() - command.trim_start().len()];
+                // an option or an argument: its spelling is what a person types. a description
+                // below its name sits deeper, though it may start with < or - too
+                let indent = &command[..command.len() - command.trim_start().len()];
+                if indent.len() <= 4 && command.trim_start().starts_with(['-', '<']) {
                     let entry = command.trim_start();
                     let (flag, description) = entry.split_once("  ").unwrap_or((entry, ""));
                     let gap = &entry[flag.len()..entry.len() - description.trim_start().len()];
