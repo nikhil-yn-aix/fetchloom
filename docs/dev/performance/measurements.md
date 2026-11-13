@@ -53,6 +53,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | each dataset's folder found with one lookup | sync of 40,000 datasets 9.68 to 6.33 s | kept | [list of links](#adding-a-list-of-links-2026-11-12) |
 | placement | an import's list of walked files freed before its files are placed | import of 100,000 files peak memory 0.890 on glibc, 0.908 on musl; wall flat | kept | [import](#an-import-of-100000-files-2026-11-12) |
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
+| placement | read-only placements on xfs hardlinked before a reflink is tried | musl: sync of a zip of 10,000 files into a new cache 0.776 [0.751, 0.782], placing 10,000 cached files 0.358 [0.333, 0.469]; memory flat | not adopted: the gain is the isolation reflinks give, a placement decision | [xfs hardlinks](#hardlinks-before-reflinks-on-xfs-2026-11-13) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
 | placement | lean against default: 2 local workers | settled sync of 100,000 files: time 1.112, peak memory 0.999, glibc; sync of 40,000 one-file datasets 1.115 and 0.998 glibc, 1.144 and 0.901 musl | lean's trade, no change | [levels](#resources-levels-against-default-2026-11-13) |
@@ -647,6 +648,19 @@ so the rebalanced corpus turned the manifest's regression into the largest gain,
 the release builds each binary so that rebuilding the commit gives the same bytes, and a profile trained in the release job would break that. a second training of the same corpus, by the same binary on the same inputs, merged to another profile, 99.957% of its edge counts overlapping the first, since threads and randomly seeded maps move the counts; the binary built from it differed from the first in 13,666,826 bytes. a committed profile for each of the six release targets, trained on each and redone as the code moves, would be the only way to keep the release reproducible. that was not built: dropped, below the bar, with that cost on top.
 
 three musl release builds of df4d2a5b from one source tree, control, instrumented and optimized, the flags passed through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS` as the release workflow passes its own; rustc 1.99.1 with llvm 23.1.1. interleaved rounds after a warmup under the measure lock on cores 12-23, projects and caches on tmpfs, the copied projects synced once by the control build first, so both builds read the indexed state. `lock --check` and `list` lost most rounds to other users' load; their rows keep all 20, and the clean rounds alone give 0.910 for both.
+
+## hardlinks before reflinks on xfs, 2026-11-13
+
+on xfs a reflink of a small file costs far more than a hardlink. read-only placements on windows already try a hardlink first; one experiment build, `FETCHLOOM_EXP_HARDLINK_FIRST`, did the same on linux, for read-only placements outside synced folders as on windows. every placed file then had two names, its own and the cache's object, where with reflinks each had one.
+
+| run on xfs, project and cache there | pairs | time [95%] | cpu [95%] | peak memory [95%] |
+|---|---:|---|---|---|
+| sync of a zip of 10,000 files of 4 KiB into a new cache | 15 | 0.776 [0.751, 0.782], 1.549 to 1.198 s | 0.590 [0.582, 0.599] | 0.981 [0.951, 1.068] |
+| sync placing 10,000 files of 1 to 8 KiB the cache holds | 15 | 0.358 [0.333, 0.469], 461 to 166 ms | 0.259 [0.255, 0.266] | 1.000 [0.979, 1.002] |
+
+a musl release build of df4d2a5b with the switch, interleaved rounds after a warmup under the measure lock on cores 12-23, xfs loop-mounted on the nvme disk and shared with other work, which flagged most rounds as loaded; the clean rounds alone give 0.767 [0.751, 0.781] in 9 pairs and 0.484 [0.409, 0.539] in 6.
+
+the speed is the isolation. a reflink shares blocks until either side writes, so an edit to a placed file, after a chmod or by a program that ignores the read-only bit, leaves the cache and every other project as they were. a hardlink is the cache's object, so the same edit changes the object and every project's link to it at once, and fetchloom can only find it on the next run, put the pinned bytes back and keep the changed copy beside them. ext4, which has no reflinks, already works this way, and xfs would join it. the [placement order](../decisions.md) puts reflinks first for that isolation, so a speed rule cannot trade it away: not adopted, a placement decision to make with these numbers.
 
 ## small leftovers from the perf maps, 2026-11-13
 
