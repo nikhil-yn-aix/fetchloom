@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use crate::support::{Proxy, Result, Sandbox, Server, file, json, reply, text};
+use crate::support::{Proxy, Refusing, Result, Sandbox, Server, file, json, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -243,9 +243,8 @@ fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
 #[test]
 fn a_proxy_that_cannot_be_reached_is_named_and_not_tried_again() -> Result {
     let sandbox = Sandbox::new()?;
-    let closed = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let proxy = format!("http://{}", closed.local_addr()?);
-    drop(closed);
+    let refusing = Refusing::new()?;
+    let proxy = format!("http://{}", refusing.address);
     let output = sandbox
         .command(&["--json", "get", "https://data.example.org/iris.csv"])
         .env("HTTPS_PROXY", &proxy)

@@ -922,6 +922,25 @@ impl Site {
     }
 }
 
+/// an address on this machine nothing answers at while it lives: its socket holds the port without
+/// listening, so each connection is refused, and no other process can take the port meanwhile, as
+/// one could once a dropped listener freed it.
+pub(crate) struct Refusing {
+    pub(crate) address: std::net::SocketAddr,
+    _held: tokio::net::TcpSocket,
+}
+
+impl Refusing {
+    pub(crate) fn new() -> Result<Refusing> {
+        let held = tokio::net::TcpSocket::new_v4()?;
+        held.bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?;
+        Ok(Refusing {
+            address: held.local_addr()?,
+            _held: held,
+        })
+    }
+}
+
 /// a forward proxy on this machine. it tunnels `CONNECT` and passes a request in absolute form on
 /// to its server, and keeps the first line of each request, lowercased.
 pub(crate) struct Proxy {

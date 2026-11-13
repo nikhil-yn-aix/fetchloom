@@ -3,7 +3,8 @@
 use std::fs;
 
 use crate::support::{
-    Result, Routes, Sandbox, Server, file, json, link_folder, reply, sha256_hex, text, zip_of,
+    Refusing, Result, Routes, Sandbox, Server, file, json, link_folder, reply, sha256_hex, text,
+    zip_of,
 };
 
 const PATH: &str = "/files/data.csv";
@@ -1008,12 +1009,9 @@ fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
     for suffix in ["?rlkey=s3ntinel&dl=1", "#s3ntinel"] {
         for mode in [&[][..], &["--json"]] {
             let sandbox = Sandbox::new()?;
-            // nothing listens on the port once its listener is gone, so the request cannot
-            // connect, which a retry could get past
-            let port = std::net::TcpListener::bind("127.0.0.1:0")?
-                .local_addr()?
-                .port();
-            let link = format!("http://127.0.0.1:{port}{PATH}{suffix}");
+            // the request cannot connect, which a retry could get past
+            let refusing = Refusing::new()?;
+            let link = format!("http://{}{PATH}{suffix}", refusing.address);
             let args: Vec<&str> = mode
                 .iter()
                 .copied()
