@@ -263,7 +263,7 @@ with a mirror holding every result, as `fetchloom --mirror ../mirror build --dry
 | `log` | `.fetchloom/builds/<name>.log` when it ran, else null |
 | `seconds` | how long it ran, else null |
 
-a failed build keeps the steps that finished before it in `result.steps`. a check reports every step it ran there, with `lock_changed` false and `placement` null. with `--dry-run`, `result.dry_run` is `true` and each step record has:
+a failed build keeps the steps that finished before it in `result.steps`, and a `build.differs` the step that differs too. a check reports every step it ran there, with `lock_changed` false and `placement` null. with `--dry-run`, `result.dry_run` is `true` and each step record has:
 
 | field | value |
 |---|---|

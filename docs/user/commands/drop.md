@@ -140,7 +140,7 @@ once drop starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions
 
 ## JSON
 
-`--json` returns `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, with `archive` null for a file the source lists; `result.copied`, one `{dataset, archive, from}` for each archive given its own members table; `result.lock_changed`; and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes. a dry run adds `dry_run` and `changes`.
+`--json` returns `result.project`, `result.dropped`, one `{path, dataset, archive, pattern}` for each file left out, with `archive` null for a file the source lists, `result.copied`, one `{dataset, archive, from}` for each archive given its own members table, `result.lock_changed` and `result.placement`, as [JSON output](../reference/json-output.md#command-results) describes; a dry run adds `dry_run` and `changes`.
 
 ## exit codes
 
