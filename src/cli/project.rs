@@ -460,9 +460,8 @@ fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
     Err(engine::unbuilt_here(unbuilt).with_report(&report))
 }
 
-/// data.toml as [`manifest::read_plain`] reads its `text`, with the text's SHA-256, for a sync of
-/// every dataset that only checks and places, when the state says the last complete sync read the
-/// same text; none otherwise, and data.toml is parsed.
+/// data.toml's `text` as [`manifest::read_plain`] reads it, with its SHA-256, for a plain sync of
+/// every dataset when the last complete sync read the same text; none, so it is parsed, otherwise.
 fn settled_plain(
     project: &Project,
     text: &str,
@@ -2223,10 +2222,8 @@ pub(crate) mod tests {
         assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
     }
 
-    /// a sync of every dataset in a project the last complete sync left as it is, with data.toml
-    /// as `add` writes it, finds the project settled without parsing data.toml; with data.lock
-    /// changed since, it parses data.toml once and syncs from the survey it made. it opens the
-    /// test's cache, never the machine's, which other runs hold and gc and would list it in.
+    /// a settled project whose data.toml is as `add` writes it syncs without parsing it, and once
+    /// data.lock changed parses it once, from its own cache, never the one other runs hold.
     #[test]
     fn a_settled_sync_of_a_plain_data_toml_parses_none() {
         let dir = tempfile::tempdir().unwrap();

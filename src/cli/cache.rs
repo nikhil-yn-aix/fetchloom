@@ -799,9 +799,8 @@ pub(super) fn needed_by_all(
     Ok(needed_with(cache, current, stop, false, Uses::Untold)?.needed)
 }
 
-/// [`needed_by_all`] as far as `candidates`, archives a drop may remove, are concerned: only an
-/// archive with one of its files among them checks that the cache holds every member, and each
-/// member is looked at once, on `threads` workers, however many projects pin it.
+/// [`needed_by_all`] for `candidates`, archives a drop may remove: only these check the cache holds
+/// every member, each member looked at once on `threads` workers however many projects pin it.
 pub(in crate::cli) fn needed_for_drop(
     cache: &Cache,
     current: Option<&Lock>,

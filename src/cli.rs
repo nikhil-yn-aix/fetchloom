@@ -300,9 +300,8 @@ struct RetryLines {
 }
 
 impl RetryLines {
-    /// whether a retry to `host` at `now` gets a line: the first does, and then one every
-    /// [`RETRY_LINES`] while the trouble lasts. a host that takes one request at a time retries
-    /// one request alone, seconds apart, so each of its retries does.
+    /// whether a retry to `host` at `now` gets a line: the first, then one every [`RETRY_LINES`]
+    /// while trouble lasts, and each of a host taking one request at a time, seconds apart.
     fn tell(&self, host: &str, now: Instant) -> bool {
         if crate::source::most_at_once(&crate::source::paced_as(host)) == Some(1) {
             return true;
@@ -331,9 +330,8 @@ pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
     "../".repeat(depth)
 }
 
-/// a warning that `what` goes out again after `wait`, as try `next` of `of`: `127.0.0.1 answered
-/// 503. trying iris.csv again in 1.2 s (try 2 of 5)`. tries that `waited` for a rate limit were
-/// told as waits, so a count that starts past them says so.
+/// the warning that `what` goes again after `wait`, as try `next` of `of`: `trying iris.csv again
+/// in 1.2 s (try 2 of 5)`. a count past tries that `waited` for a rate limit says so.
 fn retry_line(
     what: &str,
     reason: &str,

@@ -807,9 +807,8 @@ async fn settle(
     finish(context, cache, wanted, found, None, taken).await
 }
 
-/// checks what arrived, unpacks archives and puts every file in the link's folder, refused when an
-/// earlier link of the run took it. the run's `last` link marks the run's work as finishing. a link
-/// downloaded alone is timed from `started`; one downloaded beside others has none.
+/// checks what arrived, unpacks archives and puts each file in the link's folder unless an earlier
+/// link took it; the `last` link marks the run finishing, and a lone link is timed from `started`.
 async fn finish(
     context: &Context,
     cache: &Cache,
@@ -1534,10 +1533,8 @@ fn tell_fetched(
     }
 }
 
-/// the step that tells what one link's downloads brought: downloaded, checked or found, with the
-/// time since `started` their bytes took to arrive, which leaves out a slow disk's time after. a
-/// link downloaded beside others, with no `started`, is timed by its own downloads alone, since the
-/// time around them went to the other links and the disk they share.
+/// the step telling what one link's downloads brought, timed from `started` to their last byte, not
+/// the disk's time after; without `started`, beside other links, by its own downloads alone.
 fn fetched_step(
     paths: &[String],
     fetched: &[Fetched],

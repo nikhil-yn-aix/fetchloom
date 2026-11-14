@@ -546,9 +546,8 @@ fn check(
     Ok(status)
 }
 
-/// the files a sync of `status` would download, each once, by the link it starts at: a file it
-/// places that neither the cache nor the data folder holds, or the archive holding it when the
-/// cache lacks that too.
+/// the files a sync of `status` would download, once each, by the link it starts at: one neither
+/// the cache nor the data folder holds, or the archive holding it when the cache lacks that too.
 fn downloads(
     status: &Status,
     planned: &plan::Plan<'_>,

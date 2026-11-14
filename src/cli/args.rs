@@ -192,9 +192,8 @@ pub(super) const TOP_EXAMPLES: &str = "examples:
 /// what the welcome says fetchloom is for, below its name.
 pub(crate) const PURPOSE: &str = "exact research data for every project, on every machine";
 
-/// what a bare `fetchloom` shows outside a project, below its name: where to start, what fetchloom
-/// writes, and where to read more. each thing goes by its own name; the analogy belongs to `help
-/// concepts`.
+/// what a bare `fetchloom` shows outside a project, below its name: where to start, what it writes
+/// and where to read more, each by its own name, since the analogy belongs to `help concepts`.
 pub(crate) const WELCOME: &str = "start in a folder for your project:
   mkdir iris-study && cd iris-study
   fetchloom add iris              pick an iris dataset online and pin its files
@@ -658,9 +657,8 @@ impl Command {
         }
     }
 
-    /// whether a script may run the command as the next step a help names: one that deletes,
-    /// overwrites or repins what a person keeps, runs project code, signs in or takes a web page
-    /// for data is their choice, unless `--dry-run` only shows it.
+    /// whether a script may run the command a help names next: not one that deletes, overwrites or
+    /// repins what a person keeps, runs code, signs in or takes a web page, unless a dry run.
     pub(crate) fn harmless(&self) -> bool {
         match self {
             Command::Add(add) => !add.web_page || add.dry.dry_run,

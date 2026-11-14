@@ -151,14 +151,12 @@ fn gather_folders<'p>(folders: &mut HashSet<&'p str>, path: &'p str) {
     }
 }
 
-/// the state size from which a survey reads it on a thread of its own while it walks the data
-/// folder: 24.5 MB, 100,000 files, took a settled sync 0.79 of its time for 2 MiB more memory,
-/// where 2.4 to 12.1 MB took that thread's own heap 11 to 18 MiB more.
+/// the state size from which a survey reads it on its own thread as it walks the data folder: 24.5
+/// MB took a settled sync 0.79 of its time for 2 MiB more, while 2.4 to 12.1 MB cost 11 to 18 MiB.
 const BESIDE_FROM: u64 = 16 << 20;
 
-/// the run's `resources` level, as its settings give it, by which a survey weighs memory against
-/// time. it is the process's own: settings are read once, before any command runs, and every
-/// survey of the run weighs alike. [`Survey::surveyed_from`] takes it as a value, which tests set.
+/// the run's `resources` level, by which a survey weighs memory against time, set once from the
+/// settings before any command runs. [`Survey::surveyed_from`] takes it as a value tests set.
 static LEVEL: OnceLock<Level> = OnceLock::new();
 
 /// sets the run's `resources` level once its settings are read. a second set is a bug, which
@@ -168,9 +166,8 @@ pub(crate) fn set_level(level: Level) {
     debug_assert!(first, "the resources level is set once, at start");
 }
 
-/// whether a survey reads a whole state of `size` bytes on a thread of its own while it walks the
-/// data folder: from `from` bytes on, unless the run keeps to one worker or is lean, which
-/// spends memory before time.
+/// whether a survey reads a whole state of `size` bytes on its own thread as it walks the data
+/// folder: from `from` bytes on, unless the run keeps to one worker or is lean on memory.
 fn beside(size: u64, from: u64, threads: Threads, level: Level) -> bool {
     size >= from && threads.limit(2) >= 2 && level != Level::Lean
 }

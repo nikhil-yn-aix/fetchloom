@@ -440,10 +440,8 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
 /// it, its origin and variable on a line of their own, so the other rows keep their columns.
 const VALUE: usize = 24;
 
-/// the settings as aligned columns, one per line, for a person or for `grep`. a terminal `width`
-/// shows a home path from `~`, puts what follows a long value on a line of its own, and too
-/// narrow leaves out the variable, `FETCHLOOM_` and the name, then puts each origin under its
-/// value.
+/// the settings in aligned columns, a line each, for a person or `grep`. a terminal `width` shows
+/// the cache from `~`, breaks after a long value, and when narrow drops variables, then origins.
 fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()

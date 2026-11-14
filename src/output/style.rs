@@ -37,9 +37,8 @@ pub(crate) struct Palette {
 pub(crate) enum Theme {
     /// the terminal's own sixteen colors, which follow whatever theme it has
     Ansi,
-    /// a sage green for work and for what a person types, a leaf green for what finished, amber
-    /// and red, for a dark background: the docs site's colors, which `python/test_site.py` holds
-    /// these to
+    /// the docs site's dark colors, as `python/test_site.py` checks: sage green for work and what a
+    /// person types, leaf green for what finished, amber and red
     Dark,
     /// the same colors, deeper, for a light background
     Light,

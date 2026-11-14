@@ -55,9 +55,8 @@ pub(crate) struct Usage {
 }
 
 impl Usage {
-    /// what `scan`'s objects hold against what `needed` keeps, as gc would count them at `now`,
-    /// and which files placed in `projects` are copies of them, looked at on `threads`. a windows
-    /// listing counts no names, so there each object is opened once.
+    /// what `scan`'s objects hold against what `needed` keeps, as gc counts them at `now`, and the
+    /// copies of them placed in `projects`, on `threads`. windows opens each object to count names.
     pub(crate) fn measure(
         scan: &Scan,
         needed: &Needed,
@@ -280,9 +279,8 @@ mod tests {
         assert_eq!(usage.inputs_only, Some(1));
     }
 
-    /// a cache holding each of `held`, and a project whose state records each of `placed` by path,
-    /// method, bytes and whether it still links the cache's copy, where the drive makes links.
-    /// returns the folder holding both and what `measure` finds.
+    /// the folder of a cache holding `held` and a project whose state records `placed` by path,
+    /// method, bytes and whether it links the cache's copy, with what `measure` finds there.
     fn report(
         placed: &[(&str, Method, &[u8], bool)],
         held: &[&[u8]],

@@ -342,9 +342,8 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     Ok(Request::Link(link))
 }
 
-/// the words of one search, when `typed` holds several and each is plain words, with no link, id,
-/// DOI or path among them, which could then mean nothing else. none of them may name something
-/// here, so a local name never goes out; `pins` says the command can import it, as add can.
+/// the words of one search, when `typed` holds several plain words and no link, id, DOI or path.
+/// a word naming something here is refused, never sent; `pins` says the command can import it.
 pub(super) fn one_search(typed: &[String], pins: bool) -> Result<Option<String>, Error> {
     if typed.len() < 2
         || !typed

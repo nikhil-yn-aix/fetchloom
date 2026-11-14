@@ -411,9 +411,8 @@ impl<'a> Watch<'a> {
         fetched
     }
 
-    /// says once that the download starts over when it goes on from `resumed`, before bytes it
-    /// held, which are then lost: an earlier run's, or an earlier try's, with why, from what the
-    /// try before allowed and what the new answer, `resumable`, allows.
+    /// says once that the download starts over from `resumed`, losing bytes an earlier run or try
+    /// held, and why, from what the try before allowed and the new answer's `resumable` allows.
     fn restarting(&self, resumed: u64, resumable: Resumable) {
         let earlier = self.earlier.load(Ordering::Relaxed);
         let held = self.held.bytes.load(Ordering::Relaxed);
@@ -685,9 +684,8 @@ fn encoded(path: &str, encoding: &str) -> (String, String) {
     (said, help)
 }
 
-/// how long the downloads `jobs` should take, each its host and its size when known, added up
-/// by the name each host is paced under, with what this machine remembers of each host's speed,
-/// the pacing its source asks and the run's job limits.
+/// how long the downloads `jobs`, each a host and a size if known, should take, added up by pacing
+/// name from each host's remembered speed, its source's pacing and the run's job limits.
 pub(super) fn planned(
     context: &Context,
     jobs: impl IntoIterator<Item = (String, Option<u64>)>,

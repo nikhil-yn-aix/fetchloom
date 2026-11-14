@@ -153,9 +153,8 @@ fn unread(manifest: &Manifest, name: &str, removed: &[String]) -> Result<(), Err
     )
 }
 
-/// asks before removing the imports among `names`: no source can give their files back, so once
-/// they leave the data folder only the cache keeps them, until gc frees them. with nobody to ask it
-/// refuses, unless `--yes`.
+/// asks before removing the imports among `names`, whose files no source can give back once gc
+/// frees them from the cache; with nobody to ask it refuses, unless `--yes`.
 fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<(), Error> {
     let Ok((_, manifest)) = project.manifest() else {
         return Ok(());

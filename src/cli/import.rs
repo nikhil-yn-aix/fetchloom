@@ -141,9 +141,8 @@ pub(super) async fn import_held(
     Ok(report)
 }
 
-/// the import data.toml has under `own`, the name the files `found` in `shown` would take, which
-/// is theirs only when they are its pinned files: other paths or sizes are refused before a byte
-/// is copied, and other bytes once they are.
+/// the import data.toml has under `own`, the name the files `found` in `shown` would take, when
+/// they are its pinned files: other paths or sizes are refused before a copy, other bytes after.
 fn retaken<'m>(
     manifest: &'m Manifest,
     old: Option<&Lock>,
@@ -163,9 +162,8 @@ fn retaken<'m>(
     }
 }
 
-/// the refusal of the files `shown` holds, other than those data.toml's import `name` pins, as
-/// `difference` says: a number would leave the scripts that read its folder on the old files, so
-/// the person chooses whether these replace them or join them under another name.
+/// the refusal of the files in `shown`, which differ from those import `name` pins as `difference`
+/// says; a numbered name would leave scripts on the old files, so the person chooses.
 fn other_import(manifest: &Manifest, name: &str, shown: &str, difference: Option<String>) -> Error {
     let difference =
         difference.unwrap_or_else(|| "data.toml chooses its files with other patterns".to_owned());
@@ -752,9 +750,8 @@ pub(super) fn near(typed: &str, path: &Path) -> Option<String> {
     Some(format!("{folder}{meant}{}", &typed[kept.len()..]))
 }
 
-/// refuses to import `start`, a path with no link in it, where it overlaps what fetchloom keeps:
-/// a folder holding the project, anything in its data folder `data_dir`, which placing writes, or
-/// the cache. `here` is the folder the command runs in.
+/// refuses to import `start`, run from `here`, where it overlaps what fetchloom keeps: a folder
+/// holding the project, anything in its data folder `data_dir`, which placing writes, or the cache.
 pub(super) fn refuse_overlap(
     (start, shown): (&Path, &str),
     root: &Path,
@@ -805,9 +802,8 @@ pub(super) fn word_in_data_folder(typed: &str, here: &Path) -> Option<Error> {
         .then(|| in_data_folder((&start, typed), &project.root, &data_dir, here))
 }
 
-/// the refusal of `shown`, which names `start` inside `data_dir`, the data folder of the project
-/// at `root`, seen from `here`. placing writes there, so the help gives the commands that move it
-/// out and add it back, and the `data_dir` that keeps the folder as it is.
+/// the refusal of `shown`, `start` inside `data_dir` of the project at `root`, seen from `here`,
+/// whose help moves it out and adds it back, or sets the `data_dir` that keeps it as it is.
 fn in_data_folder(
     (start, shown): (&Path, &str),
     root: &Path,

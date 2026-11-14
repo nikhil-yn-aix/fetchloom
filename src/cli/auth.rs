@@ -41,10 +41,8 @@ pub(super) struct State {
     user: Option<String>,
     /// whether the source accepted the key: none when it was not asked.
     valid: Option<bool>,
-    /// how keys for buckets and containers come, for AWS, google and azure, which `auth` never
-    /// asks: `keys`, `credential_process`, `sso`, `role`, `service_account`, `authorized_user`,
-    /// `sas`, `key`, `az_cli` or `managed_identity`; for a website, `token`, `header` or
-    /// `cookies`.
+    /// the key's kind: `keys`, `credential_process`, `sso`, `role`, `service_account`, `sas`,
+    /// `authorized_user`, `key`, `az_cli`, `managed_identity`, `token`, `header` or `cookies`.
     kind: Option<&'static str>,
     /// when the soonest of a website's saved cookies expires, left out of every other row.
     #[serde(skip_serializing_if = "Option::is_none")]

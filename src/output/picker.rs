@@ -185,9 +185,8 @@ fn rows(line: &str, width: usize) -> usize {
         .sum()
 }
 
-/// the picker's lines on a screen `width` columns wide and `height` rows high: the question with
-/// its keys, a row for each option, then the footer. a list too tall for the screen shows the
-/// options around `cursor`, scrolled from `top` no further than it needs, and counts the rest.
+/// the picker's lines on a `width` by `height` screen: the question, a row for each option and the
+/// footer, or when too tall, the rows around `cursor` scrolled from `top`, the rest counted.
 fn frame(
     question: &str,
     options: &[String],

@@ -82,10 +82,8 @@ pub(super) fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) 
     command_line(kept.into_iter())
 }
 
-/// this run's command line as typed, for a person to run again from a new folder inside the one
-/// it ran in, so each relative path, as `./stuff` or the list `-i links.txt` reads, starts one
-/// folder further up. none when the line cannot be repeated, or gave `-C`, whose own folder
-/// changes where its paths are read from.
+/// this run's command line, to run again from a new folder inside this one, each relative path one
+/// folder further up. none when it cannot be repeated or gave `-C`, which moves its paths.
 pub(in crate::cli) fn one_folder_down() -> Option<String> {
     let line = TYPED.get()?;
     let root = <args::Args as clap::CommandFactory>::command();
@@ -212,9 +210,8 @@ fn may_hold_secret(arg: &str) -> bool {
     })
 }
 
-/// `error`, a reference `command` could not read, with this run's line retyped where the prefix of
-/// `typed`, the part before `:`, is one typo from a single prefix fetchloom reads, as `zenodoo:`
-/// is. a link that may hold a secret gets no guess.
+/// `error`, for a reference `command` could not read, with the line retyped where `typed`'s prefix
+/// is one typo from one fetchloom reads, as `zenodoo:` is; a link that may hold a secret gets none.
 pub(in crate::cli) fn scheme_meant(
     error: crate::error::Error,
     typed: &str,

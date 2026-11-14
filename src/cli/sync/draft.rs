@@ -785,10 +785,8 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
         .then_some(stated)
 }
 
-/// what the cache recorded the link served, while the listing gives the strong `ETag` and size
-/// recorded with those bytes and the cache still holds them or, for an archive, its files. this
-/// trusts a service to change an object's `ETag` with its bytes. a web page is asked for again,
-/// so the page rule decides whether it is the file.
+/// what the cache recorded the link served, while the listing's strong `ETag` and size match it and
+/// the cache holds its bytes or files, trusting `ETag`s to change; a web page is asked for again.
 fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
     let etag = remote
         .etag

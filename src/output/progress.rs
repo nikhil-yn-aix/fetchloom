@@ -892,9 +892,8 @@ impl Ticker {
         }
     }
 
-    /// adds the size a download just told. a download that knows its whole batch's size now says
-    /// what it does and, with grounds, about how long it takes, as `time` words it, unless it told
-    /// none, as one refused before its body, which never began.
+    /// adds the size a download just told; the one that makes its batch's size known says what the
+    /// batch does, with `time` when there are grounds, unless it told none, as a refused one does.
     pub(crate) fn sized(&self, bytes: u64, time: Option<&str>) {
         if let Some(shared) = &self.shared
             && shared
