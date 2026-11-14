@@ -742,6 +742,95 @@ mod tests {
         }
     }
 
+    /// a rebuild kept beside the pin of `key` whose tree is `pinned`, its files hashing to its tree.
+    fn kept(key: Sha256, pinned: Sha256) -> Candidate {
+        let files = vec![Member {
+            path: "clean.csv".to_owned(),
+            size: 3,
+            sha256: digest::sha256(b"abc"),
+        }];
+        Candidate {
+            key,
+            tree: crate::cache::tree_hash(&files),
+            pinned,
+            files,
+        }
+    }
+
+    /// a kept rebuild answers only the recipe's key, beside the very pin it was kept beside, with
+    /// files that still hash to its tree; any one of the four differing alone refuses it.
+    #[test]
+    fn a_kept_rebuild_answers_only_its_own_key_pin_and_files() {
+        let (key, pinned, other) = (
+            digest::sha256(b"key"),
+            digest::sha256(b"pinned"),
+            digest::sha256(b"other"),
+        );
+        let pin = |key: Sha256, tree: Sha256| Derived {
+            name: "clean".to_owned(),
+            from: Vec::new(),
+            run: Vec::new(),
+            code: Vec::new(),
+            env: BTreeMap::new(),
+            key,
+            timestamp: String::new(),
+            tree,
+            files: Vec::new(),
+        };
+        let candidate = kept(key, pinned);
+        let unhashed = Candidate {
+            tree: other,
+            ..candidate.clone()
+        };
+        for (case, rebuild, now, pin, answers) in [
+            (
+                "all four match",
+                &candidate,
+                Some(key),
+                Some(pin(key, pinned)),
+                true,
+            ),
+            (
+                "the recipe's key moved",
+                &candidate,
+                Some(other),
+                Some(pin(key, pinned)),
+                false,
+            ),
+            (
+                "no key now",
+                &candidate,
+                None,
+                Some(pin(key, pinned)),
+                false,
+            ),
+            ("nothing pinned", &candidate, Some(key), None, false),
+            (
+                "a pin of another key",
+                &candidate,
+                Some(key),
+                Some(pin(other, pinned)),
+                false,
+            ),
+            (
+                "a pin of another tree",
+                &candidate,
+                Some(key),
+                Some(pin(key, other)),
+                false,
+            ),
+            (
+                "files of another tree",
+                &unhashed,
+                Some(key),
+                Some(pin(key, pinned)),
+                false,
+            ),
+        ] {
+            assert_eq!(rebuild.answers(now, pin.as_ref()), answers, "{case}");
+        }
+    }
+
     /// a small folder beside a large one reads little past its records, however large the state.
     #[test]
     fn a_read_within_a_folder_reads_little_beyond_its_records() {
