@@ -609,9 +609,16 @@ impl Net {
         if !self.carries(hop) {
             return None;
         }
-        let key = self.credentials.iter().find(|key| {
-            key.every_hop && key.port == port && host.eq_ignore_ascii_case(&key.host)
-        })?;
+        // a login for this very port goes before one a line without a port gives every port
+        let login = |every_port: bool| {
+            self.credentials.iter().find(|key| {
+                key.every_hop
+                    && key.every_port == every_port
+                    && (every_port || key.port == port)
+                    && host.eq_ignore_ascii_case(&key.host)
+            })
+        };
+        let key = login(false).or_else(|| login(true))?;
         let named = if port == 443 {
             key.host.clone()
         } else {

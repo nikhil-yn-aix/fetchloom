@@ -192,6 +192,51 @@ fn a_refused_token_is_named_with_the_command_that_saves_a_new_one() -> Result {
     Ok(())
 }
 
+/// a `.netrc` line without a port gives its login to every port of its host, so a sign-in page
+/// where a file was expected after it is refused on any port, as one after a login kept to the
+/// port is.
+#[test]
+fn a_sign_in_page_after_a_login_for_every_port_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><form action=/login>sign in</form></html>";
+    let length = page.len().to_string();
+    let site = Routes::start(vec![
+        (
+            "/login".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "text/html"), ("Content-Length", &length)],
+                page,
+            ),
+        ),
+        (
+            "/data.csv".to_owned(),
+            reply(
+                "302 Found",
+                &[("Location", "/login"), ("Content-Length", "0")],
+                b"",
+            ),
+        ),
+    ])?;
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    std::fs::write(
+        home.join(".netrc"),
+        "machine 127.0.0.1 login ada password pw\n",
+    )?;
+    let link = format!("{}/data.csv", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["message"],
+        format!(
+            "{} sent a web page, such as its sign-in page, where a file was expected, so the login saved for it may have expired",
+            host_of(&site)
+        )
+    );
+    assert!(!sandbox.work().join("data.csv").exists());
+    Ok(())
+}
+
 /// a site that answers a saved token with a basic challenge asks for a username and password,
 /// which the token, sent in the same header, would keep from going: so the help removes it first.
 #[test]
