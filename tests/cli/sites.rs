@@ -192,6 +192,42 @@ fn a_refused_token_is_named_with_the_command_that_saves_a_new_one() -> Result {
     Ok(())
 }
 
+/// a site that answers a saved token with a basic challenge asks for a username and password,
+/// which the token, sent in the same header, would keep from going: so the help removes it first.
+#[test]
+fn a_basic_challenge_to_a_saved_token_asks_for_a_login() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![(
+        "/data.csv".to_owned(),
+        reply(
+            "401 Unauthorized",
+            &[
+                ("WWW-Authenticate", "Basic realm=\"lab\""),
+                ("Content-Length", "0"),
+            ],
+            b"",
+        ),
+    )])?;
+    let host = host_of(&site);
+    sign_in_with_token(&sandbox, &host, "t-wrong-kind")?;
+    let link = format!("{}/data.csv", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "auth.required");
+    assert_eq!(
+        error["message"],
+        format!("{host} asks for a username and password (401), not the token saved for it")
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "remove the token with `fetchloom auth logout {host}`, then sign in with `fetchloom auth login {host}`, then run `fetchloom --json get {link}` again"
+        )
+    );
+    Ok(())
+}
+
 /// a sign-in page where a file was expected, once a saved token went, says the token may have
 /// expired and how to save a new one, unless the person asked for the page.
 #[test]

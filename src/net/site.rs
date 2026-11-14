@@ -144,12 +144,33 @@ pub(crate) struct Sent {
     answered: bool,
     /// whether every saved cookie that would have gone had expired, so nothing went.
     expired: bool,
+    /// where it went, as a basic challenge reads it.
+    went: Went,
+}
+
+/// where a saved credential went, which says whether a login could go beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Went {
+    /// a `.netrc` login, which a basic challenge asks for.
+    Login,
+    /// `Authorization`, as a token, where a login would go, so none could go beside it.
+    Authorization,
+    /// cookies or a header of another name, beside which a login may go.
+    Beside,
 }
 
 impl Sent {
-    /// the error for an answer of `status` to `url` that refused the credential.
-    pub(crate) fn refusal(&self, url: &Url, status: StatusCode) -> Error {
+    /// the error for an answer of `status` to `url` that refused the credential, with `headers`
+    /// saying how the host would let a person in.
+    pub(crate) fn refusal(&self, url: &Url, status: StatusCode, headers: &HeaderMap) -> Error {
         let code = status.as_u16();
+        if status == StatusCode::UNAUTHORIZED
+            && self.went != Went::Login
+            && !self.expired
+            && challenge(headers).as_deref() == Some("basic")
+        {
+            return self.wants_login(code);
+        }
         let message = if self.expired {
             format!(
                 "{} refused access to {} ({code}), and {} saved for it have expired",
@@ -165,6 +186,33 @@ impl Sent {
         };
         Error::new(Kind::AuthRequired, message)
             .help(format!("{}, then run the same command again", self.again))
+    }
+
+    /// the error for a host that answered with a basic challenge, which asks for a username and
+    /// password rather than what was saved for it. a login goes beside cookies or a header of
+    /// another name, but not beside what went in `Authorization`, which has to go first.
+    fn wants_login(&self, code: u16) -> Error {
+        let account = Account::Login(self.host.clone());
+        let command = account.command();
+        let error = Error::new(
+            Kind::AuthRequired,
+            format!(
+                "{} asks for a username and password ({code}), not {} saved for it",
+                self.host, self.what
+            ),
+        );
+        if self.went == Went::Authorization {
+            return error.help(format!(
+                "remove {} with `fetchloom auth logout {}`, then sign in with `{command}`, then run the same command again",
+                self.what,
+                crate::suggested::shell_word(&self.host)
+            ));
+        }
+        error
+            .help(format!(
+                "sign in with `{command}`, then run the same command again"
+            ))
+            .needs(account, None)
     }
 
     /// the error for a web page that came back from `url` where a file was expected, as a site
@@ -528,6 +576,15 @@ impl Net {
                     again: site.again.clone(),
                     answered: true,
                     expired,
+                    went: if site
+                        .headers
+                        .iter()
+                        .any(|(name, _)| *name == header::AUTHORIZATION)
+                    {
+                        Went::Authorization
+                    } else {
+                        Went::Beside
+                    },
                 })
             })
             .or_else(|| self.login_sent(hop));
@@ -569,6 +626,7 @@ impl Net {
             what: "the login".to_owned(),
             answered: true,
             expired: false,
+            went: Went::Login,
         })
     }
 

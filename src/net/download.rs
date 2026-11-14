@@ -1023,7 +1023,11 @@ impl Net {
             && let Some(sent) = response.extensions().get::<super::site::Sent>()
             && sent.answered()
         {
-            return Err(Failure::Final(sent.refusal(response.url(), status)));
+            return Err(Failure::Final(sent.refusal(
+                response.url(),
+                status,
+                response.headers(),
+            )));
         }
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && let Some(authorized) = response.extensions().get::<super::Authorized>()

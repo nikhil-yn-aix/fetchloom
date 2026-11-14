@@ -442,9 +442,10 @@ fn a_refusal_names_what_was_saved_and_how_to_save_it_again() {
         response.extensions().get::<Sent>().cloned()
     };
     let url = Url::parse("https://data.lab/file").unwrap();
-    let refused = mark(url.as_str())
-        .unwrap()
-        .refusal(&url, StatusCode::UNAUTHORIZED);
+    let refused =
+        mark(url.as_str())
+            .unwrap()
+            .refusal(&url, StatusCode::UNAUTHORIZED, &HeaderMap::new());
     assert_eq!(refused.kind, Kind::AuthRequired);
     assert_eq!(
         refused.message,
@@ -459,7 +460,9 @@ fn a_refusal_names_what_was_saved_and_how_to_save_it_again() {
     let url = Url::parse("https://old.lab:8443/file?token=abc").unwrap();
     let expired = mark(url.as_str()).unwrap();
     assert_eq!(
-        expired.refusal(&url, StatusCode::FORBIDDEN).message,
+        expired
+            .refusal(&url, StatusCode::FORBIDDEN, &HeaderMap::new())
+            .message,
         "old.lab:8443 refused access to https://old.lab:8443/file?token=*** (403), and the cookies saved for it have expired"
     );
     assert!(mark("https://elsewhere.lab/file").is_none());
