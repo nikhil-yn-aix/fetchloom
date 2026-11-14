@@ -12,9 +12,9 @@ type SiteOf = Box<dyn Fn(&Url) -> Option<String> + Send + Sync>;
 type Carries = Box<dyn Fn(&Url) -> bool + Send + Sync>;
 
 /// the cookies this run's answers set: one jar a request draws on by cookie rules where a saved
-/// credential may go, and one of its own for each site a person saved a credential for, whose
-/// cookies, a renewed session among them, go only where that credential may, through
-/// `Net::site_headers`.
+/// credential may go, each cookie in it for the host that set it alone, and one of its own for
+/// each site a person saved a credential for, whose cookies, a renewed session among them, go
+/// only where that credential may, through `Net::site_headers`.
 #[derive(Default)]
 pub(super) struct Cookies {
     state: Mutex<State>,
@@ -102,15 +102,36 @@ impl CookieStore for Cookies {
             sites,
             generation,
         } = &mut *state;
-        let jar = match site {
-            Some(site) => sites.entry(site).or_default(),
-            None => jar,
-        };
-        jar.set_cookies(&mut headers, url);
+        if let Some(site) = site {
+            sites
+                .entry(site)
+                .or_default()
+                .set_cookies(&mut headers, url);
+        } else {
+            let host_only: Vec<HeaderValue> = headers.filter_map(host_only).collect();
+            jar.set_cookies(&mut host_only.iter(), url);
+        }
         *generation = generation.wrapping_add(1);
     }
 
     fn cookies(&self, url: &Url) -> Option<HeaderValue> {
         self.snapshot(url).0
     }
+}
+
+/// `cookie`, a `Set-Cookie` value, without its `Domain` attribute, so it goes back to the host
+/// that set it alone. the jar knows no public suffix list, so a domain such as `Domain=me` would
+/// let one host set a cookie for every host under it. none for a value that is not text.
+fn host_only(cookie: &HeaderValue) -> Option<HeaderValue> {
+    let text = std::str::from_utf8(cookie.as_bytes()).ok()?;
+    let mut parts = text.split(';');
+    let pair = parts.next()?;
+    let attributes = parts.filter(|attribute| {
+        let name = attribute
+            .split_once('=')
+            .map_or(*attribute, |(name, _)| name);
+        !name.trim().eq_ignore_ascii_case("domain")
+    });
+    let kept: Vec<&str> = std::iter::once(pair).chain(attributes).collect();
+    HeaderValue::from_bytes(kept.join(";").as_bytes()).ok()
 }

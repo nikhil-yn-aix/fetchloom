@@ -365,38 +365,53 @@ fn is_loopback(url: &Url) -> bool {
     }
 }
 
-/// the cookie header for `cookies` with the run's own cookies for the same link, `run`: each
-/// header's cookies win by name over those of the headers after it, and all of them over a
-/// saved one, since the site set them since. none when the result cannot be a header.
-fn cookie_header(cookies: &[&Cookie], run: &[&HeaderValue]) -> Option<HeaderValue> {
+/// the cookie header for a request: the saved cookies that go with it, `sent`, and the run's own
+/// for its link. those the site set this run, `kept`, win by name over saved ones, since the site
+/// set them since; those of the run's shared jar, `shared`, only add a name that neither they nor
+/// any of the site's `saved` cookies have, since another host's answer may have set them. none
+/// when the result cannot be a header.
+fn cookie_header(
+    sent: &[&Cookie],
+    saved: &[Cookie],
+    kept: Option<&HeaderValue>,
+    shared: Option<&HeaderValue>,
+) -> Option<HeaderValue> {
+    fn pairs(value: Option<&HeaderValue>) -> impl Iterator<Item = &str> {
+        value
+            .map(|value| value.to_str().unwrap_or_default())
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+    }
     let name = |pair: &str| {
         pair.split_once('=')
             .map_or(pair, |(first, _)| first)
             .to_owned()
     };
-    let mut set: Vec<&str> = Vec::new();
-    for value in run {
-        for pair in value
-            .to_str()
-            .unwrap_or_default()
-            .split(';')
-            .map(str::trim)
-            .filter(|pair| !pair.is_empty())
-        {
-            if !set.iter().any(|kept| name(kept) == name(pair)) {
-                set.push(pair);
-            }
+    let mut run: Vec<&str> = Vec::new();
+    for pair in pairs(kept) {
+        if !run.iter().any(|held| name(held) == name(pair)) {
+            run.push(pair);
         }
     }
-    let named = |wanted: &str| set.iter().any(|pair| name(pair) == wanted);
-    let mut ordered: Vec<&&Cookie> = cookies.iter().collect();
+    let from_site = run.len();
+    for pair in pairs(shared) {
+        let taken = run.iter().any(|held| name(held) == name(pair))
+            || saved.iter().any(|cookie| cookie.name == name(pair));
+        if !taken {
+            run.push(pair);
+        }
+    }
+    let named = |wanted: &str| run[..from_site].iter().any(|pair| name(pair) == wanted);
+    let mut ordered: Vec<&&Cookie> = sent.iter().collect();
     // longer paths first, as RFC 6265 orders them
     ordered.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
     let pairs: Vec<String> = ordered
         .into_iter()
         .filter(|cookie| !named(&cookie.name))
         .map(|cookie| format!("{}={}", cookie.name, cookie.value))
-        .chain(set.iter().map(|pair| (*pair).to_owned()))
+        .chain(run.iter().map(|pair| (*pair).to_owned()))
         .collect();
     let mut value = HeaderValue::from_str(&pairs.join("; ")).ok()?;
     value.set_sensitive(true);
@@ -448,7 +463,8 @@ impl Net {
     /// the headers a website with a saved credential adds to a request for `url`: on its
     /// `first_origin`, its own and a cookie header with its saved cookies that apply; on any hop,
     /// as on the way back from another origin, the cookies the site set this run that apply,
-    /// which go nowhere else, with the run's shared ones for the link.
+    /// which go nowhere else, with the run's shared ones for the link that take no saved or kept
+    /// cookie's name.
     pub(super) fn site_headers(
         &self,
         url: &Url,
@@ -472,8 +488,9 @@ impl Net {
         let kept = jar.and_then(|jar| jar.kept(&site.named(), url));
         if !cookies.is_empty() || kept.is_some() {
             let shared = jar.and_then(|jar| jar.snapshot(url).0);
-            let run: Vec<&HeaderValue> = kept.iter().chain(&shared).collect();
-            if let Some(value) = cookie_header(&cookies, &run) {
+            if let Some(value) =
+                cookie_header(&cookies, &site.cookies, kept.as_ref(), shared.as_ref())
+            {
                 headers.push((header::COOKIE, value));
             }
         }

@@ -238,24 +238,24 @@ fn a_cookie_goes_by_its_path_secure_flag_and_expiry() {
 }
 
 #[test]
-fn the_runs_own_cookies_join_the_saved_ones_and_win_by_name() {
+fn the_runs_own_cookies_join_the_saved_ones_and_the_sites_win_by_name() {
     let saved = [
         cookie("session", "/", false, None),
         cookie("pref", "/data", false, None),
     ];
-    let saved: Vec<&Cookie> = saved.iter().collect();
-    let alone = cookie_header(&saved, &[]).unwrap();
+    let sent: Vec<&Cookie> = saved.iter().collect();
+    let alone = cookie_header(&sent, &saved, None, None).unwrap();
     assert!(alone.is_sensitive());
     assert_eq!(alone, "pref=pref-value; session=session-value");
     let kept = HeaderValue::from_static("session=renewed; csrf=1");
     assert_eq!(
-        cookie_header(&saved, &[&kept]).unwrap(),
+        cookie_header(&sent, &saved, Some(&kept), None).unwrap(),
         "pref=pref-value; session=renewed; csrf=1"
     );
     // the site's own jar wins over the run's shared one, which another host filled
     let shared = HeaderValue::from_static("csrf=2; region=eu");
     assert_eq!(
-        cookie_header(&saved, &[&kept, &shared]).unwrap(),
+        cookie_header(&sent, &saved, Some(&kept), Some(&shared)).unwrap(),
         "pref=pref-value; session=renewed; csrf=1; region=eu"
     );
 }
@@ -327,6 +327,70 @@ fn the_shared_jar_sends_nothing_over_plain_http_off_this_machine() {
     assert_eq!(
         cookies.cookies(&url("https://mirror.lab/y")),
         Some(HeaderValue::from_static("sid=s-1"))
+    );
+}
+
+/// a cookie set for a whole suffix, as `Domain=me` from a.example.me, goes back to the host that
+/// set it alone: never to another host under the suffix, nor in place of a signed-in one's own.
+#[test]
+fn a_cookie_for_a_whole_suffix_stays_with_the_host_that_set_it() {
+    use reqwest::cookie::CookieStore as _;
+
+    let saved = Site::new(
+        "b.other.me",
+        Vec::new(),
+        vec![cookie("session", "/", false, None)],
+        "the cookies".to_owned(),
+        String::new(),
+    )
+    .unwrap();
+    let net = net(vec![saved]);
+    let cookies = &net.wire().unwrap().cookies;
+    let url = |text: &str| Url::parse(text).unwrap();
+    let value = HeaderValue::from_static("session=planted; Domain=me; Path=/");
+    cookies.set_cookies(
+        &mut std::iter::once(&value),
+        &url("https://a.example.me/list"),
+    );
+    for other in [
+        "https://b.other.me/data",
+        "https://c.example.me/data",
+        "https://x.a.example.me/data",
+    ] {
+        assert_eq!(cookies.cookies(&url(other)), None, "{other}");
+    }
+    assert_eq!(
+        sent(&net, "https://b.other.me/data", &header::COOKIE).as_deref(),
+        Some("session=session-value")
+    );
+    assert_eq!(
+        cookies.cookies(&url("https://a.example.me/next")),
+        Some(HeaderValue::from_static("session=planted"))
+    );
+}
+
+/// a cookie the run's shared jar keeps for a signed-in site's host, as an answer over plain http
+/// to it may set, never takes the place of a saved cookie of its name.
+#[test]
+fn a_shared_cookie_never_displaces_a_saved_one() {
+    use reqwest::cookie::CookieStore as _;
+
+    let saved = Site::new(
+        "data.lab",
+        Vec::new(),
+        vec![cookie("session", "/", false, None)],
+        "the cookies".to_owned(),
+        String::new(),
+    )
+    .unwrap();
+    let net = net(vec![saved]);
+    let cookies = &net.wire().unwrap().cookies;
+    let value = HeaderValue::from_static("session=planted; Path=/");
+    let plain = Url::parse("http://data.lab/x").unwrap();
+    cookies.set_cookies(&mut std::iter::once(&value), &plain);
+    assert_eq!(
+        sent(&net, "https://data.lab/files/2", &header::COOKIE).as_deref(),
+        Some("session=session-value")
     );
 }
 
