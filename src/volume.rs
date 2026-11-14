@@ -466,6 +466,27 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     }
 }
 
+/// flushes directory entries on unix, where flushing a file does not publish its name durably.
+/// other platforms keep their own publication behavior.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "unix directory flush errors share this platform-independent interface"
+    )
+)]
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 /// `permissions` that let the file's owner write it.
 fn writable(mut permissions: Permissions) -> Permissions {
     #[cfg(unix)]

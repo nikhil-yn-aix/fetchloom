@@ -566,7 +566,7 @@ impl Target {
         if let Some(folder) = tests::failing(tests::Failing::MarkerFlush, &self.root) {
             return flush(&folder);
         }
-        crate::project::sync_directory(&self.root)
+        crate::volume::sync_directory(&self.root)
     }
 
     /// makes `tmp/`, the folders below it when `items` are many, and the folders `items` go in,
@@ -790,7 +790,7 @@ impl Target {
         }
         folders.insert(self.root.clone());
         for folder in folders {
-            crate::project::sync_directory(&folder)?;
+            crate::volume::sync_directory(&folder)?;
         }
         Ok(())
     }

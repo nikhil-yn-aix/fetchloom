@@ -183,7 +183,7 @@ impl Cache {
                 if found.permissions().readonly() {
                     return Ok(());
                 }
-                super::sync_publication(&path, &path, crate::project::sync_directory)?;
+                super::sync_publication(&path, &path, crate::volume::sync_directory)?;
             }
             Ok(found) => {
                 // windows renames nothing over a read-only file

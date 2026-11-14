@@ -590,7 +590,7 @@ impl Cache {
                     let written = fs::metadata(source).and_then(|metadata| metadata.modified());
                     match volume.replace(source, path) {
                         Ok(()) => {
-                            sync_publication(source, path, crate::project::sync_directory)?;
+                            sync_publication(source, path, crate::volume::sync_directory)?;
                             // without the replacement's time the object stays in doubt and is
                             // hashed when found, which costs time but trusts nothing changed
                             if found.is_ok()
@@ -701,7 +701,7 @@ fn fill_and_rename(
         durable,
         File::sync_all,
         |from, to| fs::rename(from, to),
-        crate::project::sync_directory,
+        crate::volume::sync_directory,
     )
 }
 

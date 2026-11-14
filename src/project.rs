@@ -920,27 +920,12 @@ fn write_atomically_with(
     written
 }
 
-/// flushes directory entries on unix, where flushing a file does not publish its name durably.
-/// other platforms keep their own publication behavior.
-#[cfg_attr(
-    not(unix),
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "unix directory flush errors share this platform-independent interface"
-    )
-)]
-pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        #[cfg(test)]
-        tests::syncing_directory(path)?;
-        File::open(path)?.sync_all()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(())
-    }
+/// flushes the entries of the folder `path`, as [`crate::volume::sync_directory`] does, where
+/// tests watch each flush.
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(all(test, unix))]
+    tests::syncing_directory(path)?;
+    crate::volume::sync_directory(path)
 }
 
 /// writes `bytes` into a new file and flushes them to disk.

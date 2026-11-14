@@ -537,7 +537,7 @@ fn publish(path: &Path, text: &str, force: bool) -> Result<PathBuf, Error> {
     if let Some(aside) = aside {
         let _ = placer.delete_file(&aside);
     }
-    crate::project::sync_directory(folder).map_err(|err| {
+    crate::volume::sync_directory(folder).map_err(|err| {
         Error::io(
             format_args!(
                 "wrote {}, but could not make sure it stays after a power cut",
