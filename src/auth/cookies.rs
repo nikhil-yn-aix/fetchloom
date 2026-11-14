@@ -3,7 +3,7 @@
 //! header can hold. the rest are named, by name and domain only, with why they were left out.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::site::{Cookie, without_port};
@@ -173,17 +173,25 @@ impl Browser {
     }
 }
 
-/// the newest of `files` by when it last changed, as the profile a browser used last. files
-/// changed at the same time, as far as the disk can tell, go by path, so the pick never
-/// depends on the order a folder lists them in.
+/// the newest of `files` by when it last changed, as the profile a browser used last: the newer
+/// of the file and the log beside it, `<file>-wal`, which a browser that keeps one, as firefox
+/// does, writes first and copies into the file only at a checkpoint. files changed at the same
+/// time, as far as the disk can tell, go by path, so the pick never depends on the order a
+/// folder lists them in.
 fn newest(files: Vec<PathBuf>) -> Option<PathBuf> {
+    let changed = |path: &Path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
     files
         .into_iter()
         .filter_map(|file| {
-            let changed = std::fs::metadata(&file)
-                .and_then(|meta| meta.modified())
-                .ok()?;
-            Some((changed, file))
+            let mut log = file.clone().into_os_string();
+            log.push("-wal");
+            let at = changed(&file)?;
+            let at = changed(Path::new(&log)).map_or(at, |logged| logged.max(at));
+            Some((at, file))
         })
         .max_by(|(one, first), (other, second)| one.cmp(other).then_with(|| second.cmp(first)))
         .map(|(_, file)| file)

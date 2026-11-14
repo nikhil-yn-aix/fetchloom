@@ -161,3 +161,30 @@ fn profiles_changed_at_the_same_time_go_by_path() {
     assert_eq!(newest(files.clone()), first);
     assert_eq!(newest(files.into_iter().rev().collect()), first);
 }
+
+/// a browser that keeps a write-ahead log beside its cookie file, as firefox does, writes there
+/// first and into the file only at a checkpoint, so a profile is as new as the newer of the two.
+#[test]
+fn a_profile_is_as_new_as_the_log_beside_its_cookie_file() {
+    let folder = tempfile::tempdir().unwrap();
+    let made = |name: &str, seconds: u64| {
+        let file = folder.path().join(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            .unwrap();
+        file
+    };
+    let a = made("a/cookies.sqlite", 1_700_000_000);
+    made("a/cookies.sqlite-wal", 1_700_000_400);
+    let b = made("b/cookies.sqlite", 1_700_000_200);
+    assert_eq!(newest(vec![a.clone(), b.clone()]), Some(a.clone()));
+    assert_eq!(newest(vec![b.clone(), a.clone()]), Some(a.clone()));
+    made("b/cookies.sqlite-wal", 1_700_000_600);
+    assert_eq!(newest(vec![a.clone(), b.clone()]), Some(b.clone()));
+    // a log older than its file leaves the file's own time
+    let c = made("c/cookies.sqlite", 1_700_000_800);
+    made("c/cookies.sqlite-wal", 1_700_000_100);
+    assert_eq!(newest(vec![a, b, c.clone()]), Some(c));
+}
