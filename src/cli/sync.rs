@@ -222,11 +222,7 @@ impl<'a> Loop<'a> {
         force: bool,
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
-        for (said, help) in plan::doubtful_paths(manifest, &plan) {
-            self.context
-                .output
-                .warn_with(Warning::PlacePathFolder, &said, &help);
-        }
+        self.warn_doubtful_paths(manifest, &plan);
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
@@ -824,6 +820,16 @@ impl<'a> Loop<'a> {
         Ok(damaged)
     }
 
+    /// warns of each dataset whose `path` is likely not what was meant, as a sync and its dry run
+    /// both do before placing.
+    fn warn_doubtful_paths(&self, manifest: &Manifest, plan: &plan::Plan<'_>) {
+        for (said, help) in plan::doubtful_paths(manifest, plan) {
+            self.context
+                .output
+                .warn_with(Warning::PlacePathFolder, &said, &help);
+        }
+    }
+
     /// what [`Loop::place`] would do, without downloading, unpacking or writing, given the `jobs`
     /// relocking would download first; it stops where an offline run would. files `guessed` by the
     /// dry relock that something stands at are told as files to check.
@@ -841,15 +847,10 @@ impl<'a> Loop<'a> {
         damaged: &HashSet<Sha256>,
         guessed: &HashSet<String>,
     ) -> Result<Preview, Error> {
-        let mut placing = Placing::new(
-            self.project,
-            manifest,
-            lock,
-            &self.cache,
-            force,
-            &self.scope,
-            survey,
-        )?;
+        let plan = plan::from_cache(manifest, lock, &self.cache)?;
+        self.warn_doubtful_paths(manifest, &plan);
+        let mut placing =
+            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
         // what the data folder holds a sync takes from there; only that sync hashes it
         let held: HashSet<Sha256> = placing

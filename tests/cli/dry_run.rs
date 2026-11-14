@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, text, warning};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -83,6 +83,35 @@ fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
     assert_eq!(tree(&clone)?, project, "the clone is as it was");
     assert_eq!(tree(&sandbox.cache())?, cache, "the cache is as it was");
     assert_eq!(server.requests().len(), 1, "only add downloaded");
+    Ok(())
+}
+
+/// a dry run warns of a `path` that names the data folder again, as the sync would, so the
+/// mistake shows before anything lands in data/data.
+#[test]
+fn sync_dry_run_warns_of_a_path_that_names_the_data_folder_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{text_now}path = \"data/iris-win\"\n"))?;
+    let said = "path = \"data/iris-win\" starts with the data folder's name, so datasets.iris lands in data/data/iris-win";
+    let output = sandbox.run(&["sync", "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&format!("warning: {said}\n")), "{stderr}");
+    assert!(
+        stderr.contains("Would place data/data/iris-win"),
+        "{stderr}"
+    );
+    let document = json(&sandbox.run(&["--json", "sync", "--dry-run"])?)?;
+    assert_eq!(
+        warning(&document, "place.path_folder")["message"],
+        said,
+        "{document}"
+    );
+    assert!(!sandbox.work().join("data").join("data").exists());
     Ok(())
 }
 
