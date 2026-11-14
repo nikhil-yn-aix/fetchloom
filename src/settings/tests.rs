@@ -366,6 +366,18 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
             "FETCHLOOM_MEMORY is \"4gb\", which is not a size such as 512M or 4G",
             "unset FETCHLOOM_MEMORY to use the default of 256.0 MiB, or set it to a size such as 512M or 4G",
         ),
+        (
+            "FETCHLOOM_TIMEOUT",
+            "0",
+            "FETCHLOOM_TIMEOUT is \"0\", which is not a number from 1 to 3600",
+            "unset FETCHLOOM_TIMEOUT to use the default of 30, or set it to a number from 1 to 3600",
+        ),
+        (
+            "FETCHLOOM_ASK_ABOVE",
+            "big",
+            "FETCHLOOM_ASK_ABOVE is \"big\", which is not a size such as 512M or 4G",
+            "unset FETCHLOOM_ASK_ABOVE to use the default of 1.0 GiB, or set it to a size such as 512M or 4G",
+        ),
     ] {
         let error = read(&[(name, value)], None).unwrap_err();
         assert_eq!(error.kind, Kind::Usage, "{name}");

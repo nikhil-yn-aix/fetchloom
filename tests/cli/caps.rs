@@ -385,65 +385,12 @@ fn a_settings_file_named_by_the_variable_must_exist() -> Result {
     Ok(())
 }
 
+/// a bad value in a variable stops the run as a usage error. `settings::tests` holds the words
+/// for what the settings read; the rest are read where they act, so their words are held here.
 #[test]
 fn bad_settings_in_the_environment_are_usage_errors() -> Result {
     let sandbox = Sandbox::new()?;
-    for (name, value, said, help) in [
-        (
-            "FETCHLOOM_HOST_JOBS",
-            "0",
-            "FETCHLOOM_HOST_JOBS is \"0\", which is not a number from 1 to 256",
-            None,
-        ),
-        (
-            "FETCHLOOM_TIMEOUT",
-            "0",
-            "FETCHLOOM_TIMEOUT is \"0\", which is not a number from 1 to 3600",
-            None,
-        ),
-        (
-            "FETCHLOOM_ASK_ABOVE",
-            "big",
-            "FETCHLOOM_ASK_ABOVE is \"big\", which is not a size such as 512M or 4G",
-            None,
-        ),
-        (
-            "FETCHLOOM_MEMORY",
-            "4gb",
-            "FETCHLOOM_MEMORY is \"4gb\", which is not a size such as 512M or 4G",
-            None,
-        ),
-        (
-            "FETCHLOOM_RATE",
-            "fast",
-            "FETCHLOOM_RATE is \"fast\", which is not a positive byte rate",
-            Some("unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M"),
-        ),
-        (
-            "FETCHLOOM_THREADS",
-            "257",
-            "FETCHLOOM_THREADS is \"257\", which is not a number from 1 to 256",
-            Some(
-                "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256",
-            ),
-        ),
-        (
-            "FETCHLOOM_SPLIT",
-            "yes",
-            "FETCHLOOM_SPLIT is \"yes\", which is not true or false",
-            Some(
-                "set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow",
-            ),
-        ),
-        (
-            "FETCHLOOM_KEYRING",
-            "no",
-            "FETCHLOOM_KEYRING is \"no\", which is not true or false",
-            Some(
-                "set FETCHLOOM_KEYRING to false to keep keys out of the system's credential store, or unset it",
-            ),
-        ),
-    ] {
+    let refused = |name: &str, value: &str| -> Result<serde_json::Value> {
         let output = sandbox
             .command(&["--json", "cache"])
             .env(name, value)
@@ -451,10 +398,44 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
         assert_eq!(output.status.code(), Some(2), "{name}");
         let document = json(&output)?;
         assert_eq!(document["errors"][0]["kind"], "usage", "{name}");
-        assert_eq!(document["errors"][0]["message"], said, "{name}");
-        if let Some(help) = help {
-            assert_eq!(document["errors"][0]["help"], help, "{name}");
-        }
+        Ok(document["errors"][0].clone())
+    };
+    let error = refused("FETCHLOOM_HOST_JOBS", "0")?;
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|said| said.starts_with("FETCHLOOM_HOST_JOBS is \"0\"")),
+        "{error}"
+    );
+    for (name, value, said, help) in [
+        (
+            "FETCHLOOM_RATE",
+            "fast",
+            "FETCHLOOM_RATE is \"fast\", which is not a positive byte rate",
+            "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M",
+        ),
+        (
+            "FETCHLOOM_THREADS",
+            "257",
+            "FETCHLOOM_THREADS is \"257\", which is not a number from 1 to 256",
+            "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256",
+        ),
+        (
+            "FETCHLOOM_SPLIT",
+            "yes",
+            "FETCHLOOM_SPLIT is \"yes\", which is not true or false",
+            "set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow",
+        ),
+        (
+            "FETCHLOOM_KEYRING",
+            "no",
+            "FETCHLOOM_KEYRING is \"no\", which is not true or false",
+            "set FETCHLOOM_KEYRING to false to keep keys out of the system's credential store, or unset it",
+        ),
+    ] {
+        let error = refused(name, value)?;
+        assert_eq!(error["message"], said, "{name}");
+        assert_eq!(error["help"], help, "{name}");
     }
     Ok(())
 }
