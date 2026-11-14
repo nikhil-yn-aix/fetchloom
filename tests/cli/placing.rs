@@ -2388,22 +2388,7 @@ fn the_counters_tell_files_placed_from_the_cache() -> Result {
 fn status_says_it_compared_sizes_and_times() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
-    sandbox.allow(&server.url);
-    fs::write(
-        sandbox.work().join("data.toml"),
-        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
-    )?;
-    let synced = sandbox.run(&["sync"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    let state = sandbox.work().join(".fetchloom").join("state");
-    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
-    fs::write(&state, fs::read(&state)?)?;
-    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
-    let mut edited = V1.to_vec();
-    edited[0] = b'S';
-    let modified = fs::metadata(&placed)?.modified()?;
-    edit(&placed, &edited)?;
-    set_time(&placed, modified)?;
+    quietly_changed_copy(&sandbox, &server)?;
 
     let status = sandbox.run(&["status"])?;
 
