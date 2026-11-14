@@ -13,6 +13,9 @@
             "id": "ds001037",
             "latestSnapshot": {
               "size": 8600815,
+              "summary": {
+                "totalFiles": 2
+              },
               "description": {
                 "Name": "The brain of Chris"
               }
@@ -27,6 +30,9 @@
             "id": "ds007046",
             "latestSnapshot": {
               "size": 71568032567,
+              "summary": {
+                "totalFiles": 2911
+              },
               "description": {
                 "Name": "Vision for action"
               }

@@ -29,6 +29,9 @@ pub(crate) struct Candidate {
     /// about how long its listed size takes to download here, from what this machine remembers
     /// of its source's hosts; none without grounds.
     pub(crate) time: Option<crate::net::estimate::Time>,
+    /// how many files its size is in, and the largest's bytes, when its catalog says.
+    pub(crate) files: Option<u64>,
+    pub(crate) largest: Option<u64>,
 }
 
 impl Candidate {
@@ -466,6 +469,8 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
                 byline: None,
                 note: gated.then(|| "needs access".to_owned()),
                 time: None,
+                files: None,
+                largest: None,
             })
         })
         .collect()
@@ -504,6 +509,8 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             })
         })
         .collect()
@@ -651,6 +658,8 @@ async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
             byline: found.byline,
             note: found.note,
             time: None,
+            files: None,
+            largest: None,
         })
         .collect())
 }
@@ -670,6 +679,8 @@ async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>,
             byline: found.byline,
             note: found.note,
             time: None,
+            files: None,
+            largest: None,
         })
         .collect())
 }
@@ -684,19 +695,24 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
         .into_iter()
         .take(limit)
         .map(|item| {
+            let sizes: Option<Vec<u64>> = item
+                .files
+                .and_then(|files| files.iter().map(|file| file.size).collect());
             Ok(Candidate {
                 reference: reference(&format!("zenodo:{}", item.id))?,
                 title: item.metadata.title,
                 source: Catalog::Zenodo.label(),
-                size: item.files.and_then(|files| {
-                    files
+                size: sizes.as_ref().and_then(|sizes| {
+                    sizes
                         .iter()
-                        .try_fold(0_u64, |sum, file| sum.checked_add(file.size?))
+                        .try_fold(0_u64, |sum, size| sum.checked_add(*size))
                 }),
                 downloads: item.stats.and_then(|stats| stats.unique_downloads),
                 byline: None,
                 note: None,
                 time: None,
+                files: sizes.as_ref().map(|sizes| sizes.len() as u64),
+                largest: sizes.as_ref().and_then(|sizes| sizes.iter().max().copied()),
             })
         })
         .collect()
@@ -783,6 +799,8 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             })
         })
         .collect()
@@ -867,6 +885,8 @@ async fn geo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             })
         })
         .collect()
@@ -931,13 +951,15 @@ async fn dandi(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
                 byline: None,
                 note: None,
                 time: None,
+                files: version.asset_count,
+                largest: None,
             })
         })
         .collect()
 }
 
 /// what openneuro's search asks of each dataset it finds.
-const DATASETS: &str = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
+const DATASETS: &str = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
 
 /// the words and the count of a search, sent apart from the query so no word can change it.
 #[derive(Serialize)]
@@ -980,7 +1002,14 @@ struct Node {
 #[derive(Deserialize)]
 struct Snapshot {
     size: Option<u64>,
+    summary: Option<Summary>,
     description: Option<Description>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Summary {
+    total_files: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1055,6 +1084,8 @@ async fn openneuro(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Cand
                 byline: None,
                 note: None,
                 time: None,
+                files: snapshot.summary.and_then(|summary| summary.total_files),
+                largest: None,
             })
         })
         .collect()

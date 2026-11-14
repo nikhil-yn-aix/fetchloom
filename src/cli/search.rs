@@ -353,9 +353,10 @@ async fn find(
     })
 }
 
-/// about how long `candidate` takes to download, as one download of its listed size from the
-/// first host its source names that this machine remembers a speed for, paced as that source
-/// asks. none without a size or a remembered host.
+/// about how long `candidate` takes to download, its listed size in the files its catalog counts
+/// from the first host its source names that this machine remembers a speed for, paced as that
+/// source asks, as [`estimate::time`](crate::net::estimate::time) plans a match. none without a
+/// size or a remembered host.
 fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::estimate::Time> {
     use crate::net::estimate;
     let size = candidate.size?;
@@ -365,9 +366,9 @@ fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::esti
         .iter()
         .find_map(|host| context.speeds.speed(&crate::source::paced_as(host)))?;
     let host = estimate::Host {
-        files: 1,
+        files: candidate.files,
         bytes: size,
-        largest: size,
+        largest: candidate.largest.unwrap_or_default(),
         speed: Some(speed),
         spacing: crate::source::spacing(&name),
         most: crate::source::most_at_once(&name),
@@ -681,6 +682,8 @@ mod tests {
                     byline: None,
                     note: None,
                     time: None,
+                    files: None,
+                    largest: None,
                 })
                 .collect();
             counted(&candidates)
@@ -711,6 +714,8 @@ mod tests {
             byline: None,
             note: None,
             time: None,
+            files: None,
+            largest: None,
         };
         assert_eq!(
             line(&candidate),
@@ -752,6 +757,8 @@ mod tests {
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             },
             Candidate {
                 reference: Reference::parse("zenodo:1").unwrap().reference,
@@ -762,6 +769,8 @@ mod tests {
                 byline: None,
                 note: Some("needs access".to_owned()),
                 time: None,
+                files: None,
+                largest: None,
             },
             Candidate {
                 reference: Reference::parse("hf:datasets/a/b").unwrap().reference,
@@ -772,6 +781,8 @@ mod tests {
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             },
             Candidate {
                 reference: Reference::parse("hf:datasets/c/d").unwrap().reference,
@@ -782,6 +793,8 @@ mod tests {
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             },
         ];
         let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));
@@ -817,6 +830,8 @@ mod tests {
             byline: None,
             note: None,
             time,
+            files: None,
+            largest: None,
         };
         let long = "a title long enough that it gives way on a terminal eighty columns wide";
         let about = Time {
@@ -882,6 +897,8 @@ mod tests {
             byline: None,
             note: gated.then(|| "needs access".to_owned()),
             time: None,
+            files: None,
+            largest: None,
         };
         let candidates = vec![
             candidate(
@@ -972,6 +989,8 @@ mod tests {
             byline: Some(byline.to_owned()),
             note: closed.then(|| "no open-access pdf".to_owned()),
             time: None,
+            files: None,
+            largest: None,
         };
         let candidates = vec![
             paper(
@@ -1055,6 +1074,8 @@ mod tests {
             byline: None,
             note: None,
             time: None,
+            files: None,
+            largest: None,
         };
         let candidates = vec![
             candidate("kaggle:uciml/iris", "Iris Species"),
@@ -1091,6 +1112,8 @@ mod tests {
             byline: None,
             note: None,
             time: None,
+            files: None,
+            largest: None,
         };
         let candidates = vec![
             candidate(
@@ -1174,6 +1197,8 @@ mod tests {
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             },
             Candidate {
                 reference: Reference::parse(&long).unwrap().reference,
@@ -1184,6 +1209,8 @@ mod tests {
                 byline: None,
                 note: None,
                 time: None,
+                files: None,
+                largest: None,
             },
         ];
         let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));

@@ -643,7 +643,7 @@ pub(super) fn planned(
         std::collections::BTreeMap::new();
     for (host, size) in jobs {
         let planned = hosts.entry(source::paced_as(&host)).or_default();
-        planned.files += 1;
+        *planned.files.get_or_insert(0) += 1;
         match size {
             Some(size) => {
                 planned.bytes = planned.bytes.saturating_add(size);

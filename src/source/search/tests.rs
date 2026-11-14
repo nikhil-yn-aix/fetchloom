@@ -50,7 +50,7 @@ const NO_S2_PAPERS: &[u8] = br#"{"total":0,"offset":0,"data":[]}"#;
 
 /// openneuro's search for `words`, a GraphQL query sent by GET with the words as a variable.
 fn openneuro(words: &str, first: usize) -> String {
-    let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
+    let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
     let variables = format!(
         r#"{{"words":[{}],"first":{first}}}"#,
         serde_json::to_string(words).unwrap()
@@ -342,16 +342,23 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     assert_eq!(hf.size, Some(18573));
     assert_eq!(hf.downloads, Some(11912));
     assert_eq!(hf.note, None);
+    // hugging face and kaggle give a size but no count of files; zenodo lists every file
+    assert_eq!((hf.files, hf.largest), (None, None));
     let kaggle = &result.candidates[1];
     assert_eq!(kaggle.title, "Iris Species");
     assert_eq!(kaggle.source, "kaggle");
     assert_eq!(kaggle.size, Some(3687));
     assert_eq!(kaggle.downloads, Some(958_555));
+    assert_eq!((kaggle.files, kaggle.largest), (None, None));
     let zenodo = &result.candidates[2];
     assert_eq!(zenodo.title, "IRIS: ICESat-2 River Surface Slope");
     assert_eq!(zenodo.source, "zenodo");
     assert_eq!(zenodo.size, Some(1_147_253_099));
     assert_eq!(zenodo.downloads, Some(2400));
+    assert_eq!(
+        (zenodo.files, zenodo.largest),
+        (Some(2), Some(1_126_260_736))
+    );
     // EBI's search gives a study's title as its description, and no size or downloads
     let ena = &result.candidates[3];
     assert_eq!(ena.title, "Iris germanica Assembly");
@@ -370,6 +377,7 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     assert_eq!(openneuro.source, "openneuro");
     assert_eq!(openneuro.size, Some(8_600_815));
     assert_eq!(openneuro.downloads, Some(42));
+    assert_eq!((openneuro.files, openneuro.largest), (Some(2), None));
 }
 
 #[test]
@@ -903,6 +911,8 @@ fn dandi_leaves_out_embargoed_and_empty_dandisets_and_reads_a_draft() {
             .iter()
             .all(|item| item.source == "dandi" && item.downloads.is_none())
     );
+    let counted: Vec<_> = result.candidates.iter().map(|item| item.files).collect();
+    assert_eq!(counted, [Some(8), Some(152)]);
 }
 
 /// openneuro answers a GET query only with the header guarding it against other sites; errors with

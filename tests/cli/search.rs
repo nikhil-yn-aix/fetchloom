@@ -931,6 +931,40 @@ fn a_mistyped_path_never_reaches_a_catalog() -> Result {
     Ok(())
 }
 
+/// a match's time counts its files as the plan before its downloads does. zenodo lists a
+/// record's files, so 23233774's two take as long as the larger alone at 1 MiB/s, half a second
+/// to answer: 1074.6 s. hugging face gives no count, so `fatdove/Iris_Database`'s 81.7 GiB
+/// spread over the host's 4 downloads at once: 20925.8 s, not 83701.7 s as one file.
+#[test]
+fn a_match_without_a_file_count_spreads_over_the_hosts_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let speeds = sandbox.speeds();
+    std::fs::create_dir_all(speeds.parent().ok_or("no folder")?)?;
+    std::fs::write(
+        &speeds,
+        r#"{"hosts":{"huggingface.co":{"rate":1048576.0,"overhead":0.5,"heard":1},"zenodo.org":{"rate":1048576.0,"overhead":0.5,"heard":1}}}"#,
+    )?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let mut command = catalogs.command(&sandbox, &["--json", "search", "iris"]);
+    command
+        .env("FETCHLOOM_JOBS", "8")
+        .env("FETCHLOOM_HOST_JOBS", "4");
+    let document = json(&command.output()?)?;
+    let seconds = |reference: &str| {
+        document["result"]["candidates"]
+            .as_array()
+            .and_then(|found| found.iter().find(|found| found["reference"] == reference))
+            .map(|found| found["time"]["seconds"].clone())
+    };
+    assert_eq!(seconds("zenodo:23233774"), Some(1075.into()), "{document}");
+    assert_eq!(
+        seconds("hf:datasets/fatdove/Iris_Database"),
+        Some(20926.into()),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// on a fresh machine no match has a time. once this machine remembers hugging face's host, its
 /// matches with a size say about how long they take, at a terminal and in `--json`, while every
 /// other site's stay blank; the rows still fit 80 columns.

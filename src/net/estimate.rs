@@ -19,11 +19,13 @@ pub(crate) struct Speed {
 /// the downloads planned from one host, under the name its requests are paced and counted by.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Host {
-    pub(crate) files: u64,
+    /// none when a catalog gives a dataset's bytes but not how many files hold them.
+    pub(crate) files: Option<u64>,
     /// the bytes of the files whose size is known.
     pub(crate) bytes: u64,
     /// files whose size only their download tells.
     pub(crate) unknown: u64,
+    /// the largest file's bytes, or 0 when only the whole is known.
     pub(crate) largest: u64,
     pub(crate) speed: Option<Speed>,
     /// how far apart its requests start, as arXiv asks 3 s.
@@ -80,15 +82,30 @@ impl Time {
 /// a host without a remembered speed, or with a file of unknown size, has no estimate, only its
 /// pacing as a floor. then the whole is at least the longest part that is known, the other hosts'
 /// estimates or any floor, since the rest can only add time; a floor under a minute is no time.
+///
+/// a catalog's match is planned from what its search tells: the files and their sizes as zenodo
+/// lists them, or how many files there are, as dandi and openneuro count them, taken as even. a
+/// match whose files are not counted, as hugging face's and kaggle's, has as many as its host
+/// runs at once, its bytes spread evenly over them, as a plan of many files keeps every stream
+/// busy.
 pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
     let jobs = limits.jobs.max(1);
     let (mut longest, mut work, mut known) = (0.0_f64, 0.0_f64, true);
-    for host in hosts.iter().filter(|host| host.files > 0) {
+    for host in hosts.iter().filter(|host| host.files != Some(0)) {
+        let streams = [limits.host_jobs, host.most.unwrap_or(usize::MAX), jobs]
+            .into_iter()
+            .min()
+            .unwrap_or(1)
+            .max(1);
         #[expect(
             clippy::cast_precision_loss,
             reason = "an estimate needs no exact count"
         )]
-        let (files, bytes, largest) = (host.files as f64, host.bytes as f64, host.largest as f64);
+        let (files, bytes, largest) = (
+            host.files.map_or(streams as f64, |files| files as f64),
+            host.bytes as f64,
+            host.largest as f64,
+        );
         let floor = host
             .spacing
             .map_or(0.0, |spacing| files * spacing.as_secs_f64());
@@ -100,11 +117,6 @@ pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
             known = false;
             continue;
         };
-        let streams = [limits.host_jobs, host.most.unwrap_or(usize::MAX), jobs]
-            .into_iter()
-            .min()
-            .unwrap_or(1)
-            .max(1);
         #[expect(clippy::cast_precision_loss, reason = "a few streams")]
         let streams = (streams as f64).min(files);
         let own = files * speed.overhead + bytes / speed.rate;
@@ -148,7 +160,7 @@ impl Total {
     /// `hosts` added up, with how long they should take under `limits`.
     pub(crate) fn of(hosts: &[Host], limits: Limits) -> Total {
         Total {
-            files: hosts.iter().map(|host| host.files).sum(),
+            files: hosts.iter().filter_map(|host| host.files).sum(),
             bytes: hosts
                 .iter()
                 .map(|host| host.bytes)
@@ -156,7 +168,7 @@ impl Total {
             sizes_unknown: hosts.iter().map(|host| host.unknown).sum(),
             time: hosts
                 .iter()
-                .any(|host| host.files > 0)
+                .any(|host| host.files.is_some_and(|files| files > 0))
                 .then(|| time(hosts, limits))
                 .flatten(),
         }
@@ -200,7 +212,7 @@ mod tests {
 
     fn known(files: u64, bytes: u64, largest: u64, rate: f64, overhead: f64) -> Host {
         Host {
-            files,
+            files: Some(files),
             bytes,
             largest,
             speed: Some(Speed { rate, overhead }),
@@ -237,12 +249,45 @@ mod tests {
         assert_eq!(time(&[host], LIMITS), Some(about(100)));
     }
 
+    /// a match of 100 MiB at 1 MiB/s, a quarter second to answer: in two files a catalog counts,
+    /// it takes two streams, 50.25 s; uncounted, the host's four, 25.25 s, or the one at a time a
+    /// host allows, 100.25 s.
+    #[test]
+    fn a_match_its_catalog_does_not_count_fills_its_hosts_streams() {
+        let counted = Host {
+            files: Some(2),
+            bytes: 100 * MIB,
+            speed: Some(Speed {
+                rate: A_MIB,
+                overhead: 0.25,
+            }),
+            ..Host::default()
+        };
+        assert_eq!(
+            time(std::slice::from_ref(&counted), LIMITS),
+            Some(about(50))
+        );
+        let uncounted = Host {
+            files: None,
+            ..counted
+        };
+        assert_eq!(
+            time(std::slice::from_ref(&uncounted), LIMITS),
+            Some(about(25))
+        );
+        let one_at_a_time = Host {
+            most: Some(1),
+            ..uncounted
+        };
+        assert_eq!(time(&[one_at_a_time], LIMITS), Some(about(100)));
+    }
+
     /// arXiv's one request at a time, 3 s apart: 100 papers take at least 300 s however fast
     /// each arrives, and with no speed remembered that floor is all there is.
     #[test]
     fn pacing_is_a_floor_even_for_a_host_never_seen() {
         let papers = Host {
-            files: 100,
+            files: Some(100),
             bytes: 100 * MIB,
             largest: MIB,
             spacing: Some(Duration::from_secs(3)),
@@ -276,7 +321,7 @@ mod tests {
     #[test]
     fn no_grounds_give_no_time() {
         let unknown = Host {
-            files: 3,
+            files: Some(3),
             bytes: 30 * MIB,
             largest: 10 * MIB,
             ..Host::default()
@@ -299,7 +344,7 @@ mod tests {
     fn a_host_without_grounds_leaves_the_rest_as_a_floor() {
         let slow = known(1, 120 * MIB, 120 * MIB, A_MIB, 0.0);
         let unknown = Host {
-            files: 1,
+            files: Some(1),
             bytes: MIB,
             largest: MIB,
             ..Host::default()
@@ -330,7 +375,7 @@ mod tests {
         assert_eq!(total.files, 2);
         assert_eq!(total.facts(), "3.0 MiB · under 10 s");
         let unknown = Host {
-            files: 3,
+            files: Some(3),
             bytes: MIB,
             largest: MIB,
             unknown: 2,
