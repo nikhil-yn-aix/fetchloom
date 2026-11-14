@@ -182,12 +182,12 @@ impl Program {
                 format!(
                     "the keys {} gave expired at {}",
                     self.named(),
-                    crate::project::lock::timestamp(expires)
+                    crate::units::timestamp(expires)
                 ),
             )
             .help(help));
         }
-        tracing::debug!(key = %issued.keys.shown(), expires = ?issued.expires.map(crate::project::lock::timestamp), "the program gave AWS keys");
+        tracing::debug!(key = %issued.keys.shown(), expires = ?issued.expires.map(crate::units::timestamp), "the program gave AWS keys");
         Ok(issued)
     }
 
@@ -471,10 +471,7 @@ mod tests {
             }
         );
         assert_eq!(
-            issued
-                .expires
-                .map(crate::project::lock::timestamp)
-                .as_deref(),
+            issued.expires.map(crate::units::timestamp).as_deref(),
             Some("2026-11-12T12:00:00Z")
         );
         let lasting = read(
@@ -524,7 +521,7 @@ mod tests {
 
     #[test]
     fn an_rfc_3339_time_names_its_moment() {
-        let utc = |text| instant(text).map(crate::project::lock::timestamp);
+        let utc = |text| instant(text).map(crate::units::timestamp);
         for (text, moment) in [
             ("2026-11-12T12:00:00Z", "2026-11-12T12:00:00Z"),
             ("2026-11-12T13:30:00+01:30", "2026-11-12T12:00:00Z"),

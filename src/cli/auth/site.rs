@@ -582,7 +582,7 @@ use crate::auth::site::moment;
 
 /// the date `seconds` after 1970 is, as `2026-12-01`.
 fn date(seconds: i64) -> String {
-    let mut stamp = crate::project::lock::timestamp(moment(seconds));
+    let mut stamp = crate::units::timestamp(moment(seconds));
     stamp.truncate(10);
     stamp
 }
@@ -628,7 +628,7 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
             user: None,
             valid: None,
             kind: Some(saved.kind()),
-            expires: soonest.map(|soonest| crate::project::lock::timestamp(moment(soonest))),
+            expires: soonest.map(|soonest| crate::units::timestamp(moment(soonest))),
         });
     }
     rows

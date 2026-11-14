@@ -546,7 +546,7 @@ impl<'a> Loop<'a> {
         }
         self.unpack_drafts(manifest, &mut drafts).await?;
         self.unpack_pinned(manifest, &mut pinned).await?;
-        let now = lock::timestamp(SystemTime::now());
+        let now = crate::units::timestamp(SystemTime::now());
         let mut drafted = drafts
             .into_iter()
             .map(|draft| draft.finish(&now))
@@ -599,7 +599,7 @@ impl<'a> Loop<'a> {
             );
             jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
         }
-        let now = lock::timestamp(SystemTime::now());
+        let now = crate::units::timestamp(SystemTime::now());
         let mut guessed = HashSet::new();
         let mut drafted = Vec::with_capacity(drafts.len() + pinned.len());
         for draft in drafts {

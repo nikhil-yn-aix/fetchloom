@@ -1176,7 +1176,7 @@ fn narrowed(
 
 fn lock_written(updated: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Result<Lock, Error> {
     let new_manifest = Manifest::parse(updated)?;
-    let now = lock::timestamp(std::time::SystemTime::now());
+    let now = crate::units::timestamp(std::time::SystemTime::now());
     let mut new_lock = lock.clone();
     for locked in &mut new_lock.datasets {
         let Some(edit) = edits.get(locked.name.as_str()) else {

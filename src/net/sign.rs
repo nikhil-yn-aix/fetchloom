@@ -165,7 +165,7 @@ pub(crate) fn canonical(request: &Request<'_>) -> String {
 
 /// the time as `x-amz-date` states it, such as `20130524T000000Z`.
 pub(crate) fn amz_date(now: SystemTime) -> String {
-    crate::project::lock::timestamp(now).replace(['-', ':'], "")
+    crate::units::timestamp(now).replace(['-', ':'], "")
 }
 
 pub(crate) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {

@@ -37,8 +37,8 @@ use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
 use crate::plan;
 use crate::project::Project;
+use crate::project::lock::Lock;
 use crate::project::lock::derived::Derived;
-use crate::project::lock::{self, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Candidate;
 use crate::recipe::{self, Slot, Step};
@@ -1025,7 +1025,7 @@ fn closing(built: &[&str], repinned: &[String]) -> String {
 fn pin(lock: &mut Lock, step: &Step, key: Sha256, tree: Sha256, members: Vec<Member>) {
     let timestamp = match lock.result(&step.name) {
         Some(old) if old.key == key && old.tree == tree => old.timestamp.clone(),
-        _ => lock::timestamp(SystemTime::now()),
+        _ => crate::units::timestamp(SystemTime::now()),
     };
     let derived = Derived {
         name: step.name.clone(),

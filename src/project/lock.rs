@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -735,36 +734,6 @@ pub(crate) fn page_no_longer_asked(locked: &Locked, source: &Source) -> bool {
     locked.web_page && !source.web_page
 }
 
-/// the current time as `data.lock` records it: `2026-10-27T17:30:00Z`.
-pub(crate) fn timestamp(now: SystemTime) -> String {
-    let seconds = now
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let days = i64::try_from(seconds / 86_400).unwrap_or(0);
-    let rest = seconds % 86_400;
-    // days since 1970 to a civil date, as in Howard Hinnant's chrono algorithms
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rest / 3600,
-        rest % 3600 / 60,
-        rest % 60
-    )
-}
-
 /// a TOML basic string.
 fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -1006,8 +975,6 @@ impl Lock {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use crate::cache::Member;
     use crate::project::manifest::Manifest;
@@ -1900,23 +1867,6 @@ mod tests {
             Some(parse_toml(&text).unwrap())
         );
         assert!(!sample().render().contains("web_page"));
-    }
-
-    #[test]
-    #[expect(
-        clippy::duration_suboptimal_units,
-        reason = "unix timestamps count seconds"
-    )]
-    fn timestamps_are_utc_and_exact() {
-        assert_eq!(timestamp(UNIX_EPOCH), "1970-01-01T00:00:00Z");
-        assert_eq!(
-            timestamp(UNIX_EPOCH + Duration::from_secs(1_793_122_200)),
-            "2026-10-27T17:30:00Z"
-        );
-        assert_eq!(
-            timestamp(UNIX_EPOCH + Duration::from_secs(951_782_400)),
-            "2000-02-29T00:00:00Z"
-        );
     }
 
     #[test]

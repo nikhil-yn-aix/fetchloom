@@ -288,7 +288,7 @@ pub(crate) async fn cli_token(path: &Path, now: SystemTime, stop: &Stop) -> Resu
             Kind::AuthRequired,
             format!(
                 "the token the az cli gave expired at {}",
-                crate::project::lock::timestamp(expires)
+                crate::units::timestamp(expires)
             ),
         )
         .help(format!("{SIGN_IN} again, and check this machine's clock")));
@@ -689,10 +689,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(token, "eyJ0eXAi.printed");
-        assert_eq!(
-            crate::project::lock::timestamp(expires),
-            "2026-11-12T23:59:59Z"
-        );
+        assert_eq!(crate::units::timestamp(expires), "2026-11-12T23:59:59Z");
         assert!(read_cli(br#"{"accessToken": "a", "expires_on": "1794527999"}"#).is_ok());
         for (printed, wrong) in [
             ("printed-token", "it is not JSON"),

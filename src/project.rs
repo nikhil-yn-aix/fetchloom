@@ -101,7 +101,7 @@ impl Held {
         let owner = Owner {
             os: std::env::consts::OS.to_owned(),
             pid: std::process::id(),
-            started: lock::timestamp(now),
+            started: crate::units::timestamp(now),
             command: command.to_owned(),
         };
         let record = serde_json::to_vec(&owner).map_err(io::Error::other)?;
@@ -1200,7 +1200,7 @@ mod tests {
         let owner: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(owner["os"], std::env::consts::OS);
         assert_eq!(owner["pid"], std::process::id());
-        assert_eq!(owner["started"], lock::timestamp(now));
+        assert_eq!(owner["started"], crate::units::timestamp(now));
         assert_eq!(owner["command"], "remove");
     }
 
