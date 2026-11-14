@@ -33,7 +33,6 @@ mod zenodo;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
 
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use tracing::Instrument as _;
@@ -167,16 +166,13 @@ pub(crate) fn too_many_of(subject: impl fmt::Display, most: usize, instead: &str
     ))
 }
 
-/// reads the environment, so tests can give each run its own.
-pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
-
 /// the environment a source reads to tell whether its requests go signed in. unit tests read an
 /// empty one, so a key saved on the machine running them changes nothing.
 fn env(name: &str) -> Option<OsString> {
     if cfg!(test) {
         None
     } else {
-        crate::auth::env(name)
+        crate::machine::env(name)
     }
 }
 
@@ -753,42 +749,6 @@ impl Remote {
     /// file wrapped in a zip.
     pub(crate) fn expected_size(&self) -> Option<u64> {
         self.size.filter(|_| !may_wrap(&self.url))
-    }
-}
-
-/// standard base64 with padding, which basic authentication sends.
-pub(crate) fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let [a, b, c] = [0, 1, 2].map(|at| chunk.get(at).copied().unwrap_or(0));
-        let sextets = [
-            a >> 2,
-            ((a & 0b11) << 4) | (b >> 4),
-            ((b & 0b1111) << 2) | (c >> 6),
-            c & 0b11_1111,
-        ];
-        for (at, sextet) in sextets.into_iter().enumerate() {
-            text.push(if at <= chunk.len() {
-                char::from(ALPHABET[usize::from(sextet)])
-            } else {
-                '='
-            });
-        }
-    }
-    text
-}
-
-pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
-    let set = |name: &str| {
-        var(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    if cfg!(windows) {
-        set("USERPROFILE").or_else(|| set("HOME"))
-    } else {
-        set("HOME")
     }
 }
 

@@ -619,12 +619,12 @@ mod tests {
     #[test]
     #[ignore = "live: talks to api.kaggle.com with a kaggle account"]
     fn live_titanic_lists_its_files() {
-        if super::super::token::find(&crate::auth::env).is_none() {
+        if super::super::token::find(&crate::machine::env).is_none() {
             eprintln!("skipped: no KAGGLE_API_TOKEN, access_token or kaggle.json on this machine");
             return;
         }
         let (net, work) =
-            crate::source::recorded::live(crate::source::kaggle::credentials(&crate::auth::env));
+            crate::source::recorded::live(crate::source::kaggle::credentials(&crate::machine::env));
         let reference = Reference::parse("kaggle:competitions/titanic")
             .unwrap()
             .reference;

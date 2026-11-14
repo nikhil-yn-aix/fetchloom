@@ -1,10 +1,12 @@
 //! what this machine gives a run: its processors, the memory a run may use and how many files the
 //! process may hold open, read once when a run starts, and the programs on its PATH.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", test))]
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::error::{Error, Kind};
 
 /// the open files a run asks for when its soft limit is lower, a file for each download, archive
 /// writer and placer. uv, openjdk and graalvm stop here too: past it some code breaks or slows.
@@ -248,6 +250,76 @@ fn runnable(program: &Path) -> bool {
     }
 }
 
+/// reads the environment, so tests can give each run its own.
+pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+/// the environment of this process, the one `Var` most callers want.
+pub(crate) fn env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
+/// the home folder `var` names: `USERPROFILE`, else `HOME`, on windows; `HOME` elsewhere.
+pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if cfg!(windows) {
+        set("USERPROFILE").or_else(|| set("HOME"))
+    } else {
+        set("HOME")
+    }
+}
+
+/// fetchloom's folder for settings, where each system keeps a program's settings.
+pub(crate) fn settings_folder(var: Var<'_>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if cfg!(windows) {
+        return set("APPDATA").map(|appdata| appdata.join("fetchloom"));
+    }
+    if cfg!(target_os = "macos") {
+        return home(var).map(|home| home.join("Library/Application Support/fetchloom"));
+    }
+    // the XDG spec has a relative value ignored, which would move the file with the working folder
+    set("XDG_CONFIG_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| home(var).map(|home| home.join(".config")))
+        .map(|config| config.join("fetchloom"))
+}
+
+/// whether the on/off variable `name` is on, as [`switched`] reads it: a value it cannot read is
+/// off.
+pub(crate) fn is_on(var: Var<'_>, name: &str) -> bool {
+    matches!(switched(name, var(name).as_deref()), Ok(Some(true)))
+}
+
+/// what an on/off setting `named` says as `value`: none when unset or blank, true for `true` or
+/// `1`, false for `false` or `0`, in any case. anything else is a usage error without a help, for
+/// the caller to refuse or to tell as a warning.
+pub(crate) fn switched(
+    named: &str,
+    value: Option<&std::ffi::OsStr>,
+) -> Result<Option<bool>, Error> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let text = value.to_string_lossy();
+    match text.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "true" | "1" => Ok(Some(true)),
+        "false" | "0" => Ok(Some(false)),
+        _ => Err(Error::new(
+            Kind::Usage,
+            format!("{named} is \"{text}\", which is not true or false"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +519,28 @@ mod tests {
             let path = std::env::join_paths(folders).unwrap();
             assert_eq!(installed(&path, "tool"), program, "{folders:?}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_relative_xdg_config_home_is_ignored() {
+        let var = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/ada")),
+            "XDG_CONFIG_HOME" => Some(OsString::from("relative/config")),
+            _ => None,
+        };
+        assert_eq!(
+            settings_folder(&var),
+            Some(PathBuf::from("/home/ada/.config/fetchloom"))
+        );
+        let absolute = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/ada")),
+            "XDG_CONFIG_HOME" => Some(OsString::from("/xdg")),
+            _ => None,
+        };
+        assert_eq!(
+            settings_folder(&absolute),
+            Some(PathBuf::from("/xdg/fetchloom"))
+        );
     }
 }

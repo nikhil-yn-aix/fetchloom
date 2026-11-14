@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{Origin, store};
 use crate::error::{Error, Kind};
+use crate::machine::Var;
 use crate::net::site::Site;
-use crate::source::Var;
 
 /// how the key store's ids of websites start.
 const PREFIX: &str = "site:";
@@ -275,7 +275,7 @@ fn origin(var: Var<'_>, place: store::Place) -> Origin {
     match place {
         store::Place::Keyring => Origin::Keyring,
         store::Place::File => Origin::File(
-            store::folder(var)
+            crate::machine::settings_folder(var)
                 .unwrap_or_default()
                 .join("credentials.json"),
         ),

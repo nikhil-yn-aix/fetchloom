@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::auth::process::{self, PATIENCE, Ran};
 use crate::error::{Error, Kind};
+use crate::machine::Var;
 use crate::net::sign::Keys;
-use crate::source::Var;
 use crate::stop::Stop;
 
 /// what is wrong with an `Expiration` fetchloom cannot read.

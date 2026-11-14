@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::auth::{Found, Origin};
-use crate::source::Var;
+use crate::machine::Var;
 
 /// the legacy key in `kaggle.json`.
 #[derive(Default, Deserialize)]
@@ -56,7 +56,7 @@ fn api_token(var: Var<'_>) -> Option<Found> {
             .and_then(clean)
             .map(|secret| token(Origin::Variable("KAGGLE_API_TOKEN"), secret));
     }
-    let folder = crate::source::home(var)?.join(".kaggle");
+    let folder = crate::machine::home(var)?.join(".kaggle");
     ["access_token", "access_token.txt"]
         .into_iter()
         .find_map(|name| {
@@ -103,7 +103,7 @@ pub(crate) fn config_folder(var: Var<'_>) -> Option<PathBuf> {
     if let Some(folder) = var("KAGGLE_CONFIG_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(folder));
     }
-    let home = crate::source::home(var)?;
+    let home = crate::machine::home(var)?;
     let dotted = home.join(".kaggle");
     if cfg!(target_os = "linux") && !dotted.exists() {
         let config = var("XDG_CONFIG_HOME")
@@ -266,8 +266,8 @@ mod tests {
             ("foobar", "Zm9vYmFy"),
         ];
         for (text, encoded) in cases {
-            assert_eq!(crate::source::base64(text.as_bytes()), encoded, "{text}");
+            assert_eq!(crate::auth::base64(text.as_bytes()), encoded, "{text}");
         }
-        assert_eq!(crate::source::base64(&[0xff, 0xfe, 0xfd]), "//79");
+        assert_eq!(crate::auth::base64(&[0xff, 0xfe, 0xfd]), "//79");
     }
 }

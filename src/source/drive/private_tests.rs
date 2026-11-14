@@ -370,11 +370,11 @@ fn live_private_drive() {
         );
         return;
     };
-    if !matches!(crate::auth::google::find(&crate::auth::env), Ok(Some(_))) {
+    if !matches!(crate::auth::google::find(&crate::machine::env), Ok(Some(_))) {
         eprintln!("skipped: no google application default credentials on this machine");
         return;
     }
-    let google = crate::net::Google::new(Vec::new(), std::sync::Arc::new(crate::auth::env))
+    let google = crate::net::Google::new(Vec::new(), std::sync::Arc::new(crate::machine::env))
         .with_drive(vec![DriveId::parse(&id).unwrap()]);
     let (net, work) = crate::source::recorded::live(Vec::new());
     let net = net.with_google(google);

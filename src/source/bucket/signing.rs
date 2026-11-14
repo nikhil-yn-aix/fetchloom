@@ -19,7 +19,7 @@ use crate::stop::Stop;
 /// endpoint serves, and the one most other services take.
 const DEFAULT_REGION: &str = "us-east-1";
 
-/// reads the environment for the AWS settings, as [`crate::auth::env`] does.
+/// reads the environment for the AWS settings, as [`crate::machine::env`] does.
 pub(crate) type Environment = Arc<dyn Fn(&str) -> Option<OsString> + Send + Sync>;
 
 /// how a request for an S3 bucket went out, kept on its answer so a refusal can say why.
@@ -69,7 +69,7 @@ pub(crate) struct Signer {
 
 impl Default for Signing {
     fn default() -> Signing {
-        Signing::new(Vec::new(), Arc::new(crate::auth::env))
+        Signing::new(Vec::new(), Arc::new(crate::machine::env))
     }
 }
 

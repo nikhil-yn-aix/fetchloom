@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::sqlite::{Database, Value};
 use super::{Left, Read, Why};
 use crate::auth::site::Cookie;
-use crate::source::Var;
+use crate::machine::Var;
 
 /// the schema version from which firefox keeps an expiry in milliseconds, not seconds.
 const MILLISECONDS: u32 = 16;
@@ -19,7 +19,7 @@ pub(super) fn roots(var: Var<'_>) -> Vec<PathBuf> {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    let home = crate::source::home(var);
+    let home = crate::machine::home(var);
     if cfg!(windows) {
         let mut roots: Vec<PathBuf> = set("APPDATA")
             .map(|appdata| appdata.join("Mozilla").join("Firefox"))

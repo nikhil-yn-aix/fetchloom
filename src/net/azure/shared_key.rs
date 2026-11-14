@@ -35,7 +35,7 @@ pub(crate) fn authorization(
     url: &Url,
 ) -> String {
     let text = signed_text(account, method, headers, url);
-    let signature = crate::source::base64(&crate::net::sign::hmac(key.bytes(), text.as_bytes()));
+    let signature = crate::auth::base64(&crate::net::sign::hmac(key.bytes(), text.as_bytes()));
     format!("SharedKey {account}:{signature}")
 }
 

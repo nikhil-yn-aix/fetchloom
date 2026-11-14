@@ -12,8 +12,8 @@ use std::time::{Instant, SystemTime};
 use self::program::Program;
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
+use crate::machine::Var;
 use crate::net::sign::Keys;
-use crate::source::Var;
 use crate::stop::Stop;
 
 /// keys found for one endpoint, and where.
@@ -395,7 +395,7 @@ impl Files {
     /// the files `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name, else `credentials` and
     /// `config` in `~/.aws`. a file that is not there holds nothing.
     fn read(var: Var<'_>) -> Files {
-        let home = crate::source::home(var);
+        let home = crate::machine::home(var);
         let path = |variable: &str, name: &str| {
             set(var, variable)
                 .map(|named| match (named.strip_prefix("~/"), &home) {

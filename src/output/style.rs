@@ -300,7 +300,7 @@ fn is_interactive(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> boo
 /// coding agents, which a question would leave waiting.
 fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
     terminal
-        && crate::settings::is_on(var, "FETCHLOOM_ACCESSIBLE")
+        && crate::machine::is_on(var, "FETCHLOOM_ACCESSIBLE")
         && !marks("CI", var)
         && !by_agent(var)
 }
@@ -309,7 +309,7 @@ fn is_accessible(terminal: bool, var: &dyn Fn(&str) -> Option<OsString>) -> bool
 /// empty, false or 0, so a service's own word counts too, as drone's `CI=drone` does.
 fn marks(name: &str, var: &dyn Fn(&str) -> Option<OsString>) -> bool {
     !matches!(
-        crate::settings::switched(name, var(name).as_deref()),
+        crate::machine::switched(name, var(name).as_deref()),
         Ok(None | Some(false))
     )
 }

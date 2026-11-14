@@ -201,7 +201,7 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
 /// asks before a sign-in replaces what is saved for `host`, as a person at the terminal may
 /// not know it is there.
 fn replacing(context: &Context, host: &str) -> Result<(), Error> {
-    let Some((before, origin)) = site::find(&auth::env, host) else {
+    let Some((before, origin)) = site::find(&crate::machine::env, host) else {
         return Ok(());
     };
     context.output.step(
@@ -305,7 +305,7 @@ fn none_kept(host: &str, picked: &Picked, place: &str, again: &str) -> Error {
 /// name, domain and expiry, with those left out that a person might have expected.
 fn from_browser(context: &Context, host: &str, typed: &str) -> Result<Saved, Error> {
     let browser = cookies::Browser::parse(typed)?;
-    let (mut picked, profile) = browser.cookies(&auth::env, host, SystemTime::now())?;
+    let (mut picked, profile) = browser.cookies(&crate::machine::env, host, SystemTime::now())?;
     // a profile holds every site's cookies; only those of the host's own site are worth a word
     picked
         .left
@@ -518,7 +518,7 @@ fn agrees(
 /// saves `saved` for `host` once the person agrees, or without asking when `told`: in the
 /// system's credential store, or in fetchloom's own file where the machine has none.
 fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Origin, Error> {
-    let var = &auth::env;
+    let var = &crate::machine::env;
     let failed = |err: std::io::Error| {
         Error::io(format!("could not save {} for {host}", saved.what()), &err)
     };
@@ -541,7 +541,7 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             }
         });
     }
-    let file = store::folder(var)
+    let file = crate::machine::settings_folder(var)
         .unwrap_or_default()
         .join("credentials.json");
     if told || context.yes {
@@ -592,7 +592,7 @@ fn date(seconds: i64) -> String {
 /// for cookies, when the soonest expires; cookies past it are marked expired with how to save
 /// new ones.
 pub(super) fn listed(output: &Output) -> Vec<State> {
-    let var = &auth::env;
+    let var = &crate::machine::env;
     let now = SystemTime::now();
     let mut rows = Vec::new();
     for host in site::hosts(var) {
@@ -646,7 +646,7 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
         Ok(_) => return Ok(None),
         Err(error) => (site::host(&logout.account).ok_or(error)?, false),
     };
-    let var = &auth::env;
+    let var = &crate::machine::env;
     let output = &context.output;
     if !site::hosts(var).contains(&host) {
         if named {

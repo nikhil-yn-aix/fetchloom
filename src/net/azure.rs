@@ -137,7 +137,7 @@ pub(crate) enum Sent {
 
 impl Default for Azure {
     fn default() -> Azure {
-        Azure::new(Vec::new(), Arc::new(crate::auth::env))
+        Azure::new(Vec::new(), Arc::new(crate::machine::env))
     }
 }
 

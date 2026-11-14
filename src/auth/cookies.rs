@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use super::site::{Cookie, without_port};
 use crate::error::{Error, Kind};
-use crate::source::Var;
+use crate::machine::Var;
 
 mod chromium;
 mod firefox;

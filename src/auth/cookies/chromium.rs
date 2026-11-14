@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::sqlite::{Database, Value};
 use super::{Left, Read, Why, covers};
 use crate::auth::site::Cookie;
-use crate::source::Var;
+use crate::machine::Var;
 
 /// the salt chromium derives every cookie key with.
 const SALT: &[u8] = b"saltysalt";
@@ -84,7 +84,7 @@ impl Chromium {
     /// the folder the browser keeps its profiles in on this system, or none where fetchloom
     /// does not read it.
     pub(crate) fn root(&self, var: Var<'_>) -> Option<PathBuf> {
-        let home = crate::source::home(var)?;
+        let home = crate::machine::home(var)?;
         if cfg!(target_os = "macos") {
             return Some(home.join("Library/Application Support").join(self.macos));
         }

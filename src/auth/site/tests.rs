@@ -186,8 +186,12 @@ fn a_saved_credential_round_trips_and_goes_to_its_host_alone() {
     assert_eq!(find(&var, "data.example.org").unwrap().0, token);
     assert_eq!(find(&var, "api.example.org:8443").unwrap().0, header);
     assert_eq!(find(&var, "api.example.org"), None);
-    let index =
-        std::fs::read_to_string(store::folder(&var).unwrap().join("accounts.json")).unwrap();
+    let index = std::fs::read_to_string(
+        crate::machine::settings_folder(&var)
+            .unwrap()
+            .join("accounts.json"),
+    )
+    .unwrap();
     for secret in ["t-secret", "k-secret", "session-secret"] {
         assert!(
             !index.contains(secret),

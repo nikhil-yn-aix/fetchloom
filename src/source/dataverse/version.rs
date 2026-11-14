@@ -6,7 +6,8 @@ use serde_json::Value;
 use super::{Dataset, Item};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::source::{Access, Listing, Reference, Remote, Var};
+use crate::machine::Var;
+use crate::source::{Access, Listing, Reference, Remote};
 
 /// a native API answer for one version of a dataset.
 #[derive(Deserialize)]

@@ -12,7 +12,6 @@ pub(crate) mod site;
 pub(crate) mod store;
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -20,8 +19,8 @@ use url::Url;
 
 use crate::account::Account;
 use crate::error::{Error, Kind};
+use crate::machine::Var;
 use crate::net::Credential;
-use crate::source::Var;
 
 /// one step of a sign-in guide.
 #[derive(Debug, PartialEq, Eq)]
@@ -533,7 +532,7 @@ impl Account {
                 origin: match place {
                     store::Place::Keyring => Origin::Keyring,
                     store::Place::File => Origin::File(
-                        store::folder(var)
+                        crate::machine::settings_folder(var)
                             .unwrap_or_default()
                             .join("credentials.json"),
                     ),
@@ -589,7 +588,7 @@ impl Account {
                 crate::source::kaggle::config_folder(var)
                     .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json")))
             }
-            Account::Kaggle => crate::source::home(var).map_or(Home::Store, |home| {
+            Account::Kaggle => crate::machine::home(var).map_or(Home::Store, |home| {
                 Home::File(home.join(".kaggle").join("access_token"))
             }),
             Account::Login(_) => netrc::path(var).map_or(Home::Store, Home::Netrc),
@@ -708,7 +707,7 @@ pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
                 .map(|cache| PathBuf::from(cache).join("huggingface").join("token"))
         })
         .or_else(|| {
-            crate::source::home(var)
+            crate::machine::home(var)
                 .map(|home| home.join(".cache").join("huggingface").join("token"))
         })
 }
@@ -762,10 +761,7 @@ fn bearer(token: &str) -> String {
 }
 
 pub(crate) fn basic(login: &str, password: &str) -> String {
-    format!(
-        "Basic {}",
-        crate::source::base64(format!("{login}:{password}").as_bytes())
-    )
+    format!("Basic {}", base64(format!("{login}:{password}").as_bytes()))
 }
 
 fn text(value: &serde_json::Value) -> Option<String> {
@@ -776,9 +772,27 @@ fn text(value: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// the environment of this process, the one `Var` most callers want.
-pub(crate) fn env(name: &str) -> Option<OsString> {
-    std::env::var_os(name)
+/// standard base64 with padding, which basic authentication sends.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let [a, b, c] = [0, 1, 2].map(|at| chunk.get(at).copied().unwrap_or(0));
+        let sextets = [
+            a >> 2,
+            ((a & 0b11) << 4) | (b >> 4),
+            ((b & 0b1111) << 2) | (c >> 6),
+            c & 0b11_1111,
+        ];
+        for (at, sextet) in sextets.into_iter().enumerate() {
+            text.push(if at <= chunk.len() {
+                char::from(ALPHABET[usize::from(sextet)])
+            } else {
+                '='
+            });
+        }
+    }
+    text
 }
 
 #[cfg(test)]

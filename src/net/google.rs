@@ -31,7 +31,7 @@ const SCOPE_HELP: &str = "a login needs the cloud-platform scope: sign in again 
 /// the largest answer the token endpoint may send.
 const LARGEST_ANSWER: usize = 64 * 1024;
 
-/// reads the environment for the google settings, as [`crate::auth::env`] does.
+/// reads the environment for the google settings, as [`crate::machine::env`] does.
 pub(crate) type Environment = Arc<dyn Fn(&str) -> Option<OsString> + Send + Sync>;
 
 /// what one run knows about google access: the buckets listed, the credentials, read when first
@@ -92,7 +92,7 @@ pub(crate) enum Authorized {
 
 impl Default for Google {
     fn default() -> Google {
-        Google::new(Vec::new(), Arc::new(crate::auth::env))
+        Google::new(Vec::new(), Arc::new(crate::machine::env))
     }
 }
 

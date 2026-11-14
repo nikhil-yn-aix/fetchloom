@@ -104,7 +104,9 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     context
         .cautioned
         .store(true, std::sync::atomic::Ordering::Relaxed);
-    if let Some(path) = auth::netrc::path(&auth::env).filter(|path| auth::netrc::too_open(path)) {
+    if let Some(path) =
+        auth::netrc::path(&crate::machine::env).filter(|path| auth::netrc::too_open(path))
+    {
         output.warn_with(
             Warning::AuthReadable,
             &format!(
@@ -119,8 +121,8 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             "mirrors_only lets fetchloom ask its mirrors alone, so no key is checked with its site",
         );
     }
-    for account in auth::listed(&auth::env) {
-        let found = account.find(&auth::env);
+    for account in auth::listed(&crate::machine::env) {
+        let found = account.find(&crate::machine::env);
         let (user, valid, unanswered) = match &found {
             // asking with a key that is never sent would only say the source refused it
             Some(found) if !account.sendable(found) => {
@@ -188,7 +190,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
 /// but never running a key program and asking nothing; unusable settings are warned of.
 fn aws_keys(output: &crate::output::Output, missing: &mut Vec<String>) -> Vec<State> {
     use crate::auth::aws::How;
-    let described = auth::aws::describe(&auth::env).unwrap_or_else(|error| {
+    let described = auth::aws::describe(&crate::machine::env).unwrap_or_else(|error| {
         unusable(output, &error);
         None
     });
@@ -236,7 +238,7 @@ fn aws_keys(output: &crate::output::Output, missing: &mut Vec<String>) -> Vec<St
 /// the row of google's application default credentials, which buckets ask a token with: the
 /// file, and a service account's email or a person's login. nothing is asked.
 fn google_credentials(output: &crate::output::Output, missing: &mut Vec<String>) -> State {
-    let found = auth::google::find(&auth::env).unwrap_or_else(|error| {
+    let found = auth::google::find(&crate::machine::env).unwrap_or_else(|error| {
         unusable(output, &error);
         None
     });
@@ -276,7 +278,7 @@ fn azure_credentials(
     listed: &[crate::source::AzureContainer],
 ) -> Vec<State> {
     use crate::auth::azure::{Kept, Rest};
-    let described = match auth::azure::describe(&auth::env, listed) {
+    let described = match auth::azure::describe(&crate::machine::env, listed) {
         Ok(described) => described,
         Err(error) => {
             unusable(output, &error);
@@ -396,7 +398,7 @@ async fn sign_in(
                 account.command()
             )));
         }
-        if let Some(found) = account.find(&auth::env) {
+        if let Some(found) = account.find(&crate::machine::env) {
             output.step(
                 "Found",
                 &format!("a {} key in {}", title(account), found.origin),
@@ -707,7 +709,7 @@ fn save(
     told: bool,
 ) -> Result<Option<String>, Error> {
     let output = &context.output;
-    let var = &auth::env;
+    let var = &crate::machine::env;
     let agrees = |question: String, default: bool| -> Result<bool, Error> {
         if told {
             return Ok(true);
@@ -752,7 +754,7 @@ fn save(
                 store::save(var, &id, secret, store::Place::Keyring).map_err(failed)?;
                 return Ok(Some(auth::keyring_name().to_owned()));
             }
-            let file = store::folder(var)
+            let file = crate::machine::settings_folder(var)
                 .unwrap_or_default()
                 .join("credentials.json");
             if told {
@@ -808,7 +810,7 @@ fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
     // compared part by part, so C:\Users\bob-shared is not inside C:\Users\bob
     let lower =
         |path: &std::path::Path| std::path::PathBuf::from(path.to_string_lossy().to_lowercase());
-    let inside = auth::env("USERPROFILE")
+    let inside = crate::machine::env("USERPROFILE")
         .map(std::path::PathBuf::from)
         .is_some_and(|profile| lower(path).starts_with(lower(&profile)));
     if !inside {
@@ -844,7 +846,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     }
     let output = &context.output;
     let account = Account::parse(&logout.account, logout.host.as_deref())?;
-    let var = &auth::env;
+    let var = &crate::machine::env;
     let Some(found) = account.find(var) else {
         output.done("Ok", &format!("no {} key was saved", title(&account)));
         return Ok(Report::Logout {
@@ -961,7 +963,7 @@ pub(super) async fn offer(
         None => Ok(false),
     };
     let account = &need.account;
-    let found = account.find(&auth::env);
+    let found = account.find(&crate::machine::env);
     if let Some(found) = found.as_ref().filter(|found| !account.sendable(found)) {
         warn_unsendable(output, account, found);
     }

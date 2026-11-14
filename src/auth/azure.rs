@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use crate::auth::process::{self, PATIENCE};
 use crate::error::{Error, Kind};
-use crate::source::{AzureContainer, Sas, Var, is_azure_account};
+use crate::machine::Var;
+use crate::source::{AzureContainer, Sas, is_azure_account};
 use crate::stop::Stop;
 
 /// the resource whose tokens read azure storage, in any account their identity may read.
@@ -421,7 +422,7 @@ fn cli_login(var: Var<'_>) -> Login {
     let folder = var("AZURE_CONFIG_DIR")
         .filter(|folder| !folder.is_empty())
         .map(PathBuf::from)
-        .or_else(|| Some(crate::source::home(var)?.join(".azure")));
+        .or_else(|| Some(crate::machine::home(var)?.join(".azure")));
     let Some(folder) = folder else {
         return Login::Out;
     };
@@ -523,7 +524,7 @@ mod tests {
             let bytes: Vec<u8> = (0..length)
                 .map(|at| u8::try_from((at * 37 + 11) % 256).unwrap())
                 .collect();
-            let written = crate::source::base64(&bytes);
+            let written = crate::auth::base64(&bytes);
             let read = decoded(&written);
             if length == 0 {
                 assert_eq!(read, None);

@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::source::Var;
+use crate::machine::Var;
 
 /// one `machine` entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub(crate) fn path(var: Var<'_>) -> Option<PathBuf> {
     if let Some(named) = var("NETRC").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(named));
     }
-    let home = crate::source::home(var)?;
+    let home = crate::machine::home(var)?;
     let dotted = home.join(".netrc");
     if cfg!(windows) && !dotted.exists() {
         let underscored = home.join("_netrc");

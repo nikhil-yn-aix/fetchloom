@@ -13,13 +13,10 @@ mod resources;
 pub(crate) use resources::Level;
 
 use crate::error::{Error, Kind};
-use crate::machine::Machine;
+use crate::machine::{Machine, Var, switched};
 use crate::mirror::Location;
 use crate::source::{AzureContainer, Bucket, DriveId, GcsBucket};
 use crate::units;
-
-/// reads one environment variable, so tests can give each run its own.
-pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// downloads running at once, across all hosts. downloads wait on the network, not the
 /// processor, so the number does not follow the core count.
@@ -270,7 +267,8 @@ fn located(var: Var<'_>) -> (Option<PathBuf>, bool) {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
     let is_named = named.is_some();
-    let path = named.or_else(|| crate::auth::store::folder(var).map(|folder| folder.join(FILE)));
+    let path =
+        named.or_else(|| crate::machine::settings_folder(var).map(|folder| folder.join(FILE)));
     (path, is_named)
 }
 
@@ -1103,34 +1101,6 @@ fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Err
         value: value.unwrap_or(default),
         origin,
     })
-}
-
-/// whether the on/off variable `name` is on, as [`switched`] reads it: a value it cannot read is
-/// off.
-pub(crate) fn is_on(var: Var<'_>, name: &str) -> bool {
-    matches!(switched(name, var(name).as_deref()), Ok(Some(true)))
-}
-
-/// what an on/off setting `named` says as `value`: none when unset or blank, true for `true` or
-/// `1`, false for `false` or `0`, in any case. anything else is a usage error without a help, for
-/// the caller to refuse or to tell as a warning.
-pub(crate) fn switched(
-    named: &str,
-    value: Option<&std::ffi::OsStr>,
-) -> Result<Option<bool>, Error> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let text = value.to_string_lossy();
-    match text.trim().to_ascii_lowercase().as_str() {
-        "" => Ok(None),
-        "true" | "1" => Ok(Some(true)),
-        "false" | "0" => Ok(Some(false)),
-        _ => Err(Error::new(
-            Kind::Usage,
-            format!("{named} is \"{text}\", which is not true or false"),
-        )),
-    }
 }
 
 /// the whole seconds `key` holds, within `range`, or `default`.

@@ -10,7 +10,7 @@ use rustls::pki_types::pem::PemObject as _;
 use serde::Deserialize;
 
 use crate::error::{Error, Kind};
-use crate::source::Var;
+use crate::machine::Var;
 
 /// the scope of a token that reads cloud storage.
 pub(crate) const STORAGE_READ: &str = "https://www.googleapis.com/auth/devstorage.read_only";
@@ -409,7 +409,7 @@ fn assertion(
 
 /// base64 with the URL alphabet and no padding, as JSON web tokens write their parts.
 fn url_base64(bytes: &[u8]) -> String {
-    crate::source::base64(bytes)
+    crate::auth::base64(bytes)
         .trim_end_matches('=')
         .replace('+', "-")
         .replace('/', "_")

@@ -12,8 +12,9 @@ use url::Url;
 pub(crate) use self::competition::Competition;
 pub(super) use self::competition::{may_wrap, refused_download};
 pub(crate) use self::token::{config_folder, locate};
-use super::{Reference, Var, malformed};
+use super::{Reference, malformed};
 use crate::error::{Error, Kind};
+use crate::machine::Var;
 use crate::net::Credential;
 
 /// the host of kaggle's API, and the only host kaggle's credentials go to.

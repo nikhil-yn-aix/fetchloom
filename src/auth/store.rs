@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::source::Var;
+use crate::machine::Var;
 
 const SERVICE: &str = "fetchloom";
 
@@ -18,27 +18,6 @@ pub(crate) enum Place {
     Keyring,
     /// `credentials.json` in fetchloom's folder, readable by its owner only.
     File,
-}
-
-/// fetchloom's folder for settings, where each system keeps a program's settings.
-pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
-    let set = |name: &str| {
-        var(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    if cfg!(windows) {
-        return set("APPDATA").map(|appdata| appdata.join("fetchloom"));
-    }
-    if cfg!(target_os = "macos") {
-        return crate::source::home(var)
-            .map(|home| home.join("Library/Application Support/fetchloom"));
-    }
-    // the XDG spec has a relative value ignored, which would move the file with the working folder
-    set("XDG_CONFIG_HOME")
-        .filter(|path| path.is_absolute())
-        .or_else(|| crate::source::home(var).map(|home| home.join(".config")))
-        .map(|config| config.join("fetchloom"))
 }
 
 /// a credential store: whether it can be used, and the calls that reach its keys.
@@ -93,14 +72,14 @@ impl Keyring {
 fn keyring_allowed(var: Var<'_>) -> bool {
     let name = "FETCHLOOM_KEYRING";
     !matches!(
-        crate::settings::switched(name, var(name).as_deref()),
+        crate::machine::switched(name, var(name).as_deref()),
         Ok(Some(false))
     )
 }
 
 /// what was saved, and where.
 pub(crate) fn saved(var: Var<'_>) -> BTreeMap<String, Place> {
-    folder(var)
+    crate::machine::settings_folder(var)
         .and_then(|folder| fs::read_to_string(folder.join("accounts.json")).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
@@ -128,8 +107,8 @@ fn save_with(
     secret: &str,
     place: Place,
 ) -> io::Result<()> {
-    let folder =
-        folder(var).ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
+    let folder = crate::machine::settings_folder(var)
+        .ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
     let index_path = folder.join("accounts.json");
     let mut index: BTreeMap<String, Place> = load(&index_path)?;
     let before = index.get(id).copied();
@@ -160,7 +139,7 @@ fn edit_file(folder: &Path, change: impl FnOnce(&mut BTreeMap<String, String>)) 
 
 /// removes what was saved for `id`. returns whether anything was.
 pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
-    let Some(folder) = folder(var) else {
+    let Some(folder) = crate::machine::settings_folder(var) else {
         return Ok(false);
     };
     let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
@@ -178,7 +157,7 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
 }
 
 fn file(var: Var<'_>) -> BTreeMap<String, String> {
-    folder(var)
+    crate::machine::settings_folder(var)
         .and_then(|folder| fs::read_to_string(folder.join("credentials.json")).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
@@ -233,26 +212,6 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_relative_xdg_config_home_is_ignored() {
-        let var = |name: &str| match name {
-            "HOME" => Some(OsString::from("/home/ada")),
-            "XDG_CONFIG_HOME" => Some(OsString::from("relative/config")),
-            _ => None,
-        };
-        assert_eq!(
-            folder(&var),
-            Some(PathBuf::from("/home/ada/.config/fetchloom"))
-        );
-        let absolute = |name: &str| match name {
-            "HOME" => Some(OsString::from("/home/ada")),
-            "XDG_CONFIG_HOME" => Some(OsString::from("/xdg")),
-            _ => None,
-        };
-        assert_eq!(folder(&absolute), Some(PathBuf::from("/xdg/fetchloom")));
-    }
 
     #[test]
     fn a_key_replaces_its_file_with_a_new_private_one() {
@@ -377,12 +336,19 @@ mod tests {
             saved_key("dataverse:demo.dataverse.org").as_deref(),
             Some("d-key")
         );
-        let index = fs::read_to_string(folder(&var).unwrap().join("accounts.json")).unwrap();
+        let index = fs::read_to_string(
+            crate::machine::settings_folder(&var)
+                .unwrap()
+                .join("accounts.json"),
+        )
+        .unwrap();
         assert!(!index.contains("d-key"), "the index holds no secrets");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let keys = folder(&var).unwrap().join("credentials.json");
+            let keys = crate::machine::settings_folder(&var)
+                .unwrap()
+                .join("credentials.json");
             assert_eq!(
                 fs::metadata(keys).unwrap().permissions().mode() & 0o777,
                 0o600
@@ -390,7 +356,9 @@ mod tests {
         }
         // a damaged index, not JSON or not even UTF-8, is refused rather than written over, which
         // would lose the other keys
-        let index = folder(&var).unwrap().join("accounts.json");
+        let index = crate::machine::settings_folder(&var)
+            .unwrap()
+            .join("accounts.json");
         for damaged in [b"{ not json".as_slice(), b"\xff\xfe{\0}\0"] {
             fs::write(&index, damaged).unwrap();
             let error = save(&var, "osf", "o-key", Place::File).unwrap_err();
@@ -398,7 +366,12 @@ mod tests {
             assert!(forget(&var, "dataverse:demo.dataverse.org").is_err());
             assert_eq!(fs::read(&index).unwrap(), damaged);
         }
-        let keys = fs::read_to_string(folder(&var).unwrap().join("credentials.json")).unwrap();
+        let keys = fs::read_to_string(
+            crate::machine::settings_folder(&var)
+                .unwrap()
+                .join("credentials.json"),
+        )
+        .unwrap();
         assert!(keys.contains("d-key"));
     }
 

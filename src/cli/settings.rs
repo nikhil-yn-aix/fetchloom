@@ -152,9 +152,9 @@ const DISPLAY_VARIABLES: [(&str, &str); 2] = [
 ];
 
 /// warns about each of [`DISPLAY_VARIABLES`] that holds neither true nor false.
-pub(super) fn warn_unread(output: &Output, var: crate::settings::Var<'_>) {
+pub(super) fn warn_unread(output: &Output, var: crate::machine::Var<'_>) {
     for (name, help) in DISPLAY_VARIABLES {
-        if let Err(error) = crate::settings::switched(name, var(name).as_deref()) {
+        if let Err(error) = crate::machine::switched(name, var(name).as_deref()) {
             output.warn_with(
                 Warning::SettingsSwitchUnread,
                 &format!("{}, so it stays off", error.message),
@@ -339,7 +339,7 @@ fn variables(context: &Context) -> Vec<Shown> {
         said: said.to_owned(),
         only_variable: true,
     });
-    let accessible = crate::settings::is_on(&var, "FETCHLOOM_ACCESSIBLE");
+    let accessible = crate::machine::is_on(&var, "FETCHLOOM_ACCESSIBLE");
     shown.push(Shown {
         name: "accessible",
         value: json!(accessible),

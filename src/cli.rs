@@ -141,11 +141,11 @@ impl Context {
         let cautioned = Arc::clone(&self.cautioned);
         self.net_with(Vec::new())
             .finding_credentials(move || {
-                credentials.extend(crate::auth::credentials(&crate::auth::env));
+                credentials.extend(crate::auth::credentials(&crate::machine::env));
                 caution(&output, &cautioned, &credentials);
                 credentials
             })
-            .finding_sites(|| crate::auth::site::sites(&crate::auth::env))
+            .finding_sites(|| crate::auth::site::sites(&crate::machine::env))
     }
 
     /// the `allowed_origins` setting, with where a person changes it.
@@ -195,18 +195,18 @@ impl Context {
         };
         let signing = crate::source::Signing::new(
             self.settings.s3_buckets.value.clone(),
-            Arc::new(crate::auth::env),
+            Arc::new(crate::machine::env),
         );
         let google = net::Google::new(
             self.settings.gcs_buckets.value.clone(),
-            Arc::new(crate::auth::env),
+            Arc::new(crate::machine::env),
         )
         .with_drive(self.settings.drive_folders.value.clone());
         #[cfg(debug_assertions)]
         let google = google.with_token_endpoint(net::test_token_endpoint());
         let azure = net::Azure::new(
             self.settings.azure_containers.value.clone(),
-            Arc::new(crate::auth::env),
+            Arc::new(crate::machine::env),
         );
         #[cfg(debug_assertions)]
         let azure = azure.with_identity_endpoint(net::test_identity_endpoint());
@@ -243,7 +243,7 @@ fn caution(
     if cautioned.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    if let Some(path) = crate::auth::netrc::path(&crate::auth::env)
+    if let Some(path) = crate::auth::netrc::path(&crate::machine::env)
         .filter(|path| crate::auth::netrc::too_open(path))
     {
         output.warn_with(
@@ -346,7 +346,7 @@ fn offline(value: Option<&std::ffi::OsStr>) -> Result<bool, Error> {
 fn read_switches(
     context: &mut Context,
     flag: bool,
-    var: crate::settings::Var<'_>,
+    var: crate::machine::Var<'_>,
 ) -> Result<(), Error> {
     let environment = offline(var("FETCHLOOM_OFFLINE").as_deref())?;
     context.offline = net::Offline::from_settings(flag, environment);
@@ -355,7 +355,7 @@ fn read_switches(
 }
 
 /// the settings file, or one left unread when `flag`, `--no-config`, or `FETCHLOOM_NO_CONFIG` asks.
-fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Error> {
+fn settings_file(flag: bool, var: crate::machine::Var<'_>) -> Result<File, Error> {
     match no_config(flag, var("FETCHLOOM_NO_CONFIG").as_deref())? {
         Some(by) => Ok(File::bypassed(var, by)),
         None => File::read(var),
@@ -364,7 +364,7 @@ fn settings_file(flag: bool, var: crate::settings::Var<'_>) -> Result<File, Erro
 
 /// `error`, when it is about the settings file, which every message about it names, with how to
 /// run without the file, since a bad one stops every named command, `settings` included.
-fn bypassable(mut error: Error, var: crate::settings::Var<'_>) -> Error {
+fn bypassable(mut error: Error, var: crate::machine::Var<'_>) -> Error {
     let named = File::bypassed(var, "")
         .path
         .is_some_and(|path| error.message.contains(&path.display().to_string()));
@@ -395,7 +395,7 @@ fn no_config(flag: bool, value: Option<&std::ffi::OsStr>) -> Result<Option<&'sta
 /// the variable `name`'s `value` as true or false, read as every on/off variable is: unset or
 /// empty is false, and anything but true, false, 1 or 0 is a usage error whose help is `help`.
 fn switch(name: &str, value: Option<&std::ffi::OsStr>, help: &str) -> Result<bool, Error> {
-    crate::settings::switched(name, value)
+    crate::machine::switched(name, value)
         .map(|on| on.unwrap_or(false))
         .map_err(|error| error.help(help))
 }
@@ -403,7 +403,7 @@ fn switch(name: &str, value: Option<&std::ffi::OsStr>, help: &str) -> Result<boo
 /// when large downloads split, by `FETCHLOOM_SPLIT`. unset waits until one stream proves slow:
 /// splitting at once lost in the lab on lan and home, and won only on far, where a stream is slow.
 fn splits(value: Option<&std::ffi::OsStr>) -> Result<net::Splitting, Error> {
-    let split = crate::settings::switched("FETCHLOOM_SPLIT", value).map_err(|error| {
+    let split = crate::machine::switched("FETCHLOOM_SPLIT", value).map_err(|error| {
         error.help("set FETCHLOOM_SPLIT to true to split large downloads from the start or false to never split them, or unset it to split one once it proves slow")
     })?;
     Ok(match split {
@@ -609,7 +609,7 @@ pub(crate) fn run() -> ExitCode {
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
     let output = Output::new(style, level, global.json, logs.on_stderr())
-        .without_hints(crate::settings::is_on(&var, "FETCHLOOM_NO_HINTS"))
+        .without_hints(crate::machine::is_on(&var, "FETCHLOOM_NO_HINTS"))
         .with_progress(global.progress)
         .fitted(crate::output::story_columns());
     let mut context = Context::new(output);
@@ -1268,7 +1268,7 @@ fn finish<T: Serialize>(
     });
     let outcome = outcome
         .map_err(|error| stop_named(error, context.output.stopped_by()))
-        .map_err(|error| with_key_here(error, &crate::auth::env));
+        .map_err(|error| with_key_here(error, &crate::machine::env));
     if outcome.is_ok() {
         project::remind_lists(context);
     }
@@ -1324,7 +1324,7 @@ fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
 
 /// `error`, a refusal signing in could lift, when `var` gives a key for its account already: since
 /// signing in is no remedy, [`with_key`] says to check that key. any other error stays as it is.
-fn with_key_here(error: Error, var: crate::source::Var<'_>) -> Error {
+fn with_key_here(error: Error, var: crate::machine::Var<'_>) -> Error {
     let Some(need) = error.need.as_deref() else {
         return error;
     };
