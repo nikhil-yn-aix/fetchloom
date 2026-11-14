@@ -1190,6 +1190,11 @@ fn gc_now_frees_imported_bytes_only_after_a_yes() -> Result {
         error["message"],
         "1 file · 32 B gc would free was imported from files, and no source can give it back, so freeing it needs a yes"
     );
+    // a dry run counts what gc frees; it names no imported file, which the cache knows by hash
+    assert_eq!(
+        error["help"],
+        "answer yes at a terminal, or add --yes once you keep it elsewhere; a dry run counts it, as in `fetchloom cache gc --now --dry-run`"
+    );
     assert_eq!(error["fix"], serde_json::Value::Null);
     object(true)?;
     let freed = sandbox.run(&["--json", "cache", "gc", "--now", "--yes"])?;

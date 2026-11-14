@@ -334,7 +334,7 @@ fn ask_imported(context: &Context) -> Result<HashSet<Sha256>, Error> {
         None => Err(
             Error::new(Kind::Unconfirmed, format!("{why}, so freeing {it} needs a yes")).help(
                 format!(
-                    "answer yes at a terminal, or add --yes once you keep {it} elsewhere; a dry run lists {it}, as in `fetchloom cache gc --now --dry-run`"
+                    "answer yes at a terminal, or add --yes once you keep {it} elsewhere; a dry run counts {it}, as in `fetchloom cache gc --now --dry-run`"
                 ),
             ),
         ),
