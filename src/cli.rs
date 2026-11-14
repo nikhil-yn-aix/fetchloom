@@ -586,6 +586,10 @@ fn peek_cache() -> Result<Cache, Error> {
 
 /// the cache folder: `FETCHLOOM_CACHE`, else the settings file's `cache`, else the platform's.
 fn cache_folder() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(folder) = tests::CACHE.with_borrow(Clone::clone) {
+        return Some(folder);
+    }
     let filed = SETTINGS_FILE.get().and_then(File::cache);
     Cache::locate(&|name| std::env::var_os(name), filed.as_deref())
 }
@@ -1434,6 +1438,13 @@ fn level(quiet: bool, verbose: u8) -> Level {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// the cache a unit test's commands open, set by the test, so none reaches the cache of
+        /// the machine running it, which other runs hold and which would list the test's project.
+        pub(super) static CACHE: std::cell::RefCell<Option<std::path::PathBuf>> =
+            const { std::cell::RefCell::new(None) };
+    }
 
     /// a stop asked before the command marks its work finished ends it as stopped.
     #[test]

@@ -2225,7 +2225,8 @@ pub(crate) mod tests {
 
     /// a sync of every dataset in a project the last complete sync left as it is, with data.toml
     /// as `add` writes it, finds the project settled without parsing data.toml; with data.lock
-    /// changed since, it parses data.toml once and syncs from the survey it made.
+    /// changed since, it parses data.toml once and syncs from the survey it made. it opens the
+    /// test's cache, never the machine's, which other runs hold and gc and would list it in.
     #[test]
     fn a_settled_sync_of_a_plain_data_toml_parses_none() {
         let dir = tempfile::tempdir().unwrap();
@@ -2262,6 +2263,9 @@ pub(crate) mod tests {
         let work = Loop::new(&first, &project, Arc::new(first.net()), cache.clone());
         let synced = sync_all(&work, &manifest, Some(lock), None, Run::planned(&seen));
         super::super::block_on(&first, synced).unwrap();
+        let own = Cache::open(dir.path().join("own")).unwrap();
+        crate::cache::tests::store(&own, bytes);
+        super::super::tests::CACHE.set(Some(own.root().to_path_buf()));
         let args = args::Sync {
             names: Vec::new(),
             force: false,
@@ -2286,6 +2290,11 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(sync(), (1, 0, 1));
         assert_eq!(sync(), (1, 0, 0));
+        assert_eq!(
+            own.registered_projects(&crate::stop::Stop::default())
+                .unwrap(),
+            [root]
+        );
     }
 
     /// a sync of every dataset counts only those it placed, not `place = false` or unbuilt ones.
