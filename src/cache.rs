@@ -1650,6 +1650,14 @@ pub(crate) mod tests {
         assert!(fs::metadata(&object).unwrap().permissions().readonly());
     }
 
+    /// an object another process took away verifies as gone, not as an error that stops the run.
+    #[test]
+    fn verifying_a_missing_object_reports_it_gone() {
+        let (_dir, cache) = cache();
+        let digest = crate::digest::sha256(b"never stored");
+        assert!(matches!(cache.verify(&digest), Ok(false)));
+    }
+
     #[test]
     fn a_failed_repair_leaves_the_changed_object_in_doubt() {
         let (_dir, cache) = cache();
