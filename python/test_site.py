@@ -3,9 +3,13 @@
 import base64
 import contextlib
 import hashlib
+import importlib.util
 import io
+import json
 from pathlib import Path
 import re
+import shutil
+import struct
 import sys
 import tarfile
 import tempfile
@@ -13,7 +17,7 @@ import unittest
 from unittest.mock import patch
 
 import build_site
-from build_site import add_home, add_mermaid, add_pin, export_agents, page_url
+from build_site import add_head, add_home, add_icons, add_mermaid, add_pin, export_agents, page_url
 import check_site
 
 PAGES = "https://nikhil-yn-aix.github.io/fetchloom/"
@@ -120,37 +124,44 @@ class Mermaid(Folder):
 
 class Pin(Folder):
     CELLS = '("\u25cf", "o"), ("\u2500", "-"), ("\u2500", "-"), ("\u2500", "-"), ("\u2574", "-")'
-    HEAD = "M-9 0a9 9 0 1 1 18 0a9 9 0 1 1 -18 0z"
+    # the head's middle at the origin, 9 pixels across, a pixel in from the top and the right of the
+    # favicon's 16; the point four cells, 9.5 pixels, across and down from it, the shaft a quarter
+    # pixel off its middle
+    BODY = ("M0.75 0.75L-6.629 8.129L-9.25 9.75L-7.629 7.129L-0.25 -0.25z"
+            "M-4.5 0a4.5 4.5 0 1 1 9 0a4.5 4.5 0 1 1 -9 0z")
 
     def source(self, cells=CELLS):
-        """a repository whose src/output.rs lays out a pin of ``cells``, with the site's two accents."""
+        """a repository whose src/output.rs lays out a pin of ``cells``, with the site's two schemes
+        and the line fetchloom's welcome says it is for."""
         root = self.folder()
         self.write(root / "src/output.rs", f"const PIN: [(&str, &str); {cells.count('(')}] = [{cells}];\n")
-        self.write(root / "docs-site/theme/assets/stylesheets/fetchloom.css",
-                   '[data-md-color-scheme="default"] {\n  --fl-accent: #065f46;\n}\n'
-                   '[data-md-color-scheme="slate"] {\n  --fl-accent: #79c9ae;\n}\n')
+        self.write(root / "src/cli/args.rs", 'pub(crate) const PURPOSE: &str = "exact research data";\n')
+        self.write(root / build_site.STYLESHEET,
+                   '[data-md-color-scheme="default"] {\n  --fl-paper: #fbfdfc;\n  --fl-surface: #f7f9f8;\n'
+                   '  --fl-ink: #121613;\n  --fl-muted: #4d5650;\n  --fl-accent: #027864;\n}\n'
+                   '[data-md-color-scheme="slate"] {\n  --fl-paper: #121613;\n  --fl-surface: #1b221d;\n'
+                   '  --fl-ink: #e4e9e4;\n  --fl-muted: #9ba69e;\n  --fl-accent: #79c9ae;\n}\n')
         return root
 
     def test_the_site_and_its_favicon_draw_the_pin_the_cli_draws(self):
         root, site = self.source(), self.folder()
         add_pin(root, site)
-        # the head's middle at the origin, the point four cells, 40 units, from it, down and to the
-        # left: 28.28 units across and down. the favicon's box is 18 * 16 / 7 units, so the head is
-        # 7 of its 16 pixels, with a pixel, 2.57 units, above and to the right of it
-        self.assertEqual((site / "assets/images/pin.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-28.28 -9 37.28 37.28">'
-                         '<path d="M0.78 0.78L-23.97 25.53L-28.28 28.28L-25.53 23.97L-0.78 -0.78z'
-                         f'{self.HEAD}M-1.13 -6.38A6.48 6.48 0 0 0 -6.09 -2.22L-4.4 -1.6A4.68 4.68 0 0 1 -0.81 -4.61z"/>'
-                         '</svg>\n')
-        self.assertEqual((site / "assets/images/favicon.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-29.57 -11.57 41.14 41.14">'
-                         '<style>path{fill:#065f46}@media (prefers-color-scheme:dark){path{fill:#79c9ae}}</style>'
-                         f'<path d="M1.06 1.06L-23.69 25.81L-28.28 28.28L-25.81 23.69L-1.06 -1.06z{self.HEAD}"/></svg>\n')
+        images = site / "assets/images"
+        box = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.5 -5.5 16 16">'
+        self.assertEqual((images / "pin.svg").read_text(encoding="utf-8"), f'{box}<path d="{self.BODY}"/></svg>\n')
+        self.assertEqual((images / "favicon.svg").read_text(encoding="utf-8"),
+                         f'{box}<style>path{{fill:#027864}}@media (prefers-color-scheme:dark){{path{{fill:#79c9ae}}}}'
+                         f'</style><path d="{self.BODY}"/></svg>\n')
+        # the label's pin, finer, with the light its head catches: its accent halfway to white
+        label = (images / "pin-slate.svg").read_text(encoding="utf-8")
+        self.assertIn('<path fill="#79c9ae" d="M0.604 0.604L', label)
+        self.assertIn('<path fill="#bce4d6" d="M-2.95 -1.6a1.35 1.35 0 1 1 2.7 0', label)
+        self.assertIn('<path fill="#027864" d=', (images / "pin-default.svg").read_text(encoding="utf-8"))
 
     def test_a_longer_shaft_in_the_terminal_is_a_longer_pin_on_the_site(self):
         root, site = self.source(self.CELLS.replace('("\u2574"', '("\u2500", "-"), ("\u2574"')), self.folder()
         add_pin(root, site)
-        self.assertIn('viewBox="-35.36 -9 44.36 44.36"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
+        self.assertIn('viewBox="-12.875 -5.5 18.375 18.375"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
 
     def test_a_source_without_a_pin_is_refused(self):
         for cells in ('("\u2500", "-"), ("\u25cf", "o"), ("\u2574", "-")',
@@ -162,6 +173,61 @@ class Pin(Folder):
 
     def test_the_repository_draws_a_pin_the_site_can_draw(self):
         self.assertEqual(build_site.pin(build_site.ROOT)[0], "\u25cf")
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "pillow comes with the site's toolchain")
+    def test_the_browsers_icons_and_link_card_draw_the_same_pin_in_the_sites_colors(self):
+        from PIL import Image
+        root, site = self.source(), self.folder()
+        fonts = "docs-site/theme/assets/fonts"
+        (root / fonts).mkdir(parents=True)
+        shutil.copy(build_site.ROOT / fonts / "source-serif-4-latin-opsz-normal.woff2", root / fonts)
+        add_icons(root, site)
+        images = site / "assets/images"
+        icon = (images / "favicon.ico").read_bytes()
+        self.assertEqual(struct.unpack("<HHH", icon[:6]), (0, 1, 2))
+        sizes = []
+        for index in range(2):
+            width, height, *_, length, offset = struct.unpack("<BBBBHHII", icon[6 + 16 * index:22 + 16 * index])
+            drawn = Image.open(io.BytesIO(icon[offset:offset + length])).convert("RGBA")
+            sizes.append((width, height, drawn.size))
+            # the head's middle is the light accent, the corners nothing
+            self.assertEqual(drawn.getpixel((width * 10 // 16, height * 5 // 16)), (0x02, 0x78, 0x64, 255))
+            self.assertEqual(drawn.getpixel((0, 0))[3], 0)
+        self.assertEqual(sizes, [(16, 16, (16, 16)), (32, 32, (32, 32))])
+        for name, size in (("apple-touch-icon.png", (180, 180)), ("icon-192.png", (192, 192)),
+                           ("icon-512.png", (512, 512)), ("icon-mask.png", (512, 512)), ("preview.png", (1200, 630))):
+            with self.subTest(name=name):
+                drawn = Image.open(images / name).convert("RGB")
+                self.assertEqual(drawn.size, size)
+                self.assertEqual(drawn.getpixel((0, 0)), (0x12, 0x16, 0x13))
+                self.assertIn((0x79, 0xc9, 0xae), {color for _, color in drawn.getcolors(1 << 20)})
+        manifest = json.loads((site / "manifest.webmanifest").read_text(encoding="utf-8"))
+        self.assertEqual((manifest["description"], manifest["theme_color"], manifest["background_color"]),
+                         ("exact research data", "#121613", "#121613"))
+        self.assertEqual([(icon["src"], icon["sizes"], icon.get("purpose")) for icon in manifest["icons"]],
+                         [("assets/images/icon-192.png", "192x192", None), ("assets/images/icon-512.png", "512x512", None),
+                          ("assets/images/icon-mask.png", "512x512", "maskable")])
+
+    def test_every_page_names_its_icons_colors_and_link_card(self):
+        root, site = self.source(), self.folder()
+        page = '<html><head><title>add · fetchloom</title><meta name="description" content="exact data"></head></html>'
+        self.write(site / "user/commands/add/index.html", page)
+        self.write(site / "404.html", "<html><head><title>fetchloom</title></head></html>")
+        add_head(root, site)
+        added = (site / "user/commands/add/index.html").read_text(encoding="utf-8")
+        for tag in ('<link rel="icon" href="../../../assets/images/favicon.ico" sizes="32x32">',
+                    '<link rel="apple-touch-icon" href="../../../assets/images/apple-touch-icon.png">',
+                    '<link rel="manifest" href="../../../manifest.webmanifest">',
+                    '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfdfc">',
+                    '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121613">',
+                    '<meta property="og:title" content="add · fetchloom">',
+                    '<meta property="og:description" content="exact data">',
+                    f'<meta property="og:url" content="{PAGES}user/commands/add/">',
+                    f'<meta property="og:image" content="{PAGES}assets/images/preview.png">',
+                    '<meta name="twitter:card" content="summary_large_image">'):
+            self.assertIn(tag, added)
+        self.assertIn('<link rel="manifest" href="/fetchloom/manifest.webmanifest">',
+                      (site / "404.html").read_text(encoding="utf-8"))
 
 
 class Home(Folder):
@@ -226,13 +292,7 @@ def luminance(color):
 
 
 def schemes():
-    """the site's light colors and its dark ones, by name, from its stylesheet."""
-    css = (build_site.ROOT / build_site.STYLESHEET).read_text(encoding="utf-8")
-    found = {}
-    for scheme in ("default", "slate"):
-        block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)[1]
-        found[scheme] = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block))
-    return found
+    return build_site.palette(build_site.ROOT)
 
 
 class Colors(unittest.TestCase):
@@ -264,7 +324,7 @@ class Colors(unittest.TestCase):
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
-        names = ("add_home", "color_transcripts", "add_pin", "add_mermaid", "export_agents")
+        names = ("add_home", "color_transcripts", "add_pin", "add_icons", "add_head", "add_mermaid", "export_agents")
         with patch.object(build_site.subprocess, "run", side_effect=lambda *a, **k: steps.append("zensical")) as run, \
              patch.object(build_site.shutil, "rmtree", side_effect=lambda *a, **k: steps.append("clean")), \
              contextlib.ExitStack() as stack:

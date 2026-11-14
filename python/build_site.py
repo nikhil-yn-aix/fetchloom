@@ -4,15 +4,19 @@ import base64
 from datetime import datetime
 import hashlib
 import html
+import io
+import json
 import math
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
 import tomllib
 import urllib.request
+from urllib.parse import urlsplit
 
 import transcript
 
@@ -29,6 +33,8 @@ MERMAID = ("https://registry.npmjs.org/@mermaid-js/tiny/-/tiny-12.3.0.tgz",
 # them along one line, each beside its ascii
 PIN = re.compile(r"const PIN: \[\(&str, &str\); \d+\] = \[(.*?)\];", re.S)
 HEAD, SHAFT, POINT = "\u25cf", "\u2500", "\u2574"
+# what the welcome says fetchloom is for, under its name, which a link's card shows under it too
+PURPOSE = re.compile(r'const PURPOSE: &str = "([^"]+)";')
 # a real run the home page shows: each command's transcript, the data.lock the add wrote, and the
 # hub's answers, which tests/cli/docs.rs replays to hold the transcripts to what fetchloom prints
 RECORDED = "docs-site/home"
@@ -117,70 +123,228 @@ def pin(root):
 
 def number(value):
     """``value`` as an svg writes it, with no more digits than it needs."""
-    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
     return "0" if text == "-0" else text
 
 
-def drawn(cells, head, shaft, square=False, inside=""):
-    """an svg of the pin a terminal lays out as ``cells``, each 10 units long, stood up at 45 degrees
-    with its head up and to the right: a head ``head`` units across, with a crescent of light on it,
-    on a shaft ``shaft`` wide that narrows over the last half cell to its point. ``square`` sets it
-    in a square for a favicon, without the crescent, which a few pixels cannot hold: the head 7 of
-    16 pixels across and a pixel in from the top and right, so its edges meet whole pixels at 16 and
-    32 pixels."""
-    radius, length = head / 2, 10 * (len(cells) - 1)
-    along, across = (-math.sqrt(0.5), math.sqrt(0.5)), (math.sqrt(0.5), math.sqrt(0.5))
-
-    def at(distance, side):
-        return (along[0] * distance + across[0] * side, along[1] * distance + across[1] * side)
-
-    half = shaft / 2
-    # clockwise, as the head is, so where they overlap is filled rather than cut out
-    outline = [at(0, half), at(length - 5, half), at(length, 0), at(length - 5, -half), at(0, -half)]
-    parts = ["M" + "L".join(f"{number(x)} {number(y)}" for x, y in outline) + "z",
-             f"M{number(-radius)} 0a{number(radius)} {number(radius)} 0 1 1 {number(head)} 0"
-             f"a{number(radius)} {number(radius)} 0 1 1 {number(-head)} 0z"]
-    if not square:
-        # counterclockwise, so it cuts the crescent out of the head: a band on its upper left
-        outer, inner = radius * 0.72, radius * 0.52
-        ends = [(math.cos(math.radians(turn)), math.sin(math.radians(turn))) for turn in (200, 260)]
-        parts.append(f"M{number(outer * ends[1][0])} {number(outer * ends[1][1])}"
-                     f"A{number(outer)} {number(outer)} 0 0 0 {number(outer * ends[0][0])} {number(outer * ends[0][1])}"
-                     f"L{number(inner * ends[0][0])} {number(inner * ends[0][1])}"
-                     f"A{number(inner)} {number(inner)} 0 0 1 {number(inner * ends[1][0])} {number(inner * ends[1][1])}z")
-    left, top = at(length, 0)[0], -radius
-    width = radius - left
-    height = at(length, 0)[1] + radius
-    if square:
-        width = height = max(head * 16 / 7, width * 16 / 15, height * 16 / 15)
-        left, top = radius + width / 16 - width, -radius - width / 16
-    box = " ".join(number(value) for value in (left, top, width, height))
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{box}">{inside}'
-            f'<path d="{"".join(parts)}"/></svg>')
+def shapes(cells, large=False):
+    """the pin a terminal lays out as ``cells``, stood up at 45 degrees with its head up and to the
+    right, on a favicon's grid of 16 pixels: its square box as (left, top, size), the polygon of its
+    shaft and the circles of its head and, when ``large``, of the light a glass head catches. the
+    head is 9 pixels across and a pixel in from the top and the right, so its edges meet whole
+    pixels; the shaft crosses two pixels of each row, a quarter pixel off the head's middle so its
+    edges meet whole pixels too, and narrows over its last 3 to a point 2.375 across and down for
+    each cell after the head. a large pin, which pixels do not crowd, takes a finer shaft and point."""
+    reach, slant = 2.375 * (len(cells) - 1), math.sqrt(0.5)
+    half, taper = (.5, 4.5) if large else (math.sqrt(2) / 2, 3)
+    tip = (.25 - reach, .25 + reach)
+    neck = (tip[0] + taper * slant, tip[1] - taper * slant)
+    sides = [(slant * half, slant * half), (-slant * half, -slant * half)]
+    shaft = [(.25 + sides[0][0], .25 + sides[0][1]), (neck[0] + sides[0][0], neck[1] + sides[0][1]), tip,
+             (neck[0] + sides[1][0], neck[1] + sides[1][1]), (.25 + sides[1][0], .25 + sides[1][1])]
+    circles = [(0, 0, 4.5)] + ([(-1.6, -1.6, 1.35)] if large else [])
+    return (-reach - 1, -5.5, reach + 6.5), shaft, circles
 
 
-def accents(root):
-    """the accent of the site's light colors and of its dark ones, from its stylesheet."""
+def svg(cells, colors=None, style=""):
+    """an svg of the pin: in one color for a mask or ``style`` to fill, or, with ``colors`` (the
+    pin's and its glint's), drawn with its glint in them."""
+    (left, top, size), shaft, circles = shapes(cells, large=bool(colors))
+
+    # clockwise, as the shaft is, so where they overlap is filled rather than cut out
+    def ring(x, y, r):
+        return (f"M{number(x - r)} {number(y)}a{number(r)} {number(r)} 0 1 1 {number(2 * r)} 0"
+                f"a{number(r)} {number(r)} 0 1 1 {number(-2 * r)} 0z")
+    body = "M" + "L".join(f"{number(x)} {number(y)}" for x, y in shaft) + "z" + ring(*circles[0])
+    paths = (f'<path fill="{colors[0]}" d="{body}"/><path fill="{colors[1]}" d="{ring(*circles[1])}"/>'
+             if colors else f'<path d="{body}"/>')
+    box = " ".join(number(value) for value in (left, top, size, size))
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{box}">{style}{paths}</svg>\n'
+
+
+def palette(root):
+    """the site's light colors and its dark ones, by name, from its stylesheet."""
     css = (root / STYLESHEET).read_text(encoding="utf-8")
-    found = [re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{[^}]*?--fl-accent: (#[0-9a-f]{6});', css)
-             for scheme in ("default", "slate")]
-    if not all(found):
-        raise ValueError(f"{STYLESHEET} has no accent for each color scheme")
-    return [match[1] for match in found]
+    found = {}
+    for scheme in ("default", "slate"):
+        block = re.search(r'\[data-md-color-scheme="' + scheme + r'"\] \{([^}]*)\}', css)
+        found[scheme] = dict(re.findall(r"--fl-(\w+): (#[0-9a-f]{6});", block[1])) if block else {}
+        if not {"paper", "surface", "ink", "muted", "accent"} <= found[scheme].keys():
+            raise ValueError(f"{STYLESHEET} lacks a color the site's pins and icons need")
+    return found
+
+
+def glinted(accent):
+    """the light on a glass head of ``accent``: the accent halfway to white."""
+    return "#" + "".join(f"{(int(accent[i:i + 2], 16) + 255) // 2:02x}" for i in (1, 3, 5))
 
 
 def add_pin(root, site):
     """the pin src/output.rs lays beside the welcome's title, drawn from the same cells for the site
-    and stood up: pin.svg, which pins the home page's label, and the favicon, drawn heavier, as a
-    small size of a typeface is, in the accent of the reader's colors, which the stylesheet also
-    sets beside the site's name."""
-    cells = pin(root)
-    light, dark = accents(root)
-    colors = f"<style>path{{fill:{light}}}@media (prefers-color-scheme:dark){{path{{fill:{dark}}}}}</style>"
+    and stood up: pin.svg, the stylesheet's mark beside the site's name; the favicon, in the accent
+    of the reader's colors; and pin-default.svg and pin-slate.svg, with their glint, which pin the
+    home page's label in each color scheme."""
+    cells, colors = pin(root), palette(root)
+    light, dark = colors["default"]["accent"], colors["slate"]["accent"]
+    style = f"<style>path{{fill:{light}}}@media (prefers-color-scheme:dark){{path{{fill:{dark}}}}}</style>"
     images = site / "assets/images"
     images.mkdir(parents=True, exist_ok=True)
-    (images / "pin.svg").write_text(drawn(cells, 18, 2.2) + "\n", encoding="utf-8")
-    (images / "favicon.svg").write_text(drawn(cells, 18, 3, square=True, inside=colors) + "\n", encoding="utf-8")
+    (images / "pin.svg").write_text(svg(cells), encoding="utf-8")
+    (images / "favicon.svg").write_text(svg(cells, style=style), encoding="utf-8")
+    for scheme, named in colors.items():
+        accent = named["accent"]
+        (images / f"pin-{scheme}.svg").write_text(svg(cells, colors=(accent, glinted(accent))), encoding="utf-8")
+
+
+def rgb(color):
+    return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def drawn(cells, size, color, ground=None, span=1.0, at=None, large=False):
+    """a ``size`` pixel square image of the pin in ``color`` on ``ground`` or on nothing, its box
+    ``span`` of the image across, its middle at ``at`` or the image's, sampled finely, so each pixel
+    takes as much of the color as the pin covers of it."""
+    # pillow comes with the site's toolchain, not with the python the unit tests run under
+    from PIL import Image, ImageDraw
+    (left, top, box), shaft, circles = shapes(cells, large)
+    fine = 16 if size <= 64 else 4
+    across = size * span / box
+    middle = at or (size / 2, size / 2)
+    origin = (middle[0] - size * span / 2, middle[1] - size * span / 2)
+
+    def point(x, y):
+        return ((origin[0] + (x - left) * across) * fine, (origin[1] + (y - top) * across) * fine)
+
+    def mask(parts):
+        layer = Image.new("L", (size * fine, size * fine), 0)
+        draw = ImageDraw.Draw(layer)
+        for part in parts:
+            if len(part) == 3:
+                x, y, r = part
+                draw.ellipse([*point(x - r, y - r), *point(x + r, y + r)], fill=255)
+            else:
+                draw.polygon([point(x, y) for x, y in part], fill=255)
+        return layer.resize((size, size), Image.Resampling.BOX)
+    image = Image.new("RGBA", (size, size), (*rgb(ground), 255) if ground else (0, 0, 0, 0))
+    image.paste((*rgb(color), 255), mask=mask([shaft, circles[0]]))
+    if large:
+        image.paste((*rgb(glinted(color)), 255), mask=mask([circles[1]]))
+    return image
+
+
+def png(image):
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def ico(images):
+    """an icon file holding each of ``images``, a png apiece, as every browser reads them."""
+    head = struct.pack("<HHH", 0, 1, len(images))
+    offset, entries, data = 6 + 16 * len(images), b"", b""
+    for image in images:
+        encoded = png(image)
+        entries += struct.pack("<BBBBHHII", image.width % 256, image.height % 256, 0, 0, 1, 32, len(encoded), offset)
+        offset += len(encoded)
+        data += encoded
+    return head + entries + data
+
+
+def preview(root, cells, colors):
+    """the 1200 by 630 image a link to the site shows: the pin, glinting, beside fetchloom's name and,
+    under it, the one line its welcome says it is for, on the sheet of ``colors``."""
+    from PIL import ImageDraw, ImageFont
+    card = drawn(cells, 630, colors["accent"], colors["paper"], span=.42, at=(240, 315), large=True)
+    card = card.crop((0, 0, 1200, 630))
+    card.paste((*rgb(colors["paper"]), 255), (630, 0, 1200, 630))
+    fonts = root / "docs-site/theme/assets/fonts"
+
+    def face(size, weight, optical):
+        font = ImageFont.truetype(str(fonts / "source-serif-4-latin-opsz-normal.woff2"), size)
+        font.set_variation_by_axes([weight, optical])
+        return font
+    draw = ImageDraw.Draw(card)
+    name, line = face(132, 600, 60), face(42, 400, 20)
+    draw.text((452, 300), "fetchloom", font=name, fill=colors["ink"], anchor="ls")
+    lines = [""]
+    for word in purpose(root).split():
+        joined = f"{lines[-1]} {word}".strip()
+        if lines[-1] and draw.textlength(joined, font=line) > 1200 - 452 - 96:
+            lines.append(word)
+        else:
+            lines[-1] = joined
+    for index, text in enumerate(lines):
+        draw.text((456, 380 + 58 * index), text, font=line, fill=colors["muted"], anchor="ls")
+    return card.convert("RGB")
+
+
+def add_icons(root, site):
+    """the rest of the browser's set, drawn from the same pin and colors: favicon.ico at 16 and 32
+    pixels in the light accent, for browsers without svg icons; the 180 pixel icon apple devices take,
+    and the 192 and 512 pixel icons of manifest.webmanifest, the pin glinting on the dark sheet; and
+    preview.png, which a link to the site shows."""
+    cells, colors = pin(root), palette(root)
+    light, dark = colors["default"], colors["slate"]
+    images = site / "assets/images"
+    images.mkdir(parents=True, exist_ok=True)
+    (images / "favicon.ico").write_bytes(ico([drawn(cells, size, light["accent"]) for size in (16, 32)]))
+    (images / "apple-touch-icon.png").write_bytes(png(drawn(cells, 180, dark["accent"], dark["paper"], .62, large=True)))
+    for size in (192, 512):
+        (images / f"icon-{size}.png").write_bytes(png(drawn(cells, size, dark["accent"], dark["paper"], .62, large=True)))
+    (images / "icon-mask.png").write_bytes(png(drawn(cells, 512, dark["accent"], dark["paper"], .5, large=True)))
+    (images / "preview.png").write_bytes(png(preview(root, cells, dark)))
+    icons = [{"src": f"assets/images/icon-{size}.png", "sizes": f"{size}x{size}", "type": "image/png"} for size in (192, 512)]
+    icons.append({"src": "assets/images/icon-mask.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"})
+    manifest = {"name": "fetchloom", "short_name": "fetchloom", "description": purpose(root), "start_url": "./",
+                "display": "browser", "background_color": dark["paper"], "theme_color": dark["paper"], "icons": icons}
+    (site / "manifest.webmanifest").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def purpose(root):
+    """what fetchloom's welcome says it is for, under its name, from src/cli/args.rs."""
+    found = PURPOSE.search((root / "src/cli/args.rs").read_text(encoding="utf-8"))
+    if not found:
+        raise ValueError("src/cli/args.rs has no PURPOSE")
+    return found[1]
+
+
+def head(root, page, url):
+    """the tags a page of the site adds to its head at ``url``, under the site's address: its icons,
+    the browser's color under each color scheme, and the card a link to it shows."""
+    colors = palette(root)
+    title = re.search(r"<title>([^<]*)</title>", page)
+    description = re.search(r'<meta name="description" content="([^"]*)">', page)
+    image = SITE_URL + "assets/images/preview.png"
+    alt = html.escape(f"fetchloom's pin beside its name and {purpose(root)}")
+    tags = ['<link rel="icon" href="{0}assets/images/favicon.ico" sizes="32x32">',
+            '<link rel="apple-touch-icon" href="{0}assets/images/apple-touch-icon.png">',
+            '<link rel="manifest" href="{0}manifest.webmanifest">',
+            f'<meta name="theme-color" media="(prefers-color-scheme: light)" content="{colors["default"]["paper"]}">',
+            f'<meta name="theme-color" media="(prefers-color-scheme: dark)" content="{colors["slate"]["paper"]}">',
+            '<meta property="og:type" content="website">',
+            '<meta property="og:site_name" content="fetchloom">',
+            f'<meta property="og:title" content="{title[1] if title else "fetchloom"}">',
+            f'<meta property="og:url" content="{SITE_URL}{url}">',
+            f'<meta property="og:image" content="{image}">',
+            '<meta property="og:image:width" content="1200">',
+            '<meta property="og:image:height" content="630">',
+            f'<meta property="og:image:alt" content="{alt}">',
+            '<meta name="twitter:card" content="summary_large_image">']
+    if description:
+        tags.insert(8, f'<meta property="og:description" content="{description[1]}">')
+    # the 404 page answers at any depth, so it names the site's own folder
+    up = urlsplit(SITE_URL).path if url == "404.html" else "../" * url.count("/")
+    return "".join(tag.replace("{0}", up) for tag in tags)
+
+
+def add_head(root, site):
+    """every page's head with its icons, theme colors and link card."""
+    for page in site.rglob("*.html"):
+        text = page.read_text(encoding="utf-8")
+        if "</head>" not in text:
+            continue
+        url = page.relative_to(site).as_posix().removesuffix("index.html")
+        page.write_text(text.replace("</head>", head(root, text, url) + "</head>", 1), encoding="utf-8")
 
 
 def label(recorded, path):
@@ -258,6 +422,8 @@ def main():
     add_home(ROOT, SITE)
     color_transcripts(SITE)
     add_pin(ROOT, SITE)
+    add_icons(ROOT, SITE)
+    add_head(ROOT, SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")
     export_agents(ROOT, SITE)
 

@@ -201,8 +201,8 @@ body {
   font-weight: 600;
   letter-spacing: 0;
 }
-/* the pin the cli lays beside its welcome, stood up: the favicon's drawing, made for small sizes,
-   which python/build_site.py draws from src/output.rs */
+/* the pin the cli lays beside its welcome, stood up as the favicon draws it, which
+   python/build_site.py draws from src/output.rs */
 .md-header__topic:first-child .md-ellipsis::before {
   content: "";
   display: inline-block;
@@ -211,8 +211,8 @@ body {
   margin-right: .4em;
   vertical-align: -.3em;
   background-color: var(--fl-accent);
-  -webkit-mask: url("../images/favicon.svg") center / contain no-repeat;
-  mask: url("../images/favicon.svg") center / contain no-repeat;
+  -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
+  mask: url("../images/pin.svg") center / contain no-repeat;
 }
 .md-header__button.md-logo,
 .md-nav__title .md-nav__button.md-logo {
@@ -698,9 +698,11 @@ body {
   left: calc(1.25 * var(--fl-u));
   width: calc(3 * var(--fl-u));
   height: calc(3 * var(--fl-u));
-  background-color: var(--fl-accent);
-  -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
-  mask: url("../images/pin.svg") center / contain no-repeat;
+  background: url("../images/pin-default.svg") center / contain no-repeat;
+}
+/* the label's pin catches the light, so it is drawn in each color scheme's own colors */
+[data-md-color-scheme="slate"] .md-typeset figure.fl-label::before {
+  background-image: url("../images/pin-slate.svg");
 }
 .md-typeset .fl-label-file {
   margin: 0;

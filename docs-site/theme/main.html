@@ -1,9 +1,26 @@
 {% extends "base.html" %}
+{# a tab shows the page's name before the site's, and the home page the site's alone #}
+{% block htmltitle %}
+  {% if page.url == "" %}
+    <title>{{ config.site_name }}</title>
+  {% elif page.title %}
+    <title>{{ page.title | striptags }} · {{ config.site_name }}</title>
+  {% else %}
+    <title>{{ config.site_name }}</title>
+  {% endif %}
+{% endblock %}
 {% block extrahead %}
   <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-opsz-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
 {% endblock %}
 {% block scripts %}
   <script>
+    // the theme keeps a color for the browser's own bar in step with the colors a reader picks; the
+    // two python/build_site.py writes for each system scheme serve only until it does
+    window.addEventListener("load", function () {
+      document.querySelectorAll("meta[name='theme-color'][media]").forEach(function (meta) {
+        meta.remove();
+      });
+    });
     // the search dialog draws in a shadow root of its own, out of the stylesheet's reach
     new MutationObserver(function (changes) {
       changes.forEach(function (change) {
