@@ -14,6 +14,31 @@ fn listed(reference: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(Reference::parse(reference)?.reference.resolve(recorded))
 }
 
+/// a dandiset of more assets than one dataset may list is refused, naming its page to select
+/// folders from.
+#[test]
+fn a_dandiset_of_more_files_than_allowed_is_refused() {
+    let version = "https://api.dandiarchive.org/api/dandisets/001512/versions/0.250624.1820";
+    let second = format!("{version}/assets/?metadata=true&order=path&page=2&page_size=2");
+    let recorded = Recorded::default()
+        .fixture(&format!("{version}/info/"), "dandi/paged-info.json")
+        .fixture(&assets(version), "dandi/page-1.json")
+        .fixture(&second, "dandi/page-2.json")
+        .most(2);
+    let error = listed("dandi:001512@0.250624.1820", &recorded).unwrap_err();
+    assert_eq!(error.kind, crate::error::Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "dandi:001512@0.250624.1820 lists more than 2 files, the most this run lists for one dataset"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "select the folders you need with --select, as https://dandiarchive.org/dandiset/001512/0.250624.1820 shows them, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+        )
+    );
+}
+
 /// the newest published version, pinned, with each asset's size, the SHA-256 dandi states and
 /// the blob's own link on S3. dandi's etag is S3's multipart tag, so no MD5 is taken from it.
 #[test]

@@ -58,6 +58,24 @@ fn dataset(text: &str) -> Dataset {
     Dataset::parse(text).unwrap()
 }
 
+/// a dataset of more files than one dataset may list is refused, naming its page to download
+/// from.
+#[test]
+fn a_dataset_of_more_files_than_allowed_is_refused() {
+    let error = block_on(dataset("rscbjbr9sj@2").resolve(&version_two().most(2))).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "mendeley:rscbjbr9sj@2 lists more than 2 files, the most this run lists for one dataset"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "download the files you need from https://data.mendeley.com/datasets/rscbjbr9sj/2, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+        )
+    );
+}
+
 #[test]
 fn lists_a_version_with_the_sha256_mendeley_states() {
     let recorded = version_two();

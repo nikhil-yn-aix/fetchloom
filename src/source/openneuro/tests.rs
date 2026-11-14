@@ -46,6 +46,24 @@ fn listed(reference: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(Reference::parse(reference)?.reference.resolve(recorded))
 }
 
+/// a snapshot of more files than one dataset may list is refused, naming its page at that
+/// snapshot to download folders from.
+#[test]
+fn a_snapshot_of_more_files_than_allowed_is_refused() {
+    let error = listed("openneuro:ds000001@1.0.0", &ds000001().most(5)).unwrap_err();
+    assert_eq!(error.kind, crate::error::Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "openneuro:ds000001@1.0.0 lists more than 5 files, the most this run lists for one dataset"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "download the folders you need from https://openneuro.org/datasets/ds000001/versions/1.0.0, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+        )
+    );
+}
+
 /// each folder is one query with the header openneuro asks for. annexed files get their S3 link at
 /// the snapshot's version, git's go by their object, and `DataLad`'s folder is left out.
 #[test]
