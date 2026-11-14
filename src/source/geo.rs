@@ -9,7 +9,7 @@ use std::time::Duration;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 
@@ -101,7 +101,10 @@ impl Accession {
         while let Some((path, url)) = folders.pop_front() {
             read += 1;
             if read > MOST_FOLDERS {
-                return Err(self.invalid(&format!("it holds more than {MOST_FOLDERS} folders")));
+                return Err(invalid(
+                    self,
+                    &format!("it holds more than {MOST_FOLDERS} folders"),
+                ));
             }
             let response = api.get(&url).await?;
             let html = self.index(&response, path.is_empty())?;
@@ -115,10 +118,13 @@ impl Accession {
                     .ok()
                     .filter(|decoded| is_name(decoded))
                     .ok_or_else(|| {
-                        self.invalid(&format!(
-                            "its index names an entry that is no file name: {}",
-                            name.escape_debug()
-                        ))
+                        invalid(
+                            self,
+                            &format!(
+                                "its index names an entry that is no file name: {}",
+                                name.escape_debug()
+                            ),
+                        )
                     })?;
                 let at = if path.is_empty() {
                     decoded.into_owned()
@@ -130,7 +136,10 @@ impl Accession {
                     .ok()
                     .filter(|link| link.as_str().starts_with(top.as_str()))
                     .ok_or_else(|| {
-                        self.invalid(&format!("its index links away: {}", entry.escape_debug()))
+                        invalid(
+                            self,
+                            &format!("its index links away: {}", entry.escape_debug()),
+                        )
                     })?;
                 if folder {
                     folders.push_back((at, link));
@@ -177,7 +186,7 @@ impl Accession {
         match response.status {
             200..=299 => Ok(response.text().into_owned()),
             404 | 410 if own => Err(self.missing()),
-            404 | 410 => Err(self.invalid("a folder its index lists is not there")),
+            404 | 410 => Err(invalid(self, "a folder its index lists is not there")),
             401 | 403 => Err(super::refused(
                 crate::net::host(&response.url),
                 &self.to_string(),
@@ -201,7 +210,7 @@ impl Accession {
             self.stub(),
             self.id
         ))
-        .map_err(|_| self.invalid("the folder's URL is invalid"))
+        .map_err(|_| invalid(self, "the folder's URL is invalid"))
     }
 
     /// the folder of GEO's file server for the accession's kind.
@@ -229,14 +238,6 @@ impl Accession {
             "check https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={}: the accession may not exist or not be public yet, and a sample's own table is on that page rather than in a file GEO keeps",
             self.id
         ))
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 

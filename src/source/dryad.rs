@@ -9,7 +9,7 @@ use serde::Deserialize;
 use url::Url;
 
 use super::doi::Doi;
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::account::Account;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -107,14 +107,14 @@ impl Dataset {
             .strip_prefix("doi:")
             .is_some_and(|doi| doi.eq_ignore_ascii_case(&self.doi))
         {
-            return Err(self.invalid("the answer names another dataset"));
+            return Err(invalid(self, "the answer names another dataset"));
         }
         let id = answer
             .links
             .version
             .as_ref()
             .and_then(|link| version_id(&link.href))
-            .ok_or_else(|| self.invalid("the answer links no version"))?;
+            .ok_or_else(|| invalid(self, "the answer links no version"))?;
         let newest = Version {
             id,
             number: answer.number,
@@ -142,7 +142,7 @@ impl Dataset {
                     .version
                     .as_ref()
                     .and_then(|link| version_id(&link.href))
-                    .ok_or_else(|| self.invalid("a version links nowhere"))?;
+                    .ok_or_else(|| invalid(self, "a version links nowhere"))?;
                 return Ok(Version {
                     id,
                     number,
@@ -169,14 +169,14 @@ impl Dataset {
     /// dryad says the version has. a listing that ends early is refused, not shortened.
     async fn files(&self, api: &impl Api, id: u64) -> Result<Vec<Remote>, Error> {
         let mut url = Url::parse(&format!("{API}/versions/{id}/files"))
-            .map_err(|_| self.invalid("the files URL is invalid"))?;
+            .map_err(|_| invalid(self, "the files URL is invalid"))?;
         let mut files = Vec::new();
         let (mut seen, mut total) = (0, 0);
         let mut pages = super::Pages::most(api.most_files());
         for page in 1.. {
             pages
                 .next(page, seen)
-                .map_err(|reason| self.invalid(&reason))?;
+                .map_err(|reason| invalid(self, &reason))?;
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
             let response = api.get(&url).await?;
             let answer: Page<Files> = super::json(self, &response)?;
@@ -206,10 +206,13 @@ impl Dataset {
             }
         }
         if seen < total {
-            return Err(self.invalid(&format!(
-                "the listing ends after {seen} of the {} it counts",
-                crate::units::count(total as u64, "file", "files")
-            )));
+            return Err(invalid(
+                self,
+                &format!(
+                    "the listing ends after {seen} of the {} it counts",
+                    crate::units::count(total as u64, "file", "files")
+                ),
+            ));
         }
         Ok(files)
     }
@@ -217,20 +220,12 @@ impl Dataset {
     /// the dataset's URL in dryad's API, with `more` path segments after it.
     fn url(&self, more: &[&str]) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("{API}/datasets"))
-            .map_err(|_| self.invalid("the API URL is invalid"))?;
+            .map_err(|_| invalid(self, "the API URL is invalid"))?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the API URL has no path"))?
+            .map_err(|()| invalid(self, "the API URL has no path"))?
             .push(&format!("doi:{}", self.doi))
             .extend(more);
         Ok(url)
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -387,13 +382,13 @@ impl File {
                     .ok()
             })
             .ok_or_else(|| {
-                dataset.invalid(&format!(
-                    "\"{}\" has no download link",
-                    self.path.escape_debug()
-                ))
+                invalid(
+                    dataset,
+                    &format!("\"{}\" has no download link", self.path.escape_debug()),
+                )
             })?;
         let url = Url::parse(&format!("{API}/files/{id}/download"))
-            .map_err(|_| dataset.invalid("the download URL is invalid"))?;
+            .map_err(|_| invalid(dataset, "the download URL is invalid"))?;
         let (mut md5, mut sha256) = (None, None);
         if let Some(digest) = self.digest.as_deref() {
             let read = match self.digest_type.as_deref() {
@@ -403,10 +398,13 @@ impl File {
                 _ => Some(()),
             };
             if read.is_none() {
-                return Err(dataset.invalid(&format!(
-                    "the digest of \"{}\" is not hex of its type",
-                    self.path.escape_debug()
-                )));
+                return Err(invalid(
+                    dataset,
+                    &format!(
+                        "the digest of \"{}\" is not hex of its type",
+                        self.path.escape_debug()
+                    ),
+                ));
             }
         }
         Ok(Remote {

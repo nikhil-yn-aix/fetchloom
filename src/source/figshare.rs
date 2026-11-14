@@ -6,7 +6,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -92,7 +92,7 @@ impl Article {
                 .version
                 .is_some_and(|version| version != answer.version)
         {
-            return Err(self.invalid("the article id or version does not match"));
+            return Err(invalid(self, "the article id or version does not match"));
         }
         if answer.download_disabled || answer.is_embargoed {
             return Err(Error::new(
@@ -152,7 +152,7 @@ impl Article {
     async fn files(&self, api: &impl Api, page_size: usize) -> Result<Vec<File>, Error> {
         let mut url = self.url()?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the files URL has no path"))?
+            .map_err(|()| invalid(self, "the files URL has no path"))?
             .push("files");
         let mut files = Vec::new();
         let mut seen = HashSet::new();
@@ -161,7 +161,7 @@ impl Article {
         loop {
             pages
                 .next(page, files.len())
-                .map_err(|reason| self.invalid(&reason))?;
+                .map_err(|reason| invalid(self, &reason))?;
             url.query_pairs_mut()
                 .clear()
                 .append_pair("page", &page.to_string())
@@ -170,7 +170,7 @@ impl Article {
             let entries: Vec<File> = super::json(self, &response)?;
             let is_last = entries.is_empty() || entries.len() < page_size;
             if entries.iter().any(|file| !seen.insert(file.id)) {
-                return Err(self.invalid("the files endpoint repeated a file"));
+                return Err(invalid(self, "the files endpoint repeated a file"));
             }
             files.extend(entries);
             if files.len() > api.most_files() {
@@ -189,21 +189,13 @@ impl Article {
 
     fn url(&self) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("https://api.figshare.com/v2/articles/{}", self.id))
-            .map_err(|_| self.invalid("the article URL is invalid"))?;
+            .map_err(|_| invalid(self, "the article URL is invalid"))?;
         if let Some(version) = self.version {
             url.path_segments_mut()
-                .map_err(|()| self.invalid("the article URL has no path"))?
+                .map_err(|()| invalid(self, "the article URL has no path"))?
                 .extend(["versions", &version.to_string()]);
         }
         Ok(url)
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -272,7 +264,10 @@ impl File {
             .or_else(|| self.supplied_md5.as_deref().filter(|hash| !hash.is_empty()))
             .map(|hash| {
                 Md5::from_hex(hash).ok_or_else(|| {
-                    article.invalid(&format!("the checksum for \"{}\" is not an MD5", self.name))
+                    invalid(
+                        article,
+                        &format!("the checksum for \"{}\" is not an MD5", self.name),
+                    )
                 })
             })
             .transpose()?;
@@ -289,10 +284,13 @@ impl File {
 
     fn download(&self, article: &Article) -> Result<Url, Error> {
         let bad = || {
-            article.invalid(&format!(
-                "the download URL for \"{}\" is not a stable public link",
-                self.name
-            ))
+            invalid(
+                article,
+                &format!(
+                    "the download URL for \"{}\" is not a stable public link",
+                    self.name
+                ),
+            )
         };
         let url = Url::parse(&self.download_url).map_err(|_| bad())?;
         if url.scheme() != "https"

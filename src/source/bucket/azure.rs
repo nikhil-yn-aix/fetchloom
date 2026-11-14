@@ -9,6 +9,7 @@ use super::{Listed, Object, Prefix, object_url, query};
 use crate::auth::azure::BLOB_HOST;
 use crate::error::Error;
 use crate::net::{Api, Response};
+use crate::source::invalid;
 use crate::xml;
 
 /// the container's link, ending in `/`, which its blobs' links extend.
@@ -18,7 +19,7 @@ fn container_url(prefix: &Prefix) -> Result<Url, Error> {
         prefix.account(),
         prefix.bucket
     ))
-    .map_err(|_| prefix.invalid("the container makes no valid link"))
+    .map_err(|_| invalid(prefix, "the container makes no valid link"))
 }
 
 /// every blob under the prefix, a page at a time, without the empty blobs that only mark a
@@ -45,9 +46,9 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
         if response.status != 200 {
             return Err(refused(prefix, &response, document.as_ref().ok()));
         }
-        let page = document.map_err(|reason| prefix.invalid(&reason))?;
+        let page = document.map_err(|reason| invalid(prefix, &reason))?;
         if page.name != "EnumerationResults" {
-            return Err(prefix.invalid(&format!("the answer is <{}>", page.name)));
+            return Err(invalid(prefix, &format!("the answer is <{}>", page.name)));
         }
         credentials |= super::with_credentials(&response);
         for blob in page
@@ -80,23 +81,23 @@ fn object(prefix: &Prefix, blobs_at: &Url, blob: &xml::Element) -> Result<Object
     let name = blob
         .text_of("Name")
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| prefix.invalid("a blob has no name"))?;
+        .ok_or_else(|| invalid(prefix, "a blob has no name"))?;
     prefix.check_key(name)?;
     let properties = blob
         .children("Properties")
         .next()
-        .ok_or_else(|| prefix.invalid(&format!("the blob \"{name}\" has no properties")))?;
+        .ok_or_else(|| invalid(prefix, &format!("the blob \"{name}\" has no properties")))?;
     let size = properties
         .text_of("Content-Length")
         .and_then(|size| size.parse().ok())
-        .ok_or_else(|| prefix.invalid(&format!("the size of \"{name}\" is not a number")))?;
+        .ok_or_else(|| invalid(prefix, &format!("the size of \"{name}\" is not a number")))?;
     let md5 = match properties
         .text_of("Content-MD5")
         .filter(|md5| !md5.is_empty())
     {
         Some(md5) => Some(
             super::gcs::base64_md5(md5)
-                .ok_or_else(|| prefix.invalid(&format!("the MD5 of \"{name}\" is not base64")))?,
+                .ok_or_else(|| invalid(prefix, &format!("the MD5 of \"{name}\" is not base64")))?,
         ),
         None => None,
     };

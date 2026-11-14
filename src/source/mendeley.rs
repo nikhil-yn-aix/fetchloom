@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
@@ -97,16 +97,16 @@ impl Dataset {
         }
         let described: Described = self.answer(&api.get(&url).await?)?;
         if !described.id.eq_ignore_ascii_case(&self.id) {
-            return Err(self.invalid("the answer names another dataset"));
+            return Err(invalid(self, "the answer names another dataset"));
         }
         if self
             .version
             .is_some_and(|version| version != described.version)
         {
-            return Err(self.invalid("the answer names another version"));
+            return Err(invalid(self, "the answer names another version"));
         }
         if described.version == 0 {
-            return Err(self.invalid("the answer names no version"));
+            return Err(invalid(self, "the answer names no version"));
         }
         Ok(described)
     }
@@ -125,17 +125,17 @@ impl Dataset {
         let mut paths = Vec::with_capacity(folders.len());
         for folder in &folders {
             if !is_uuid(&folder.id) {
-                return Err(self.invalid("a folder has an id that is no UUID"));
+                return Err(invalid(self, "a folder has an id that is no UUID"));
             }
             let mut names = vec![folder.name.as_str()];
             let mut at = folder;
             while let Some(parent) = at.parent_id.as_deref() {
                 at = by_id
                     .get(parent)
-                    .ok_or_else(|| self.invalid("a folder lies in a folder it does not list"))?;
+                    .ok_or_else(|| invalid(self, "a folder lies in a folder it does not list"))?;
                 names.push(at.name.as_str());
                 if names.len() > folders.len() {
-                    return Err(self.invalid("its folders hold each other"));
+                    return Err(invalid(self, "its folders hold each other"));
                 }
             }
             names.reverse();
@@ -162,7 +162,7 @@ impl Dataset {
             let held = usize::try_from(seen).unwrap_or(usize::MAX);
             pages
                 .next(seen, held)
-                .map_err(|reason| self.invalid(&reason))?;
+                .map_err(|reason| invalid(self, &reason))?;
             url.set_query(Some(&format!(
                 "folder_id={folder}&version={version}&$start={seen}"
             )));
@@ -171,10 +171,13 @@ impl Dataset {
             let total = response.total;
             if listed.is_empty() {
                 if total.is_some_and(|total| seen < total) {
-                    return Err(self.invalid(&format!(
-                        "the listing of a folder ends after {seen} of the {} it counts",
-                        crate::units::count(total.unwrap_or_default(), "file", "files")
-                    )));
+                    return Err(invalid(
+                        self,
+                        &format!(
+                            "the listing of a folder ends after {seen} of the {} it counts",
+                            crate::units::count(total.unwrap_or_default(), "file", "files")
+                        ),
+                    ));
                 }
                 return Ok(());
             }
@@ -184,7 +187,7 @@ impl Dataset {
                     return Err(self.too_many(api.most_files()));
                 }
                 if !ids.insert(file.id.clone()) {
-                    return Err(self.invalid("the listing of a folder repeats a file"));
+                    return Err(invalid(self, "the listing of a folder repeats a file"));
                 }
                 found.add(self, path, file)?;
             }
@@ -211,20 +214,20 @@ impl Dataset {
                     .help(super::UNKNOWN_HELP),
                     Some(401 | 403) => super::refused("data.mendeley.com", &self.to_string()),
                     Some(451) => self.embargoed(),
-                    _ => self.invalid("the answer is an error mendeley does not explain"),
+                    _ => invalid(self, "the answer is an error mendeley does not explain"),
                 },
             );
         }
         serde_json::from_value(value)
-            .map_err(|err| self.invalid(&format!("the answer could not be read: {err}")))
+            .map_err(|err| invalid(self, &format!("the answer could not be read: {err}")))
     }
 
     /// the dataset's URL in mendeley's public API, with `more` path segments after it.
     fn url(&self, more: &[&str]) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("{SITE}/public-api/datasets"))
-            .map_err(|_| self.invalid("the API URL is invalid"))?;
+            .map_err(|_| invalid(self, "the API URL is invalid"))?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the API URL has no path"))?
+            .map_err(|()| invalid(self, "the API URL has no path"))?
             .push(&self.id)
             .extend(more);
         Ok(url)
@@ -255,14 +258,6 @@ impl Dataset {
             most,
             &format!("download the files you need from {}", self.page()),
         )
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -298,10 +293,10 @@ impl Found {
             format!("{folder}/{}", file.filename)
         };
         if !is_uuid(&file.id) {
-            return Err(dataset.invalid(&format!(
-                "\"{}\" has an id that is no UUID",
-                path.escape_debug()
-            )));
+            return Err(invalid(
+                dataset,
+                &format!("\"{}\" has an id that is no UUID", path.escape_debug()),
+            ));
         }
         let Some(details) = file
             .content_details
@@ -325,18 +320,21 @@ impl Found {
                     )
             })
             .ok_or_else(|| {
-                dataset.invalid(&format!(
-                    "the download link of \"{}\" is not this dataset's",
-                    path.escape_debug()
-                ))
+                invalid(
+                    dataset,
+                    &format!(
+                        "the download link of \"{}\" is not this dataset's",
+                        path.escape_debug()
+                    ),
+                )
             })?;
         let sha256 = match details.sha256_hash.as_deref() {
             None => None,
             Some(hex) => Some(Sha256::from_hex(hex).ok_or_else(|| {
-                dataset.invalid(&format!(
-                    "the SHA-256 of \"{}\" is not hex",
-                    path.escape_debug()
-                ))
+                invalid(
+                    dataset,
+                    &format!("the SHA-256 of \"{}\" is not hex", path.escape_debug()),
+                )
             })?),
         };
         self.files.push(Remote {

@@ -7,7 +7,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
@@ -92,7 +92,7 @@ impl Dandiset {
             pinned.open(&status)?;
         }
         if info.version != version {
-            return Err(pinned.invalid("the answer names another version"));
+            return Err(invalid(&pinned, "the answer names another version"));
         }
         let (files, unavailable) = pinned.assets(api).await?;
         let metadata = info.metadata.unwrap_or_default();
@@ -122,7 +122,7 @@ impl Dandiset {
             return Ok(published.version);
         }
         let Some(draft) = described.draft_version else {
-            return Err(self.invalid("the answer names no version"));
+            return Err(invalid(self, "the answer names no version"));
         };
         warnings.push(format!(
             "{self} has no published version, so its draft is read. a draft can change: data.lock's hashes name the bytes"
@@ -144,7 +144,7 @@ impl Dandiset {
         while let Some(url) = next.take() {
             pages
                 .next(url.to_string(), files.len() + unavailable.len())
-                .map_err(|reason| self.invalid(&reason))?;
+                .map_err(|reason| invalid(self, &reason))?;
             let page: Page = self.answer(&api.get(&url).await?)?;
             if page
                 .count
@@ -153,7 +153,7 @@ impl Dandiset {
                 return Err(self.too_many(api.most_files()));
             }
             if page.results.is_empty() && page.next.is_some() {
-                return Err(self.invalid("an empty page names a next one"));
+                return Err(invalid(self, "an empty page names a next one"));
             }
             for asset in page.results {
                 match self.asset(asset)? {
@@ -175,7 +175,7 @@ impl Dandiset {
                                 && url.path() == pages_at.path()
                         })
                         .ok_or_else(|| {
-                            self.invalid("a page's next page is not one of this version's")
+                            invalid(self, "a page's next page is not one of this version's")
                         })?,
                 ),
             };
@@ -195,13 +195,16 @@ impl Dandiset {
             }));
         }
         let Some(blob) = asset.blob.filter(|blob| is_uuid(blob)) else {
-            return Err(self.invalid(&format!("\"{}\" is neither a blob nor a zarr", named())));
+            return Err(invalid(
+                self,
+                &format!("\"{}\" is neither a blob nor a zarr", named()),
+            ));
         };
         let metadata = asset.metadata.unwrap_or_default();
         let sha256 = match metadata.digest.get(SHA256) {
             None => None,
             Some(hex) => Some(Sha256::from_hex(hex).ok_or_else(|| {
-                self.invalid(&format!("the SHA-256 of \"{}\" is not hex", named()))
+                invalid(self, &format!("the SHA-256 of \"{}\" is not hex", named()))
             })?),
         };
         // the blob's own link on S3, which never changes; dandi's download link redirects there
@@ -217,7 +220,7 @@ impl Dandiset {
         let url = Url::parse(&url)
             .ok()
             .filter(|_| is_uuid(&asset.id))
-            .ok_or_else(|| self.invalid(&format!("\"{}\" has no usable link", named())))?;
+            .ok_or_else(|| invalid(self, &format!("\"{}\" has no usable link", named())))?;
         Ok(Ok(Remote {
             path,
             size: Some(asset.size),
@@ -270,7 +273,7 @@ impl Dandiset {
             }
             _ => format!("{API}/dandisets/{}/", self.id),
         };
-        Url::parse(&path).map_err(|_| self.invalid("the API URL is invalid"))
+        Url::parse(&path).map_err(|_| invalid(self, "the API URL is invalid"))
     }
 
     /// the page that shows the dandiset, at its version when it names one.
@@ -303,14 +306,6 @@ impl Dandiset {
                 self.page()
             ),
         )
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 

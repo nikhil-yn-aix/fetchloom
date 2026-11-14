@@ -9,7 +9,7 @@ use super::Node;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Access, Listing, Reference, Remote};
+use crate::source::{Access, Listing, Reference, Remote, invalid};
 
 #[derive(Deserialize)]
 struct Page {
@@ -116,11 +116,11 @@ pub(super) async fn files(node: &Node, api: &impl Api, root: Url) -> Result<Vec<
         loop {
             pages
                 .next(url.clone(), walk.seen.len())
-                .map_err(|reason| node.invalid(&reason))?;
+                .map_err(|reason| invalid(node, &reason))?;
             let response = api.get(&url).await?;
             let page: Page = crate::source::json(node, &response)?;
             if page.data.is_empty() && page.links.next.is_some() {
-                return Err(node.invalid("an empty file page points to another page"));
+                return Err(invalid(node, "an empty file page points to another page"));
             }
             for entry in page.data {
                 walk.add(node, &url, &folder.path, entry)?;
@@ -135,7 +135,7 @@ pub(super) async fn files(node: &Node, api: &impl Api, root: Url) -> Result<Vec<
 impl Walk {
     fn add(&mut self, node: &Node, page: &Url, parent: &str, entry: Entry) -> Result<(), Error> {
         if entry.id.is_empty() || !self.seen.insert(entry.id.clone()) {
-            return Err(node.invalid("the files API repeated a file or folder id"));
+            return Err(invalid(node, "the files API repeated a file or folder id"));
         }
         if self.seen.len() > self.most {
             return Err(crate::source::too_many(
@@ -162,7 +162,7 @@ impl Walk {
                 let related = entry
                     .relationships
                     .files
-                    .ok_or_else(|| node.invalid("a folder has no files relationship"))?;
+                    .ok_or_else(|| invalid(node, "a folder has no files relationship"))?;
                 let mut url = api_url(node, page, &related.links.related.href)?;
                 // OSF caps page[size] at 100, even when a caller asks for 1,000
                 url.query_pairs_mut()
@@ -176,7 +176,7 @@ impl Walk {
 }
 
 fn api_url(node: &Node, base: &Url, link: &str) -> Result<Url, Error> {
-    let bad = || node.invalid("a file page or folder link leaves the OSF API");
+    let bad = || invalid(node, "a file page or folder link leaves the OSF API");
     let url = base.join(link).map_err(|_| bad())?;
     let prefix = format!("/v2/nodes/{}/files/osfstorage/", node.id);
     let is_listing = url.path().strip_prefix(&prefix).is_some_and(|rest| {
@@ -205,7 +205,7 @@ impl Entry {
     /// lists the one file named by a GUID.
     pub(super) fn listing(self, node: &Node) -> Result<Listing, Error> {
         if self.attributes.kind != EntryKind::File {
-            return Err(node.invalid("the GUID names a folder rather than a file"));
+            return Err(invalid(node, "the GUID names a folder rather than a file"));
         }
         let title = self.attributes.name.clone();
         let file = self.remote(node, title.clone())?;
@@ -227,10 +227,10 @@ impl Entry {
             .current_version
             .filter(|version| *version > 0)
             .ok_or_else(|| {
-                node.invalid(&format!(
-                    "\"{}\" has no file version to pin",
-                    self.attributes.name
-                ))
+                invalid(
+                    node,
+                    &format!("\"{}\" has no file version to pin", self.attributes.name),
+                )
             })
     }
 
@@ -264,10 +264,13 @@ impl Entry {
 
     fn download(&self, node: &Node, version: u64) -> Result<Url, Error> {
         let bad = || {
-            node.invalid(&format!(
-                "\"{}\" has no stable OSF download link",
-                self.attributes.name
-            ))
+            invalid(
+                node,
+                &format!(
+                    "\"{}\" has no stable OSF download link",
+                    self.attributes.name
+                ),
+            )
         };
         let mut url = self
             .links

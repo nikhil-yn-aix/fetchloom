@@ -8,7 +8,7 @@ use std::fmt;
 
 use url::Url;
 
-use super::{Listing, malformed};
+use super::{Listing, invalid, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 
@@ -169,16 +169,16 @@ impl Dataset {
     /// the dataset alone answers with the newest one the key may see, a draft for its curators.
     fn url(&self) -> Result<Url, Error> {
         let Item::Dataset(pid) = &self.item else {
-            return Err(self.invalid("a file has no dataset listing URL"));
+            return Err(invalid(self, "a file has no dataset listing URL"));
         };
         let mut url = Url::parse(&format!(
             "https://{}/api/datasets/:persistentId/",
             self.host
         ))
-        .map_err(|_| self.invalid("the dataset URL is invalid"))?;
+        .map_err(|_| invalid(self, "the dataset URL is invalid"))?;
         let version = self.version.as_deref().unwrap_or(":latest-published");
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the dataset URL has no path"))?
+            .map_err(|()| invalid(self, "the dataset URL has no path"))?
             .pop_if_empty()
             .extend(["versions", version]);
         url.query_pairs_mut().append_pair("persistentId", pid);
@@ -187,7 +187,7 @@ impl Dataset {
 
     fn file_url(&self, id: u64) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("https://{}/api/access/datafile/{id}", self.host))
-            .map_err(|_| self.invalid("the file URL is invalid"))?;
+            .map_err(|_| invalid(self, "the file URL is invalid"))?;
         // dataverse checksums describe the upload, not the ingested tabular conversion
         url.query_pairs_mut().append_pair("format", "original");
         Ok(url)
@@ -201,14 +201,6 @@ impl Dataset {
             format!("{self} sent an invalid listing: the version is not published"),
         )
         .help("open the dataset's page and choose a published version")
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 

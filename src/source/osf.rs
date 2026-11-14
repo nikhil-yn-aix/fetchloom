@@ -8,7 +8,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Expired};
 
@@ -78,11 +78,11 @@ impl Node {
         match answer.data {
             Resource::Node(metadata) => {
                 if metadata.id != self.id {
-                    return Err(self.invalid("the node id does not match"));
+                    return Err(invalid(self, "the node id does not match"));
                 }
                 let mut root = self.endpoint("nodes")?;
                 root.path_segments_mut()
-                    .map_err(|()| self.invalid("the files URL has no path"))?
+                    .map_err(|()| invalid(self, "the files URL has no path"))?
                     .pop_if_empty()
                     .extend(["files", "osfstorage", ""]);
                 root.query_pairs_mut().append_pair("page[size]", "100");
@@ -103,15 +103,7 @@ impl Node {
 
     fn endpoint(&self, resource: &str) -> Result<Url, Error> {
         Url::parse(&format!("https://api.osf.io/v2/{resource}/{}/", self.id))
-            .map_err(|_| self.invalid("the API URL is invalid"))
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
+            .map_err(|_| invalid(self, "the API URL is invalid"))
     }
 }
 

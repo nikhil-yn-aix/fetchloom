@@ -11,7 +11,7 @@ use std::fmt;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::auth::azure::{BLOB_HOST, account_of, is_account, is_container};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
@@ -38,7 +38,7 @@ impl Pages {
     fn follow(&mut self, prefix: &Prefix, token: &str, objects: usize) -> Result<(), Error> {
         self.0
             .next(token.to_owned(), objects)
-            .map_err(|reason| prefix.invalid(&reason))
+            .map_err(|reason| invalid(prefix, &reason))
     }
 }
 
@@ -330,14 +330,6 @@ impl Prefix {
             most,
             "name a narrower prefix, ending in /, for the folder you need",
         )
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 
     /// the error for an answer other than a listing. `code`, `message` and `region` are what the

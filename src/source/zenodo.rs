@@ -6,7 +6,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -69,14 +69,14 @@ impl Record {
         let response = api.get(&self.url()?).await?;
         let answer: Answer = super::json(self, &response)?;
         if answer.id == 0 {
-            return Err(self.invalid("the record has no concrete id"));
+            return Err(invalid(self, "the record has no concrete id"));
         }
         let concept = answer
             .conceptrecid
             .as_deref()
             .and_then(|id| id.parse::<u64>().ok());
         if answer.id != self.id && concept != Some(self.id) {
-            return Err(self.invalid("the record or concept id does not match"));
+            return Err(invalid(self, "the record or concept id does not match"));
         }
         let access = match answer.metadata.access_right.as_str() {
             "open" => Access::Public,
@@ -93,7 +93,9 @@ impl Record {
                 ))
                 .needs(crate::account::Account::Zenodo, Some(page)));
             }
-            _ => return Err(self.invalid("the access condition is not recognized")),
+            _ => {
+                return Err(invalid(self, "the access condition is not recognized"));
+            }
         };
         let resolved = Record { id: answer.id };
         // the records API embeds all files, including the 1,123 in record 7793716.
@@ -118,15 +120,7 @@ impl Record {
 
     fn url(&self) -> Result<Url, Error> {
         Url::parse(&format!("https://zenodo.org/api/records/{}", self.id))
-            .map_err(|_| self.invalid("the record URL is invalid"))
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
+            .map_err(|_| invalid(self, "the record URL is invalid"))
     }
 }
 
@@ -165,11 +159,14 @@ impl File {
             .strip_prefix("md5:")
             .and_then(Md5::from_hex)
             .ok_or_else(|| {
-                record.invalid(&format!("the checksum for \"{}\" is not an MD5", self.key))
+                invalid(
+                    record,
+                    &format!("the checksum for \"{}\" is not an MD5", self.key),
+                )
             })?;
         let mut url = record.url()?;
         url.path_segments_mut()
-            .map_err(|()| record.invalid("the file URL has no path"))?
+            .map_err(|()| invalid(record, "the file URL has no path"))?
             .extend(["files", &self.key, "content"]);
         Ok(Remote {
             path: self.key,

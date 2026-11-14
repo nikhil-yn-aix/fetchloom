@@ -1035,6 +1035,15 @@ fn check(reference: &Reference, mut listing: Listing, most: usize) -> Result<Lis
     Ok(listing)
 }
 
+/// the error for a listing `subject` sent that fetchloom cannot read, for `reason`.
+pub(crate) fn invalid(subject: impl fmt::Display, reason: &str) -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        format!("{subject} sent an invalid listing: {reason}"),
+    )
+    .help(crate::error::report_answer())
+}
+
 /// the error for a file or folder `reference` lists at `path`, a name fetchloom refuses
 /// `because` of what it holds, which only the dataset's owner can change.
 pub(crate) fn refused_name(reference: &str, path: &str, because: &str) -> Error {

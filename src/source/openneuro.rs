@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
@@ -99,9 +99,9 @@ impl Dataset {
             .await?;
         let snapshot = top
             .snapshot
-            .ok_or_else(|| pinned.invalid("the answer holds no snapshot"))?;
+            .ok_or_else(|| invalid(&pinned, "the answer holds no snapshot"))?;
         if snapshot.tag.as_deref() != Some(tag.as_str()) {
-            return Err(pinned.invalid("the answer names another snapshot"));
+            return Err(invalid(&pinned, "the answer names another snapshot"));
         }
         let mut warnings = Vec::new();
         if let Some(deprecated) = snapshot.deprecated {
@@ -177,7 +177,7 @@ impl Dataset {
         let mut trees = HashMap::new();
         while let Some((tree, path)) = found.folders.pop_front() {
             if parents(&path).any(|parent| trees.get(parent) == Some(&tree)) {
-                return Err(self.invalid("a folder lies in itself"));
+                return Err(invalid(self, "a folder lies in itself"));
             }
             trees.insert(path.clone(), tree.clone());
             if trees.len() + found.files.len() > api.most_files() {
@@ -194,7 +194,7 @@ impl Dataset {
                 .await?;
             let files = folder
                 .snapshot
-                .ok_or_else(|| self.invalid(&format!("the folder {path} holds no listing")))?
+                .ok_or_else(|| invalid(self, &format!("the folder {path} holds no listing")))?
                 .files;
             found.add(self, &path, files)?;
         }
@@ -223,8 +223,12 @@ impl Dataset {
                 )
                 .help(format!("{} says when its owners publish one", self.page()))
             })?;
-        tag_of(&tag)
-            .ok_or_else(|| self.invalid("the newest snapshot's tag is not one fetchloom can name"))
+        tag_of(&tag).ok_or_else(|| {
+            invalid(
+                self,
+                "the newest snapshot's tag is not one fetchloom can name",
+            )
+        })
     }
 
     /// asks openneuro's API `query`, by GET with the header it asks of one, and reads the
@@ -234,7 +238,7 @@ impl Dataset {
             .append_pair("query", query)
             .finish();
         let url = Url::parse(&format!("{API}?{encoded}"))
-            .map_err(|_| self.invalid("the query makes no valid link"))?;
+            .map_err(|_| invalid(self, "the query makes no valid link"))?;
         let response = api.get_with(&url, PREFLIGHT).await?;
         if response.status != 200 {
             return Err(Error::new(
@@ -248,7 +252,7 @@ impl Dataset {
         }
         answer
             .data
-            .ok_or_else(|| self.invalid("the answer holds no data"))
+            .ok_or_else(|| invalid(self, "the answer holds no data"))
     }
 
     /// the error for what openneuro's API said went wrong: a dataset or a snapshot it does not
@@ -301,14 +305,6 @@ impl Dataset {
             most,
             &format!("download the folders you need from {}", self.page()),
         )
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -419,15 +415,18 @@ impl Found {
     fn add(&mut self, dataset: &Dataset, folder: &str, entries: Vec<Entry>) -> Result<(), Error> {
         for entry in entries {
             if entry.filename.is_empty() || entry.filename.contains('/') {
-                return Err(dataset.invalid(&format!(
-                    "an entry in {} has the name \"{}\"",
-                    if folder.is_empty() {
-                        "the top folder"
-                    } else {
-                        folder
-                    },
-                    entry.filename.escape_debug()
-                )));
+                return Err(invalid(
+                    dataset,
+                    &format!(
+                        "an entry in {} has the name \"{}\"",
+                        if folder.is_empty() {
+                            "the top folder"
+                        } else {
+                            folder
+                        },
+                        entry.filename.escape_debug()
+                    ),
+                ));
             }
             let path = if folder.is_empty() {
                 entry.filename.clone()
@@ -439,7 +438,10 @@ impl Found {
                     continue;
                 }
                 if !is_git_id(&entry.id) {
-                    return Err(dataset.invalid(&format!("the folder {path} has no usable id")));
+                    return Err(invalid(
+                        dataset,
+                        &format!("the folder {path} has no usable id"),
+                    ));
                 }
                 if self.opens(&path) {
                     self.folders.push_back((entry.id, path));
@@ -466,19 +468,23 @@ fn file(dataset: &Dataset, path: String, entry: &Entry) -> Result<Remote, Error>
         .size
         .as_ref()
         .and_then(number)
-        .ok_or_else(|| dataset.invalid(&format!("the size of {path} is not a number")))?;
+        .ok_or_else(|| invalid(dataset, &format!("the size of {path} is not a number")))?;
     let objects = format!("{SITE}/crn/datasets/{}/objects/", dataset.id);
     let (key, url) = if entry.annexed {
         let key = Key::parse(&entry.id).ok_or_else(|| {
-            dataset.invalid(&format!(
-                "{path} is kept under \"{}\", which is no git-annex key",
-                entry.id.escape_debug()
-            ))
+            invalid(
+                dataset,
+                &format!(
+                    "{path} is kept under \"{}\", which is no git-annex key",
+                    entry.id.escape_debug()
+                ),
+            )
         })?;
         if key.size.is_some_and(|stated| stated != size) {
-            return Err(dataset.invalid(&format!(
-                "{path} is listed at {size} bytes, and its key says otherwise"
-            )));
+            return Err(invalid(
+                dataset,
+                &format!("{path} is listed at {size} bytes, and its key says otherwise"),
+            ));
         }
         let bucket = format!("/openneuro.org/{}/", dataset.id);
         let stored = entry
@@ -494,15 +500,15 @@ fn file(dataset: &Dataset, path: String, entry: &Entry) -> Result<Remote, Error>
         let url = match stored {
             Some(url) => url,
             None => Url::parse(&format!("{objects}{}", entry.id))
-                .map_err(|_| dataset.invalid(&format!("{path} has no usable link")))?,
+                .map_err(|_| invalid(dataset, &format!("{path} has no usable link")))?,
         };
         (key, url)
     } else {
         if !is_git_id(&entry.id) {
-            return Err(dataset.invalid(&format!("{path} has no usable git id")));
+            return Err(invalid(dataset, &format!("{path} has no usable git id")));
         }
         let mut url = Url::parse(&format!("{objects}{}", entry.id))
-            .map_err(|_| dataset.invalid(&format!("{path} has no usable link")))?;
+            .map_err(|_| invalid(dataset, &format!("{path} has no usable link")))?;
         url.query_pairs_mut()
             .append_pair("filename", &entry.filename);
         (

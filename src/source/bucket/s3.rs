@@ -8,6 +8,7 @@ use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::s3::{Keyed, is_region, s3_host};
 use crate::net::{Api, Response};
+use crate::source::invalid;
 use crate::xml;
 
 /// where a bucket's requests go: its own host, or a path on the service's host for a dotted name
@@ -31,7 +32,7 @@ impl Endpoint {
             format!("https://{bucket}.{service}/")
         };
         let base =
-            Url::parse(&base).map_err(|_| prefix.invalid("the bucket makes no valid link"))?;
+            Url::parse(&base).map_err(|_| invalid(prefix, "the bucket makes no valid link"))?;
         Ok(Endpoint { base })
     }
 
@@ -91,9 +92,9 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
             let named = said.and_then(|said| said.text_of("Region"));
             return Err(prefix.refused(&response, code, message, named));
         }
-        let page = document.map_err(|reason| prefix.invalid(&reason))?;
+        let page = document.map_err(|reason| invalid(prefix, &reason))?;
         if page.name != "ListBucketResult" {
-            return Err(prefix.invalid(&format!("the answer is <{}>", page.name)));
+            return Err(invalid(prefix, &format!("the answer is <{}>", page.name)));
         }
         credentials |= super::with_credentials(&response);
         let signed = match &response.keyed {
@@ -131,12 +132,19 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
                 });
             }
             Some("true") => {}
-            _ => return Err(prefix.invalid("a page does not say whether more follow")),
+            _ => {
+                return Err(invalid(prefix, "a page does not say whether more follow"));
+            }
         }
         let next = page
             .text_of("NextContinuationToken")
             .filter(|next| !next.is_empty())
-            .ok_or_else(|| prefix.invalid("a page says more follow but gives no token for them"))?;
+            .ok_or_else(|| {
+                invalid(
+                    prefix,
+                    "a page says more follow but gives no token for them",
+                )
+            })?;
         pages.follow(prefix, next, objects.len())?;
         token = Some(next.to_owned());
     }
@@ -169,12 +177,12 @@ fn object(
 ) -> Result<Object, Error> {
     let raw = contents
         .text_of("Key")
-        .ok_or_else(|| prefix.invalid("an object has no key"))?;
+        .ok_or_else(|| invalid(prefix, "an object has no key"))?;
     // with encoding-type=url, S3 escapes keys as a form does, a space as +
     let key = if escaped {
         percent_decode_str(&raw.replace('+', " "))
             .decode_utf8()
-            .map_err(|_| prefix.invalid(&format!("the key \"{raw}\" is not UTF-8")))?
+            .map_err(|_| invalid(prefix, &format!("the key \"{raw}\" is not UTF-8")))?
             .into_owned()
     } else {
         raw.to_owned()
@@ -183,7 +191,7 @@ fn object(
     let size = contents
         .text_of("Size")
         .and_then(|size| size.parse().ok())
-        .ok_or_else(|| prefix.invalid(&format!("the size of \"{key}\" is not a number")))?;
+        .ok_or_else(|| invalid(prefix, &format!("the size of \"{key}\" is not a number")))?;
     let mut url = object_url(&endpoint.base, &key);
     // s3 reserves the exact key soap on a bucket host for its legacy SOAP endpoint
     if key == "soap" && prefix.endpoint.is_none() && !prefix.bucket.contains('.') {
@@ -191,9 +199,9 @@ fn object(
             .base
             .host_str()
             .and_then(|host| host.strip_prefix(&format!("{}.", prefix.bucket)))
-            .ok_or_else(|| prefix.invalid("the bucket makes no valid link"))?;
+            .ok_or_else(|| invalid(prefix, "the bucket makes no valid link"))?;
         url.set_host(Some(service))
-            .map_err(|_| prefix.invalid("the bucket makes no valid link"))?;
+            .map_err(|_| invalid(prefix, "the bucket makes no valid link"))?;
         url.set_path(&format!("/{}/soap", prefix.bucket));
     }
     let etag = contents.text_of("ETag");

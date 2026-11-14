@@ -7,7 +7,7 @@ use super::{Dataset, Item};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::machine::Var;
-use crate::source::{Access, Listing, Reference, Remote};
+use crate::source::{Access, Listing, Reference, Remote, invalid};
 
 /// a native API answer for one version of a dataset.
 #[derive(Deserialize)]
@@ -93,7 +93,7 @@ impl Answer {
     /// lists the published version without requesting file bodies.
     pub(super) fn listing(self, dataset: &Dataset, var: Var<'_>) -> Result<Listing, Error> {
         if self.status != "OK" {
-            return Err(dataset.invalid("the API did not return an OK answer"));
+            return Err(invalid(dataset, "the API did not return an OK answer"));
         }
         self.data.listing(dataset, var)
     }
@@ -105,7 +105,7 @@ impl Version {
         let files = self
             .files
             .take()
-            .ok_or_else(|| dataset.invalid("the dataset version has no file list"))?;
+            .ok_or_else(|| invalid(dataset, "the dataset version has no file list"))?;
         self.pinned(dataset, item, files, var)
     }
 
@@ -163,7 +163,7 @@ impl Version {
         if let Item::Dataset(pid) = &dataset.item
             && !self.dataset_persistent_id.eq_ignore_ascii_case(pid)
         {
-            return Err(dataset.invalid("the persistent id does not match"));
+            return Err(invalid(dataset, "the persistent id does not match"));
         }
         if let Some(requested) = &dataset.version {
             let requested = if requested.contains('.') {
@@ -172,7 +172,7 @@ impl Version {
                 format!("{requested}.0")
             };
             if !requested.starts_with(':') && requested != number {
-                return Err(dataset.invalid("the version does not match"));
+                return Err(invalid(dataset, "the version does not match"));
             }
         }
         let restricted: Vec<_> = files
@@ -207,7 +207,7 @@ impl Version {
                     .value
                     .as_str()
                     .map(str::to_owned)
-                    .ok_or_else(|| dataset.invalid("the title is not text"))
+                    .ok_or_else(|| invalid(dataset, "the title is not text"))
             })
             .transpose()
     }
@@ -251,9 +251,10 @@ impl File {
             match (&self.data.original_file_name, self.data.original_file_size) {
                 (Some(_), Some(size)) => Some(size),
                 _ => {
-                    return Err(dataset.invalid(&format!(
-                        "the original name or size for \"{path}\" is missing"
-                    )));
+                    return Err(invalid(
+                        dataset,
+                        &format!("the original name or size for \"{path}\" is missing"),
+                    ));
                 }
             }
         } else {

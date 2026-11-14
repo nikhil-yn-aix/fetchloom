@@ -8,7 +8,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -99,18 +99,21 @@ impl Release {
         }
         let answer: Answer = super::json(self, &response)?;
         if answer.tag_name.is_empty() {
-            return Err(self.invalid("the release names no tag"));
+            return Err(invalid(self, "the release names no tag"));
         }
         if self.tag.as_ref().is_some_and(|tag| *tag != answer.tag_name) {
-            return Err(self.invalid("the answer names another tag"));
+            return Err(invalid(self, "the answer names another tag"));
         }
         let assets = answer.assets;
         if assets.count > assets.links.len() + assets.sources.len() {
-            return Err(self.invalid(&format!(
-                "it lists {} of the {} it counts",
-                assets.links.len() + assets.sources.len(),
-                crate::units::count(assets.count as u64, "asset", "assets")
-            )));
+            return Err(invalid(
+                self,
+                &format!(
+                    "it lists {} of the {} it counts",
+                    assets.links.len() + assets.sources.len(),
+                    crate::units::count(assets.count as u64, "asset", "assets")
+                ),
+            ));
         }
         if assets.links.len() > api.most_files() {
             return Err(super::too_many(
@@ -166,10 +169,13 @@ impl Release {
     /// gitlab.com.
     fn path(&self, direct: &str) -> Result<String, Error> {
         let invalid = || {
-            self.invalid(&format!(
-                "a download link is not this release's on gitlab.com: {}",
-                crate::shown::mask_query(direct)
-            ))
+            invalid(
+                self,
+                &format!(
+                    "a download link is not this release's on gitlab.com: {}",
+                    crate::shown::mask_query(direct)
+                ),
+            )
         };
         let url = Url::parse(direct)
             .ok()
@@ -234,9 +240,9 @@ impl Release {
     /// the project's URL in gitlab's API, its path one encoded segment, with `more` after it.
     fn url(&self, more: &[&str]) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("{SITE}/api/v4/projects"))
-            .map_err(|_| self.invalid("the API URL is invalid"))?;
+            .map_err(|_| invalid(self, "the API URL is invalid"))?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the API URL has no path"))?
+            .map_err(|()| invalid(self, "the API URL has no path"))?
             .push(&self.project)
             .extend(more);
         Ok(url)
@@ -244,14 +250,6 @@ impl Release {
 
     fn page(&self) -> String {
         format!("{SITE}/{}", self.project)
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 

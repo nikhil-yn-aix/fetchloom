@@ -10,6 +10,7 @@ use super::{Listed, Object, Prefix, object_url, query};
 use crate::digest::Md5;
 use crate::error::Error;
 use crate::net::Api;
+use crate::source::invalid;
 
 /// the object fields a listing needs, so pages stay small.
 const FIELDS: &str = "items(name,size,md5Hash,generation),nextPageToken";
@@ -33,7 +34,7 @@ struct Item {
 
 /// every object under the prefix, a page of up to 1,000 at a time.
 pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Error> {
-    let bad = || prefix.invalid("the bucket makes no valid link");
+    let bad = || invalid(prefix, "the bucket makes no valid link");
     let listing = Url::parse(&format!(
         "https://storage.googleapis.com/storage/v1/b/{}/o",
         prefix.bucket
@@ -88,31 +89,42 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
 /// for it.
 fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error> {
     prefix.check_key(&item.name)?;
-    let size = item
-        .size
-        .parse()
-        .map_err(|_| prefix.invalid(&format!("the size of \"{}\" is not a number", item.name)))?;
+    let size = item.size.parse().map_err(|_| {
+        invalid(
+            prefix,
+            &format!("the size of \"{}\" is not a number", item.name),
+        )
+    })?;
     let md5 = item
         .md5_hash
         .as_deref()
         .map(|hash| {
             base64_md5(hash).ok_or_else(|| {
-                prefix.invalid(&format!("the MD5 of \"{}\" is not base64", item.name))
+                invalid(
+                    prefix,
+                    &format!("the MD5 of \"{}\" is not base64", item.name),
+                )
             })
         })
         .transpose()?;
     let mut url = object_url(objects_at, &item.name);
     let generation = item.generation.as_deref().ok_or_else(|| {
-        prefix.invalid(&format!(
-            "the object \"{}\" has no generation",
-            item.name.escape_debug()
-        ))
+        invalid(
+            prefix,
+            &format!(
+                "the object \"{}\" has no generation",
+                item.name.escape_debug()
+            ),
+        )
     })?;
     if generation.is_empty() || !generation.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(prefix.invalid(&format!(
-            "the generation of \"{}\" is not a number",
-            item.name.escape_debug()
-        )));
+        return Err(invalid(
+            prefix,
+            &format!(
+                "the generation of \"{}\" is not a number",
+                item.name.escape_debug()
+            ),
+        ));
     }
     url.set_query(Some(&format!("generation={generation}")));
     Ok(Object {

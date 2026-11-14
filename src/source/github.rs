@@ -8,7 +8,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -87,10 +87,10 @@ impl Release {
         }
         let answer: Answer = super::json(self, &response)?;
         if answer.tag_name.is_empty() {
-            return Err(self.invalid("the release names no tag"));
+            return Err(invalid(self, "the release names no tag"));
         }
         if self.tag.as_ref().is_some_and(|tag| *tag != answer.tag_name) {
-            return Err(self.invalid("the answer names another tag"));
+            return Err(invalid(self, "the answer names another tag"));
         }
         if answer.assets.len() > api.most_files() {
             return Err(super::too_many(
@@ -191,9 +191,9 @@ impl Release {
     /// the repository's URL in github's API, with `more` path segments after it.
     fn url(&self, more: &[&str]) -> Result<Url, Error> {
         let mut url = Url::parse(&format!("{API}/repos"))
-            .map_err(|_| self.invalid("the API URL is invalid"))?;
+            .map_err(|_| invalid(self, "the API URL is invalid"))?;
         url.path_segments_mut()
-            .map_err(|()| self.invalid("the API URL has no path"))?
+            .map_err(|()| invalid(self, "the API URL has no path"))?
             .push(&self.owner)
             .push(&self.repo)
             .extend(more);
@@ -202,14 +202,6 @@ impl Release {
 
     fn page(&self) -> String {
         format!("https://github.com/{}/{}", self.owner, self.repo)
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -276,22 +268,24 @@ impl Asset {
                     && url.path().contains("/releases/download/")
             })
             .ok_or_else(|| {
-                release.invalid(&format!(
-                    "the download link of \"{quoted}\" is not on github.com"
-                ))
+                invalid(
+                    release,
+                    &format!("the download link of \"{quoted}\" is not on github.com"),
+                )
             })?;
         let sha256 = match self.digest.as_deref() {
             None => None,
             Some(digest) => match digest.split_once(':') {
                 Some(("sha256", hex)) => Some(Sha256::from_hex(hex).ok_or_else(|| {
-                    release.invalid(&format!("the SHA-256 of \"{quoted}\" is not hex"))
+                    invalid(release, &format!("the SHA-256 of \"{quoted}\" is not hex"))
                 })?),
                 // another algorithm checks nothing fetchloom keeps, and the bytes pin the file
                 Some(_) => None,
                 None => {
-                    return Err(
-                        release.invalid(&format!("the digest of \"{quoted}\" names no algorithm"))
-                    );
+                    return Err(invalid(
+                        release,
+                        &format!("the digest of \"{quoted}\" names no algorithm"),
+                    ));
                 }
             },
         };

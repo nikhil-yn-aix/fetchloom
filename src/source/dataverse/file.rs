@@ -9,6 +9,7 @@ use super::{Dataset, Item, is_number};
 use crate::error::Error;
 use crate::net::Api;
 use crate::source::Listing;
+use crate::source::invalid;
 
 #[derive(Deserialize)]
 struct Answer {
@@ -31,14 +32,14 @@ pub(super) async fn resolve(dataset: &Dataset, id: &str, api: &impl Api) -> Resu
     let response = api.get(&url(dataset, id)?).await?;
     let answer: Answer = dataset.answer(&response)?;
     if answer.status != "OK" {
-        return Err(dataset.invalid("the API did not return an OK answer"));
+        return Err(invalid(dataset, "the API did not return an OK answer"));
     }
     let Described {
         file,
         dataset_version,
     } = answer.data;
     if !file.is(id) {
-        return Err(dataset.invalid("the answer describes another file"));
+        return Err(invalid(dataset, "the answer describes another file"));
     }
     let item = Item::File(file.id().to_string());
     dataset_version.pinned(dataset, item, vec![file], &crate::source::env)
@@ -49,9 +50,9 @@ fn url(dataset: &Dataset, id: &str) -> Result<Url, Error> {
     let version = dataset.version.as_deref().unwrap_or(":latest-published");
     let named = if is_number(id) { id } else { ":persistentId" };
     let mut url = Url::parse(&format!("https://{}/api/files/", dataset.host))
-        .map_err(|_| dataset.invalid("the file URL is invalid"))?;
+        .map_err(|_| invalid(dataset, "the file URL is invalid"))?;
     url.path_segments_mut()
-        .map_err(|()| dataset.invalid("the file URL has no path"))?
+        .map_err(|()| invalid(dataset, "the file URL has no path"))?
         .pop_if_empty()
         .extend([named, "versions", version]);
     {

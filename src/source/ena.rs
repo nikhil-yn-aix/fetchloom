@@ -8,7 +8,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Access, Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
@@ -128,11 +128,14 @@ impl Accession {
         }
         let mut rows = self.report(api, count).await?;
         if rows.len() < count {
-            return Err(self.invalid(&format!(
-                "the report ends after {} of the {} ENA counts",
-                grouped(rows.len() as u64),
-                crate::units::count(count as u64, "run", "runs")
-            )));
+            return Err(invalid(
+                self,
+                &format!(
+                    "the report ends after {} of the {} ENA counts",
+                    grouped(rows.len() as u64),
+                    crate::units::count(count as u64, "run", "runs")
+                ),
+            ));
         }
         rows.sort_by(|a, b| a.run_accession.cmp(&b.run_accession));
         let mut found = Found::default();
@@ -175,7 +178,7 @@ impl Accession {
             .count
             .trim()
             .parse()
-            .map_err(|_| self.invalid("the count of runs is no number"))
+            .map_err(|_| invalid(self, "the count of runs is no number"))
     }
 
     /// ENA's report of the runs it counted, which it sends whole, since it has no pages: no
@@ -188,10 +191,13 @@ impl Accession {
         )));
         let rows: Vec<Row> = self.answer(&api.get(&url).await?)?;
         if rows.len() > count {
-            return Err(self.invalid(&format!(
-                "the report holds more than the {} it was asked for",
-                crate::units::count(count as u64, "run", "runs")
-            )));
+            return Err(invalid(
+                self,
+                &format!(
+                    "the report holds more than the {} it was asked for",
+                    crate::units::count(count as u64, "run", "runs")
+                ),
+            ));
         }
         Ok(rows)
     }
@@ -227,7 +233,7 @@ impl Accession {
 
     fn url(&self, report: &str) -> Result<Url, Error> {
         Url::parse(&format!("{PORTAL}/{report}"))
-            .map_err(|_| self.invalid("the API URL is invalid"))
+            .map_err(|_| invalid(self, "the API URL is invalid"))
     }
 
     fn page(&self) -> String {
@@ -248,14 +254,6 @@ impl Accession {
             most,
             "add the runs you need by their own run accessions",
         )
-    }
-
-    fn invalid(&self, reason: &str) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{self} sent an invalid listing: {reason}"),
-        )
-        .help(crate::error::report_answer())
     }
 }
 
@@ -370,7 +368,7 @@ impl Found {
         }
         let run = &row.run_accession;
         if level(run) != Some(Level::Run) {
-            return Err(accession.invalid("a run has no run accession"));
+            return Err(invalid(accession, "a run has no run accession"));
         }
         let entries: Vec<&str> = entries.split(';').collect();
         let listed = |field: &str| -> Result<Vec<String>, Error> {
@@ -378,31 +376,43 @@ impl Found {
             match values.as_slice() {
                 [only] if only.is_empty() => Ok(vec![String::new(); entries.len()]),
                 _ if values.len() == entries.len() => Ok(values),
-                _ => Err(accession.invalid(&format!(
-                    "run {run} gives {} but not as many sizes and hashes",
-                    crate::units::count(entries.len() as u64, "file", "files")
-                ))),
+                _ => Err(invalid(
+                    accession,
+                    &format!(
+                        "run {run} gives {} but not as many sizes and hashes",
+                        crate::units::count(entries.len() as u64, "file", "files")
+                    ),
+                )),
             }
         };
         let (md5s, sizes) = (listed(md5s)?, listed(sizes)?);
         for ((entry, md5), size) in entries.iter().zip(md5s).zip(sizes) {
             let url = address(entry).ok_or_else(|| {
-                accession.invalid(&format!(
-                    "run {run} gives a file away from ENA: {}",
-                    entry.escape_debug()
-                ))
+                invalid(
+                    accession,
+                    &format!(
+                        "run {run} gives a file away from ENA: {}",
+                        entry.escape_debug()
+                    ),
+                )
             })?;
             let name = entry.rsplit('/').next().unwrap_or_default().to_owned();
             let md5 = match md5.trim() {
                 "" => None,
                 hex => Some(Md5::from_hex(hex).ok_or_else(|| {
-                    accession.invalid(&format!("the MD5 of {} is not hex", name.escape_debug()))
+                    invalid(
+                        accession,
+                        &format!("the MD5 of {} is not hex", name.escape_debug()),
+                    )
                 })?),
             };
             let size = match size.trim() {
                 "" => None,
                 number => Some(number.parse::<u64>().map_err(|_| {
-                    accession.invalid(&format!("the size of {} is no number", name.escape_debug()))
+                    invalid(
+                        accession,
+                        &format!("the size of {} is no number", name.escape_debug()),
+                    )
                 })?),
             };
             let path = if level(&accession.id) == Some(Level::Run) {
