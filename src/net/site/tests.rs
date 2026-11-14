@@ -482,15 +482,15 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
 }
 
 /// a page a redirect led the link to, as a site's `www.` or a release's latest version does,
-/// is the data when asked for, on the same site, at the link's path or below it, or for a link
-/// to the site's root, at a link that names no sign-in page; anywhere else it is refused, asked
-/// or not, and the help names the link the page is at.
+/// is the data when asked for, on the same site, at the link's path or below it, at a link that
+/// names no sign-in page; anywhere else it is refused, asked or not, and the help names the link
+/// the page is at.
 #[test]
 fn a_page_a_redirect_led_to_is_the_data_on_its_own_site_alone() {
     let net = net(vec![token("data.lab", "t-1"), token("www.data.lab", "t-1")]);
     // a page the link was sent on to, asked for, counts when it stays on the site, at the link's
-    // path or below it; under the root, which every path is below, when it is no sign-in page by
-    // its path or its way back. anywhere else it is refused whatever was asked
+    // path or below it, which every path is under the root, and is no sign-in page by its path or
+    // its way back. anywhere else it is refused whatever was asked
     for (link, from, refused) in [
         ("https://data.lab/files/1", "https://data.lab/login", true),
         (
@@ -528,7 +528,12 @@ fn a_page_a_redirect_led_to_is_the_data_on_its_own_site_alone() {
         (
             "https://data.lab/files/1",
             "https://data.lab/files/1/login",
-            false,
+            true,
+        ),
+        (
+            "https://data.lab/files/1",
+            "https://data.lab/files/1/v2?next=%2Ffiles%2F1",
+            true,
         ),
         ("https://data.lab/", "https://data.lab/v3/", false),
         ("https://data.lab", "https://www.data.lab/", false),

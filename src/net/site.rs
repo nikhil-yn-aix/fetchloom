@@ -209,7 +209,7 @@ impl Sent {
 /// credential went for `link`, as a site sends its sign-in page once a session ends. a page the
 /// link itself answered with is the data when the person `asked` for a page or its own name
 /// says it is one; a page a redirect led to, at another origin or path, only when asked for, on
-/// the same site, where [`beneath`] allows.
+/// the same site, where [`beneath`] allows, at a link that names no sign-in page.
 pub(super) fn sign_in_page(
     response: &reqwest::Response,
     answered: &Url,
@@ -225,18 +225,15 @@ pub(super) fn sign_in_page(
     if !moved {
         return (!(asked || names_a_page(answered))).then(|| sent.signed_out(answered));
     }
-    let kept = asked && same_site(link, answered) && beneath(link, answered);
+    let kept =
+        asked && same_site(link, answered) && beneath(link, answered) && !names_a_sign_in(answered);
     (!kept).then(|| sent.moved_out(answered))
 }
 
 /// whether `answered` is at `link`'s path or below it, a whole part at a time, as a release's
-/// latest notes move below their link. every path is below a link to a site's root, so there
-/// `answered` must also name no sign-in page.
+/// latest notes move below their link. every path is below a link to a site's root.
 fn beneath(link: &Url, answered: &Url) -> bool {
     let base = link.path().trim_end_matches('/');
-    if base.is_empty() {
-        return !names_a_sign_in(answered);
-    }
     let path = answered.path().trim_end_matches('/');
     path.strip_prefix(base)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
