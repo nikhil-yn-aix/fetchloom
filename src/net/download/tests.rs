@@ -446,6 +446,55 @@ fn a_resume_answered_from_another_version_starts_over() {
     }
 }
 
+/// a resume the server cannot serve from the kept bytes, answered 416, starts the file over from
+/// its first byte rather than failing.
+#[test]
+fn a_resume_answered_416_starts_over() {
+    // the first answer promises 8 bytes and breaks after 4
+    let cut =
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nETag: \"v1\"\r\n\r\naaaa";
+    let (url, asked) = serve(vec![
+        cut.as_bytes().to_vec(),
+        reply(
+            "416 Range Not Satisfiable",
+            &[("Content-Range", "bytes */8")],
+            b"",
+        ),
+        reply("200 OK", &[("ETag", "\"v1\"")], b"aaaabbbb"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch::new(url.clone());
+    let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"aaaabbbb"
+    );
+    let asked: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|head| head.to_ascii_lowercase())
+        .collect();
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    assert!(asked[1].contains("range: bytes=4-"), "{}", asked[1]);
+    assert!(!asked[2].contains("range:"), "{}", asked[2]);
+}
+
+/// a 416 to a request that asked for no range is the server's fault, so the download is refused
+/// rather than asked for again from the start.
+#[test]
+fn a_fresh_request_answered_416_is_refused() {
+    let (url, asked) = serve(vec![
+        reply("416 Range Not Satisfiable", &[], b""),
+        reply("200 OK", &[], b"abcd"),
+    ]);
+    let error = download(&url.join("file").unwrap(), refuse).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkStatus, "{}", error.message);
+    assert!(error.message.contains("416"), "{}", error.message);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
 /// a long download over a connection that drops every few minutes still finishes.
 #[test]
 fn tries_that_move_the_file_on_earn_the_tries_back() {
