@@ -16,6 +16,10 @@ const OPEN_FILES: u64 = 1 << 20;
 #[cfg(unix)]
 const OPEN_MAX: u64 = 10_240;
 
+/// the least memory a run budgets for its buffers, and what it budgets when the machine does not
+/// say how much it has.
+pub(crate) const LEAST_MEMORY: u64 = 256 << 20;
+
 /// what this machine gives a run. its default stands for a machine that says nothing of itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Machine {

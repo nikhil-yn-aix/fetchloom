@@ -162,6 +162,11 @@ impl Offline {
     }
 }
 
+/// requests running at once to one host, so no server sees fetchloom as a flood.
+pub(crate) const HOST_JOBS: usize = 4;
+/// how long a request may wait for an answer, or a download stay silent, before it is tried again.
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
+
 pub(crate) struct Options {
     pub(crate) offline: Offline,
     /// downloads running at once, across all hosts.
@@ -442,7 +447,7 @@ impl Net {
         Net {
             wire: OnceLock::new(),
             offline: options.offline,
-            metadata: api::Memo::new(crate::settings::LEAST_MEMORY / 16),
+            metadata: api::Memo::new(crate::machine::LEAST_MEMORY / 16),
             typed: address::Typed::default(),
             credentials: LazyLock::new(Box::new(move || keys(given))),
             sites: site::Sites::default(),
@@ -455,9 +460,9 @@ impl Net {
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
             rate: None,
-            idle: crate::settings::TIMEOUT,
+            idle: TIMEOUT,
             connect: CONNECT,
-            host_jobs: crate::settings::HOST_JOBS,
+            host_jobs: HOST_JOBS,
             retries: RETRIES,
             first_wait: failure::FIRST_WAIT,
             split: download::starting(options.split),
@@ -1165,7 +1170,7 @@ mod tests {
         assert_eq!(
             net.slots(&link("https://zenodo.org/api/records/1"))
                 .available_permits(),
-            crate::settings::HOST_JOBS
+            HOST_JOBS
         );
     }
 
@@ -1311,7 +1316,7 @@ mod tests {
                 Arc::default(),
                 Arc::new(|_| {}),
             );
-            let net = if host_jobs == crate::settings::HOST_JOBS {
+            let net = if host_jobs == HOST_JOBS {
                 net
             } else {
                 net.with_host_jobs(host_jobs)

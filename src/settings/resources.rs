@@ -3,7 +3,8 @@
 
 use std::fmt;
 
-use super::{LEAST_MEMORY, MOST_MEMORY, Origin, Settings};
+use super::{MOST_MEMORY, Origin, Settings};
+use crate::machine::LEAST_MEMORY;
 use crate::machine::Machine;
 use crate::threads::Threads;
 use crate::units;

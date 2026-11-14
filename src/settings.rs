@@ -13,23 +13,17 @@ mod resources;
 pub(crate) use resources::Level;
 
 use crate::error::{Error, Kind};
-use crate::machine::{Machine, Var, switched};
+use crate::machine::{LEAST_MEMORY, Machine, Var, switched};
 use crate::mirror::Location;
+use crate::net::{HOST_JOBS, TIMEOUT};
 use crate::source::{AzureContainer, Bucket, DriveId, GcsBucket};
 use crate::units;
 
 /// downloads running at once, across all hosts. downloads wait on the network, not the
 /// processor, so the number does not follow the core count.
 pub(crate) const JOBS: usize = 8;
-/// requests running at once to one host, so no server sees fetchloom as a flood.
-pub(crate) const HOST_JOBS: usize = 4;
-/// how long a request may wait for an answer, or a download stay silent, before it is tried again.
-pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 /// downloads above this size ask first, at a terminal, or need `--yes` without one.
 pub(crate) const ASK_ABOVE: u64 = 1 << 30;
-/// the least memory a run budgets for its buffers, and what it budgets when the machine does not
-/// say how much it has.
-pub(crate) const LEAST_MEMORY: u64 = 256 << 20;
 /// the most memory a run budgets for its buffers on its own, however much the machine has.
 const MOST_MEMORY: u64 = 4 << 30;
 
