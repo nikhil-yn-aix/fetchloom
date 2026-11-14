@@ -762,7 +762,8 @@ impl Project {
         Ok(Some(updated))
     }
 
-    /// the .fetchloom folder, which tells git to ignore it the first time it is made.
+    /// the .fetchloom folder, which tells git to ignore it the first time it is made. one this call
+    /// made and could not finish goes again.
     fn inner(&self) -> Result<PathBuf, Error> {
         let folder = self.root.join(FOLDER);
         let created = match fs::create_dir(&folder) {
@@ -793,12 +794,20 @@ impl Project {
             .help("replace .fetchloom with a real folder before running this command"));
         }
         if created {
-            write_atomically(&folder.join(".gitignore"), b"*\n").map_err(|err| {
-                Error::io(format_args!("could not write {}", folder.display()), &err)
-            })?;
-            sync_directory(&self.root).map_err(|err| {
-                Error::io("could not flush the new project metadata folder", &err)
-            })?;
+            let finished = write_atomically(&folder.join(".gitignore"), b"*\n")
+                .map_err(|err| {
+                    Error::io(format_args!("could not write {}", folder.display()), &err)
+                })
+                .and_then(|()| {
+                    sync_directory(&self.root).map_err(|err| {
+                        Error::io("could not flush the new project metadata folder", &err)
+                    })
+                });
+            if let Err(error) = finished {
+                let _ = fs::remove_file(folder.join(".gitignore"));
+                let _ = fs::remove_dir(&folder);
+                return Err(error);
+            }
         }
         Ok(folder)
     }
@@ -996,6 +1005,29 @@ mod tests {
             root: dir.path().to_path_buf(),
         };
         (dir, project)
+    }
+
+    /// a project folder so deep that `.fetchloom` fits linux's 4,095 bytes a path but nothing
+    /// inside it does: the folder this command made goes with the error.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_metadata_folder_that_cannot_be_finished_is_not_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let deepest = 4_095 - "/.fetchloom".len();
+        let mut root = dir.path().to_path_buf();
+        loop {
+            let left = deepest - root.as_os_str().len() - 1;
+            if left <= 200 {
+                root.push("e".repeat(left));
+                break;
+            }
+            root.push("d".repeat(200));
+        }
+        fs::create_dir_all(&root).unwrap();
+        let project = Project { root };
+        let error = project.inner().unwrap_err();
+        assert!(error.message.contains("file name too long"), "{error:?}");
+        assert!(!project.own_folder().exists());
     }
 
     #[test]
