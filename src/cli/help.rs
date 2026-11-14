@@ -140,19 +140,45 @@ and build_floor for every run, one per line, as jobs = 16. a variable wins over
 the file.
 fetchloom settings shows each value and where it came from.
 
-keys are read where each source's own tools keep them: HF_TOKEN and the hugging
-face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,
-OSF_TOKEN, DATAVERSE_API_TOKEN with DATAVERSE_URL, .netrc or the file NETRC
-names, for S3 buckets in s3_buckets, AWS_ACCESS_KEY_ID with
-AWS_SECRET_ACCESS_KEY, or the profile AWS_PROFILE names in ~/.aws, for cloud
-storage buckets in gcs_buckets and drive items in drive_folders, the key file
-that GOOGLE_APPLICATION_CREDENTIALS names, else the login that
-gcloud auth application-default login saved, and for azure containers in
-azure_containers, the SAS AZURE_STORAGE_SAS_TOKEN holds, else the key
-AZURE_STORAGE_KEY holds for AZURE_STORAGE_ACCOUNT, else the az cli's login or
-the machine's managed identity, as AZURE_TOKEN_CREDENTIALS chooses. drive needs
-the google login made through an oauth client of your own: see the google
-drive page.
+keys are read as each source's own tools read them, and a variable wins over
+a key fetchloom auth login saved:
+
+  HF_TOKEN, HF_TOKEN_PATH, HF_HOME
+                       hugging face, else the token file huggingface-cli saved
+  KAGGLE_API_TOKEN, KAGGLE_USERNAME, KAGGLE_KEY, KAGGLE_CONFIG_DIR
+                       kaggle, else the kaggle.json the kaggle cli reads
+  ZENODO_TOKEN, FIGSHARE_TOKEN, OSF_TOKEN, DRYAD_TOKEN, GH_TOKEN, GITHUB_TOKEN,
+  GITLAB_TOKEN, S2_API_KEY
+                       the key of the source each names, S2 for semantic
+                       scholar
+  DATAVERSE_API_TOKEN  dataverse, for the installation DATAVERSE_URL names
+  NETRC                the netrc file with logins for other sites, instead of
+                       ~/.netrc
+  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_PROFILE,
+  AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE, AWS_REGION, AWS_DEFAULT_REGION,
+  AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_S3, AWS_IGNORE_CONFIGURED_ENDPOINT_URLS
+                       S3 buckets in s3_buckets, as the aws cli reads them
+  GOOGLE_APPLICATION_CREDENTIALS, CLOUDSDK_CONFIG
+                       cloud storage buckets in gcs_buckets and drive items in
+                       drive_folders: the key file, else the login that
+                       gcloud auth application-default login saved
+  AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_KEY, AZURE_STORAGE_ACCOUNT,
+  AZURE_TOKEN_CREDENTIALS, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+  AZURE_CLIENT_CERTIFICATE_PATH, AZURE_FEDERATED_TOKEN_FILE, AZURE_CONFIG_DIR
+                       azure containers in azure_containers: a SAS, else the
+                       key, else the az cli's login or a managed identity, as
+                       AZURE_TOKEN_CREDENTIALS chooses
+
+drive needs the google login made through an oauth client of your own: see the
+google drive page.
+
+  SSL_CERT_FILE, SSL_CERT_DIR
+                       on linux, certificates to trust instead of the system's
+  HOME, USERPROFILE, APPDATA, LOCALAPPDATA, XDG_CONFIG_HOME, XDG_CACHE_HOME,
+  XDG_STATE_HOME       where the home, settings, cache and state folders are
+  TERM_PROGRAM, COLORTERM, LANG and other terminal variables
+                       unicode, links and the color theme, as the page below
+                       lists them
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/";
 
@@ -640,6 +666,50 @@ mod tests {
     fn the_environment_topic_names_every_variable_the_docs_do() {
         let docs = include_str!("../../docs/user/reference/environment.md");
         assert_eq!(variables(ENVIRONMENT), variables(docs));
+    }
+
+    /// the quoted names in `code` shaped like a variable, as `"HF_TOKEN"` or `"NETRC"`.
+    fn quoted_variables(code: &str) -> Vec<&str> {
+        let quotes: Vec<usize> = code.match_indices('"').map(|(at, _)| at).collect();
+        quotes
+            .windows(2)
+            .map(|pair| &code[pair[0] + 1..pair[1]])
+            .filter(|word| word.contains('_') || *word == "NETRC")
+            .filter(|word| word.starts_with(|c: char| c.is_ascii_uppercase()))
+            .filter(|word| {
+                word.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            })
+            .collect()
+    }
+
+    /// a person whose key is refused or whose network swaps certificates looks here for what
+    /// set it, so each variable the key and certificate code reads is named in both places.
+    #[test]
+    fn the_environment_topic_names_every_key_and_certificate_variable() {
+        let docs = include_str!("../../docs/user/reference/environment.md");
+        let topic: std::collections::BTreeSet<&str> = ENVIRONMENT
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
+        let code = [
+            include_str!("../auth.rs"),
+            include_str!("../auth/aws.rs"),
+            include_str!("../auth/azure.rs"),
+            include_str!("../auth/google.rs"),
+            include_str!("../auth/kaggle.rs"),
+            include_str!("../auth/netrc.rs"),
+            include_str!("../net/roots.rs"),
+        ];
+        let read: std::collections::BTreeSet<&str> =
+            code.into_iter().flat_map(quoted_variables).collect();
+        assert!(
+            read.contains("GH_TOKEN") && read.contains("SSL_CERT_FILE"),
+            "{read:?}"
+        );
+        for name in read {
+            assert!(topic.contains(name), "{name}");
+            assert!(docs.contains(&format!("`{name}`")), "{name}");
+        }
     }
 
     /// a person behind a company proxy looks in this topic for where the proxy is set.
