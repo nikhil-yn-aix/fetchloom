@@ -31,24 +31,26 @@
 
 /* the palette, in one place: the cli's light and dark themes (src/output/style.rs) are held to
    these colors by python/test_site.py, and the benchmark charts (bench/render.py) read them from
-   here. a herbarium sheet: green-grey paper, graphite ink, a fern accent for what a person types */
+   here. a herbarium sheet: graphite ink and a green for what a person types, on a near-white sheet
+   by day, from radix colors' sage, grass and tailwind's emerald, and on green-grey by night */
 [data-md-color-scheme="default"] {
-  --fl-paper: #f2f4ef;
-  --fl-surface: #fcfdfa;
-  --fl-band: #e3e8e0;
-  --fl-ink: #172019;
-  --fl-muted: #56615a;
-  --fl-hair: #dde2da;
-  --fl-track: #e6eae3;
-  --fl-accent: #1b6a54;
-  --fl-done: #3f7317;
+  --fl-paper: #fbfdfc;
+  --fl-surface: #f7f9f8;
+  --fl-band: #eef1f0;
+  --fl-ink: #121613;
+  --fl-muted: #4d5650;
+  --fl-hair: #dfe2e0;
+  --fl-line: #d7dad9;
+  --fl-track: #eef1f0;
+  --fl-accent: #065f46;
+  --fl-done: #2a7e3b;
   --fl-warn: #895900;
   --fl-fail: #b2263a;
   /* the search dialog's colors, as rgb triplets */
-  --color-foreground: 23 32 25;
-  --color-background: 242 244 239;
-  --color-background-subtle: 230 234 227;
-  --color-backdrop: 242 244 239;
+  --color-foreground: 18 22 19;
+  --color-background: 251 253 252;
+  --color-background-subtle: 238 241 240;
+  --color-backdrop: 251 253 252;
 }
 
 [data-md-color-scheme="slate"] {
@@ -413,6 +415,18 @@ body {
 }
 .md-typeset a code {
   color: inherit;
+}
+/* by day a panel's tone barely parts from the near-white sheet, so a thin line edges each panel,
+   and code in a sentence takes the band's deeper tone */
+[data-md-color-scheme="default"] :is(.md-typeset pre > code, .md-typeset table:not([class]),
+  .md-typeset figure.fl-label, .md-search__button) {
+  border: 1px solid var(--fl-line);
+}
+[data-md-color-scheme="default"] .md-typeset code {
+  background-color: var(--fl-band);
+}
+[data-md-color-scheme="default"] .md-typeset pre > code {
+  background-color: var(--fl-surface);
 }
 .md-typeset :is(h1, h2, h3, h4, h5, h6) code {
   font-size: .85em;

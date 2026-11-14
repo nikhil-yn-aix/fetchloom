@@ -64,11 +64,11 @@ impl Theme {
                 accent: rgb(0x79, 0xc9, 0xae),
             },
             Theme::Light => Palette {
-                done: rgb(0x3f, 0x73, 0x17),
-                work: rgb(0x1b, 0x6a, 0x54),
+                done: rgb(0x2a, 0x7e, 0x3b),
+                work: rgb(0x06, 0x5f, 0x46),
                 warn: rgb(0x89, 0x59, 0x00),
                 fail: rgb(0xb2, 0x26, 0x3a),
-                accent: rgb(0x1b, 0x6a, 0x54),
+                accent: rgb(0x06, 0x5f, 0x46),
             },
         }
     }
