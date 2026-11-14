@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["tests/fixtures/**", "tests/cli/snapshots/**", "bench/results/**", "bench/fonts/**", "Cargo.lock", "bench/uv.lock"]
+extend-exclude = ["tests/fixtures/**", "tests/cli/snapshots/**", "bench/fonts/**", "Cargo.lock", "bench/uv.lock"]
 
 [default]
 # exact invalid inputs, byte samples and encoded names whose spelling is the test.
