@@ -171,7 +171,7 @@ on disk: removes the saved key. asks first when other tools read it too";
 on disk: nothing";
 
     pub(super) const COMPLETIONS: &str = "examples:
-  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
+  fetchloom completions bash >> ~/.bash_completion
   fetchloom completions zsh > ~/.zfunc/_fetchloom
   fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
   fetchloom completions powershell | Out-String | Invoke-Expression
@@ -1403,6 +1403,23 @@ mod tests {
                     words(&help),
                     "{name} at {width} columns\n{wrapped}"
                 );
+            }
+        }
+    }
+
+    /// help into a pipe keeps each example whole, so every long and short help fits 80 columns as
+    /// written.
+    #[test]
+    fn every_help_fits_80_columns_in_a_pipe() {
+        let mut screens = every_help();
+        screens.push((String::new(), top_help()));
+        for (name, help) in screens {
+            let topic: Vec<String> = name.split_whitespace().map(str::to_owned).collect();
+            let short = super::super::help::short(&topic).unwrap();
+            for text in [super::super::help::examples_first(&help), short] {
+                for line in crate::output::wrap_help(&text, 80, false).lines() {
+                    assert!(console::measure_text_width(line) <= 80, "{name}: {line}");
+                }
             }
         }
     }

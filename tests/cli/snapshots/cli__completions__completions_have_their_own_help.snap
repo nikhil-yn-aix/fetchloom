@@ -7,7 +7,7 @@ print a script that completes fetchloom's commands in a shell
 usage: fetchloom completions [options] <shell>
 
 examples:
-  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
+  fetchloom completions bash >> ~/.bash_completion
   fetchloom completions zsh > ~/.zfunc/_fetchloom
   fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
   fetchloom completions powershell | Out-String | Invoke-Expression
