@@ -166,10 +166,33 @@ pub(super) fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Op
         if may_hold_secret(&arg) {
             return None;
         }
+        let shown = match arg.split_once('=').filter(|_| arg.starts_with('-')) {
+            Some((option, value)) => Cow::Owned(format!("{option}={}", without_login(value))),
+            None => without_login(&arg),
+        };
         line.push(' ');
-        line.push_str(&shell_word(&arg));
+        line.push_str(&shell_word(&shown));
     }
     Some(line)
+}
+
+/// `word` with a login before a host, as in `ada:pw@data.example.org`, shown as `***@`; a URL
+/// parser reads no login there without a scheme. `figshare:1@2` names no host, so it stays.
+fn without_login(word: &str) -> Cow<'_, str> {
+    let end = word.find(['/', '\\', '?', '#']).unwrap_or(word.len());
+    let Some(at) = word[..end].rfind('@').filter(|at| *at > 0) else {
+        return Cow::Borrowed(word);
+    };
+    let host = &word[at + 1..end];
+    let (name, port) = host.split_once(':').unwrap_or((host, ""));
+    let hostlike = name.contains('.')
+        || name.eq_ignore_ascii_case("localhost")
+        || (!port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()));
+    if hostlike {
+        Cow::Owned(format!("***{}", &word[at..]))
+    } else {
+        Cow::Borrowed(word)
+    }
 }
 
 /// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
@@ -413,6 +436,47 @@ mod tests {
             "fetchloom sync iris",
             "without the line typed, the command alone"
         );
+    }
+
+    /// a guess shows a login before a host masked, its password never; the `@` of a reference such
+    /// as `figshare:1@2` names no host, so the reference stays as typed.
+    #[test]
+    fn a_guess_masks_a_login_before_a_host() {
+        let line = |args: &[&str], typed: &str, meant: &str| {
+            let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+            retyped(&args, &[typed], &[meant])
+        };
+        for (args, typed, meant, expected) in [
+            (
+                &["auth", "logn", "user:pass@host.org"][..],
+                "logn",
+                "login",
+                "fetchloom auth login \"***@host.org\"",
+            ),
+            (
+                &[
+                    "auth",
+                    "logn",
+                    "ada@localhost",
+                    "--host=ada:pw@dv.example.org:8443",
+                ],
+                "logn",
+                "login",
+                "fetchloom auth login \"***@localhost\" \"--host=***@dv.example.org:8443\"",
+            ),
+            (
+                &["ad", "figshare:1@2", "hf:org/data@v1.0"],
+                "ad",
+                "add",
+                "fetchloom add figshare:1@2 hf:org/data@v1.0",
+            ),
+        ] {
+            assert_eq!(
+                line(args, typed, meant).as_deref(),
+                Some(expected),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

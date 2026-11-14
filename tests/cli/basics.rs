@@ -781,6 +781,18 @@ fn a_typo_suggests_the_line_typed_with_one_word_fixed() -> Result {
         let said = text(&output.stderr)?;
         assert!(said.contains(&format!("`{meant}`")), "{typed:?}: {said}");
     }
+    // the password of a login before a host is never shown back
+    let output = sandbox.run(&["auth", "logn", "ada:hunter2@data.example.org"])?;
+    assert_eq!(output.status.code(), Some(2));
+    let said = text(&output.stderr)?;
+    assert!(
+        said.contains("`fetchloom auth login \"***@data.example.org\"`"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("hunter2") && !said.contains("ada:"),
+        "{said}"
+    );
     let output = sandbox.run(&["cache", "verfiy", "--json"])?;
     assert_eq!(output.status.code(), Some(2));
     let document: Value = serde_json::from_slice(&output.stdout)?;
