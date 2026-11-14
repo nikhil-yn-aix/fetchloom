@@ -50,6 +50,19 @@ pub(super) enum Failure {
     },
 }
 
+impl Failure {
+    /// the error a request ends with when it is tried no more: a retryable failure's reason as
+    /// `kind`.
+    pub(super) fn into_error(self, kind: Kind) -> Error {
+        match self {
+            Failure::Final(error) => error,
+            Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
+                Error::new(kind, reason)
+            }
+        }
+    }
+}
+
 /// counts the tries of one request and waits between them, as politely as the server asks.
 pub(super) struct Retry<'a> {
     net: &'a Net,

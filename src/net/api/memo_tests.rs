@@ -99,6 +99,16 @@ fn listing_urls_and_page_metadata_stay_separate() {
     assert_eq!(asked.lock().unwrap().len(), 2);
 }
 
+/// a one-try request that a busy server turns away fails at once, as a status from the server.
+#[test]
+fn a_one_try_hint_turned_away_fails_with_the_servers_status() {
+    let (url, asked) = serve(vec![reply("503 Service Unavailable", &[], b"busy")]);
+    let error = block_on(net(&url).get_once(&url)).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkStatus);
+    assert_eq!(error.message, "127.0.0.1 answered 503");
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn one_try_hints_do_not_use_or_replace_the_listing_memo() {
     let (url, asked) = serve(vec![

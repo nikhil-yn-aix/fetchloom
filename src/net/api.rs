@@ -145,22 +145,16 @@ impl Api for Net {
             ));
         }
         let mut permits = Some(self.permit(&url).await?);
-        match self
-            .answer(
-                &url,
-                false,
-                false,
-                Some(super::Holding::new(&url, &mut permits)),
-                &[],
-            )
-            .await
-        {
-            Ok((response, _)) => Ok(response),
-            Err(Failure::Final(err)) => Err(err),
-            Err(Failure::Transient { reason, .. } | Failure::Limited { reason, .. }) => {
-                Err(Error::new(Kind::NetworkStatus, reason))
-            }
-        }
+        self.answer(
+            &url,
+            false,
+            false,
+            Some(super::Holding::new(&url, &mut permits)),
+            &[],
+        )
+        .await
+        .map(|(response, _)| response)
+        .map_err(|failure| failure.into_error(Kind::NetworkStatus))
     }
 }
 
@@ -188,12 +182,7 @@ impl Net {
     async fn get_for(&self, url: &Url, mirror: bool, extra: Extra) -> Result<Response, Error> {
         let url = self.asking(url)?;
         self.may_ask(&url, mirror, None)
-            .map_err(|failure| match failure {
-                Failure::Final(error) => error,
-                Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
-                    Error::new(Kind::NetworkRefused, reason)
-                }
-            })?;
+            .map_err(|failure| failure.into_error(Kind::NetworkRefused))?;
         loop {
             self.stop.check()?;
             let Some(key) = self.metadata_key(&url, mirror, extra).await? else {
@@ -259,24 +248,14 @@ impl Net {
             .signing
             .signer(bucket.as_ref(), std::time::SystemTime::now(), &self.stop)
             .await?;
-        let tokened =
-            self.google_bearer(stored.as_ref(), 0)
-                .await
-                .map_err(|failure| match failure {
-                    Failure::Final(error) => error,
-                    Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
-                        Error::new(Kind::NetworkStatus, reason)
-                    }
-                })?;
-        let blobbed =
-            self.azure_hop(container.as_ref(), 0)
-                .await
-                .map_err(|failure| match failure {
-                    Failure::Final(error) => error,
-                    Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
-                        Error::new(Kind::NetworkStatus, reason)
-                    }
-                })?;
+        let tokened = self
+            .google_bearer(stored.as_ref(), 0)
+            .await
+            .map_err(|failure| failure.into_error(Kind::NetworkStatus))?;
+        let blobbed = self
+            .azure_hop(container.as_ref(), 0)
+            .await
+            .map_err(|failure| failure.into_error(Kind::NetworkStatus))?;
         let request = match &signer {
             Some(signer) => super::signed(
                 client.get(url.clone()),
