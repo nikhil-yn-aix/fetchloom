@@ -21,23 +21,25 @@ fn check_with(
     budget: u64,
 ) -> Result<(), Error> {
     guard.check_stopped()?;
+    let memory = guard.limits().memory;
     let size = source
         .seek(SeekFrom::End(0))
-        .map_err(|error| read_error(&error))?;
+        .map_err(|error| read_error(&error, memory))?;
     let length = usize::try_from(size).unwrap_or(TAIL).min(TAIL);
     let start = size - length as u64;
     source
         .seek(SeekFrom::Start(start))
-        .map_err(|error| read_error(&error))?;
+        .map_err(|error| read_error(&error, memory))?;
     let mut tail = vec![0; length];
     source
         .read_exact(&mut tail)
-        .map_err(|error| read_error(&error))?;
+        .map_err(|error| read_error(&error, memory))?;
     let mut probe = Probe {
         source,
         position: size,
         remaining: budget,
         budget,
+        memory,
     };
     let ends = 0..length.saturating_sub(21);
     // every whole zip ends with its end record within the tail, as its comment is short
@@ -108,6 +110,8 @@ struct Probe<'a, R> {
     position: u64,
     remaining: u64,
     budget: u64,
+    /// what decoders may take, which a read error's message names.
+    memory: u64,
 }
 
 impl<R: Read + Seek> Probe<'_, R> {
@@ -133,11 +137,11 @@ impl<R: Read + Seek> Probe<'_, R> {
         if let Ok(distance) = i64::try_from(distance) {
             self.source
                 .seek_relative(distance)
-                .map_err(|error| read_error(&error))?;
+                .map_err(|error| read_error(&error, self.memory))?;
         } else {
             self.source
                 .seek(SeekFrom::Start(at))
-                .map_err(|error| read_error(&error))?;
+                .map_err(|error| read_error(&error, self.memory))?;
         }
         self.position = at;
         let mut filled = 0;
@@ -149,7 +153,7 @@ impl<R: Read + Seek> Probe<'_, R> {
                     self.position += read as u64;
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(read_error(&error)),
+                Err(error) => return Err(read_error(&error, self.memory)),
             }
         }
         Ok(true)
@@ -278,8 +282,8 @@ fn qword(bytes: &[u8], at: usize) -> u64 {
     ])
 }
 
-fn read_error(error: &io::Error) -> Error {
-    unreadable_stream(None, error)
+fn read_error(error: &io::Error, memory: u64) -> Error {
+    unreadable_stream(None, error, memory)
 }
 
 #[cfg(test)]

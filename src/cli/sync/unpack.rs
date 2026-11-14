@@ -121,6 +121,7 @@ pub(in crate::cli) async fn unpack_all(
         .div_ceil(4)
         .min(4);
     let (at_once, writers) = context.threads.archives(at_once, archives.len());
+    let limits = context.settings.archive_limits();
     let failed = Arc::new(AtomicBool::new(false));
     let what = match archives.as_slice() {
         [(_, only)] => only.label.clone(),
@@ -147,9 +148,11 @@ pub(in crate::cli) async fn unpack_all(
                 let tree = unpack.tree.as_ref();
                 let unpacked = if unpack.parts.is_empty() {
                     let size = unpack.size;
-                    archive::unpack_cached(&cache, &unpack.archive, size, tree, &watch, writers)
+                    let digest = &unpack.archive;
+                    archive::unpack_cached(&cache, digest, size, tree, &limits, &watch, writers)
                 } else {
-                    archive::unpack_cached_parts(&cache, &unpack.parts, tree, &watch, writers)
+                    let parts = &unpack.parts;
+                    archive::unpack_cached_parts(&cache, parts, tree, &limits, &watch, writers)
                 };
                 drop(told);
                 (index, unpack, started.elapsed(), unpacked)
@@ -856,10 +859,17 @@ mod tests {
             heard.borrow_mut().push((now, told.bar.total(), in_cache()));
             false
         };
-        let unpacked =
-            archive::unpack_cached(&cache, &stored.digest, stored.size, None, &watch, Some(2))
-                .unwrap()
-                .unwrap();
+        let unpacked = archive::unpack_cached(
+            &cache,
+            &stored.digest,
+            stored.size,
+            None,
+            &crate::archive::Limits::default(),
+            &watch,
+            Some(2),
+        )
+        .unwrap()
+        .unwrap();
         let heard = heard.into_inner();
         assert!(
             heard

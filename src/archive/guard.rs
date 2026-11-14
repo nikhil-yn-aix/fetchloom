@@ -173,7 +173,7 @@ impl<'a> Guard<'a> {
                 Ok(0) => return Ok(()),
                 Ok(read) => read,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                Err(err) => return Err(unreadable_stream(Some(path), &err)),
+                Err(err) => return Err(unreadable_stream(Some(path), &err, self.limits.memory)),
             };
             self.written += read as u64;
             self.check_limits(path)?;
@@ -198,7 +198,7 @@ impl<'a> Guard<'a> {
                 Ok(0) => return Ok(()),
                 Ok(passed) => self.skip(passed as u64)?,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                Err(err) => return Err(unreadable_stream(Some(path), &err)),
+                Err(err) => return Err(unreadable_stream(Some(path), &err, self.limits.memory)),
             }
             self.check_stopped()?;
         }

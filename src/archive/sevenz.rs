@@ -28,8 +28,8 @@ pub(super) fn unpack(
     let file = input.open(guard.meter())?;
     let source = Source::new(file, guard.meter()).map_err(|err| unreadable(input.first(), &err))?;
     let limit = usize::try_from(guard.limits().memory / 1024).unwrap_or(usize::MAX);
-    let mut reader =
-        ArchiveReader::new_with_memory_limit(source, Password::empty(), limit).map_err(failed)?;
+    let mut reader = ArchiveReader::new_with_memory_limit(source, Password::empty(), limit)
+        .map_err(|err| failed(err, guard.limits().memory))?;
     // lzma2's threaded decoder holds a block whole in memory, packed and unpacked, before any of
     // it reaches the guard
     reader.set_thread_count(1);
@@ -51,7 +51,7 @@ pub(super) fn unpack(
     if let Some(error) = stopped {
         return Err(error);
     }
-    walked.map_err(failed)
+    walked.map_err(|err| failed(err, guard.limits().memory))
 }
 
 /// passes one entry through the guard, and keeps it when it is a file.
@@ -112,7 +112,7 @@ fn encrypted() -> Error {
     refused("the archive is encrypted, and fetchloom unpacks no encrypted archive")
 }
 
-fn failed(err: sevenz_rust2::Error) -> Error {
+fn failed(err: sevenz_rust2::Error, memory: u64) -> Error {
     use sevenz_rust2::Error as Seven;
     match err {
         Seven::PasswordRequired | Seven::MaybeBadPassword(_) => encrypted(),
@@ -138,8 +138,8 @@ fn failed(err: sevenz_rust2::Error) -> Error {
                 "memory",
             )
         }
-        Seven::Io(error, _) | Seven::FileOpen(error, _) => damaged(None, &error),
-        other => damaged(None, &other),
+        Seven::Io(error, _) | Seven::FileOpen(error, _) => damaged(None, &error, memory),
+        other => damaged(None, &other, memory),
     }
 }
 
@@ -486,7 +486,7 @@ mod tests {
         ];
         for (cause, kind, message) in cases {
             let told = format!("{cause:?}");
-            let err = failed(cause);
+            let err = failed(cause, crate::archive::Limits::default().memory);
             assert_eq!(err.kind, kind, "{told}");
             assert!(err.message.starts_with(message), "{told}: {}", err.message);
         }

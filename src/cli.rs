@@ -608,7 +608,6 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
 fn share(settings: &Settings) {
     crate::source::set_most_files(settings.most_files.value);
     crate::project::lock::set_room(settings.machine.container_room());
-    crate::archive::set_limits(settings.archive_limits());
     sync::disk::set_level(settings.resources.value);
 }
 

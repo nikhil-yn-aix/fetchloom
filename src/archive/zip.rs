@@ -30,7 +30,8 @@ pub(super) fn unpack(
     let mut file = input.open(guard.meter())?;
     directory::check(&mut file, guard)?;
     let source = Source::new(file, guard.meter()).map_err(|err| unreadable(input.first(), &err))?;
-    let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err))?;
+    let memory = guard.limits().memory;
+    let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err, memory))?;
     if zip.has_duplicate_names() {
         let name = repeated_name(input, zip.central_directory_start())
             .unwrap_or_else(|| "a name".to_owned());
@@ -39,7 +40,7 @@ pub(super) fn unpack(
     for (index, path) in checked(&zip, guard)? {
         let mut file = zip
             .by_index(index)
-            .map_err(|err| damaged(Some(&path), &err))?;
+            .map_err(|err| damaged(Some(&path), &err, memory))?;
         guard.fits(&path, file.size())?;
         keep(guard, path, file.size(), &mut file)?;
     }
@@ -52,12 +53,13 @@ fn checked(
     guard: &mut Guard<'_>,
 ) -> Result<Vec<(usize, String)>, Error> {
     let mut files = Vec::new();
+    let memory = guard.limits().memory;
     for index in 0..zip.len() {
         guard.entry()?;
         let entry = zip
             .by_index_data(index)
-            .map_err(|err| damaged(None, &err))?;
-        let raw = name(&entry).map_err(|err| damaged(None, &err))?;
+            .map_err(|err| damaged(None, &err, memory))?;
+        let raw = name(&entry).map_err(|err| damaged(None, &err, memory))?;
         let is_folder = is_folder(&entry);
         if let Some(reason) = refusal(&entry, is_folder) {
             return Err(refused_member(&raw, &reason));

@@ -1963,10 +1963,17 @@ mod tests {
             draft.learn(index, &fetched, &cache);
         }
         for (file, todo) in draft.unknown_archives(&cache) {
-            let unpacked =
-                archive::unpack_cached(&cache, &todo.archive, todo.size, None, &|_| false, None)
-                    .unwrap()
-                    .unwrap();
+            let unpacked = archive::unpack_cached(
+                &cache,
+                &todo.archive,
+                todo.size,
+                None,
+                &crate::archive::Limits::default(),
+                &|_| false,
+                None,
+            )
+            .unwrap()
+            .unwrap();
             draft.unpacked(file, Some(unpacked.tree));
         }
         let locked = draft.finish("2026-11-01T00:00:00Z").unwrap();

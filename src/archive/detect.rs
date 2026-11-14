@@ -31,24 +31,19 @@ const BLOCK: usize = 512;
 
 /// tells an archive from any other file by its first bytes, `local.io` when they cannot be read.
 /// the cache names files by hash, so documents that are zips, as `.xlsx`, are kept whole earlier.
-pub(crate) fn detect(input: &Input) -> Result<Detected, Error> {
+/// `memory` bounds the decoder that looks for a tar inside a compressed stream.
+pub(crate) fn detect(input: &Input, memory: u64) -> Result<Detected, Error> {
     let mut file = Joined::open(input).map_err(|(path, err)| unreadable(path, &err))?;
     let unread = |err: io::Error| unreadable(input.first(), &err);
     let mut block = [0; BLOCK];
     let len = read_up_to(&mut file, &mut block).map_err(unread)?;
     let head = &block[..len];
-    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-        return Ok(Detected::Archive(Format::Zip));
-    }
-    if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
-        return Ok(Detected::Archive(Format::SevenZ));
-    }
-    if head.starts_with(b"Rar!\x1a\x07") {
-        return Ok(Detected::Unsupported("rar"));
+    if let Some(detected) = signed(head) {
+        return Ok(detected);
     }
     if let Some(format) = compression(head) {
         file.rewind().map_err(unread)?;
-        return Ok(if holds_tar(format, file) {
+        return Ok(if holds_tar(format, file, memory) {
             Detected::Archive(format)
         } else {
             Detected::Plain
@@ -78,10 +73,32 @@ fn compression(head: &[u8]) -> Option<Format> {
     }
 }
 
+/// what the first bytes of `input` alone tell: a zip, a 7z or a rar, an archive fetchloom does not
+/// unpack. none for any other file, which only [`detect`] tells apart, by looking further.
+pub(crate) fn signature(input: &Input) -> Result<Option<Detected>, Error> {
+    let mut file = Joined::open(input).map_err(|(path, err)| unreadable(path, &err))?;
+    let mut block = [0; BLOCK];
+    let len = read_up_to(&mut file, &mut block).map_err(|err| unreadable(input.first(), &err))?;
+    Ok(signed(&block[..len]))
+}
+
+/// the archive the first bytes `head` name by their signature alone.
+fn signed(head: &[u8]) -> Option<Detected> {
+    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
+        return Some(Detected::Archive(Format::Zip));
+    }
+    if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
+        return Some(Detected::Archive(Format::SevenZ));
+    }
+    if head.starts_with(b"Rar!\x1a\x07") {
+        return Some(Detected::Unsupported("rar"));
+    }
+    None
+}
+
 /// whether the stream decompresses to a tar header. one that fails is no archive, unless xz or
 /// zstd asks for too much memory: unpacking then refuses it and says why, never leaving it packed.
-fn holds_tar(format: Format, file: Joined) -> bool {
-    let memory = super::Limits::current().memory;
+fn holds_tar(format: Format, file: Joined, memory: u64) -> bool {
     let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
         return false;
     };
@@ -140,7 +157,11 @@ mod tests {
 
     fn detected(name: &str, bytes: &[u8]) -> Detected {
         let scratch = Scratch::new();
-        detect(&Input::File(scratch.file(name, bytes))).unwrap()
+        detect(
+            &Input::File(scratch.file(name, bytes)),
+            crate::archive::Limits::default().memory,
+        )
+        .unwrap()
     }
 
     #[test]

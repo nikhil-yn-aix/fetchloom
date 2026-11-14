@@ -74,8 +74,8 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
         return false;
     };
     matches!(
-        detect(&Input::File(object.clone())),
-        Ok(Detected::Archive(Format::Zip))
+        detect::signature(&Input::File(object.clone())),
+        Ok(Some(Detected::Archive(Format::Zip)))
     ) && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
 }
 
@@ -83,8 +83,8 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
 /// holds under `digest`, whatever the file's name says.
 pub(crate) fn unsupported(cache: &Cache, digest: &Sha256, size: u64) -> Option<&'static str> {
     let object = cache.find(digest, Some(size))?;
-    match detect(&Input::File(object)) {
-        Ok(Detected::Unsupported(format)) => Some(format),
+    match detect::signature(&Input::File(object)) {
+        Ok(Some(Detected::Unsupported(format))) => Some(format),
         _ => None,
     }
 }
@@ -261,19 +261,6 @@ impl Default for Limits {
     }
 }
 
-static LIMITS: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
-
-pub(crate) fn set_limits(limits: Limits) {
-    let _ = LIMITS.set(limits);
-}
-
-impl Limits {
-    /// the limits of this run: what its settings say, else the defaults.
-    pub(crate) fn current() -> Limits {
-        LIMITS.get().copied().unwrap_or_default()
-    }
-}
-
 /// every file an archive unpacked to, sorted by path, and the tree hash over them.
 #[derive(Debug)]
 pub(crate) struct Unpacked {
@@ -362,17 +349,27 @@ pub(crate) fn unpack(
 
 /// unpacks the cached `archive`, recording the result only when it is `tree` or none is known,
 /// so changed bytes never replace data.lock's pin. none when it is no archive fetchloom unpacks.
-/// fails as [`unpack`] does, or `local.io` when the cache lost the archive or cannot record it.
+/// fails as [`unpack`] does within `limits`, or `local.io` when the cache lost the archive or
+/// cannot record it.
 pub(crate) fn unpack_cached(
     cache: &Cache,
     archive: &Sha256,
     size: u64,
     tree: Option<&Sha256>,
+    limits: &Limits,
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
     let object = cache.find(archive, Some(size)).ok_or_else(lost)?;
-    unpack_recorded(cache, archive, &Input::File(object), tree, watch, writers)
+    unpack_recorded(
+        cache,
+        archive,
+        &Input::File(object),
+        tree,
+        limits,
+        watch,
+        writers,
+    )
 }
 
 /// [`unpack_cached`], failing as it does, for an archive split into `parts`, each the SHA-256 and
@@ -381,6 +378,7 @@ pub(crate) fn unpack_cached_parts(
     cache: &Cache,
     parts: &[(Sha256, u64)],
     tree: Option<&Sha256>,
+    limits: &Limits,
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
@@ -390,7 +388,15 @@ pub(crate) fn unpack_cached_parts(
         .collect::<Option<Vec<_>>>()
         .ok_or_else(lost)?;
     let key = parts_key(parts.iter().copied());
-    unpack_recorded(cache, &key, &Input::Joined(found), tree, watch, writers)
+    unpack_recorded(
+        cache,
+        &key,
+        &Input::Joined(found),
+        tree,
+        limits,
+        watch,
+        writers,
+    )
 }
 
 /// unpacks `input` and records what it unpacked to under `key`, as [`unpack_cached`] describes.
@@ -399,14 +405,15 @@ fn unpack_recorded(
     key: &Sha256,
     input: &Input,
     tree: Option<&Sha256>,
+    limits: &Limits,
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
-    let format = match detect(input)? {
+    let format = match detect(input, limits.memory)? {
         Detected::Archive(format) => format,
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
-    let unpacked = unpack(input, format, &Limits::current(), cache, watch, writers)?;
+    let unpacked = unpack(input, format, limits, cache, watch, writers)?;
     if tree.is_none_or(|tree| *tree == unpacked.tree) {
         cache
             .record_unpacked(key, &unpacked.members)
@@ -451,8 +458,9 @@ fn refused_member(path: &str, reason: &str) -> Error {
     ))
 }
 
-/// the error for an archive not read to its end; a disk's own failure stays `local.io`.
-fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
+/// the error for an archive not read to its end, unpacked within `memory`; a disk's own failure
+/// stays `local.io`.
+fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static), memory: u64) -> Error {
     if let Some(error) = crate::error::io_cause(err) {
         let doing = match at {
             Some(path) => format!("could not read the cached archive at \"{path}\""),
@@ -464,7 +472,7 @@ fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
         return past(
             format!(
                 "the archive's xz stream needs more than {} of memory to unpack",
-                crate::units::size(Limits::current().memory)
+                crate::units::size(memory)
             ),
             "FETCHLOOM_MEMORY, which gives each archive a quarter of it",
             "memory",

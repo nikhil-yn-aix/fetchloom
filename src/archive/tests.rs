@@ -17,7 +17,7 @@ fn fixture(name: &str) -> Result<Unpacked, Error> {
         .join("tests/fixtures/archives")
         .join(name);
     let input = Input::File(path);
-    let Detected::Archive(format) = detect(&input).unwrap() else {
+    let Detected::Archive(format) = detect(&input, Limits::default().memory).unwrap() else {
         panic!("{name} is not detected as an archive");
     };
     let scratch = Scratch::new();
@@ -195,7 +195,10 @@ fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
         for cut in cuts {
             let scratch = Scratch::new();
             let input = scratch.parts(&bytes, &cut);
-            assert_eq!(detect(&input).unwrap(), Detected::Archive(format));
+            assert_eq!(
+                detect(&input, Limits::default().memory).unwrap(),
+                Detected::Archive(format)
+            );
             let unpacked = unpack(
                 &input,
                 format,
@@ -398,6 +401,7 @@ fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
         &archive.digest,
         archive.size,
         Some(&pinned),
+        &Limits::default(),
         &|_| false,
         None,
     )
@@ -425,6 +429,7 @@ fn unpacking_that_cannot_write_to_the_cache_names_the_cache_folder() {
             &archive.digest,
             archive.size,
             None,
+            &Limits::default(),
             &|_| false,
             None,
         )
@@ -449,6 +454,7 @@ fn a_tar_zst_asking_for_a_large_window_is_refused_not_left_packed() {
         &packed.digest,
         packed.size,
         None,
+        &Limits::default(),
         &|_| false,
         None,
     )
@@ -635,9 +641,17 @@ fn a_zip_of_one_file_wraps_only_that_file() {
     let size = std::fs::metadata(cache.find(&wrapped, None).unwrap())
         .unwrap()
         .len();
-    super::unpack_cached(cache, &wrapped, size, None, &|_| false, None)
-        .unwrap()
-        .unwrap();
+    super::unpack_cached(
+        cache,
+        &wrapped,
+        size,
+        None,
+        &Limits::default(),
+        &|_| false,
+        None,
+    )
+    .unwrap()
+    .unwrap();
     cache.drop_object(&wrapped).unwrap();
     assert!(super::wraps(cache, &wrapped, "train.csv"));
     assert!(!super::wraps(cache, &wrapped, "test.csv"));
@@ -736,7 +750,10 @@ fn a_tar_cut_short_is_told_in_plain_words() {
         assert!(err.help.unwrap().contains("fixed copy"), "{format:?}");
     }
     let disk = std::io::Error::from_raw_os_error(5);
-    assert_eq!(super::damaged(None, &disk).kind, Kind::LocalIo);
+    assert_eq!(
+        super::damaged(None, &disk, Limits::default().memory).kind,
+        Kind::LocalIo
+    );
 }
 
 /// any long name an archive is refused for is shown short too.

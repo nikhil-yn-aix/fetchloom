@@ -76,9 +76,10 @@ pub(super) fn needs_too_large_window(err: &(dyn std::error::Error + 'static)) ->
 pub(super) fn unreadable_stream(
     at: Option<&str>,
     err: &(dyn std::error::Error + 'static),
+    memory: u64,
 ) -> Error {
     if needs_too_large_window(err) {
-        let window = 1 << zstd_window_log(super::Limits::current().memory);
+        let window = 1 << zstd_window_log(memory);
         return super::past(
             format!(
                 "the archive's zstd stream needs a window larger than {} to unpack",
@@ -88,7 +89,7 @@ pub(super) fn unreadable_stream(
             "memory",
         );
     }
-    damaged(at, err)
+    damaged(at, err, memory)
 }
 
 pub(super) fn unpack(
@@ -102,19 +103,21 @@ pub(super) fn unpack(
         meter: guard.meter(),
     };
     let memory = guard.limits().memory;
-    let decoded =
-        decompressed(format, counted, memory).map_err(|err| unreadable_stream(None, &err))?;
+    let decoded = decompressed(format, counted, memory)
+        .map_err(|err| unreadable_stream(None, &err, memory))?;
     let headers = Headers::default();
     let mut tar = Archive::new(Capped {
         inner: decoded,
         headers: &headers,
     });
-    let entries = tar.entries().map_err(|err| unreadable_stream(None, &err))?;
+    let entries = tar
+        .entries()
+        .map_err(|err| unreadable_stream(None, &err, memory))?;
     for entry in entries {
         let mut entry = entry.map_err(|err| {
             headers
                 .refusal()
-                .unwrap_or_else(|| unreadable_stream(None, &err))
+                .unwrap_or_else(|| unreadable_stream(None, &err, memory))
         })?;
         guard.skip(headers.read.replace(0))?;
         guard.entry()?;
@@ -165,8 +168,8 @@ pub(super) fn unpack(
     // a compressed stream's own check, such as gzip's CRC, comes after the tar's end
     if !matches!(format, Format::Tar) {
         let mut rest = tar.into_inner().inner.take(HEADERS_CAP + 1);
-        let trailing =
-            io::copy(&mut rest, &mut io::sink()).map_err(|err| unreadable_stream(None, &err))?;
+        let trailing = io::copy(&mut rest, &mut io::sink())
+            .map_err(|err| unreadable_stream(None, &err, memory))?;
         if trailing > HEADERS_CAP {
             return Err(refused(format!(
                 "the archive holds more than {} after its end",
