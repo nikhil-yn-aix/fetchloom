@@ -420,6 +420,8 @@ class NoiseTests(unittest.TestCase):
             ("wider", aa("ext4/lan/s2", bootstrap_95_median_ratio=[.999, 1.001]), aa("ext4/lan/s2", bootstrap_95_median_ratio=[.975, 1.025]),
              "loaded A/A interval width exceeds the quiet/historical limit"),
             ("biased", aa("ext4/lan/s2"), aa("ext4/lan/s2", median_ratio=1.02), "loaded A/A bias shifted by more than one third"),
+            ("noisier", aa("ext4/lan/s2"), aa("ext4/lan/s2", log_ratio_robust_sd=.05),
+             "loaded: paired noise exceeds the limit the noise file sets"),
         ]:
             with self.subTest(case):
                 [result] = island.compare_noise([quiet], [loaded], noise, cases=("ext4/lan/s2",))

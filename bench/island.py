@@ -179,13 +179,13 @@ def judge(key, old, arms, *, effect, noise_multiple, rounds):
     historical = old["plain_median"]
     return dict(case=key, passed=not reasons, reasons=reasons,
                 quiet_interval_width=widths[0], loaded_interval_width=widths[1],
-                phase2_interval_width=old_width, allowed_interval_width=width_limit,
+                noise_interval_width=old_width, allowed_interval_width=width_limit,
                 quiet_aa_bias=biases[0], loaded_aa_bias=biases[1],
-                phase2_aa_bias=bias(old),
-                phase2_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
-                phase2_plain_median=historical, quiet_island=before, loaded_island=after,
+                noise_aa_bias=bias(old),
+                noise_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
+                noise_plain_median=historical, quiet_island=before, loaded_island=after,
                 loaded_over_quiet_island=ratio,
-                loaded_over_phase2=after["plain_median"] / historical if historical and after["plain_median"] else None)
+                loaded_over_noise=after["plain_median"] / historical if historical and after["plain_median"] else None)
 
 
 def arm_reasons(name, result, *, effect, limit, rounds):
@@ -201,7 +201,7 @@ def arm_reasons(name, result, *, effect, limit, rounds):
         reasons.append(f"{name}: A/A interval is outside the chosen equivalence band")
     spread = wall["log_ratio_robust_sd"]
     if spread is None or spread > limit:
-        reasons.append(f"{name}: paired noise exceeds the phase-2-based limit")
+        reasons.append(f"{name}: paired noise exceeds the limit the noise file sets")
     return reasons
 
 
