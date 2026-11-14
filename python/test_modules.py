@@ -1,5 +1,5 @@
 """the modules under src/ keep their layers: only cli uses cli and output, and no modules use one
-another in a circle, apart from the modules of a group ALLOWED names."""
+another in a circle."""
 
 from pathlib import Path
 import functools
@@ -8,9 +8,6 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-# net asks source for each source's rules about requests, and auth builds net's credential types
-# and masks links by net's rules, until those rules and types sit below net
-ALLOWED = [{"auth", "net", "source"}]
 WORDS = re.compile(r'//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)".*?"\1|b?"(?:\\.|[^"\\])*"|b?\'(?:\\.|[^\'\\])\'', re.S)
 TEST = re.compile(r"#\[cfg\((?:test|all\([^\]]*\btest\b[^\]]*)\)\]")
 ITEM = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?(?:fn|impl|struct|enum|mod|use|const|static|type|trait|unsafe)\b")
@@ -149,9 +146,8 @@ class Reading(unittest.TestCase):
 
 class Layers(unittest.TestCase):
     def test_no_modules_use_one_another_in_a_circle(self):
-        found = [group for group in circles(uses(ROOT / "src"))
-                 if not any(set(group) <= allowed for allowed in ALLOWED)]
-        self.assertEqual(found, [], "move what the modules share to the one that owns it")
+        self.assertEqual(circles(uses(ROOT / "src")), [],
+                         "move what the modules share to the one that owns it")
 
     def test_only_cli_uses_cli_and_output(self):
         found = sorted((user, used) for user, used in uses(ROOT / "src") if used in ("cli", "output") and user != "cli")
