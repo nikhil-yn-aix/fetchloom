@@ -75,9 +75,8 @@ fn paper(mirrored: bool) -> Result<Routes> {
     ])
 }
 
-/// a paper takes its title as its name and pins its newest version, the mirror's copy at its
-/// generation, with arXiv's license, which earns a warning; a teammate's sync asks nothing of
-/// arXiv.
+/// a paper takes its title as its name and pins its newest version, the mirror's copy, with arXiv's
+/// license and its warning; a teammate's sync asks nothing of arXiv.
 #[test]
 fn an_arxiv_paper_is_named_by_its_title_and_pinned_from_the_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -340,8 +339,7 @@ fn s2_open(routes: &Routes) -> Result<Vec<u8>> {
 }
 
 /// a paper is found with no key, named by its title and pinned at the pdf semantic scholar links,
-/// with the license it states; a teammate's sync downloads that link and asks semantic scholar
-/// nothing.
+/// with its license; a teammate's sync downloads that link and asks semantic scholar nothing.
 #[test]
 fn a_semantic_scholar_paper_is_pinned_at_its_open_pdf_without_a_key() -> Result {
     let sandbox = Sandbox::new()?;
@@ -692,10 +690,8 @@ fn a_semantic_scholar_link_past_its_expiry_is_asked_for_again() -> Result {
 /// S3's answer for a link whose time ran out, as AWS words it.
 const S3_EXPIRED: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>2026-11-20T13:36:33Z</Expires><ServerTime>2026-11-20T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
 
-/// adds `count` files of the recorded dataset, at most `jobs` requests at once, whose first links
-/// S3 calls expired, as it does once the session that signed them ends: each download asks the
-/// listing again and its fresh link downloads the file. a download that kept its place while it
-/// asked would wait for ever once every place is taken, so the run has a short deadline.
+/// adds `count` files, `jobs` at once, whose first links S3 calls expired, so each asks the listing
+/// again; one that held its place while asking would wait for ever, hence the short deadline.
 fn expired_links_are_asked_for_again(count: usize, jobs: &str) -> Result {
     let sandbox = Sandbox::new()?;
     let names = s2_names(count)?;

@@ -767,9 +767,8 @@ fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
     Ok(())
 }
 
-/// a clone's link to a private address that `allowed_origins` does not list: status warns that a
-/// sync will not follow it and counts no download, a dry run stops where the sync stops, and the
-/// sync refuses before it says it downloads anything.
+/// a clone's link to a private address `allowed_origins` does not list: status warns and counts no
+/// download, and a dry run and the sync stop before saying they download anything.
 #[test]
 fn a_link_a_sync_refuses_is_never_announced_as_a_download() -> Result {
     let sandbox = Sandbox::new()?;

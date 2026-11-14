@@ -461,10 +461,8 @@ fn collect_rust(folder: &Path, found: &mut Vec<PathBuf>) -> Result {
     Ok(())
 }
 
-/// the home page shows a real add of hugging face's iris and a teammate's sync, recorded with the
-/// hub's answers in docs-site/home. given those answers, and files of the sizes the hub listed,
-/// fetchloom still prints every line a terminal keeps, all but how long the work took. the run
-/// was recorded on linux, where each file links to the cache.
+/// the home page's add of hugging face's iris and a teammate's sync, replayed on linux from the
+/// hub's answers in docs-site/home, still print every line a terminal keeps, but for the times.
 #[cfg(all(debug_assertions, target_os = "linux"))]
 #[test]
 fn the_home_page_shows_what_fetchloom_prints() -> Result {

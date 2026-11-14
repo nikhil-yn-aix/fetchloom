@@ -517,9 +517,8 @@ fn data_already_in_the_data_folder_is_moved_out_first() -> Result {
     Ok(())
 }
 
-/// raw data imported from inside the git work tree stays where `git add .` takes it into the
-/// repository, so the import says so, names the commands that keep it out, and says nothing once
-/// .gitignore leaves it out.
+/// raw data imported from inside the git work tree, where `git add .` takes it, gets a warning with
+/// the commands that keep it out, and none once .gitignore leaves it out.
 #[test]
 fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     let sandbox = Sandbox::new()?;

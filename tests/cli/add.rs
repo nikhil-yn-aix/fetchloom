@@ -1835,9 +1835,8 @@ fn links_of_a_list_that_fail_are_fixed_on_their_lines() -> Result {
     Ok(())
 }
 
-/// a hugging face dataset whose hub states one file's SHA-256 and not the other's downloads the
-/// one to learn its hash before the other, and the run tells both as one total before and after.
-/// a sync of the same entry on a fresh machine tells it alike.
+/// a hugging face dataset whose hub states only one file's SHA-256 downloads the other first, yet
+/// tells both as one total before and after, as a sync of the entry on a fresh machine does.
 #[cfg(debug_assertions)]
 #[test]
 fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {

@@ -751,9 +751,8 @@ fn a_refusal_with_a_key_here_says_how_to_check_it() -> Result {
     Ok(())
 }
 
-/// a server on this machine that asks for a username and password is offered a login for its
-/// host and port, as `.netrc` keeps it, which then goes with the request over plain http, since
-/// nothing leaves the machine.
+/// a server on this machine that asks for a username and password is offered a `.netrc` login
+/// for its host and port, sent over plain http, since nothing leaves the machine.
 #[test]
 fn a_login_this_machine_asks_for_is_offered_with_its_port() -> Result {
     let sandbox = Sandbox::new()?;

@@ -614,7 +614,7 @@ fn search_json_carries_metadata_and_joins_words() -> Result {
 }
 
 /// plain words with no link, id, DOI or path among them can only be one search, quoted or not. a
-/// word that names something here, or a mix with a link, is refused as before, asking nobody.
+/// word that names something here, or a mix with a link, is refused, asking nobody.
 #[test]
 fn unquoted_words_are_one_search() -> Result {
     let sandbox = Sandbox::new()?;
@@ -992,10 +992,8 @@ fn a_mistyped_path_never_reaches_a_catalog() -> Result {
     Ok(())
 }
 
-/// a match's time counts its files as the plan before its downloads does. zenodo lists a
-/// record's files, so 23233774's two take as long as the larger alone at 1 MiB/s, half a second
-/// to answer: 1074.6 s. hugging face gives no count, so `fatdove/Iris_Database`'s 81.7 GiB
-/// spread over the host's 4 downloads at once: 20925.8 s, not 83701.7 s as one file.
+/// a match's time counts files as a download plan does: zenodo's 23233774 lists two, as long as the
+/// larger alone, 1074.6 s; hugging face counts none, so 81.7 GiB spreads over 4 streams, 20925.8 s.
 #[test]
 fn a_match_without_a_file_count_spreads_over_the_hosts_downloads() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1026,9 +1024,8 @@ fn a_match_without_a_file_count_spreads_over_the_hosts_downloads() -> Result {
     Ok(())
 }
 
-/// on a fresh machine no match has a time. once this machine remembers hugging face's host, its
-/// matches with a size say about how long they take, at a terminal and in `--json`, while every
-/// other site's stay blank; the rows still fit 80 columns.
+/// a match has a time once this machine remembers its host's speed, at a terminal and in
+/// `--json`, other sites' staying blank, and the rows still fit 80 columns.
 #[test]
 fn a_remembered_host_times_its_sites_matches() -> Result {
     let sandbox = Sandbox::new()?;
