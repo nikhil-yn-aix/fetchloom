@@ -5,6 +5,7 @@
 mod program;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -13,8 +14,31 @@ use self::program::Program;
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
 use crate::machine::Var;
-use crate::net::sign::Keys;
 use crate::stop::Stop;
+
+/// an AWS access key: its id, its secret and, for temporary keys, the session they belong to.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Keys {
+    pub(crate) id: String,
+    pub(crate) secret: String,
+    pub(crate) token: Option<String>,
+}
+
+impl Keys {
+    /// the key id as messages show it, its last four characters only: `…WXYZ`.
+    pub(crate) fn shown(&self) -> String {
+        let skip = self.id.chars().count().saturating_sub(4);
+        format!("\u{2026}{}", self.id.chars().skip(skip).collect::<String>())
+    }
+}
+
+impl fmt::Debug for Keys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Keys")
+            .field("id", &self.shown())
+            .finish_non_exhaustive()
+    }
+}
 
 /// keys found for one endpoint, and where.
 pub(crate) struct Identity {

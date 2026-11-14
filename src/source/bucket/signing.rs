@@ -10,9 +10,9 @@ use std::time::SystemTime;
 use url::Url;
 
 use super::{Bucket, Store, is_bucket, s3_host};
-use crate::auth::aws::{self, Identity};
+use crate::auth::aws::{self, Identity, Keys};
 use crate::error::Error;
-use crate::net::sign::{self, Keys, Request, Scope};
+use crate::net::sign::{self, Request, Scope};
 use crate::stop::Stop;
 
 /// the region a signature names when nothing says where a bucket is: the one S3's global

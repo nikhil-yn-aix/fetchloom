@@ -1,13 +1,15 @@
 //! AWS signature version 4, as S3-compatible stores check it: a hash of the request signed with a
 //! key the secret yields for one day, region and service, so the secret itself is never sent.
 
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 use std::time::SystemTime;
 
 use hmac::{Hmac, KeyInit, Mac};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, percent_encode};
 use sha2::Sha256;
 use url::Url;
+
+use crate::auth::aws::Keys;
 
 /// the hash of an empty body, which every GET states and signs.
 pub(crate) const EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -19,30 +21,6 @@ pub(crate) const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'.')
     .remove(b'~');
-
-/// an AWS access key: its id, its secret and, for temporary keys, the session they belong to.
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Keys {
-    pub(crate) id: String,
-    pub(crate) secret: String,
-    pub(crate) token: Option<String>,
-}
-
-impl Keys {
-    /// the key id as messages show it, its last four characters only: `…WXYZ`.
-    pub(crate) fn shown(&self) -> String {
-        let skip = self.id.chars().count().saturating_sub(4);
-        format!("\u{2026}{}", self.id.chars().skip(skip).collect::<String>())
-    }
-}
-
-impl fmt::Debug for Keys {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Keys")
-            .field("id", &self.shown())
-            .finish_non_exhaustive()
-    }
-}
 
 /// where a signature holds: the time it was made, as `20130524T000000Z`, the region and the
 /// service.

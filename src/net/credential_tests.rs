@@ -657,7 +657,7 @@ fn verify(base: &Url, head: &str, secret: &str) {
         "every x-amz- header is signed: {head}"
     );
     let signed: Vec<(&str, &str)> = names.split(';').map(|name| (name, header(name))).collect();
-    let keys = crate::net::sign::Keys {
+    let keys = crate::auth::aws::Keys {
         id: scope[0].to_owned(),
         secret: secret.to_owned(),
         token: None,
