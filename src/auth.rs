@@ -435,9 +435,8 @@ impl Account {
             // the API alone: the links it gives to its files on S3 carry their own signature
             Account::S2 => (S2_HOST.to_owned(), "x-api-key", token.to_owned(), false),
             Account::Dataverse(host) => (host.clone(), "x-dataverse-key", token.to_owned(), false),
-            // a login answers wherever its host is reached, as curl's netrc does: earthdata's
-            // archives send a person to urs.earthdata.nasa.gov and back. a line without a port
-            // answers every port of its host, as curl reads one
+            // a login answers its host on every hop, and every port of it from a line without
+            // one, as curl reads netrc: earthdata sends a person through urs.earthdata.nasa.gov
             Account::Login(host) => {
                 let login = found.login.as_deref()?;
                 (

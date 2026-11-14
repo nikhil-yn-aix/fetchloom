@@ -493,9 +493,8 @@ fn test_endpoint(url: &Url) -> Option<Url> {
     Some(local)
 }
 
-/// the server `FETCHLOOM_TEST_HOSTS` names, which stands in for every host but this machine's
-/// own, so a docs example can run against recorded answers: `https://<host>/<path>` goes to
-/// `/<host>/<path>` there, with `:<port>` after the host when the link names a port.
+/// the server `FETCHLOOM_TEST_HOSTS` names, standing in for every host but this machine's own:
+/// a link to `<host>[:<port>]/<path>` asks it for `/<host>[:<port>]/<path>`.
 #[cfg(debug_assertions)]
 pub(super) fn stand_in(url: &Url) -> Option<Url> {
     let here = match url.host()? {

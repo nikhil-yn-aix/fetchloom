@@ -557,9 +557,8 @@ fn a_web_page_after_a_saved_credential_went_is_its_sign_in_page() {
 #[test]
 fn a_page_a_redirect_led_to_is_the_data_on_its_own_site_alone() {
     let net = net(vec![token("data.lab", "t-1"), token("www.data.lab", "t-1")]);
-    // a page the link was sent on to, asked for, counts when it stays on the site, at the link's
-    // path or below it, which every path is under the root, and is no sign-in page by its path or
-    // its way back. anywhere else it is refused whatever was asked
+    // a page a redirect led to, asked for, counts only on the link's site at or below its path,
+    // with no sign-in page in its path or way back; anywhere else it is refused
     for (link, from, refused) in [
         ("https://data.lab/files/1", "https://data.lab/login", true),
         (

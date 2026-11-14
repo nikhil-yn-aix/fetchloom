@@ -704,8 +704,7 @@ impl Net {
                         return Ok(fetched);
                     }
                     // bytes from two connections may not belong together, so a resumed or split
-                    // download that does not match starts over once, as one stream, before it
-                    // counts as a mismatch
+                    // download that does not match starts over once, as one stream
                     Err(err) if resumed && !restarted => {
                         tracing::debug!(%err, "a download in pieces did not match, starting over");
                         restarted = true;

@@ -55,9 +55,8 @@ async fn bytes_waiting_when_the_idle_deadline_is_found_passed_are_no_silence() {
     let url = Url::parse("https://example.org/file").unwrap();
     let mut net = net(&url);
     net.idle = std::time::Duration::from_secs(30);
-    // a process stopped for two minutes, as a laptop's lid or SIGSTOP stops it, wakes with its
-    // deadline long gone and the server's bytes in the socket; both are ready at once, and the
-    // order a select picks them in is random, so the stop is tried many times
+    // a stopped process, as a closed laptop's, wakes with its deadline gone and bytes waiting;
+    // a select picks either first at random, so the stop is tried many times
     for _ in 0..32 {
         let (source, mut chunks) = tokio::sync::mpsc::channel(16);
         let (sender, _written) = tokio::sync::mpsc::channel(16);
