@@ -731,6 +731,27 @@ mod tests {
         Ok(())
     }
 
+    /// clap words an error the match above leaves alone, as too many values, and a link it quotes
+    /// keeps its secret masked there too.
+    #[test]
+    fn a_usage_error_clap_words_masks_a_query_secret() {
+        let mut error = clap::Error::new(ErrorKind::TooManyValues).with_cmd(&args::Args::command());
+        error.insert(
+            ContextKind::InvalidArg,
+            ContextValue::String("--select <glob>".to_owned()),
+        );
+        error.insert(
+            ContextKind::InvalidValue,
+            ContextValue::String("https://example.org/a.csv?token=AUDIT_CANARY".to_owned()),
+        );
+        let said = message(&error);
+        assert!(
+            said.contains("https://example.org/a.csv?token=***"),
+            "{said}"
+        );
+        assert!(!said.contains("AUDIT_CANARY"), "{said}");
+    }
+
     #[test]
     fn command_typos_find_the_command_by_its_spelling() -> Result<(), Box<dyn std::error::Error>> {
         for (arguments, meant) in [
