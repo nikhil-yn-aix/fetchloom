@@ -16,22 +16,28 @@ pub(super) fn choose(
         return Err(cancelled());
     }
     let terminal = Term::stderr();
+    // too few rows for the question, one option and the footer: a list drawn once never stacks
+    if terminal.size().0 < 5 {
+        return numbered(question, options, footer, style);
+    }
     let escapes = escapes();
     let _ = terminal.hide_cursor();
     let mut cursor = 0;
+    let mut top = 0;
     let mut shown = 0;
-    let draw = |cursor: usize, shown: &mut usize| {
-        let width = usize::from(terminal.size().1);
-        let lines = frame(question, options, footer, cursor, style, width);
-        show(&terminal, &lines, shown, width, escapes);
+    let draw = |cursor: usize, top: &mut usize, shown: &mut usize| {
+        let (height, width) = terminal.size();
+        let screen = (usize::from(width), usize::from(height));
+        let lines = frame(question, options, footer, (cursor, top), style, screen);
+        show(&terminal, &lines, shown, screen.0, escapes);
     };
-    draw(cursor, &mut shown);
+    draw(cursor, &mut top, &mut shown);
     let answer = loop {
         let previous = cursor;
         match selection_key(terminal.read_key_raw(), &mut cursor, options.len()) {
             Ok(None) => {
                 if previous != cursor {
-                    draw(cursor, &mut shown);
+                    draw(cursor, &mut top, &mut shown);
                 }
             }
             answer => break answer,
@@ -178,14 +184,17 @@ fn rows(line: &str, width: usize) -> usize {
         })
         .sum()
 }
-/// the picker's lines: the question with its keys, a row for each option, then the footer.
+
+/// the picker's lines on a screen `width` columns wide and `height` rows high: the question with
+/// its keys, a row for each option, then the footer. a list too tall for the screen shows the
+/// options around `cursor`, scrolled from `top` no further than it needs, and counts the rest.
 fn frame(
     question: &str,
     options: &[String],
     footer: &str,
-    cursor: usize,
+    (cursor, top): (usize, &mut usize),
     style: Style,
-    width: usize,
+    (width, height): (usize, usize),
 ) -> Vec<String> {
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
@@ -211,13 +220,56 @@ fn frame(
         .copied()
         .unwrap_or("");
     let mut lines = vec![format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}")];
-    lines.extend(listed(options, cursor, style, width));
+    let mut rows_listed = listed(options, cursor, style, width);
+    let heights: Vec<usize> = rows_listed.iter().map(|row| rows(row, width)).collect();
+    // a frame as tall as the screen scrolls it, and the next draw cannot climb back to its top.
+    // the question, the footer and the row the cursor waits on take three
+    let all = 1 + heights.iter().sum::<usize>() + usize::from(!footer.is_empty());
+    let (start, end) = if all < height {
+        (0, options.len())
+    } else {
+        window(&heights, cursor, *top, height.saturating_sub(3))
+    };
+    *top = start;
+    let separator = if style.unicode { " \u{b7} " } else { ", " };
+    let footer = [
+        (start > 0).then(|| format!("{start} more above")),
+        (end < options.len()).then(|| format!("{} more below", options.len() - end)),
+        (!footer.is_empty()).then(|| footer.to_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<String>>()
+    .join(separator);
+    lines.extend(rows_listed.drain(start..end));
     if !footer.is_empty() {
         let more = if style.unicode { "\u{2026}" } else { "..." };
-        let footer = console::truncate_str(footer, width.saturating_sub(5), more);
+        let footer = console::truncate_str(&footer, width.saturating_sub(5), more);
         lines.push(format!("    {dim}{}{dim:#}", plain(&footer)));
     }
     lines
+}
+
+/// the options from `start` to `end` that a list scrolled from `top` shows in `room` rows, as
+/// `heights` gives each option's: the one at `cursor` always, scrolled no further than it needs.
+fn window(heights: &[usize], cursor: usize, top: usize, room: usize) -> (usize, usize) {
+    let mut start = top.min(cursor);
+    let mut used: usize = heights[start..=cursor].iter().sum();
+    while start < cursor && used > room {
+        used -= heights[start];
+        start += 1;
+    }
+    let mut end = cursor + 1;
+    while end < heights.len() && used + heights[end] <= room {
+        used += heights[end];
+        end += 1;
+    }
+    // at the end of the list, rows left over show what is above
+    while start > 0 && used + heights[start - 1] <= room {
+        start -= 1;
+        used += heights[start];
+    }
+    (start, end)
 }
 
 /// a row for each option, the one at `cursor` marked.
@@ -449,7 +501,17 @@ mod tests {
     #[test]
     fn a_frame_is_the_question_then_one_line_per_option_then_the_footer() {
         let options = ["a   one".to_owned(), "bb  two".to_owned()];
-        let lines = frame("which?", &options, "more: x", 1, style(false, false), 80);
+        let at = |cursor: usize, footer: &str| {
+            frame(
+                "which?",
+                &options,
+                footer,
+                (cursor, &mut 0),
+                style(false, false),
+                (80, 24),
+            )
+        };
+        let lines = at(1, "more: x");
         assert_eq!(
             lines,
             [
@@ -459,10 +521,7 @@ mod tests {
                 "    more: x",
             ]
         );
-        assert_eq!(
-            frame("which?", &options, "", 0, style(false, false), 80).len(),
-            3
-        );
+        assert_eq!(at(0, "").len(), 3);
         assert!(lines.iter().all(|line| !line.contains('\n')));
     }
 
@@ -517,7 +576,14 @@ mod tests {
             ),
             format!("{long}  Huberman  90.0 KiB  2 downloads"),
         ];
-        let lines = frame("which one?", &options, "", 0, style(false, true), 120);
+        let lines = frame(
+            "which one?",
+            &options,
+            "",
+            (0, &mut 0),
+            style(false, true),
+            (120, 24),
+        );
         assert!(
             lines[1].ends_with("Palmer Penguins  18.5 KiB  12k downloads"),
             "{}",
@@ -537,7 +603,14 @@ mod tests {
             .map(|n| format!("{:9}  Iris {n}", format!("zenodo:{n}")))
             .collect();
         for cursor in [0, 11] {
-            let lines = frame("which one?", &options, "", cursor, style(false, false), 80);
+            let lines = frame(
+                "which one?",
+                &options,
+                "",
+                (cursor, &mut 0),
+                style(false, false),
+                (80, 24),
+            );
             let rows = &lines[1..];
             let starts = |text: &str| -> Vec<Option<usize>> {
                 rows.iter().map(|line| line.find(text)).collect()
@@ -555,9 +628,54 @@ mod tests {
                 )
             })
             .collect();
-        for line in frame("which one?", &long, "", 0, style(false, false), 40) {
+        for line in frame(
+            "which one?",
+            &long,
+            "",
+            (0, &mut 0),
+            style(false, false),
+            (40, 24),
+        ) {
             assert!(console::measure_text_width(&line) < 40, "{line:?}");
         }
+    }
+
+    /// on a screen too short for the whole list, the options around the cursor show, scrolled no
+    /// further than the cursor goes, and the footer counts those out of sight.
+    #[test]
+    fn a_list_taller_than_the_screen_scrolls_with_the_cursor() {
+        let options: Vec<String> = (1..=9).map(|n| format!("zenodo:{n}")).collect();
+        let mut top = 0;
+        let mut at = |cursor: usize| {
+            let lines = frame(
+                "which one?",
+                &options,
+                "more: x",
+                (cursor, &mut top),
+                style(false, false),
+                (80, 8),
+            );
+            (
+                lines[1..lines.len() - 1].to_vec(),
+                lines[lines.len() - 1].clone(),
+            )
+        };
+        let (shown, footer) = at(0);
+        assert_eq!(shown.len(), 5, "{shown:?}");
+        assert_eq!(shown[0], "  > 1 zenodo:1");
+        assert_eq!(footer, "    4 more below, more: x");
+        assert_eq!(at(4).0[0], "    1 zenodo:1");
+        let (shown, footer) = at(5);
+        assert_eq!(shown[0], "    2 zenodo:2");
+        assert_eq!(shown[4], "  > 6 zenodo:6");
+        assert_eq!(footer, "    1 more above, 3 more below, more: x");
+        assert_eq!(at(2).0[0], "    2 zenodo:2");
+        assert_eq!(at(8).1, "    4 more above, more: x");
+        // an option whose facts go below it takes two rows
+        assert_eq!(window(&[2, 2, 2, 2], 0, 0, 5), (0, 2));
+        assert_eq!(window(&[2, 2, 2, 2], 2, 0, 5), (1, 3));
+        assert_eq!(window(&[1; 9], 8, 6, 5), (4, 9));
+        assert_eq!(window(&[1; 9], 3, 4, 5), (3, 8));
     }
 
     #[test]

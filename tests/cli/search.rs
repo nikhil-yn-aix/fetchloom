@@ -102,6 +102,67 @@ fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
     Ok(())
 }
 
+/// a list taller than the terminal scrolls in place: a draw that climbed past the top of the
+/// screen could not reach its own first row again, and each key would add another copy below.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_list_taller_than_the_terminal_scrolls_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let command = catalogs.command(&sandbox, &["add", "iris"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &command,
+        "rows 8 cols 60",
+        "which one?",
+        "jjjjjjjq",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(2), "{screen}");
+    let climbs: Vec<usize> = screen
+        .split("\x1b[")
+        .filter_map(|escape| {
+            let digits = escape.find(|c: char| !c.is_ascii_digit())?;
+            escape[digits..]
+                .starts_with('A')
+                .then(|| escape[..digits].parse().ok())
+                .flatten()
+        })
+        .collect();
+    assert!(climbs.iter().all(|rows| *rows < 8), "{climbs:?}\n{screen}");
+    // the last list drawn, which q wiped, has the cursor on the eighth match
+    let frames: Vec<&str> = screen.split("\r\x1b[0J").collect();
+    let last = frames
+        .len()
+        .checked_sub(2)
+        .map(|index| frames[index])
+        .unwrap_or_default();
+    assert!(
+        last.lines()
+            .any(|line| line.contains("› 8 ") || line.contains("> 8 ")),
+        "{last}"
+    );
+    // too short for even one match between the question and the footer, the list is drawn once,
+    // numbered, as a screen reader's is
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let command = catalogs.command(&sandbox, &["add", "iris"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &command,
+        "rows 4 cols 60",
+        "type a number",
+        "q\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(2), "{screen}");
+    assert_eq!(screen.matches("zenodo:4135078").count(), 1, "{screen}");
+    Ok(())
+}
+
 /// `TERM=dumb` is how a screen reader's user runs fetchloom; the error comes after the list.
 #[cfg(target_os = "linux")]
 #[test]
