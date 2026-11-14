@@ -1,5 +1,7 @@
-//! rate-limit headers and admission decisions at fixed instants.
+//! rate-limit headers, admission decisions at fixed instants, and downloads asked together.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::StatusCode;
@@ -7,6 +9,11 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use url::Url;
 
 use super::*;
+use crate::cache::Cache;
+use crate::net::download::Fetch;
+use crate::net::scripted::{reply, route};
+use crate::net::{Net, Offline, Options, Splitting};
+use crate::source::recorded::block_on;
 
 /// downloads that ask at once share what the host says is left, requests still on their way
 /// included: 12 asked four at a time of a host that takes 5 a second go 5, 5 and 2, a window's
@@ -43,6 +50,68 @@ fn requests_asked_at_once_never_take_more_than_the_hosts_quota() {
         at += Duration::from_secs(1);
     }
     assert_eq!(windows, [5, 5, 2]);
+}
+
+/// downloads asked together send no more than the host said is left, each counted from its
+/// ticket until its answer: with 3 of 4 left, of four asked at once three go and one waits for
+/// the host's next window, so the host refuses none and nothing is tried again.
+#[test]
+fn downloads_asked_together_send_no_more_than_the_host_has_left() {
+    const QUOTA: u64 = 4;
+    // a window opens with the first request after the last one ended and lasts a second
+    let window: Arc<Mutex<Option<(Instant, u64)>>> = Arc::default();
+    let refused = Arc::new(AtomicUsize::new(0));
+    let (counted, refusals) = (window.clone(), refused.clone());
+    let (url, asked) = route(move |_| {
+        let now = Instant::now();
+        let taken = {
+            let mut window = counted.lock().unwrap();
+            let open = window.filter(|(start, _)| now < *start + Duration::from_secs(1));
+            let (start, taken) = open.unwrap_or((now, 0));
+            *window = Some((start, taken + 1));
+            taken + 1
+        };
+        let left = QUOTA.saturating_sub(taken).to_string();
+        let quota = QUOTA.to_string();
+        let headers = [
+            ("X-RateLimit-Limit", quota.as_str()),
+            ("X-RateLimit-Remaining", left.as_str()),
+            ("X-RateLimit-Reset", "1"),
+        ];
+        if taken > QUOTA {
+            refusals.fetch_add(1, Ordering::SeqCst);
+            reply("429 Too Many Requests", &headers, b"")
+        } else {
+            reply("200 OK", &headers, b"a file")
+        }
+    });
+    let options = Options {
+        offline: Offline::No,
+        jobs: 8,
+        credentials: Vec::new(),
+        split: Splitting::Never,
+    };
+    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+    net.typed(&url);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let download = |n: u32| {
+        let fetch = Fetch::new(url.join(&n.to_string()).unwrap());
+        let (net, cache) = (&net, &cache);
+        async move { net.download(&fetch, cache, &|_| Ok(())).await.map(|_| ()) }
+    };
+    // the first answer tells what the host has left
+    block_on(download(0)).unwrap();
+    let together =
+        block_on(async { tokio::join!(download(1), download(2), download(3), download(4)) });
+    assert!(together.0.is_ok() && together.1.is_ok() && together.2.is_ok() && together.3.is_ok());
+    assert_eq!(
+        refused.load(Ordering::SeqCst),
+        0,
+        "a request went past the limit"
+    );
+    assert_eq!(net.work.counts().retries, 0);
+    assert_eq!(asked.lock().unwrap().len(), 5);
 }
 
 #[test]
