@@ -447,10 +447,10 @@ impl Reach {
         }
     }
 
-    /// whether the last try reached further than any before.
-    fn further(&self) -> bool {
+    /// how much further than any try before the last one reached.
+    fn further(&self) -> u64 {
         let held = self.held.load(Ordering::Relaxed);
-        self.furthest.fetch_max(held, Ordering::Relaxed) < held
+        held.saturating_sub(self.furthest.fetch_max(held, Ordering::Relaxed))
     }
 }
 
@@ -651,9 +651,7 @@ impl Net {
                     &mut state,
                 )
                 .await;
-            if reach.further() {
-                retry.progressed();
-            }
+            retry.moved(reach.further());
             match answer {
                 Ok(Answer::NotModified) => {
                     let Some(record) = known else {
@@ -709,9 +707,14 @@ impl Net {
                 Err(Failure::Transient {
                     reason,
                     retry_after,
+                    unreachable,
                 }) => {
                     Self::release_for_wait(&mut state.permits);
-                    retry.wait(reason, retry_after, known.is_some()).await?;
+                    if unreachable {
+                        retry.unreachable(reason, known.is_some()).await?;
+                    } else {
+                        retry.wait(reason, retry_after, known.is_some()).await?;
+                    }
                 }
             }
         }

@@ -293,6 +293,26 @@ impl fmt::Display for Unknown {
 
 impl std::error::Error for Unknown {}
 
+/// a lookup DNS could not answer for now, as a machine whose network is gone gets.
+#[derive(Debug)]
+pub(crate) struct Unanswered(pub(crate) std::io::Error);
+
+impl fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for Unanswered {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// a test's DNS: what a lookup of each name finds, or why it fails.
+#[cfg(test)]
+pub(crate) type Lookups = Arc<dyn Fn(&str) -> std::io::Result<Vec<SocketAddr>> + Send + Sync>;
+
 /// whether a failed lookup said the name does not exist, rather than that DNS could not answer.
 /// on unix only getaddrinfo's message says so, worded differently by glibc, musl and macos.
 fn is_unknown(err: &std::io::Error) -> bool {
@@ -556,6 +576,8 @@ pub(crate) struct Resolver {
     typed: Typed,
     offline: bool,
     reach: Reach,
+    #[cfg(test)]
+    lookups: Option<Lookups>,
 }
 
 impl Resolver {
@@ -564,7 +586,16 @@ impl Resolver {
             typed,
             offline,
             reach,
+            #[cfg(test)]
+            lookups: None,
         }
+    }
+
+    /// lookups answered by `lookups` instead of DNS, for tests of a network that comes and goes.
+    #[cfg(test)]
+    pub(crate) fn answering(mut self, lookups: Option<Lookups>) -> Resolver {
+        self.lookups = lookups;
+        self
     }
 }
 
@@ -575,18 +606,35 @@ impl reqwest::dns::Resolve for Resolver {
         let typed = self.typed.clone();
         let offline = self.offline;
         let reach = self.reach;
+        #[cfg(test)]
+        let answered = self.lookups.as_ref().map(|lookups| lookups(&host));
+        #[cfg(not(test))]
+        let answered = None;
         Box::pin(async move {
             if offline {
                 return Err(Box::new(Offline) as Box<dyn std::error::Error + Send + Sync>);
             }
-            let found: Vec<SocketAddr> = match tokio::net::lookup_host((host.as_str(), 0)).await {
-                Ok(found) => found.collect(),
+            let looked_up = match answered {
+                Some(answer) => answer,
+                None => tokio::net::lookup_host((host.as_str(), 0))
+                    .await
+                    .map(Iterator::collect),
+            };
+            let found: Vec<SocketAddr> = match looked_up {
+                Ok(found) => found,
                 Err(err) if is_unknown(&err) => {
                     return Err(
                         Box::new(Unknown(host.clone())) as Box<dyn std::error::Error + Send + Sync>
                     );
                 }
-                Err(err) => return Err(Box::new(err)),
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                    return Err(Box::new(err) as Box<dyn std::error::Error + Send + Sync>);
+                }
+                Err(err) => {
+                    return Err(
+                        Box::new(Unanswered(err)) as Box<dyn std::error::Error + Send + Sync>
+                    );
+                }
             };
             let kept: Vec<SocketAddr> = found
                 .iter()

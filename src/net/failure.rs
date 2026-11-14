@@ -18,9 +18,14 @@ pub(crate) const RETRIES: u32 = 4;
 /// the most retries `FETCHLOOM_RETRIES` may ask for. each wait is a random part of a ceiling
 /// that doubles up to a minute, so this many ride out about eight minutes without network.
 pub(crate) const MOST_RETRIES: u32 = 20;
-/// tries one request gets in all, however often progress earned tries back, so a server that
-/// sends a few bytes before every break still ends.
+/// tries one request gets that each moved its file on by less than [`MOVING`], however often
+/// progress earned tries back, so a server that sends a few bytes before every break still ends.
 const MOST_TRIES: u32 = 50;
+/// how much further than any try before a try must take its file to count toward no limit, so a
+/// download that keeps moving keeps going. on a 2 Mbit/s link a connection that lasts five
+/// seconds moves this much, while a server that breaks after a few kilobytes never does; a server
+/// that breaks after just this much costs one request a MiB, as aria2's 1 MiB pieces do.
+pub(super) const MOVING: u64 = 1 << 20;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 /// the most the wait before a first retry takes; each retry after it may wait twice as long.
 pub(super) const FIRST_WAIT: Duration = Duration::from_secs(1);
@@ -32,6 +37,9 @@ pub(super) enum Failure {
     Transient {
         reason: String,
         retry_after: Option<Duration>,
+        /// no answer came, for a reason this machine gave: no route or network, an address it no
+        /// longer has, or a lookup DNS could not answer for now, as when its network is gone.
+        unreachable: bool,
     },
     /// the host's rate limit is used up and resets within [`pace::LONGEST`], after `wait`. the
     /// next try waits for the reset before it is sent, and spends none of the request's retries.
@@ -49,7 +57,15 @@ pub(super) struct Retry<'a> {
     attempt: u32,
     /// tries in all.
     tries: u32,
+    /// tries that moved the file on by less than [`MOVING`], of which it gets [`MOST_TRIES`].
+    spent: u32,
+    /// the last try moved the file on by [`MOVING`] or more.
+    moving: bool,
     limited: u32,
+    /// what the run had heard from any host when this request's last try ended, or it began.
+    heard: u64,
+    /// waits in a row for the network to come back, which set how long the next one takes.
+    lost: u32,
     /// told of each wait for another try, as a download's bar shows it.
     on: Option<Listener<'a>>,
 }
@@ -61,7 +77,11 @@ impl<'a> Retry<'a> {
             url,
             attempt: 1,
             tries: 1,
+            spent: 0,
+            moving: false,
             limited: 0,
+            heard: net.heard(),
+            lost: 0,
             on: None,
         }
     }
@@ -82,7 +102,8 @@ impl<'a> Retry<'a> {
         } else {
             0
         };
-        let mut most = (self.tries + retries + waits).min(MOST_TRIES);
+        let capped = self.tries + MOST_TRIES.saturating_sub(self.spent + 1);
+        let mut most = (self.tries + retries + waits).min(capped);
         if let Some(left) = self.net.paces.refusals_left(&super::paced(self.url)) {
             most = most.min(self.tries + left.saturating_sub(1));
         }
@@ -103,10 +124,56 @@ impl<'a> Retry<'a> {
         }
     }
 
-    /// a try moved the download on, so the tries count again from the first, up to
-    /// [`MOST_TRIES`] in all.
-    pub(super) fn progressed(&mut self) {
-        self.attempt = 1;
+    /// the last try took the download `gained` bytes further than any before: any gain makes the
+    /// tries count again from the first, and [`MOVING`] or more counts the try toward no limit.
+    pub(super) fn moved(&mut self, gained: u64) {
+        if gained > 0 {
+            self.attempt = 1;
+        }
+        self.moving = gained >= MOVING;
+    }
+
+    /// counts the try that just ended, which moved little unless [`Retry::moved`] said so, and
+    /// notes what the run had heard by then.
+    fn ended(&mut self) {
+        if !std::mem::take(&mut self.moving) {
+            self.spent += 1;
+        }
+        self.heard = self.net.heard();
+        self.lost = 0;
+    }
+
+    /// a try got no answer for a reason this machine gave, as [`Failure::Transient`] marks it.
+    /// when [`Outage`]'s rule finds the network gone, the request waits for it and
+    /// spends no try; otherwise the try is spent as [`Retry::wait`] spends any other.
+    pub(super) async fn unreachable(
+        &mut self,
+        reason: String,
+        has_copy: bool,
+    ) -> Result<(), Error> {
+        let heard = self.net.heard();
+        if heard != self.heard {
+            return self.wait(reason, None, has_copy).await;
+        }
+        let lost = self.net.outage.lost(heard, tokio::time::Instant::now());
+        if lost.gone >= LONGEST_OUTAGE {
+            return self.wait(reason, None, has_copy).await;
+        }
+        self.moving = false;
+        self.lost += 1;
+        let wait = outage_wait(self.net.first_wait, self.lost);
+        tracing::debug!(%reason, ?wait, gone = ?lost.gone, "the network is gone, waiting for it");
+        Work::add(&self.net.work.retries, 1);
+        if lost.tell {
+            (self.net.notify)(Notice::NetworkGone {
+                longest: LONGEST_OUTAGE,
+            });
+        }
+        self.tell(wait, None);
+        tokio::select! {
+            () = self.net.outage.wait(wait, heard, || self.net.heard()) => Ok(()),
+            () = self.net.stop.asked() => Err(interrupted(self.url)),
+        }
     }
 
     /// counts a try a rate limit refused. the next one waits for the limit to reset and does not
@@ -121,6 +188,7 @@ impl<'a> Retry<'a> {
             // never sooner than the limit resets, which a try sent earlier would wait for
             return self.wait(reason, Some(wait), has_copy).await;
         }
+        self.ended();
         self.limited += 1;
         self.tries += 1;
         tracing::debug!(%reason, ?wait, "rate limited, trying again once the limit resets");
@@ -153,7 +221,8 @@ impl<'a> Retry<'a> {
         asked: Option<Duration>,
         has_copy: bool,
     ) -> Result<(), Error> {
-        if self.attempt > self.net.retries || self.tries >= MOST_TRIES {
+        self.ended();
+        if self.attempt > self.net.retries || self.spent >= MOST_TRIES {
             let through = self
                 .net
                 .wire()
@@ -252,6 +321,7 @@ pub(super) fn transient(reason: String) -> Failure {
     Failure::Transient {
         reason,
         retry_after: None,
+        unreachable: false,
     }
 }
 
@@ -279,11 +349,13 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             return Failure::Transient {
                 reason,
                 retry_after: wait.or_else(|| retry_after(headers)),
+                unreachable: false,
             };
         }
         return Failure::Transient {
             reason,
             retry_after: retry_after(headers),
+            unreachable: false,
         };
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
@@ -471,7 +543,11 @@ pub(super) fn classify(
     if err.is_timeout() {
         transient(format!("the request to {} timed out", host(url)))
     } else if err.is_connect() {
-        transient(unconnected(url, err))
+        Failure::Transient {
+            reason: unconnected(url, err),
+            retry_after: None,
+            unreachable: cut_off(err),
+        }
     } else {
         transient(format!(
             "the request to {} failed: {}",
@@ -479,6 +555,30 @@ pub(super) fn classify(
             without_link(err)
         ))
     }
+}
+
+/// whether `err` came from this machine having no network: no route or network, an address it no
+/// longer has, or a lookup DNS could not answer for now. a refusal or a silence could be one host's.
+fn cut_off(err: &reqwest::Error) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = cause {
+        if current.is::<address::Unanswered>() {
+            return true;
+        }
+        if let Some(io) = current.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::NetworkUnreachable
+                    | std::io::ErrorKind::NetworkDown
+                    | std::io::ErrorKind::HostUnreachable
+                    | std::io::ErrorKind::AddrNotAvailable
+            )
+        {
+            return true;
+        }
+        cause = current.source();
+    }
+    false
 }
 
 /// why no connection to `url`'s host and port was made, naming both, since the port is often
@@ -686,6 +786,114 @@ fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Op
     Some(when.duration_since(now()).unwrap_or_default())
 }
 
+/// how long requests wait for a lost network before their tries count again. a laptop rejoins
+/// its wifi within seconds of waking and a vpn reconnects within a minute, while a home router
+/// takes one to three minutes to restart; past five, a person is better told than kept waiting.
+const LONGEST_OUTAGE: Duration = Duration::from_mins(5);
+/// the most one wait for the network takes before the request tries again, so a download goes
+/// on within seconds of the network coming back even when nothing else is asking.
+const LONGEST_OUTAGE_WAIT: Duration = Duration::from_secs(15);
+/// how long the network stays silent before a person hears it is gone: long enough for another
+/// host's first answer to show it works, as one does a moment into a run.
+const TELL_OUTAGE_AFTER: Duration = Duration::from_secs(5);
+
+/// what the run heard from the network, which tells a lost network from one host that is down.
+///
+/// the rule: a try that got no answer for a reason this machine gave, such as no route, no
+/// network, an address it no longer has or a lookup DNS could not answer for now, finds the
+/// network gone when no host answered or sent a byte since the request's last try ended. that
+/// try spends none of the request's tries: the request waits, each wait a random part of a
+/// ceiling that doubles from a second up to 15 s, and goes on at once when any host answers.
+/// waiting ends [`LONGEST_OUTAGE`] after the first such failure, after which tries count as before; the
+/// person hears of the wait once the network has been silent for [`TELL_OUTAGE_AFTER`]. a host that
+/// refused a connection answered, and a host that cannot be reached while others answer is down
+/// alone, so both spend tries as before.
+#[derive(Default)]
+pub(super) struct Outage {
+    /// answers from any host this run.
+    answers: std::sync::atomic::AtomicU64,
+    /// told of each answer, so requests waiting for the network go on as soon as one comes.
+    back: tokio::sync::Notify,
+    /// the outage under way, if one is.
+    lost: std::sync::Mutex<Option<Gone>>,
+}
+
+/// an outage: what the run had heard when it began, when that was, and whether a person heard
+/// of it.
+struct Gone {
+    heard: u64,
+    since: tokio::time::Instant,
+    told: bool,
+}
+
+/// what a failure that found the network gone learned of the outage.
+struct Lost {
+    /// how long the network has been gone.
+    gone: Duration,
+    /// the network has been gone long enough to tell the person, who has not heard yet.
+    tell: bool,
+}
+
+impl Outage {
+    /// an answer came from some host, so the network works.
+    pub(super) fn answered(&self) {
+        self.answers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.back.notify_waiters();
+    }
+
+    /// answers this run, which with the bytes it received tell whether the network was heard
+    /// from since.
+    pub(super) fn answers(&self) -> u64 {
+        self.answers.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// a failure at `now` found the network gone, with `heard` answers and bytes heard in all:
+    /// the outage began with the first such failure since anything was heard.
+    fn lost(&self, heard: u64, now: tokio::time::Instant) -> Lost {
+        let mut lost = self
+            .lost
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outage = match &mut *lost {
+            Some(outage) if outage.heard == heard => outage,
+            _ => lost.insert(Gone {
+                heard,
+                since: now,
+                told: false,
+            }),
+        };
+        let gone = now.saturating_duration_since(outage.since);
+        let tell = gone >= TELL_OUTAGE_AFTER && !outage.told;
+        outage.told |= tell;
+        Lost { gone, tell }
+    }
+
+    /// waits `wait` for the network, or less once an answer comes from any host after `heard`
+    /// was heard, as `now_heard` tells.
+    pub(super) async fn wait(&self, wait: Duration, heard: u64, now_heard: impl Fn() -> u64) {
+        let back = self.back.notified();
+        tokio::pin!(back);
+        back.as_mut().enable();
+        if now_heard() != heard {
+            return;
+        }
+        tokio::select! {
+            () = tokio::time::sleep(wait) => {}
+            () = back => {}
+        }
+    }
+}
+
+/// how long the `lost`th wait in a row for the network takes: a random part of a ceiling that
+/// doubles from `first` up to [`LONGEST_OUTAGE_WAIT`].
+fn outage_wait(first: Duration, lost: u32) -> Duration {
+    let ceiling = first
+        .saturating_mul(1 << lost.saturating_sub(1).min(6))
+        .min(LONGEST_OUTAGE_WAIT);
+    ceiling.mul_f64(fastrand::f64())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,6 +974,7 @@ mod tests {
             let Failure::Transient {
                 reason,
                 retry_after,
+                ..
             } = refusal(&url, status, &headers)
             else {
                 panic!("HTTP {code} must retry");
@@ -1174,8 +1383,10 @@ mod tests {
         assert_eq!(net.work.counts().retries, 1);
     }
 
+    /// a try that moves the file a MiB further counts toward no limit, while one that moves it
+    /// less, as a server that breaks after a few bytes does, still counts.
     #[test]
-    fn progress_earns_tries_back_but_never_past_the_most_in_all() {
+    fn only_tries_that_move_the_file_little_count_toward_the_most_in_all() {
         use crate::net::{Options, Splitting};
         use crate::source::recorded::block_on;
         use std::sync::Arc;
@@ -1192,21 +1403,19 @@ mod tests {
             Arc::default(),
             Arc::new(|_| {}),
         );
+        // a stop ends each wait at once, after the try is granted
         net.stop.ask();
         let mut retry = Retry::new(&net, &url);
         retry.attempt = RETRIES + 1;
-        retry.progressed();
-        let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
-        assert_eq!(error.kind, Kind::Interrupted, "progress earned another try");
-        retry.progressed();
-        retry.tries = MOST_TRIES;
+        retry.spent = MOST_TRIES - 1;
+        for _ in 0..3 {
+            retry.moved(MOVING);
+            let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
+            assert_eq!(error.kind, Kind::Interrupted, "the try was not counted");
+        }
+        retry.moved(MOVING - 1);
         let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
         assert_eq!(error.kind, Kind::NetworkUnreachable);
-        assert!(
-            error.message.contains(&format!("after {MOST_TRIES} tries")),
-            "{}",
-            error.message
-        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1395,5 +1604,128 @@ mod tests {
             .unwrap();
         retry.wait("broke".to_owned(), None, false).await.unwrap();
         assert_eq!(*heard.lock().unwrap(), [(3, RETRIES + 2)]);
+    }
+
+    /// a network whose loss each request hears of, as a closure records it: `gone` for each
+    /// line about a lost network, `retry` for each warning about another try.
+    fn told() -> (Net, std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>) {
+        use crate::net::{Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let kept = heard.clone();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(move |notice| {
+                let said = match notice {
+                    Notice::NetworkGone { longest } => {
+                        assert_eq!(longest, LONGEST_OUTAGE);
+                        "gone"
+                    }
+                    Notice::Retrying { .. } => "retry",
+                    Notice::Waiting { .. } => "waiting",
+                };
+                kept.lock().unwrap().push(said);
+            }),
+        );
+        (net, heard)
+    }
+
+    /// a host this machine cannot reach while another host answers is down alone, so its tries
+    /// are spent as before and nobody hears of a lost network.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_unreachable_while_others_answer_spends_its_tries() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let (net, heard) = told();
+        let mut retry = Retry::new(&net, &url);
+        let mut ended = None;
+        for _ in 0..1000 {
+            net.outage.answered();
+            let tried = retry.unreachable("could not connect to example.org:443".to_owned(), false);
+            if let Err(error) = tried.await {
+                ended = Some(error);
+                break;
+            }
+        }
+        let error = ended.expect("the request never gave up");
+        assert_eq!(error.kind, Kind::NetworkUnreachable);
+        assert!(
+            error
+                .message
+                .contains(&format!("after {} tries", RETRIES + 1)),
+            "{}",
+            error.message
+        );
+        assert!(!heard.lock().unwrap().contains(&"gone"));
+    }
+
+    /// with no host heard from, a request that cannot reach its host waits for the network
+    /// without spending tries and says so once; its tries count again once the network has been
+    /// gone for the longest wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_network_is_waited_for_until_the_longest_wait() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let (net, heard) = told();
+        let mut retry = Retry::new(&net, &url);
+        let began = tokio::time::Instant::now();
+        let mut ended = None;
+        for _ in 0..1000 {
+            let tried = retry.unreachable("could not connect to example.org:443".to_owned(), false);
+            if let Err(error) = tried.await {
+                ended = Some(error);
+                break;
+            }
+        }
+        let error = ended.expect("the request never gave up");
+        assert!(began.elapsed() >= LONGEST_OUTAGE);
+        assert!(
+            error
+                .message
+                .contains(&format!("after {} tries", RETRIES + 1)),
+            "{}",
+            error.message
+        );
+        let heard = heard.lock().unwrap();
+        assert_eq!(heard.iter().filter(|said| **said == "gone").count(), 1);
+        assert_eq!(heard.first(), Some(&"gone"));
+    }
+
+    /// a try that fails before another host first answers tells nobody of a lost network, since
+    /// that answer comes a moment later and shows the network works.
+    #[tokio::test(start_paused = true)]
+    async fn a_moment_without_answers_is_no_lost_network_to_tell_of() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let (net, heard) = told();
+        let mut retry = Retry::new(&net, &url);
+        let mut waiting = std::pin::pin!(retry.unreachable("no route".to_owned(), false));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        net.outage.answered();
+        assert!(waiting.as_mut().poll(&mut context).is_ready());
+        assert!(heard.lock().unwrap().is_empty());
+    }
+
+    /// an answer from any host ends a wait for the network at once.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_ends_a_wait_for_the_network() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let (net, _) = told();
+        let mut retry = Retry::new(&net, &url);
+        retry.lost = 10;
+        let mut waiting = std::pin::pin!(retry.unreachable("no route".to_owned(), false));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        net.outage.answered();
+        assert!(matches!(
+            waiting.as_mut().poll(&mut context),
+            std::task::Poll::Ready(Ok(()))
+        ));
     }
 }

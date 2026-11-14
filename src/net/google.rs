@@ -558,7 +558,13 @@ impl Net {
                 Failure::Limited { reason, wait } => retry.limited(reason, wait, false).await?,
                 Failure::Transient {
                     reason,
+                    unreachable: true,
+                    ..
+                } => retry.unreachable(reason, false).await?,
+                Failure::Transient {
+                    reason,
                     retry_after,
+                    ..
                 } => retry.wait(reason, retry_after, false).await?,
             }
         }

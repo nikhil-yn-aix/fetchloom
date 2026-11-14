@@ -203,6 +203,13 @@ impl Context {
                 window,
                 wait,
             } => output.step("Waiting", &rate_wait(&host, quota, window, wait)),
+            Notice::NetworkGone { longest } => output.step(
+                "Waiting",
+                &format!(
+                    "up to {} for this machine's network to come back",
+                    units::at_least(longest)
+                ),
+            ),
         });
         let options = net::Options {
             offline: self.offline,

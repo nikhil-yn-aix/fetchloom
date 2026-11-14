@@ -316,9 +316,14 @@ impl Net {
                 Err(Failure::Transient {
                     reason,
                     retry_after,
+                    unreachable,
                 }) => {
                     Self::release_for_wait(&mut permits);
-                    retry.wait(reason, retry_after, false).await?;
+                    if unreachable {
+                        retry.unreachable(reason, false).await?;
+                    } else {
+                        retry.wait(reason, retry_after, false).await?;
+                    }
                 }
             }
         }

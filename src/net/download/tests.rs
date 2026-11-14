@@ -442,6 +442,101 @@ fn tries_that_move_the_file_on_earn_the_tries_back() {
     assert_eq!(net.work.counts().retries, total as u64 - 1);
 }
 
+/// the bytes at `at` of the file [`breaking`] serves.
+fn pattern(at: u64, length: u64) -> Vec<u8> {
+    (at..at + length)
+        .map(|index| u8::try_from(index % 251).unwrap())
+        .collect()
+}
+
+/// serves a file of `total` bytes with ranges, each answer breaking after `step` bytes of it,
+/// and counts the requests.
+fn breaking(total: u64, step: u64) -> (Url, Arc<std::sync::atomic::AtomicU32>) {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = Url::parse(&format!(
+        "http://{}/big.bin",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let asked = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counted = asked.clone();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+            let start: u64 = head
+                .lines()
+                .find_map(|line| line.strip_prefix("range: bytes="))
+                .and_then(|range| range.trim_end_matches('-').parse().ok())
+                .unwrap_or(0);
+            let answer = if start == 0 {
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\n")
+            } else {
+                format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{total}\r\n",
+                    total - start,
+                    total - 1
+                )
+            };
+            let sent = format!("{answer}ETag: \"v1\"\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(sent.as_bytes());
+            let _ = stream.write_all(&pattern(start, step.min(total - start)));
+        }
+    });
+    (url, asked)
+}
+
+/// a big file over a link that breaks every few minutes moves a lot each time, more times than
+/// a request has tries in all, and still finishes in one run.
+#[test]
+fn a_download_that_keeps_moving_keeps_going() {
+    let step = crate::net::failure::MOVING;
+    let total = 51 * step + 1000;
+    let (url, asked) = breaking(total, step);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url);
+    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.size, total);
+    assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
+    assert_eq!(asked.load(Ordering::SeqCst), 52);
+}
+
+/// a laptop whose wifi drops fails every lookup at once, more times than a request has tries;
+/// the download waits for the network instead of spending them, and goes on once it is back.
+#[test]
+fn a_download_waits_for_a_lost_network_instead_of_spending_its_tries() {
+    let (served, asked) = serve(vec![reply("200 OK", &[("ETag", "\"v1\"")], b"abcdefgh")]);
+    let url = Url::parse(&format!("http://data.test:{}/file", served.port().unwrap())).unwrap();
+    let mut net = net(&url);
+    let lookups = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let looked = lookups.clone();
+    let gone = crate::net::RETRIES + 3;
+    net.lookups = Some(Arc::new(move |_| {
+        if looked.fetch_add(1, Ordering::SeqCst) < gone {
+            return Err(io::Error::other(
+                "failed to lookup address information: Temporary failure in name resolution",
+            ));
+        }
+        Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], 0))])
+    }));
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"abcdefgh"
+    );
+    assert_eq!(lookups.load(Ordering::SeqCst), gone + 1);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
     let (url, asked) = serve(vec![reply(

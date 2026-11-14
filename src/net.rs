@@ -106,6 +106,8 @@ pub(crate) enum Notice {
         window: Option<Duration>,
         wait: Duration,
     },
+    /// this machine's network is gone, and requests wait up to `longest` for it to come back.
+    NetworkGone { longest: Duration },
 }
 
 pub(crate) type Notify = Arc<dyn Fn(Notice) + Send + Sync>;
@@ -263,6 +265,8 @@ pub(crate) struct Net {
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
+    /// what the run heard from any host, which tells a lost network from one host down.
+    outage: failure::Outage,
     rate: Option<Arc<Rate>>,
     split: Split,
     /// how long a request waits for an answer, after its connection opens, and how long an
@@ -280,6 +284,8 @@ pub(crate) struct Net {
     notify: Notify,
     /// what this run's transfers tell of each host's speed, which the run writes as it ends.
     heard: Arc<speeds::Run>,
+    #[cfg(test)]
+    lookups: Option<address::Lookups>,
 }
 
 /// how long an answer took from its request to its headers, every hop of it, without the waits
@@ -355,6 +361,8 @@ struct Wire {
     offline: bool,
     connect: Duration,
     proxies: Arc<address::Proxies>,
+    #[cfg(test)]
+    lookups: Option<address::Lookups>,
 }
 
 /// which client sends a request.
@@ -387,6 +395,8 @@ impl Wire {
             offline,
             connect,
             proxies,
+            #[cfg(test)]
+            lookups: None,
         })
     }
 
@@ -394,11 +404,7 @@ impl Wire {
         let builder = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(self.connect)
-            .dns_resolver(Arc::new(address::Resolver::new(
-                self.typed.clone(),
-                self.offline,
-                reach,
-            )))
+            .dns_resolver(Arc::new(self.resolver(reach)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
             // earthdata's archives sign a person in through a redirect to urs.earthdata.nasa.gov,
@@ -416,6 +422,14 @@ impl Wire {
                 format!("could not start the network client: {}", with_causes(&err)),
             )
         })
+    }
+
+    /// the lookups of a client whose `reach` they keep.
+    fn resolver(&self, reach: address::Reach) -> address::Resolver {
+        let resolver = address::Resolver::new(self.typed.clone(), self.offline, reach);
+        #[cfg(test)]
+        let resolver = resolver.answering(self.lookups.clone());
+        resolver
     }
 
     /// the client of `lane` for a request to `url`: one whose lookups may keep private addresses
@@ -462,6 +476,7 @@ impl Net {
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
+            outage: failure::Outage::default(),
             rate: None,
             idle: TIMEOUT,
             connect: CONNECT,
@@ -473,6 +488,8 @@ impl Net {
             stop,
             notify,
             heard: Arc::default(),
+            #[cfg(test)]
+            lookups: None,
         }
     }
 
@@ -498,7 +515,13 @@ impl Net {
         self.wire
             .get_or_init(|| {
                 let cookies = self.sites.cookies();
-                Wire::new(&self.typed, self.offline.enabled(), self.connect, cookies)
+                let wire = Wire::new(&self.typed, self.offline.enabled(), self.connect, cookies);
+                #[cfg(test)]
+                let wire = wire.map(|wire| Wire {
+                    lookups: self.lookups.clone(),
+                    ..wire
+                });
+                wire
             })
             .as_ref()
             .map_err(Clone::clone)
@@ -593,6 +616,16 @@ impl Net {
 
     pub(crate) fn offline(&self) -> Offline {
         self.offline
+    }
+
+    /// answers and bytes this run received from any host: when it has not changed between two
+    /// moments, the network was silent between them.
+    fn heard(&self) -> u64 {
+        self.outage.answers().wrapping_add(
+            self.work
+                .bytes_down
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// [`Net::send_on`] for what a source gives, on the shared client.
@@ -812,6 +845,7 @@ impl Net {
             }
             () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(hop))),
         };
+        self.outage.answered();
         if let Some(carrier) = carrier {
             wire.proxies.reached(carrier);
         }
