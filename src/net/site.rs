@@ -2,6 +2,7 @@
 //! and port. it goes over https, or over plain http only to this machine or an origin
 //! `allowed_origins` lists, and only while a request stays on its first origin.
 
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 
@@ -190,12 +191,16 @@ impl Sent {
 
     /// the error for a web page that came back from `url`, where a redirect led the link, which
     /// counts as a sign-in page: its help names the page's own link, since asking for a page by
-    /// the link that was moved would be refused again.
+    /// the link that was moved would be refused again, unless showing it masks a part, which
+    /// could not be typed then.
     fn moved_out(&self, url: &Url) -> Error {
+        let ask = match super::mask_query(url.as_str()) {
+            Cow::Borrowed(link) => format!("ask for it by the link it is at, {link}, with --web-page"),
+            Cow::Owned(_) => "open the link in a browser, then ask for the page by the link the browser shows, with --web-page".to_owned(),
+        };
         self.signed_out(url).help(format!(
-            "{}, then run the same command again. if that page itself is the data, ask for it by the link it is at, {}, with --web-page",
-            self.again,
-            Shown(url)
+            "{}, then run the same command again. if that page itself is the data, {ask}",
+            self.again
         ))
     }
 

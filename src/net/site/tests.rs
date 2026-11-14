@@ -585,23 +585,25 @@ fn a_page_a_redirect_led_to_is_the_data_on_its_own_site_alone() {
 }
 
 /// unasked, a page a redirect led the link to is refused on the site too, and the help points at
-/// the link the page is at rather than at --web-page alone.
+/// the link the page is at rather than at --web-page alone, when the link shows whole: a masked
+/// one could not be typed.
 #[test]
 fn an_unasked_page_a_redirect_led_to_is_refused_with_its_own_link() {
     let net = net(vec![token("data.lab", "t-1")]);
-    let moved = judged(
-        &net,
-        "https://data.lab/latest",
-        "https://data.lab/v3/?token=t-secret",
-        "text/html",
-        false,
-    )
-    .unwrap();
+    let help = |from: &str| {
+        judged(&net, "https://data.lab/latest", from, "text/html", false)
+            .unwrap()
+            .help
+            .unwrap()
+            .into_string()
+    };
     assert_eq!(
-        moved.help.as_deref(),
-        Some(
-            "sign in again with `fetchloom auth login data.lab --token`, then run the same command again. if that page itself is the data, ask for it by the link it is at, https://data.lab/v3/?token=***, with --web-page"
-        )
+        help("https://data.lab/v3/?page=2"),
+        "sign in again with `fetchloom auth login data.lab --token`, then run the same command again. if that page itself is the data, ask for it by the link it is at, https://data.lab/v3/?page=2, with --web-page"
+    );
+    assert_eq!(
+        help("https://data.lab/v3/?token=t-secret"),
+        "sign in again with `fetchloom auth login data.lab --token`, then run the same command again. if that page itself is the data, open the link in a browser, then ask for the page by the link the browser shows, with --web-page"
     );
 }
 
