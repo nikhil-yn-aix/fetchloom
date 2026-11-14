@@ -396,19 +396,7 @@ impl<'a> Building<'a> {
                 return Ok(done(Did::Skipped, name, key, tree, files));
             }
         }
-        let sources: BTreeSet<&str> = step
-            .inputs
-            .iter()
-            .filter(|read| !read.made)
-            .map(|read| read.name.as_str())
-            .collect();
-        self.ready(&sources).await?;
-        output.step_in(
-            "Running",
-            &format!("{name} · {}", self.command(name)),
-            crate::output::Tone::Work,
-        );
-        let made = tokio::task::block_in_place(|| self.make(&step, key, Some(tree)))?;
+        let made = self.run_step(&step, key, Some(tree)).await?;
         let compared = compare(files, &made.members);
         let mut done = done(Did::Ran, name, key, tree, files);
         done.log = Some(log_shown(name));
@@ -611,19 +599,7 @@ impl<'a> Building<'a> {
             self.pin(&step, key, built.tree, built.members);
             return Ok(done);
         }
-        let sources: BTreeSet<&str> = step
-            .inputs
-            .iter()
-            .filter(|read| !read.made)
-            .map(|read| read.name.as_str())
-            .collect();
-        self.ready(&sources).await?;
-        output.step_in(
-            "Running",
-            &format!("{name} · {}", self.command(name)),
-            crate::output::Tone::Work,
-        );
-        let made = tokio::task::block_in_place(|| self.make(&step, key, expected))?;
+        let made = self.run_step(&step, key, expected).await?;
         if let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key)
             && pinned.tree != made.tree
         {
@@ -705,6 +681,30 @@ impl<'a> Building<'a> {
         project.write_state(&state)?;
         register(&self.work);
         Ok(())
+    }
+
+    /// readies the fetched datasets `step` reads, says it runs, and makes its result for `key`,
+    /// checked against the tree `expected` when a pin gives one.
+    async fn run_step(
+        &self,
+        step: &Step,
+        key: Sha256,
+        expected: Option<Sha256>,
+    ) -> Result<Made, Error> {
+        let sources: BTreeSet<&str> = step
+            .inputs
+            .iter()
+            .filter(|read| !read.made)
+            .map(|read| read.name.as_str())
+            .collect();
+        self.ready(&sources).await?;
+        let name = &step.name;
+        self.context.output.step_in(
+            "Running",
+            &format!("{name} · {}", self.command(name)),
+            crate::output::Tone::Work,
+        );
+        tokio::task::block_in_place(|| self.make(step, key, expected))
     }
 
     /// puts in the cache the files of `sources`, fetched datasets a step reads, as [`Loop::ready`]
