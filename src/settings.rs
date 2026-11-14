@@ -815,7 +815,8 @@ fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error>
             return Err(Error::new(
                 Kind::Usage,
                 format!(
-                    "{named} holds \"{entry}\", which is not an origin such as http://lab.local:8080"
+                    "{named} holds \"{}\", which is not an origin such as http://lab.local:8080",
+                    crate::net::mask_query(entry)
                 ),
             )
             .help(format!(

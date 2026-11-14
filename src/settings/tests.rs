@@ -479,19 +479,19 @@ fn allowed_origins_are_exact_origins_from_the_environment_or_the_file() {
     let set = Settings::read(&env(&[]), file.unwrap(), machine(None)).unwrap();
     assert_eq!(shown(&set), ["http://lab.local:8080", "http://[::1]:9000"]);
     assert_eq!(set.allowed_origins.origin, Origin::File);
-    for entry in [
-        "lab.local:8080",
-        "http://lab.local:8080/data",
-        "ftp://lab.local",
-        "http://ada:secret@lab.local",
-        "http://lab.local/?all=1",
+    for (entry, said) in [
+        ("lab.local:8080", "lab.local:8080"),
+        ("http://lab.local:8080/data", "http://lab.local:8080/data"),
+        ("ftp://lab.local", "ftp://lab.local"),
+        ("http://ada:secret@lab.local", "http://***@lab.local"),
+        ("http://lab.local/?token=t-1", "http://lab.local/?token=***"),
     ] {
         let error = read(&[("FETCHLOOM_ALLOWED_ORIGINS", entry)], None).unwrap_err();
         assert_eq!(error.kind, Kind::Usage, "{entry}");
         assert_eq!(
             error.message,
             format!(
-                "FETCHLOOM_ALLOWED_ORIGINS holds \"{entry}\", which is not an origin such as http://lab.local:8080"
+                "FETCHLOOM_ALLOWED_ORIGINS holds \"{said}\", which is not an origin such as http://lab.local:8080"
             )
         );
         assert_eq!(

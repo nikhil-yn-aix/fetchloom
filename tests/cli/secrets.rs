@@ -221,6 +221,37 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
     Ok(())
 }
 
+/// a login written into `allowed_origins` shows masked in the refusal of that entry, on stderr
+/// and in `--json`, as one in a mirror does.
+#[test]
+fn a_login_written_into_allowed_origins_never_shows() -> Result {
+    let sandbox = Sandbox::new()?;
+    let entry = "http://ada:CNRYoriginlogin@127.0.0.11:18081";
+    let refused = "FETCHLOOM_ALLOWED_ORIGINS holds \"http://***@127.0.0.11:18081\", which is not an origin such as http://lab.local:8080";
+    for json_asked in [false, true] {
+        let mut args = vec!["status"];
+        if json_asked {
+            args.insert(0, "--json");
+        }
+        let output = sandbox
+            .command(&args)
+            .env("FETCHLOOM_ALLOWED_ORIGINS", entry)
+            .output()?;
+        let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(
+            !stdout.contains("CNRY") && !stderr.contains("CNRY"),
+            "{stdout}{stderr}"
+        );
+        if json_asked {
+            assert_eq!(json(&output)?["errors"][0]["message"], refused);
+        } else {
+            assert!(stderr.contains(refused), "{stderr}");
+        }
+    }
+    Ok(())
+}
+
 /// a cloned project's data.toml may name a server on this machine. sync and build take no link
 /// on their command line, so the help names `allowed_origins` alone.
 #[test]
