@@ -17,6 +17,7 @@ ignore = [
 # of these. about.toml accepts the same list for the release's THIRD-PARTY-LICENSES.
 allow = [
     "Apache-2.0",
+    "BSD-2-Clause",
     "BSD-3-Clause",
     "CDLA-Permissive-2.0",
     "ISC",
