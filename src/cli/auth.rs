@@ -772,7 +772,7 @@ fn save(
             if told {
                 output.warn(Warning::AuthNoKeyring, &format!(
                     "this machine has no credential store, so the key is saved in {}, readable only by you",
-                    file.display()
+                    units::path(&file)
                 ));
             }
             Ok(Some(file.display().to_string()))

@@ -787,6 +787,46 @@ fn a_refusal_after_a_redirect_names_the_host_that_refused() -> Result {
     Ok(())
 }
 
+/// a key saved where the machine has no credential store names fetchloom's file the way the
+/// `Signed in` line below it does, a file below the home folder as `~/…`.
+#[test]
+fn a_key_saved_without_a_credential_store_names_its_file_as_the_sign_in_line_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (args, key) in [
+        (
+            &[
+                "auth",
+                "login",
+                "data.example.org",
+                "--token",
+                "--with-token",
+            ][..],
+            "t-file\n",
+        ),
+        (
+            &["auth", "login", "zenodo", "--with-token", "--offline"],
+            "z-file\n",
+        ),
+    ] {
+        let login = with_stdin(sandbox.command(args), key)?;
+        let stderr = text(&login.stderr)?;
+        assert!(login.status.success(), "{stderr}");
+        let warned = stderr.lines().find_map(|line| {
+            let told = line.strip_prefix("warning: this machine has no credential store, so ")?;
+            told.strip_suffix(", readable only by you")?
+                .rsplit(" in ")
+                .next()
+        });
+        let signed = stderr
+            .lines()
+            .find(|line| line.contains("Signed in to "))
+            .and_then(|line| line.rsplit(" · saved to ").next());
+        assert_eq!(warned, signed, "{args:?}: {stderr}");
+        assert!(signed.is_some_and(|file| file.starts_with('~')), "{stderr}");
+    }
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;

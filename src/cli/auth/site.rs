@@ -649,7 +649,7 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             Warning::AuthNoKeyring,
             &format!(
                 "this machine has no credential store, so {they} went in {}, readable only by you",
-                file.display()
+                crate::units::path(&file)
             ),
         );
     }
