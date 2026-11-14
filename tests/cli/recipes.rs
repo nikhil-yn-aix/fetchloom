@@ -71,7 +71,7 @@ fn sync_warns_of_a_recipe_not_built_yet() -> Result {
             "clean is not built yet; run `fetchloom build clean` to make it, then commit data.lock and data.lock.d"
         ]
     );
-    assert_eq!(document["warnings"][0]["kind"], "build.unbuilt");
+    assert_eq!(crate::support::kinds(&document), ["build.unbuilt"]);
     let named = sandbox.run(&["--json", "sync", "clean"])?;
     assert_eq!(named.status.code(), Some(60), "{}", text(&named.stdout)?);
     let error = &json(&named)?["errors"][0];

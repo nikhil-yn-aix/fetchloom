@@ -601,7 +601,11 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
         "{stderr}"
     );
     let document = json(&sandbox.run(&["--json", "add", &server.url, "-n"])?)?;
-    assert_eq!(document["warnings"], serde_json::json!([]), "{document}");
+    assert_eq!(
+        crate::support::warned(&document),
+        Vec::<String>::new(),
+        "{document}"
+    );
     let changes = &document["result"]["changes"];
     assert_eq!(changes["place"], serde_json::json!([]), "{document}");
     assert_eq!(changes["replace"], serde_json::json!([]), "{document}");

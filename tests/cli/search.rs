@@ -714,12 +714,12 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
         "{document}"
     );
     assert!(
-        document["warnings"][0]["message"]
+        crate::support::warning(&document, "search.partial")["message"]
             .as_str()
             .unwrap_or_default()
-            .starts_with("kaggle search failed:")
+            .starts_with("kaggle search failed:"),
+        "{document}"
     );
-    assert_eq!(document["warnings"][0]["kind"], "search.partial");
     Ok(())
 }
 

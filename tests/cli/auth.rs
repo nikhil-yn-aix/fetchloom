@@ -1164,11 +1164,10 @@ fn auth_warns_of_aws_settings_it_cannot_use() -> Result {
         .output()?;
     assert!(output.status.success(), "{}", text(&output.stderr)?);
     let document = json(&output)?;
-    let warning = &document["warnings"][0];
-    assert_eq!(warning["kind"], "auth.unusable", "{document}");
     assert_eq!(
-        warning["message"],
-        "AWS_PROFILE names the profile nope, which the AWS credentials and config files do not have"
+        crate::support::warning(&document, "auth.unusable")["message"],
+        "AWS_PROFILE names the profile nope, which the AWS credentials and config files do not have",
+        "{document}"
     );
     let aws = document["result"]["accounts"]
         .as_array()
@@ -1409,9 +1408,11 @@ fn auth_warns_of_azure_settings_it_cannot_use() -> Result {
             .output()?;
         assert!(output.status.success(), "{}", text(&output.stderr)?);
         let document = json(&output)?;
-        let warning = &document["warnings"][0];
-        assert_eq!(warning["kind"], "auth.unusable", "{document}");
-        assert_eq!(warning["message"], warned, "{document}");
+        assert_eq!(
+            crate::support::warning(&document, "auth.unusable")["message"],
+            warned,
+            "{document}"
+        );
         let accounts = document["result"]["accounts"]
             .as_array()
             .cloned()

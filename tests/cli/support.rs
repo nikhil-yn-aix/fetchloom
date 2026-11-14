@@ -495,6 +495,26 @@ pub(crate) fn warned(document: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+/// the kind of each warning of a `--json` document, in order, without the copy note [`warned`]
+/// leaves out.
+pub(crate) fn kinds(document: &serde_json::Value) -> Vec<&str> {
+    document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| warning["kind"].as_str())
+        .filter(|kind| *kind != "place.copied")
+        .collect()
+}
+
+/// the first warning of `kind` in a `--json` document, or null when it has none.
+pub(crate) fn warning<'a>(document: &'a serde_json::Value, kind: &str) -> &'a serde_json::Value {
+    document["warnings"]
+        .as_array()
+        .and_then(|warnings| warnings.iter().find(|warning| warning["kind"] == kind))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
 /// writes over a file as a user would, clearing its read-only flag first.
 pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
     let mut permissions = std::fs::metadata(path)?.permissions();
@@ -1292,7 +1312,7 @@ pub(crate) fn finished_anyway(running: Running, release: &Path) -> Result<String
 }
 
 /// the copy note a drive that cannot link adds depends on the disk a test runs on, so `warned`
-/// leaves it out and keeps every other warning, in order.
+/// and `kinds` leave it out and keep every other warning, in order, and `warning` looks past it.
 #[test]
 fn warned_leaves_out_only_the_copy_note() {
     let document = serde_json::json!({ "warnings": [
@@ -1303,6 +1323,12 @@ fn warned_leaves_out_only_the_copy_note() {
         warned(&document),
         ["./flowers is still in the project; delete it"]
     );
+    assert_eq!(kinds(&document), ["git.import_in_tree"]);
+    assert_eq!(
+        warning(&document, "git.import_in_tree")["help"],
+        "delete it"
+    );
+    assert!(warning(&document, "name.taken").is_null());
 }
 
 /// each server and the proxy runs in a `ServerTask`. the check uses the worker's own handle,

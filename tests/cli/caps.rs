@@ -460,13 +460,11 @@ fn a_display_variable_it_cannot_read_stays_off_with_a_warning() -> Result {
     let document = json(&output)?;
     assert_eq!(output.status.code(), Some(0), "{document}");
     assert_eq!(shown(&document, "accessible")["value"], false);
-    let kinds: Vec<&str> = document["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|warning| warning["kind"].as_str())
-        .collect();
-    assert_eq!(kinds, ["settings.switch_unread"; 2], "{document}");
+    assert_eq!(
+        crate::support::kinds(&document),
+        ["settings.switch_unread"; 2],
+        "{document}"
+    );
     assert_eq!(
         crate::support::warned(&document),
         [

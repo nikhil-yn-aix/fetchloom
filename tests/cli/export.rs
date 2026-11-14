@@ -271,7 +271,7 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
         document["result"]["no_link"],
         serde_json::json!(["flowers/a.txt", "flowers/b.txt", "flowers/c.txt"])
     );
-    assert_eq!(document["warnings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(crate::support::kinds(&document), ["export.left_out"]);
     assert_eq!(
         fs::read_to_string(sandbox.work().join("links.txt"))?,
         format!("{url}/iris.csv {}\n", sha256_hex(IRIS))

@@ -544,14 +544,9 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
         json(&output)
     };
     let untracked = run(&["--json", "add", "./flowers"])?;
-    let kinds: Vec<&serde_json::Value> = untracked["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|warning| &warning["kind"])
-        .collect();
-    assert!(
-        kinds.contains(&&serde_json::json!("git.import_in_tree")),
+    assert_eq!(
+        crate::support::kinds(&untracked),
+        ["git.import_in_tree"],
         "{untracked}"
     );
     assert_eq!(

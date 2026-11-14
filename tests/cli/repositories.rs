@@ -759,11 +759,10 @@ fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result 
     .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let document = json(&output)?;
-    let warning = &document["warnings"][0];
-    assert_eq!(warning["kind"], "source.partial", "{document}");
     assert_eq!(
-        warning["message"],
-        "1 of the 2 runs is under controlled access, so its files are left out"
+        crate::support::warning(&document, "source.partial")["message"],
+        "1 of the 2 runs is under controlled access, so its files are left out",
+        "{document}"
     );
     let folder = sandbox.work().join("data/nhl/SRR1236466");
     assert_eq!(fs::read(folder.join("SRR1236466_1.fastq.gz"))?, ROWS);

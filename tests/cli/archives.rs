@@ -1000,7 +1000,7 @@ fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
     );
     let document = json(&got)?;
     assert_eq!(crate::support::warned(&document), [warning]);
-    assert_eq!(document["warnings"][0]["kind"], "archive.packed");
+    assert_eq!(crate::support::kinds(&document), ["archive.packed"]);
     assert_eq!(fs::read(sandbox.work().join("sample/sample.rar"))?, RAR);
     Ok(())
 }

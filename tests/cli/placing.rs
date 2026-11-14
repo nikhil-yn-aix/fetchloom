@@ -1670,7 +1670,7 @@ fn remove_says_it_deletes_a_file_that_was_there_before_it_was_adopted() -> Resul
         ],
         "{dry}"
     );
-    assert_eq!(dry["warnings"][0]["kind"], "place.adopted_removed");
+    assert_eq!(crate::support::kinds(&dry), ["place.adopted_removed"]);
     assert_eq!(fs::read(&placed)?, V1);
     let removed = sandbox.run(&["remove", "iris"])?;
 

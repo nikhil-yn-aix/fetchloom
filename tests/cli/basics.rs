@@ -238,7 +238,8 @@ fn a_palette_recolors_output_and_a_typo_only_warns() -> Result {
             .stdout,
     )?;
     assert_eq!(
-        document["warnings"][0]["kind"], "settings.colors_unread",
+        crate::support::kinds(&document),
+        ["settings.colors_unread"],
         "{document}"
     );
     Ok(())
