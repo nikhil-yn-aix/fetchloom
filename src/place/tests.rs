@@ -258,6 +258,34 @@ fn a_file_is_relinked_to_its_object_only_while_it_looks_as_it_did() {
     assert_eq!(placed_names(folder.path()), ["found.csv"]);
 }
 
+/// a sync client breaks hardlinks or uploads each as a whole file, so a file in a synced folder
+/// is never relinked, though the same folder outside a client's would be.
+#[test]
+fn a_synced_folder_gets_no_relinked_hardlink() {
+    let (folder, object) = cache(true);
+    if !makes_hardlinks(folder.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let destination = folder.path().join("found.csv");
+    fs::write(&destination, CONTENTS).unwrap();
+    let root = folder.path().to_path_buf();
+    let synced = Placer::starting_at(root.clone(), Method::Reflink, Some("onedrive"));
+    assert!(
+        synced
+            .relink(&object, &destination, |_| true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!same_file::is_same_file(&object, &destination).unwrap());
+    let unsynced = Placer::starting_at(root, Method::Reflink, None);
+    assert!(
+        unsynced
+            .relink(&object, &destination, |_| true)
+            .unwrap()
+            .is_some()
+    );
+}
+
 #[test]
 fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     let (folder, object) = cache(true);
