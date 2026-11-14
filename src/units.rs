@@ -1,5 +1,5 @@
-//! one way to write sizes, rates, durations, counts, lists and paths, everywhere fetchloom prints
-//! them.
+//! one way to write sizes, rates, durations, counts, lists, paths and times, everywhere fetchloom
+//! prints or records them.
 
 use std::path::{MAIN_SEPARATOR, Path};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

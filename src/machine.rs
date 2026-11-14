@@ -1,5 +1,6 @@
 //! what this machine gives a run: its processors, the memory a run may use and how many files the
-//! process may hold open, read once when a run starts, and the programs on its PATH.
+//! process may hold open, read once when a run starts; the programs on its PATH; and its
+//! environment, read through [`Var`], with the home and settings folders it names.
 
 use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", test))]

@@ -1,5 +1,7 @@
 //! the volume under a folder fetchloom writes to, such as the cache or a data folder. FAT32 and
 //! exFAT cannot hardlink, and on windows refuse to remove a read-only file, as every object is.
+//! every layer opens, renames and flushes files here: never through a link, never over a file
+//! already named, and flushed so a power cut keeps what was published.
 
 use std::collections::HashSet;
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
