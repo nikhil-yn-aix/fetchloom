@@ -1,4 +1,4 @@
-"""Compare two fetchloom builds on this machine's own filesystem.
+"""compare two fetchloom builds on this machine's own filesystem.
 
 the lab in run.py needs linux namespaces, loop mounts and tc. this runner needs none of them, so it
 also runs on windows (ntfs or a dev drive, with defender as it is) and macos (apfs, or an exfat

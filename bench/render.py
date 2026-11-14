@@ -1,4 +1,4 @@
-"""Render measured results as light and dark SVG cards and a markdown page."""
+"""render measured results as light and dark SVG cards and a markdown page."""
 import argparse
 from collections import Counter, defaultdict
 from functools import cache
@@ -96,9 +96,8 @@ def ratio(value, base):
     return "even (<5%)" if abs(result - 1) < .05 else f"{result:.2f}x"
 
 
-# source serif 4 for every word and number, as on the site: the latin subset
-# @fontsource-variable/source-serif-4 5.3.1 publishes, unchanged, under the OFL beside it in fonts/.
-# it rides inside each svg, since github shows svgs as images that load nothing else.
+# the site's serif, the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes, with its OFL
+# in fonts/. each svg carries it inline, since github shows svgs as images that load nothing else
 FONTS = Path(__file__).with_name("fonts")
 SERIF = "'Source Serif 4', Georgia, serif"
 
@@ -238,9 +237,8 @@ def picture(name, title):
 
 
 def load_results(results):
-    """every runs.jsonl under results, each with its meta.json; ValueError for mixed conditions, a
-    run recorded twice or live bytes off the reference. returns the rows and the metadata oldest
-    first."""
+    """the rows of every runs.jsonl under results and their meta.json, oldest first; ValueError for
+    mixed conditions, a run recorded twice or live bytes off the reference."""
     paths = sorted(results.rglob("runs.jsonl"))
     if not paths:
         raise ValueError("no runs.jsonl found")
@@ -304,9 +302,8 @@ def check_live(row, path, datasets, origins):
 
 
 def group(rows, metas):
-    """the measured runs, warmups left out: lab cases in page order, home and poor links first, and
-    live services by name, each with its file count, file size and every tool's summary.
-    ValueError when one case mixes sizes or campaigns measure a case twice."""
+    """lab cases in page order and live services by name, each with its file count, size and tool
+    summaries, warmups left out; ValueError when a case mixes sizes or is measured twice."""
     conditions = {}
     lab = defaultdict(lambda: defaultdict(list))
     live = defaultdict(lambda: defaultdict(list))
@@ -372,9 +369,8 @@ def network_profiles(metas):
 
 
 def draw(charts, cases, services):
-    """every card, light and dark, in charts, once the cards of an earlier render are gone: one per
-    lab case, one per live service, and a hero for each scenario and filesystem from its first case
-    on the page when that case has a verdict."""
+    """every card, light and dark, in place of an earlier render's: one per case and live service, and
+    a hero from each scenario and filesystem's first case on the page when it has a verdict."""
     charts.mkdir(parents=True, exist_ok=True)
     # every card here is generated, so a card the new results do not produce, such as a hero
     # without a verdict, must not survive from an earlier render
@@ -506,9 +502,8 @@ def live_section(service, measured):
 
 
 def render(results, repo):
-    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md, from every
-    campaign under results; ValueError, before any old card is removed, for results that cannot
-    be read as one set."""
+    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md from every campaign
+    under results; ValueError, before any old card goes, for results that do not read as one."""
     rows, metas = load_results(results)
     cases, services = group(rows, metas)
     markdown = page(rows, metas, cases, services)

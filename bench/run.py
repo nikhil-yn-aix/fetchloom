@@ -1,4 +1,4 @@
-"""Run sequential, checked Linux benchmark cases."""
+"""run sequential, checked linux benchmark cases."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -59,9 +59,8 @@ def seconds_choice(value):
 
 
 def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None):
-    """runs argv under GNU time in its own process group, with SIGINT at the deadline, then
-    SIGKILL. returns wall, cpu and peak memory, the exit code, and whether it timed out or was
-    interrupted."""
+    """wall, cpu, peak memory and exit code of argv under GNU time in its own process group, SIGINT
+    at the deadline then SIGKILL, and whether it timed out or was interrupted."""
     timeout = positive_seconds(timeout)
     if interrupt_after is not None:
         interrupt_after = positive_seconds(interrupt_after)
@@ -456,7 +455,7 @@ def arguments():
 def campaign(parser, args):
     """the lab lock, the tool adapters and the cases a campaign measures; exits through the parser,
     before the server is pinned, when the campaign cannot be measured as asked."""
-    if args.rounds is not None and args.rounds < 1 or args.timeout <= 0:
+    if (args.rounds is not None and args.rounds < 1) or args.timeout <= 0:
         parser.error("rounds and timeout must be positive")
     if not args.out.resolve().is_relative_to(lab.ROOT):
         parser.error(f"write results under {lab.ROOT}; copy them out after measurement")

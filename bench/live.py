@@ -1,4 +1,4 @@
-"""Interleaved live comparisons against each service's own client."""
+"""interleaved live comparisons against each service's own client."""
 import argparse
 from collections import Counter
 import fnmatch
@@ -22,9 +22,8 @@ PYTHON = str(lab.VENV / "bin" / "python")
 
 
 def compare(first, second):
-    """how a client's files differ from the reference, both name to sha256: identical,
-    layout-difference for the same bytes under other names, content-difference, or empty when
-    either has none."""
+    """how a client's files, name to sha256, differ from the reference's: identical, a layout or a
+    content difference, or empty when either has none."""
     if not first or not second:
         status = "empty"
     elif first == second:
@@ -49,9 +48,8 @@ def get_json(url):
 
 
 def catalog(service, quick):
-    """the dataset a service's runs fetch, from its public api: fetchloom's ref, the native client's
-    id, and each file's name, size, url and checksum. quick picks a small dataset or only its small
-    files. ValueError when no file matches."""
+    """the dataset a service's runs fetch, from its public api: refs, selection and each file's name,
+    size, url and checksum, small ones only when quick; ValueError when no file matches."""
     result = dict(service=service, select=[], quick=quick)
     fields, files = DATASETS[service](quick)
     result.update(fields)
@@ -111,7 +109,7 @@ def dataverse_dataset(quick):
     files = []
     for entry in data.get("files", version.get("files", [])):
         item = entry["dataFile"]
-        if entry.get("restricted") or quick and item["filesize"] > 1024:
+        if entry.get("restricted") or (quick and item["filesize"] > 1024):
             continue
         name = item.get("originalFileName", item["filename"])
         folder = entry.get("directoryLabel", "")

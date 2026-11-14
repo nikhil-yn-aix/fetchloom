@@ -1,4 +1,4 @@
-"""Compare a fetchloom build with the last release on the release recheck's cases.
+"""compare a fetchloom build with the last release on the release recheck's cases.
 
 the recheck times the commands a release must not slow down: a status, a settled sync and a cache
 check of 100,000 files, `path` beside them, verifying 512 MiB, placing 40,000 datasets, adding

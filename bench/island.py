@@ -1,4 +1,4 @@
-"""Check a CPU island against quiet A/A noise and a disjoint-core compiler load."""
+"""check a CPU island against quiet A/A noise and a disjoint-core compiler load."""
 import argparse
 import json
 import math
@@ -217,9 +217,8 @@ def bias(wall):
 
 
 def check(args):
-    """the island check: an a/a campaign per case on a quiet island, then again beside a compiler
-    load, both judged against the noise file. writes island.json; returns 0 only when every case
-    passes."""
+    """an a/a campaign per case on a quiet island, then beside a compiler load, both judged against
+    the noise file into island.json; 0 only when every case passes."""
     lab.require_root()
     args.cases = args.cases or list(DEFAULT_CASES)
     if len(set(args.cases)) != len(args.cases):

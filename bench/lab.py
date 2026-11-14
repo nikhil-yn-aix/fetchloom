@@ -1,4 +1,4 @@
-"""Root-owned, disposable Linux network and filesystem lab."""
+"""a root-owned, disposable linux network and filesystem lab."""
 import argparse
 from contextlib import contextmanager
 import fcntl
@@ -261,9 +261,8 @@ def drop_caches(files):
 
 
 def setup(image_gib=12, cpus=None):
-    """makes the lab: a 7-day ca and certificate for lab.flb, nginx serving www in its own network
-    namespace, and loop-mounted ext4 and xfs images. refuses to replace what it did not make, and
-    undoes itself if a step fails."""
+    """a 7-day ca and certificate for lab.flb, nginx serving www in its own network namespace and
+    loop-mounted ext4 and xfs images; refuses what it did not make and undoes itself on failure."""
     require_root()
     if (ROOT / "owned.json").exists():
         teardown()

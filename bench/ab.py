@@ -1,4 +1,4 @@
-"""Compare fetchloom variants with matched rounds and paired bootstrap intervals."""
+"""compare fetchloom variants with matched rounds and paired bootstrap intervals."""
 import argparse
 from collections import defaultdict
 import json
