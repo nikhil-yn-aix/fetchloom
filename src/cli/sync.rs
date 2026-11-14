@@ -874,7 +874,12 @@ impl<'a> Loop<'a> {
             if archive.file.unpacks_to.is_some() {
                 unpack.push(format!("{dataset}/{}", archive.file.path));
             }
-            for file in archive.files() {
+            // an import's archive the cache holds needs no link, and has none to give
+            let cached = |file: &LockedFile| {
+                !damaged.contains(&file.sha256)
+                    && self.cache.find(&file.sha256, Some(file.size)).is_some()
+            };
+            for file in archive.files().into_iter().filter(|file| !cached(file)) {
                 jobs.push(job(manifest, lock, &dataset, file)?);
             }
         }

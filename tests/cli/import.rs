@@ -856,3 +856,30 @@ fn names_written_with_two_unicode_forms_are_refused_as_such() -> Result {
     assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
 }
+
+/// an import kept packed whose data.toml now asks to unpack it: a dry run names the archive it
+/// would open, from the cache's copy, which no link can bring again, and changes nothing.
+#[test]
+fn a_dry_run_of_a_switched_import_names_the_archive_it_would_unpack() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("shards")?;
+    fs::write(folder.join("part.zip"), zip_of(&[("a.csv", b"id\n1\n")])?)?;
+    crate::support::ok(&sandbox.run(&["add", "../shards", "--no-extract"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("extract = false", "extract = true"),
+    )?;
+    for args in [&["lock", "--dry-run"][..], &["sync", "--dry-run"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("      Would open shards/part.zip\n"),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert!(sandbox.work().join("data/shards/part.zip").is_file());
+    Ok(())
+}
