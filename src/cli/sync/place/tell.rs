@@ -405,7 +405,9 @@ fn warn_adopted_removed(output: &Output, paths: &[String], verb: &str) {
 pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
     match why {
         Unlinked::OtherDrive => why.copied_because("the project", "files were"),
-        Unlinked::Synced(_) | Unlinked::NoLinks => why.copied_because(data_dir, "files were"),
+        Unlinked::Synced(_) | Unlinked::NoLinks | Unlinked::ReadOnlyCache => {
+            why.copied_because(data_dir, "files were")
+        }
     }
 }
 

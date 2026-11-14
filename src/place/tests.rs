@@ -857,7 +857,9 @@ fn a_method_the_filesystem_refuses_is_not_tried_again() {
         placer.links = OnceLock::from(false);
         let described = refusal.to_string();
 
-        placer.learn(Method::Hardlink, refusal).unwrap();
+        placer
+            .learn(Method::Hardlink, refusal, folder.path())
+            .unwrap();
         let method = placer
             .place(&object, &folder.path().join("placed.csv"), false)
             .unwrap();
@@ -878,7 +880,11 @@ fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
     // code 1 is EPERM on linux, which protected_hardlinks answers for another user's object
     // on a volume that links
     placer
-        .learn(Method::Hardlink, io::Error::from_raw_os_error(1))
+        .learn(
+            Method::Hardlink,
+            io::Error::from_raw_os_error(1),
+            folder.path(),
+        )
         .unwrap();
     let method = placer
         .place(&object, &folder.path().join("placed.csv"), false)
@@ -886,6 +892,38 @@ fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
 
     assert_eq!(method, Method::Hardlink);
     assert_eq!(placer.unlinked(), None);
+}
+
+/// no link may leave a read-only mount, even one of the project's own drive, so a read-only
+/// cache is no reason to move the project.
+#[test]
+fn a_read_only_cache_is_told_apart_from_another_drive() {
+    let folder = TempDir::new().unwrap();
+    if !makes_hardlinks(folder.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    for (read_only, why) in [
+        (false, Unlinked::OtherDrive),
+        (true, Unlinked::ReadOnlyCache),
+    ] {
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+        let pretend: fn(&Path) -> bool = if read_only { |_| true } else { |_| false };
+        placer.read_only = pretend;
+        placer
+            .learn(
+                Method::Hardlink,
+                io::ErrorKind::CrossesDevices.into(),
+                folder.path(),
+            )
+            .unwrap();
+        assert_eq!(placer.unlinked(), Some(why));
+    }
+    assert_eq!(
+        Unlinked::ReadOnlyCache
+            .copied_because("the project", "files were")
+            .to_string(),
+        "the cache is read-only, so files were copied"
+    );
 }
 
 /// a hardlink past ext4's 65,000 names fails with EMLINK, and past windows' 1,023 with
@@ -926,13 +964,23 @@ fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
     assert_eq!(linking.unlinked(), None);
     let mut no_links = placer(None);
     no_links.links = OnceLock::from(false);
-    no_links.learn(Method::Reflink, refused()).unwrap();
-    no_links.learn(Method::Hardlink, refused()).unwrap();
+    no_links
+        .learn(Method::Reflink, refused(), folder.path())
+        .unwrap();
+    no_links
+        .learn(Method::Hardlink, refused(), folder.path())
+        .unwrap();
     assert_eq!(no_links.unlinked(), Some(Unlinked::NoLinks));
     let elsewhere = placer(None);
-    elsewhere.learn(Method::Reflink, refused()).unwrap();
     elsewhere
-        .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
+        .learn(Method::Reflink, refused(), folder.path())
+        .unwrap();
+    elsewhere
+        .learn(
+            Method::Hardlink,
+            io::ErrorKind::CrossesDevices.into(),
+            folder.path(),
+        )
         .unwrap();
     // a cache on this drive helps only where this drive makes links, which FAT does not
     let blamed = if makes_hardlinks(folder.path()) {
@@ -942,7 +990,9 @@ fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
     };
     assert_eq!(elsewhere.unlinked(), Some(blamed));
     let synced = placer(Some("onedrive"));
-    synced.learn(Method::Reflink, refused()).unwrap();
+    synced
+        .learn(Method::Reflink, refused(), folder.path())
+        .unwrap();
     assert_eq!(synced.unlinked(), Some(Unlinked::Synced("onedrive")));
 }
 
@@ -953,10 +1003,18 @@ fn a_cache_elsewhere_is_not_blamed_for_a_drive_that_links_nothing() {
     placer.links = OnceLock::from(false);
 
     placer
-        .learn(Method::Reflink, io::ErrorKind::CrossesDevices.into())
+        .learn(
+            Method::Reflink,
+            io::ErrorKind::CrossesDevices.into(),
+            folder.path(),
+        )
         .unwrap();
     placer
-        .learn(Method::Hardlink, io::ErrorKind::CrossesDevices.into())
+        .learn(
+            Method::Hardlink,
+            io::ErrorKind::CrossesDevices.into(),
+            folder.path(),
+        )
         .unwrap();
 
     assert_eq!(placer.unlinked(), Some(Unlinked::NoLinks));

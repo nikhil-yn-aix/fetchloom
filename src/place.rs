@@ -68,6 +68,9 @@ pub(crate) struct Placer {
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
+    read_only_cache: AtomicBool,
+    /// whether the file at a path sits on a read-only mount, which a test may pretend.
+    read_only: fn(&Path) -> bool,
     /// the volume under the root, which may refuse to remove a read-only file.
     #[cfg(windows)]
     volume: Volume,
@@ -127,6 +130,8 @@ pub(crate) enum Unlinked {
     /// hardlinks failed because the cache sits on another drive, which a cache on the same drive
     /// would fix.
     OtherDrive,
+    /// hardlinks failed because the cache sits on a read-only mount, which no link may leave.
+    ReadOnlyCache,
     /// the drive refused reflinks and hardlinks alike, as FAT and exFAT drives do.
     NoLinks,
 }
@@ -145,6 +150,10 @@ impl Unlinked {
             },
             Self::NoLinks => Because {
                 said: format!("the drive holding {place} cannot link files, so {subject} copied"),
+                help: None,
+            },
+            Self::ReadOnlyCache => Because {
+                said: format!("the cache is read-only, so {subject} copied"),
                 help: None,
             },
             Self::OtherDrive => Because {
@@ -230,6 +239,8 @@ impl Placer {
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
+            read_only_cache: AtomicBool::new(false),
+            read_only: crate::volume::read_only,
             #[cfg(target_os = "linux")]
             batch: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
@@ -266,6 +277,9 @@ impl Placer {
     pub(crate) fn unlinked(&self) -> Option<Unlinked> {
         if let Some(client) = self.synced {
             return Some(Unlinked::Synced(client));
+        }
+        if self.read_only_cache.load(Ordering::Relaxed) {
+            return Some(Unlinked::ReadOnlyCache);
         }
         if self.other_volume.load(Ordering::Relaxed) {
             return Some(Unlinked::OtherDrive);
@@ -406,14 +420,14 @@ impl Placer {
             let checked = check_object(object)?;
             match self.link(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
-                Err(error) => self.learn(Method::Hardlink, error)?,
+                Err(error) => self.learn(Method::Hardlink, error, object)?,
             }
         }
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
             match reflink(object, &location, writable) {
                 Ok(sealed) => return Ok(Put::Placed(Method::Reflink, sealed?)),
-                Err(error) => self.learn(Method::Reflink, error)?,
+                Err(error) => self.learn(Method::Reflink, error, object)?,
             }
         }
         // sync clients break hardlinks or upload every link as a full file
@@ -425,7 +439,7 @@ impl Placer {
             let checked = check_object(object)?;
             match self.link(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
-                Err(error) => self.learn(Method::Hardlink, error)?,
+                Err(error) => self.learn(Method::Hardlink, error, object)?,
             }
         }
         // outside a batch a copy flushes on its own, as on a nested mount, which the root
@@ -662,7 +676,7 @@ impl Placer {
         if self.can_reflink.load(Ordering::Relaxed) {
             match reflink(from, &location, writable) {
                 Ok(sealed) => return sealed.map(|_| Method::Reflink),
-                Err(error) => self.learn(Method::Reflink, error)?,
+                Err(error) => self.learn(Method::Reflink, error, from)?,
             }
         }
         copy_at(from, &location, writable, self.threads, true, &self.stop)?;
@@ -687,7 +701,7 @@ impl Placer {
         let staged = match location.stage_link(object) {
             Ok(staged) => staged,
             Err(error) => {
-                self.learn(Method::Hardlink, error)?;
+                self.learn(Method::Hardlink, error, object)?;
                 return Ok(None);
             }
         };
@@ -804,10 +818,11 @@ impl Placer {
         Ok(below)
     }
 
-    /// learns from `method` failing with `error`: a refused method is not tried again, and an
-    /// error no method can avoid, as an existing destination, is returned. a hardlink refusal holds
-    /// for all only when the probe agrees, as `protected_hardlinks` may refuse one file alone.
-    fn learn(&self, method: Method, error: io::Error) -> io::Result<()> {
+    /// learns from `method` failing with `error` for the file at `from`: a refused method is not
+    /// tried again, and an error no method can avoid, as an existing destination, is returned. a
+    /// hardlink refusal holds for all only when the probe agrees, as `protected_hardlinks` may
+    /// refuse one file alone.
+    fn learn(&self, method: Method, error: io::Error, from: &Path) -> io::Result<()> {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
         }
@@ -819,11 +834,17 @@ impl Placer {
             }
             Method::Hardlink if crosses_volumes(&error) => {
                 self.can_hardlink.store(false, Ordering::Relaxed);
-                // a cache on this drive helps only where this drive makes links
-                self.other_volume.store(!links_nothing(), Ordering::Relaxed);
+                // the cache is to blame only where this drive makes links, and linux refuses a
+                // link out of a read-only mount of this same drive the same way
+                let blamed = !links_nothing();
+                let read_only = blamed && (self.read_only)(from);
+                self.read_only_cache.store(read_only, Ordering::Relaxed);
+                self.other_volume
+                    .store(blamed && !read_only, Ordering::Relaxed);
             }
             Method::Hardlink if refuses_links(&error) && links_nothing() => {
                 self.can_hardlink.store(false, Ordering::Relaxed);
+                self.read_only_cache.store(false, Ordering::Relaxed);
                 self.other_volume.store(false, Ordering::Relaxed);
             }
             _ => {}

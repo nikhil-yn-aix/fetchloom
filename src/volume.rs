@@ -273,6 +273,21 @@ pub(crate) fn refuses_links(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
 }
 
+/// whether the filesystem holding `path` is mounted read-only. false when the system cannot tell,
+/// and on windows.
+pub(crate) fn read_only(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        rustix::fs::statvfs(path)
+            .is_ok_and(|vfs| vfs.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// whether `err` says the two files sit on different volumes, as a link from a cache on another
 /// drive does.
 pub(crate) fn crosses_volumes(err: &io::Error) -> bool {

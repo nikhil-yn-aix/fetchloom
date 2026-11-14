@@ -327,7 +327,7 @@ fn tell_placed(
             output.item(&line);
         }
     }
-    if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
+    if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive | Unlinked::ReadOnlyCache)) = why {
         output.hint(&why.copied_because(folder.display(), things).to_string());
     }
 }
