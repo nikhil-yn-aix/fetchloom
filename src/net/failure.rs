@@ -1039,6 +1039,29 @@ mod tests {
         }
     }
 
+    /// a try that moved the file on counts the tries from the first again; one that moved nothing
+    /// leaves the count, so a stalled download stops at its retries.
+    #[test]
+    fn a_try_that_moved_nothing_keeps_counting() {
+        use crate::net::{Options, Splitting};
+        use std::sync::Arc;
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: Splitting::Never,
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let mut retry = Retry::new(&net, &url);
+        retry.attempt = 3;
+        retry.moved(0);
+        assert_eq!(retry.attempt, 3);
+        retry.moved(1);
+        assert_eq!(retry.attempt, 1);
+    }
+
     #[test]
     fn a_permanent_http_status_says_what_to_do_without_retrying() {
         let url = Url::parse("https://example.org/data.csv").unwrap();
