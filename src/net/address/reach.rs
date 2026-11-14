@@ -40,7 +40,8 @@ pub(super) enum Probe {
     Opened,
     /// no connection opened, for this reason.
     Failed(String),
-    /// looking up the proxy's name failed for now, which says nothing about the proxy.
+    /// looking up the proxy's name failed for now, or this machine had no network to send the
+    /// check on, which says nothing about the proxy.
     Unsure,
 }
 
@@ -168,10 +169,23 @@ async fn connect(host: &str, port: u16) -> Probe {
     for address in addresses {
         match tokio::net::TcpStream::connect(address).await {
             Ok(_) => return Probe::Opened,
-            Err(err) => failed = Probe::Failed(why(&err)),
+            Err(err) => failed = probed(&err),
         }
     }
     failed
+}
+
+/// what a connection to the proxy that did not open says of it. one this machine could not even
+/// send, for want of a route, a network or its own address, says nothing: the network may be
+/// gone, and a request through the proxy then waits for it as a direct one does.
+pub(super) fn probed(err: &io::Error) -> Probe {
+    match err.kind() {
+        io::ErrorKind::NetworkUnreachable
+        | io::ErrorKind::NetworkDown
+        | io::ErrorKind::HostUnreachable
+        | io::ErrorKind::AddrNotAvailable => Probe::Unsure,
+        _ => Probe::Failed(why(err)),
+    }
 }
 
 /// why a connection did not open, in the same words on every system.

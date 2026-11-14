@@ -251,6 +251,26 @@ async fn an_unsure_check_is_made_again() {
     assert_eq!(checks.load(Ordering::SeqCst), 2);
 }
 
+/// a check this machine could not even send, for want of a route, a network or its own address,
+/// says nothing about the proxy: the network may be gone, so the request waits for it as a direct
+/// one does. a proxy that refused the check is unreachable.
+#[test]
+fn a_check_without_a_network_decides_nothing_about_the_proxy() {
+    use std::io::{Error, ErrorKind};
+    for kind in [
+        ErrorKind::NetworkUnreachable,
+        ErrorKind::NetworkDown,
+        ErrorKind::HostUnreachable,
+        ErrorKind::AddrNotAvailable,
+    ] {
+        assert_eq!(reach::probed(&Error::from(kind)), Probe::Unsure, "{kind:?}");
+    }
+    assert_eq!(
+        reach::probed(&Error::from(ErrorKind::ConnectionRefused)),
+        Probe::Failed("it refused the connection".to_owned())
+    );
+}
+
 #[test]
 fn a_failed_connection_says_why_in_the_same_words_everywhere() {
     use std::io::{Error, ErrorKind};
