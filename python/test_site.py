@@ -278,8 +278,9 @@ class BuiltSite(Folder):
         self.write(root / "docs/user/commands/add.md")
         self.write(root / "docs/user/commands/sync.md")
         self.write(root / "docs/user/commands/README.md")
-        self.write(root / "src/cli/args.rs", 'const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";\n'
-                                             'format!("{SITE}/user/commands/"); format!("{SITE}/user/commands/{name}/");')
+        self.write(root / "src/cli/args.rs", 'const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom/";\n'
+                                             'format!("{SITE}user/commands/"); format!("{SITE}user/commands/{name}/");\n'
+                                             'format!("docs: {SITE}\\nreport a bug: {}", ISSUES)')
         self.write(root / "src/source/gitlab.rs", 'const SITE: &str = "https://gitlab.com";\nformat!("{SITE}/api/v4/projects")')
         self.write(root / "src/place.rs", '"see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/".to_owned()')
         self.write(root / "docs/user/commands/global-options.md")
@@ -289,7 +290,7 @@ class BuiltSite(Folder):
         self.write(root / "python/fetchloom/__init__.py",
                    '"""https://nikhil-yn-aix.github.io/fetchloom/user/reference/python-helper/ describes them."""\n')
         self.assertEqual(check_site.printed(root), {
-            "https://nikhil-yn-aix.github.io/fetchloom",
+            "https://nikhil-yn-aix.github.io/fetchloom/",
             "https://nikhil-yn-aix.github.io/fetchloom/user/commands/",
             "https://nikhil-yn-aix.github.io/fetchloom/user/commands/add/",
             "https://nikhil-yn-aix.github.io/fetchloom/user/commands/sync/",

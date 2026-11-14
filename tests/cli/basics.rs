@@ -436,7 +436,7 @@ fn a_bare_run_prints_a_short_welcome_with_a_first_command() -> Result {
     }
     assert!(
         stdout.ends_with(
-            "more: `fetchloom --help` lists every command\ndocs: https://nikhil-yn-aix.github.io/fetchloom\n"
+            "more: `fetchloom --help` lists every command\ndocs: https://nikhil-yn-aix.github.io/fetchloom/\n"
         ),
         "the welcome ends with where to read more: {stdout}"
     );

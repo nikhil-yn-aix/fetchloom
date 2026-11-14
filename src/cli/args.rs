@@ -209,7 +209,7 @@ what fetchloom writes:
   the cache   one copy of each file, shared by all your projects
 
 more: `fetchloom --help` lists every command
-docs: https://nikhil-yn-aix.github.io/fetchloom";
+docs: https://nikhil-yn-aix.github.io/fetchloom/";
 
 /// put the exact data a project needs onto any machine with one command
 #[derive(Debug, Parser)]
@@ -385,17 +385,17 @@ pub(super) fn command() -> clap::Command {
         })
 }
 
-const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";
+const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom/";
 
 /// every command's help ends with its page on the docs site, and the top one with where to
 /// report a bug.
 fn linked(root: clap::Command) -> clap::Command {
     let page = |name: &str| match name {
-        "help" => format!("{SITE}/user/commands/"),
-        "cache gc" => format!("{SITE}/user/commands/cache/#gc"),
-        "cache verify" => format!("{SITE}/user/commands/cache/#verify"),
-        "auth login" | "auth logout" => format!("{SITE}/user/commands/auth/"),
-        _ => format!("{SITE}/user/commands/{name}/"),
+        "help" => format!("{SITE}user/commands/"),
+        "cache gc" => format!("{SITE}user/commands/cache/#gc"),
+        "cache verify" => format!("{SITE}user/commands/cache/#verify"),
+        "auth login" | "auth logout" => format!("{SITE}user/commands/auth/"),
+        _ => format!("{SITE}user/commands/{name}/"),
     };
     let append = |command: clap::Command, line: String| {
         let before = command

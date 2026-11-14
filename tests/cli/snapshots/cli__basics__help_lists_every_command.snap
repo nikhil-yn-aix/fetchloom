@@ -45,5 +45,5 @@ global options:
   -V, --version       print the version
 
 help topics: `fetchloom help concepts`, `recipes`, `environment` or `exit-codes`
-docs: https://nikhil-yn-aix.github.io/fetchloom
+docs: https://nikhil-yn-aix.github.io/fetchloom/
 report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues

@@ -70,9 +70,10 @@ def printed(root):
         except UnicodeDecodeError:
             continue
         found.update(match.rstrip(".,;:") for match in PRINTED.findall(text))
-        if f'const SITE: &str = "{SITE_URL}";' in text:
-            for tail in re.findall(r'\{SITE\}(/[^"\s\\]*)', text):
-                found.update(SITE_URL + tail.replace("{name}", name) for name in commands)
+        site = re.search(r'const SITE: &str = "(' + re.escape(SITE_URL) + r'[^"]*)";', text)
+        if site:
+            for tail in re.findall(r'\{SITE\}([^"\s\\]*)', text):
+                found.update(site[1] + tail.replace("{name}", name) for name in commands)
     return found
 
 

@@ -19,4 +19,4 @@ what fetchloom writes:
   the cache   one copy of each file, shared by all your projects
 
 more: `fetchloom --help` lists every command
-docs: https://nikhil-yn-aix.github.io/fetchloom
+docs: https://nikhil-yn-aix.github.io/fetchloom/

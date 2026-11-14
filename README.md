@@ -66,7 +66,7 @@ what fetchloom writes:
   the cache   one copy of each file, shared by all your projects
 
 more: `fetchloom --help` lists every command
-docs: https://nikhil-yn-aix.github.io/fetchloom
+docs: https://nikhil-yn-aix.github.io/fetchloom/
 ```
 
 bare `fetchloom` prints this outside a project, below its name and version; inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/guides/scripts.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/python-helper.md).
