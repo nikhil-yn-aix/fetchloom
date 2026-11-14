@@ -1719,7 +1719,8 @@ fn readonly_windows_placement_tries_hardlinks_before_clones() {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let root = folder.path().join("data");
-    let mut placer = Placer::new(&root);
+    // a sync client's folder around the test's own would rule hardlinks out
+    let mut placer = Placer::starting_at(root.clone(), Method::Reflink, None);
     assert_eq!(
         placer.place(&object, &root.join("file"), false).unwrap(),
         Method::Hardlink
