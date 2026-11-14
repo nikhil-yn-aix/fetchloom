@@ -827,26 +827,27 @@ fn check_by(targets: &[Target], patterns: &dyn Fn(&str) -> Patterns) -> Result<(
             parent = folder;
         }
     }
-    let file_keys: HashSet<&String> = files.keys().collect();
-    for (folder, inside) in &folders {
-        if file_keys.contains(folder) {
-            let file = files[folder];
-            let message = if file.dataset == inside.dataset {
-                format!(
-                    "{} is a file, but {} needs a folder there",
-                    file.path, inside.path
-                )
-            } else {
-                format!(
-                    "dataset {} places a file at {}, but dataset {} needs a folder there for {}",
-                    file.dataset, file.path, inside.dataset, inside.path
-                )
-            };
-            let help = fix(file, inside, targets, patterns);
-            return Err(Error::new(Kind::ProjectInvalid, message).help(help));
-        }
-    }
-    Ok(())
+    let first = folders
+        .iter()
+        .filter(|(folder, _)| files.contains_key(*folder))
+        .min_by_key(|(folder, _)| *folder);
+    let Some((folder, inside)) = first else {
+        return Ok(());
+    };
+    let file = files[folder];
+    let message = if file.dataset == inside.dataset {
+        format!(
+            "{} is a file, but {} needs a folder there",
+            file.path, inside.path
+        )
+    } else {
+        format!(
+            "dataset {} places a file at {}, but dataset {} needs a folder there for {}",
+            file.dataset, file.path, inside.dataset, inside.path
+        )
+    };
+    let help = fix(file, inside, targets, patterns);
+    Err(Error::new(Kind::ProjectInvalid, message).help(help))
 }
 
 fn clash(

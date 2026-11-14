@@ -656,6 +656,22 @@ fn a_clash_between_datasets_names_both_and_the_path() {
     }
 }
 
+/// of two clashes the first by path is named, whatever order a hash map would keep them in.
+#[test]
+fn of_two_clashes_the_first_by_path_is_named() {
+    let flat = manifest(
+        "[datasets.a]\nref = \"x\"\npath = \".\"\n[datasets.b]\nref = \"y\"\npath = \".\"\n",
+    );
+    let locked = lock(&[("a", &["seg", "raw"]), ("b", &["seg/y.csv", "raw/x.csv"])]);
+    // each check builds its maps afresh, each with a seed of its own
+    for _ in 0..16 {
+        assert_eq!(
+            targets(&flat, &locked).unwrap_err().message,
+            "dataset a places a file at data/raw, but dataset b needs a folder there for data/raw/x.csv"
+        );
+    }
+}
+
 #[test]
 fn a_dataset_that_is_one_archive_gets_its_files_without_their_shared_top_folder() {
     assert_eq!(
