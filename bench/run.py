@@ -432,7 +432,8 @@ def variant_choice(value):
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
-def main():
+def arguments():
+    """the command line of a lab campaign."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
     parser.add_argument("--profiles", type=lambda x: csv_choices(x, lab.PROFILES), default=list(lab.PROFILES))
@@ -449,8 +450,12 @@ def main():
     parser.add_argument("--timeout", type=seconds_choice, default=1200)
     parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""),
                         help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
-    args = parser.parse_args()
-    lab.require_root()
+    return parser
+
+
+def campaign(parser, args):
+    """the lab lock, the tool adapters and the cases a campaign measures; exits through the parser,
+    before the server is pinned, when the campaign cannot be measured as asked."""
     if args.rounds is not None and args.rounds < 1 or args.timeout <= 0:
         parser.error("rounds and timeout must be positive")
     if not args.out.resolve().is_relative_to(lab.ROOT):
@@ -472,59 +477,81 @@ def main():
     for fs in args.fs:
         if not os.path.ismount(lab.ROOT / "fs" / fs):
             parser.error(f"{fs} is not mounted")
+    return lock, adapters, cases
+
+
+def rounds_of(args, profile):
+    """the measured rounds of a case on this profile, warmup aside."""
+    return 1 if args.quick else args.rounds or ROUNDS[profile]
+
+
+def estimate(args, adapters, cases):
+    """seconds of timed work plus warmups, for planning: a minute a run, 30 s an interrupted one and
+    3 s a smoke run."""
+    total = 0
+    for case in cases:
+        runs = (rounds_of(args, case["profile"]) + 1) * sum(tool.supports(case) for tool in adapters.values())
+        total += runs * (30 if case["id"] == "s7" else 3 if args.quick else 60)
+    return total * len(args.fs)
+
+
+def measure_case(args, fs, specification, adapters, meta):
+    """builds and prepares one case outside the clock, then runs each tool that supports it once a
+    round, warmup first, in a seeded shuffled order; returns how many runs failed."""
+    meta_path = args.out / "meta.json"
+    lab.profile("lan")
+    case = fixtures.build(specification, args.seed)
+    eligible = {name: tool for name, tool in adapters.items() if tool.supports(case)}
+    print(f"preparing {fs}/{case['profile']}/{case['id']}", flush=True)
+    preparation_errors = {}
+    for name in eligible:
+        try:
+            case = fixtures.prepare_native(case, args.fetchloom, [eligible[name].prepared_as])
+        except Exception as error:
+            preparation_errors[name] = f"native preparation failed: {error}"
+    rounds = rounds_of(args, case["profile"])
+    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds))
+    lab.profile(case["profile"])
+    # each case draws its own orders, so a campaign split into chunks shuffles as one run
+    # would, rather than every chunk replaying the same sequence
+    rng = case_rng(args.seed, fs, case)
+    failures = 0
+    for number in range(rounds + 1):
+        order = list(eligible)
+        rng.shuffle(order)
+        meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))
+        write_metadata(meta_path, meta)
+        for name in order:
+            workdir = lab.ROOT / "fs" / fs / "work"
+            if name in preparation_errors:
+                row = dict(kind="lab", filesystem=fs, profile=case["profile"], scenario=case["id"],
+                           tool=name, round=number, warmup=number == 0, quick=args.quick,
+                           count=case["count"], file_size=case["size"], status="failed",
+                           error=preparation_errors[name])
+                append(args.out / "runs.jsonl", row)
+            else:
+                row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus)
+            meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
+            failures += row["status"] != "passed"
+            wall = f"{row['wall_seconds']:.3f}s" if "wall_seconds" in row else row.get("error", "no timing")
+            print(f"{fs}/{case['profile']}/{case['id']} round {number}/{rounds} {name}: {row['status']} {wall}", flush=True)
+            if workdir.exists():
+                shutil.rmtree(workdir)
+    return failures
+
+
+def main():
+    parser = arguments()
+    args = parser.parse_args()
+    lab.require_root()
+    lock, adapters, cases = campaign(parser, args)
     server_cpus = lab.pin_server(args.cpus)
     meta = metadata(args, adapters)
     meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
-    meta_path = args.out / "meta.json"
-    estimate = 0
-    for case in cases:
-        rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
-        estimate += (rounds + 1) * sum(t.supports(case) for t in adapters.values()) * (30 if case["id"] == "s7" else 3 if args.quick else 60)
-    estimate *= len(args.fs)
-    meta["estimated_seconds"] = estimate
-    print(f"estimated timed work plus warmups: {estimate / 3600:.1f} hours; preparation is additional", flush=True)
-    failures = 0
-    for fs in args.fs:
-        for specification in cases:
-            lab.profile("lan")
-            case = fixtures.build(specification, args.seed)
-            eligible = {name: tool for name, tool in adapters.items() if tool.supports(case)}
-            print(f"preparing {fs}/{case['profile']}/{case['id']}", flush=True)
-            preparation_errors = {}
-            for name in eligible:
-                try:
-                    case = fixtures.prepare_native(case, args.fetchloom, [eligible[name].prepared_as])
-                except Exception as error:
-                    preparation_errors[name] = f"native preparation failed: {error}"
-            rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
-            meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds))
-            lab.profile(case["profile"])
-            # each case draws its own orders, so a campaign split into chunks shuffles as one run
-            # would, rather than every chunk replaying the same sequence
-            rng = case_rng(args.seed, fs, case)
-            for number in range(rounds + 1):
-                order = list(eligible)
-                rng.shuffle(order)
-                meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))
-                write_metadata(meta_path, meta)
-                for name in order:
-                    workdir = lab.ROOT / "fs" / fs / "work"
-                    if name in preparation_errors:
-                        row = dict(kind="lab", filesystem=fs, profile=case["profile"], scenario=case["id"],
-                                   tool=name, round=number, warmup=number == 0, quick=args.quick,
-                                   count=case["count"], file_size=case["size"], status="failed",
-                                   error=preparation_errors[name])
-                        append(args.out / "runs.jsonl", row)
-                    else:
-                        row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus)
-                    meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
-                    failed = row["status"] != "passed"
-                    failures += failed
-                    wall = f"{row['wall_seconds']:.3f}s" if "wall_seconds" in row else row.get("error", "no timing")
-                    print(f"{fs}/{case['profile']}/{case['id']} round {number}/{rounds} {name}: {row['status']} {wall}", flush=True)
-                    if workdir.exists():
-                        shutil.rmtree(workdir)
-    write_metadata(meta_path, meta)
+    meta["estimated_seconds"] = estimate(args, adapters, cases)
+    print(f"estimated timed work plus warmups: {meta['estimated_seconds'] / 3600:.1f} hours; preparation is additional", flush=True)
+    failures = sum(measure_case(args, fs, specification, adapters, meta) for fs in args.fs for specification in cases)
+    write_metadata(args.out / "meta.json", meta)
     print(f"recorded {failures} failed runs (including warmups); results: {args.out}")
     lock.close()
     return 1 if failures else 0
