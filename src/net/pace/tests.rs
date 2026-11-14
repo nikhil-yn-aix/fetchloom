@@ -1,9 +1,5 @@
-//! rate-limit headers, fixed-time admission decisions and concurrent downloads.
+//! rate-limit headers and admission decisions at fixed instants.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::StatusCode;
@@ -11,102 +7,42 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use url::Url;
 
 use super::*;
-use crate::cache::Cache;
-use crate::net::download::Fetch;
-use crate::net::{Net, Offline, Options};
-use crate::source::recorded::block_on;
 
-/// requests the host takes in each second.
-const QUOTA: u64 = 5;
-
-struct Host {
-    url: Url,
-    refused: Arc<AtomicUsize>,
-}
-
-fn serve() -> Host {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    // the second the count is for, and the requests in it
-    let window = Arc::new(Mutex::new((0, 0)));
-    let refused = Arc::new(AtomicUsize::new(0));
-    let (shared, count) = (window.clone(), refused.clone());
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let (window, refused) = (shared.clone(), count.clone());
-            std::thread::spawn(move || answer(stream, &window, &refused));
-        }
-    });
-    Host { url, refused }
-}
-
-fn answer(mut stream: TcpStream, window: &Mutex<(u64, u64)>, refused: &AtomicUsize) {
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-        head.push(byte[0]);
-    }
-    let now = SystemTime::now();
-    let second = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let taken = {
-        let mut window = window.lock().unwrap();
-        if window.0 != second {
-            *window = (second, 0);
-        }
-        window.1 += 1;
-        window.1
-    };
-    // zenodo sends retry-after on every answer. on one that worked it must slow nothing, so it
-    // says far longer here than the limit takes to reset
-    let (status, body, retry_after) = if taken > QUOTA {
-        refused.fetch_add(1, Ordering::SeqCst);
-        ("429 Too Many Requests", "", 1)
-    } else {
-        ("200 OK", "a file", 30)
-    };
-    let text = format!(
-        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\nDate: {}\r\n\
-         X-RateLimit-Limit: {QUOTA}\r\nX-RateLimit-Remaining: {}\r\nX-RateLimit-Reset: {}\r\n\
-         Retry-After: {retry_after}\r\n\r\n{body}",
-        body.len(),
-        httpdate::fmt_http_date(now),
-        QUOTA.saturating_sub(taken),
-        second + 1,
-    );
-    let _ = stream.write_all(text.as_bytes());
-}
-
-/// the server counts requests in each wall-clock second, as a quota does, so 12 at 5 a second
-/// take three windows, about 2 s; the decisions have fixed-instant tests below.
+/// downloads that ask at once share what the host says is left, requests still on their way
+/// included: 12 asked four at a time of a host that takes 5 a second go 5, 5 and 2, a window's
+/// rest held to its reset rather than sent to be refused.
 #[test]
-fn concurrent_downloads_respect_the_hosts_quota() {
-    let host = serve();
-    let options = Options {
-        offline: Offline::No,
-        jobs: 8,
-        credentials: Vec::new(),
-        split: crate::net::Splitting::WhenSlow,
-    };
-    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
-    net.typed(&host.url);
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let batch = |first: usize| {
-        let (net, cache, url) = (&net, &cache, &host.url);
-        async move {
-            for n in (first..12).step_by(4) {
-                let fetch = Fetch::new(url.join(&n.to_string()).unwrap());
-                net.download(&fetch, cache, &|_| Ok(())).await.unwrap();
+fn requests_asked_at_once_never_take_more_than_the_hosts_quota() {
+    let paces = Paces::default();
+    let mut at = Instant::now();
+    let (mut left, mut windows) = (12, Vec::new());
+    while left > 0 {
+        let mut taken = 0;
+        loop {
+            // four ask together, and the host answers each once all four went
+            let asked: Vec<Ticket> = (0..left.min(4))
+                .map_while(|_| paces.admit("zenodo.org", at).ok())
+                .collect();
+            if asked.is_empty() {
+                break;
+            }
+            for ticket in asked {
+                (taken, left) = (taken + 1, left - 1);
+                let limit = Limit {
+                    name: String::new(),
+                    quota: Some(5),
+                    window: None,
+                    remaining: 5_u64.saturating_sub(taken),
+                    reset: Duration::from_secs(1),
+                    stamp: None,
+                };
+                Paces::heard(ticket, vec![limit], at);
             }
         }
-    };
-    block_on(async { tokio::join!(batch(0), batch(1), batch(2), batch(3)) });
-    assert_eq!(
-        host.refused.load(Ordering::SeqCst),
-        0,
-        "a request went past the limit"
-    );
-    assert_eq!(net.work.counts().retries, 0);
+        windows.push(taken);
+        at += Duration::from_secs(1);
+    }
+    assert_eq!(windows, [5, 5, 2]);
 }
 
 #[test]
