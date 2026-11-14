@@ -139,3 +139,25 @@ fn a_host_takes_the_unexpired_sendable_cookies_its_domain_covers() {
         ]
     );
 }
+
+/// profiles changed at the same time, as far as the disk can tell (fat keeps times to two
+/// seconds), go by path, in whatever order they are found.
+#[test]
+fn profiles_changed_at_the_same_time_go_by_path() {
+    let folder = tempfile::tempdir().unwrap();
+    let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let files: Vec<PathBuf> = ["a", "b"]
+        .into_iter()
+        .map(|name| {
+            let file = folder.path().join(name);
+            std::fs::File::create(&file)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+            file
+        })
+        .collect();
+    let first = Some(files[0].clone());
+    assert_eq!(newest(files.clone()), first);
+    assert_eq!(newest(files.into_iter().rev().collect()), first);
+}

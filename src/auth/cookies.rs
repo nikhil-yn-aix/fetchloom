@@ -173,7 +173,9 @@ impl Browser {
     }
 }
 
-/// the newest of `files` by when it last changed, as the profile a browser used last.
+/// the newest of `files` by when it last changed, as the profile a browser used last. files
+/// changed at the same time, as far as the disk can tell, go by path, so the pick never
+/// depends on the order a folder lists them in.
 fn newest(files: Vec<PathBuf>) -> Option<PathBuf> {
     files
         .into_iter()
@@ -183,7 +185,7 @@ fn newest(files: Vec<PathBuf>) -> Option<PathBuf> {
                 .ok()?;
             Some((changed, file))
         })
-        .max_by_key(|(changed, _)| *changed)
+        .max_by(|(one, first), (other, second)| one.cmp(other).then_with(|| second.cmp(first)))
         .map(|(_, file)| file)
 }
 

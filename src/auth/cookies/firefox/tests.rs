@@ -107,11 +107,12 @@ fn the_profile_used_last_is_read_unless_one_is_named() {
         ),
     )
     .unwrap();
+    // times fat can hold: from 1980, in steps of two seconds
     let at = |seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
     for (file, changed) in [
-        (&used, 1_000_100),
-        (&older, 1_000_000),
-        (&elsewhere, 999_999),
+        (&used, 1_700_000_200),
+        (&older, 1_700_000_100),
+        (&elsewhere, 1_700_000_000),
     ] {
         std::fs::File::options()
             .write(true)
