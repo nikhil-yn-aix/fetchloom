@@ -1722,30 +1722,15 @@ struct Received {
 async fn finish(writer: PartialWriter) -> Result<Received, Failure> {
     let arrived = Instant::now();
     let stored = tokio::task::spawn_blocking(move || {
+        // stands in for a flush a slow disk makes long
         #[cfg(debug_assertions)]
-        held_flush();
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_FLUSH");
         writer.finish()
     })
     .await
     .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
     .map_err(|err| Failure::Final(local(&err)))?;
     Ok(Received { stored, arrived })
-}
-
-/// stands in for a flush a slow disk makes long: with `FETCHLOOM_TEST_HOLD_FLUSH` naming a file,
-/// a finished download writes `<file>.held`, then ignores any stop until that file appears.
-#[cfg(debug_assertions)]
-fn held_flush() {
-    let Some(release) = std::env::var_os("FETCHLOOM_TEST_HOLD_FLUSH").map(std::path::PathBuf::from)
-    else {
-        return;
-    };
-    let mut held = release.clone().into_os_string();
-    held.push(".held");
-    let _ = std::fs::write(held, b"");
-    while !release.exists() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
 }
 
 #[cfg(test)]

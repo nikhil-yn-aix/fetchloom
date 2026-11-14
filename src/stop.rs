@@ -153,8 +153,9 @@ impl Stop {
         if late {
             self.tell_late();
         }
+        // so a CLI test can stop the run just past this mark
         #[cfg(debug_assertions)]
-        held_at_finish();
+        hold("FETCHLOOM_TEST_HOLD_FINISH");
     }
 
     /// what to tell when a stop is asked of a run that finishes anyway, as when the work marks
@@ -235,13 +236,11 @@ impl Stop {
     }
 }
 
-/// holds a run just after its finishing mark: with `FETCHLOOM_TEST_HOLD_FINISH` naming a file, it
-/// writes `<file>.held` and waits until the file appears, so a CLI test can stop past the mark.
+/// holds a run where a CLI test needs to catch it: with the variable `name` naming a file, it
+/// writes `<file>.held` and waits until the file appears, whatever stop is asked meanwhile.
 #[cfg(debug_assertions)]
-fn held_at_finish() {
-    let Some(release) =
-        std::env::var_os("FETCHLOOM_TEST_HOLD_FINISH").map(std::path::PathBuf::from)
-    else {
+pub(crate) fn hold(name: &str) {
+    let Some(release) = std::env::var_os(name).map(std::path::PathBuf::from) else {
         return;
     };
     let mut held = release.clone().into_os_string();
