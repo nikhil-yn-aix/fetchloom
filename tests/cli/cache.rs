@@ -9,6 +9,9 @@ const IRIS: &[u8] =
 const PENGUINS: &[u8] = b"species,island,bill_length_mm\nAdelie,Torgersen,39.1\n";
 const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
 const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
+/// the help for a cache read-only for this account, as a lab's shared cache may be for everyone but
+/// whoever keeps it.
+const SHARED: &str = "help: the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
 
 /// one line counts the projects, so ten long paths never fill the screen.
 #[test]
@@ -983,18 +986,44 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
         "could not write to the cache: permission was denied in {}",
         sandbox.cache().join("partial").display()
     );
-    // a lab's shared cache may be read-only for everyone but whoever keeps it
-    let shared = "help: the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
     for output in [people, added?] {
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(50), "{stderr}");
         assert!(stderr.contains(&refused), "{stderr}");
-        assert!(stderr.contains(shared), "{stderr}");
+        assert!(stderr.contains(SHARED), "{stderr}");
     }
     let report: serde_json::Value = serde_json::from_slice(&scripts.stdout)?;
     assert_eq!(scripts.status.code(), Some(50), "{report}");
     assert_eq!(report["errors"][0]["kind"], "local.io", "{report}");
     assert_eq!(report["errors"][0]["message"], refused.as_str(), "{report}");
+    Ok(())
+}
+
+/// an empty cache folder that cannot be written fails as it opens, with the same help, as a lab's
+/// shared cache may before anything is in it.
+#[cfg(unix)]
+#[test]
+fn an_empty_cache_that_cannot_be_written_gets_the_shared_cache_help() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let cache = sandbox.cache();
+    fs::create_dir_all(&cache)?;
+    let before = fs::metadata(&cache)?.permissions();
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o555))?;
+    let added = sandbox.run(&["add", &server.url]);
+    fs::set_permissions(&cache, before)?;
+    let added = added?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!("could not open the cache at {}", cache.display())),
+        "{stderr}"
+    );
+    assert!(stderr.contains(SHARED), "{stderr}");
     Ok(())
 }
 

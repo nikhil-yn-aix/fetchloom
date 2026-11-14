@@ -617,20 +617,26 @@ impl Cache {
     }
 }
 
-/// the error for a write to the cache that `err` refused. a cache that is read-only for this
-/// account, as a lab's shared one may be, takes nothing new, so the help names a cache of the
-/// person's own; on windows a refused write is more often a file another program holds open.
-pub(crate) fn unwritten(err: &io::Error) -> crate::error::Error {
-    let error = crate::error::Error::io("could not write to the cache", err);
-    let read_only = match err.kind() {
+/// the help for a cache that is read-only for this account, as a lab's shared one may be: it takes
+/// nothing new, so the help names a cache of the person's own.
+pub(crate) const READ_ONLY: &str = "the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
+
+/// whether `err`, from writing in the cache, says the cache is read-only for this account. on
+/// windows a refused write is more often a file another program holds open.
+pub(crate) fn read_only(err: &io::Error) -> bool {
+    match err.kind() {
         io::ErrorKind::ReadOnlyFilesystem => true,
         io::ErrorKind::PermissionDenied => !cfg!(windows),
         _ => false,
-    };
-    if read_only {
-        return error.help(
-            "the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need",
-        );
+    }
+}
+
+/// the error for a write to the cache that `err` refused, with [`READ_ONLY`] for a cache that is
+/// read-only for this account.
+pub(crate) fn unwritten(err: &io::Error) -> crate::error::Error {
+    let error = crate::error::Error::io("could not write to the cache", err);
+    if read_only(err) {
+        return error.help(READ_ONLY);
     }
     error
 }

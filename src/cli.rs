@@ -564,14 +564,18 @@ fn open_unheld() -> Result<Cache, Error> {
         )
         .help("set FETCHLOOM_CACHE to a folder fetchloom may write to"));
     }
+    let existed = root.is_dir();
     Cache::open(root.clone()).map_err(|err| {
-        moved_by_variable(
-            Error::io(
-                format_args!("could not open the cache at {}", root.display()),
-                &err,
-            ),
+        let error = Error::io(
+            format_args!("could not open the cache at {}", root.display()),
             &err,
-        )
+        );
+        // a cache folder that is there and takes no write is read-only for this account, as an
+        // empty shared cache may be; one that could not be made is the container case below
+        if existed && crate::cache::read_only(&err) {
+            return error.help(crate::cache::READ_ONLY);
+        }
+        moved_by_variable(error, &err)
     })
 }
 
