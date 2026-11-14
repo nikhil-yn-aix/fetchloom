@@ -33,6 +33,13 @@ env:
   RUST_TEST_THREADS: 4
   INSTA_UPDATE: 'no'
   INSTA_FORCE_PASS: '0'
+  # each tool's version, here once; python/test_workflows.py holds those ci.yml also pins to
+  # ci.yml's
+  PIN_NEXTEST: cargo-nextest@0.9.151
+  PIN_LLVM_COV: cargo-llvm-cov@0.9.1
+  PIN_BOLERO: cargo-bolero@0.13.5
+  PIN_LYCHEE: lychee@0.24.2
+  PIN_MUTANTS: cargo-mutants@27.1.0
 
 jobs:
   coverage:
@@ -48,7 +55,7 @@ jobs:
       - run: rustup toolchain install --component llvm-tools-preview
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.151
+          tool: ${{ env.PIN_LLVM_COV }},${{ env.PIN_NEXTEST }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: coverage
@@ -90,7 +97,7 @@ jobs:
       - run: rustup toolchain install nightly-2026-11-03 --profile minimal
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-bolero@0.13.5
+          tool: ${{ env.PIN_BOLERO }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: fuzz-nightly-2026-11-03
@@ -165,7 +172,7 @@ jobs:
           persist-credentials: false
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: lychee@0.24.2
+          tool: ${{ env.PIN_LYCHEE }}
       - name: check external documentation links
         run: |
           mkdir -p target/links
@@ -198,7 +205,7 @@ jobs:
       - run: rustup toolchain install
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-mutants@27.1.0
+          tool: ${{ env.PIN_MUTANTS }}
       - name: list and test at most ten mutations in one file
         env:
           MUTATION_FILE: ${{ inputs.file }}

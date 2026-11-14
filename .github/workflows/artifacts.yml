@@ -23,6 +23,8 @@ env:
   COPYFILE_DISABLE: '1'
   # `fetchloom --version -v` names the commit a release was built from
   FETCHLOOM_COMMIT: ${{ github.sha }}
+  # each tool's version, here once
+  PIN_CARGO_ABOUT: cargo-about@0.9.3
 
 jobs:
   build:
@@ -222,7 +224,7 @@ jobs:
       - &about
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-about@0.9.3
+          tool: ${{ env.PIN_CARGO_ABOUT }}
       # the licenses of the crates the six release binaries are built from, which most of them ask
       # to travel with every copy. --frozen reads only the crates cargo fetched, so every job
       # writes the same bytes

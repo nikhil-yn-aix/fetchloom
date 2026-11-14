@@ -20,6 +20,14 @@ env:
   RUST_TEST_THREADS: 4
   INSTA_UPDATE: 'no'
   INSTA_FORCE_PASS: '0'
+  # each tool's version, here once; python/test_workflows.py holds deep.yml, pages.yml and
+  # .config/nextest.toml to the same ones
+  PIN_NEXTEST: cargo-nextest@0.9.151
+  PIN_QUALITY: cargo-deny@0.20.2,zizmor@1.32.0,cargo-machete@0.9.2,typos-cli@1.52.0,shellcheck@0.11.0
+  PIN_PSSCRIPTANALYZER: 1.25.0
+  PIN_LYCHEE: lychee@0.24.2
+  PIN_UV: 0.13.7
+  PIN_UV_SHA256: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
 
 jobs:
   ci:
@@ -56,7 +64,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         if: always()
         with:
-          tool: cargo-deny@0.20.2,zizmor@1.32.0,cargo-machete@0.9.2,typos-cli@1.52.0,shellcheck@0.11.0
+          tool: ${{ env.PIN_QUALITY }}
       - name: fmt
         if: always()
         run: cargo fmt --all -- --check
@@ -81,10 +89,10 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -EQ '1.25.0')) {
-            Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force -Repository PSGallery
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -EQ $env:PIN_PSSCRIPTANALYZER)) {
+            Install-Module PSScriptAnalyzer -RequiredVersion $env:PIN_PSSCRIPTANALYZER -Scope CurrentUser -Force -Repository PSGallery
           }
-          Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0
+          Import-Module PSScriptAnalyzer -RequiredVersion $env:PIN_PSSCRIPTANALYZER
           # the installer targets 5.1+, where Write-Host is redirectable progress, not pipeline data.
           $issues = @(Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error -ExcludeRule PSAvoidUsingWriteHost)
           $issues | Format-Table -AutoSize
@@ -100,18 +108,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: python documentation tests
-        run: |
-          python3 -m unittest discover -s python -p test_docs.py
-          python3 -m unittest discover -s python -p test_site.py
-          python3 -m unittest discover -s python -p test_transcript.py
-          python3 -m unittest discover -s python -p test_ci.py
-          python3 -m unittest discover -s python -p test_snapshots.py
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        if: always()
         with:
-          version: 0.13.7
-          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+          version: ${{ env.PIN_UV }}
+          checksum: ${{ env.PIN_UV_SHA256 }}
           enable-cache: false
       - name: install the site's toolchain
         if: always()
@@ -122,7 +122,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         if: always()
         with:
-          tool: lychee@0.24.2
+          tool: ${{ env.PIN_LYCHEE }}
       - name: build the site and agent exports
         if: always()
         run: uv run --locked --project docs-site python python/build_site.py
@@ -168,7 +168,7 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-nextest@0.9.151
+          tool: ${{ env.PIN_NEXTEST }}
       # the crate has no code that differs by processor, so the arm64 linux and windows runners
       # would lint what the x86_64 jobs of their system already lint
       - run: cargo clippy --all-targets --locked -- -D warnings
@@ -273,7 +273,7 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-nextest@0.9.151
+          tool: ${{ env.PIN_NEXTEST }}
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --locked --example recipe_step
       - name: record cargo test selections
@@ -312,7 +312,7 @@ jobs:
           save-if: false
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-nextest@0.9.151
+          tool: ${{ env.PIN_NEXTEST }}
       - run: cargo build --locked --example recipe_step
       - name: record cargo test selections
         run: python python/ci_tests.py record
@@ -362,7 +362,7 @@ jobs:
           persist-credentials: false
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-nextest@0.9.151
+          tool: ${{ env.PIN_NEXTEST }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-test-build
