@@ -608,6 +608,44 @@ fn a_managed_identity_that_cannot_be_had_says_why() {
     assert_eq!(lines(&asked).len(), 2);
 }
 
+/// a metadata service's answer with no bearer token a header can carry ends the request, in
+/// words that name the service.
+#[test]
+fn a_metadata_answer_without_a_usable_token_says_so() {
+    let (identity, _) = server(|_, count| {
+        let body: &[u8] = match count {
+            0 => br#"{"access_token":"identity-token","token_type":"mac"}"#,
+            1 => br#"{"access_token":"identity token","token_type":"Bearer"}"#,
+            _ => b"<html>not json</html>",
+        };
+        reply("200 OK", &[("Content-Type", "application/json")], body)
+    });
+    let (local, _) = blob_host("never");
+    let endpoint = identity.join("metadata/identity/oauth2/token").unwrap();
+    for sent in [
+        "a token of another kind than bearer",
+        "no token a request can carry",
+        "an answer fetchloom could not read",
+    ] {
+        let net = azure_net_at(
+            &["azure:lab/raw"],
+            &[("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential")],
+            Some(endpoint.clone()),
+        );
+        let error =
+            through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert_eq!(
+            error.message,
+            format!("azure's metadata service sent {sent}")
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(crate::error::report_answer().as_str())
+        );
+    }
+}
+
 /// the metadata service's answer cut off partway is asked for again, one of 64 KiB is read whole
 /// and one past it ends the request; none of it counts as the run's bytes down. with no retries,
 /// the cut one ends it.

@@ -360,16 +360,45 @@ fn the_token_endpoints_answer_gives_the_token_and_how_long_it_lives() {
         )
         .unwrap();
     assert_eq!(unstated.lifetime, Duration::from_secs(3600));
-    for body in [
-        &br#"{"token_type":"Bearer","expires_in":3599}"#[..],
-        br#"{"access_token":"ya29.mac-token","token_type":"mac"}"#,
-        br#"{"access_token":"","token_type":"Bearer"}"#,
-        br#"{"access_token":"ya29.line\nbreak","token_type":"Bearer"}"#,
-        b"<html>not json</html>",
+    let written = credentials
+        .answer(
+            200,
+            br#"{"access_token":"ya29.written","expires_in":" 3599 ","token_type":"Bearer"}"#,
+        )
+        .unwrap();
+    assert_eq!(written.lifetime, Duration::from_secs(3599));
+    for (body, sent) in [
+        (
+            &br#"{"token_type":"Bearer","expires_in":3599}"#[..],
+            "no token a request can carry",
+        ),
+        (
+            br#"{"access_token":"ya29.mac-token","token_type":"mac"}"#,
+            "a token of another kind than bearer",
+        ),
+        (
+            br#"{"access_token":"","token_type":"Bearer"}"#,
+            "no token a request can carry",
+        ),
+        (
+            br#"{"access_token":"ya29.line\nbreak","token_type":"Bearer"}"#,
+            "no token a request can carry",
+        ),
+        (
+            b"<html>not json</html>",
+            "an answer fetchloom could not read",
+        ),
     ] {
         let error = credentials.answer(200, body).err().unwrap();
         assert_eq!(error.kind, Kind::SourceInvalid, "{}", error.message);
-        assert!(!error.message.contains("ya29"), "{}", error.message);
+        assert_eq!(
+            error.message,
+            format!("google's token endpoint sent {sent}")
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(crate::error::report_answer().as_str())
+        );
     }
 }
 
