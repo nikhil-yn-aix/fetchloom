@@ -397,7 +397,8 @@ fn a_group_takes_its_names_once_its_first_download_waited_long_enough() {
 }
 
 /// a process allowed few open files waits in smaller groups, as each waiting download keeps one
-/// open: a group of 256 ran out under a limit of 256, as `add -i` of 1,000 links did.
+/// open: a group of 256 ran out under a limit of 256, as `add -i` of 1,000 links did, and 300
+/// downloads fill such a group.
 #[cfg(target_os = "linux")]
 #[test]
 fn downloads_wait_in_groups_a_low_open_file_limit_can_hold() {
@@ -433,7 +434,7 @@ fn downloads_wait_in_groups_a_low_open_file_limit_can_hold() {
     .unwrap();
     let (_dir, cache) = cache();
     assert!(cache.defer_downloads(Some(open_files)).unwrap());
-    let urls: Vec<String> = (0..1_000)
+    let urls: Vec<String> = (0..300)
         .map(|n| format!("https://example.org/{n}"))
         .collect();
     let stored: Vec<Stored> = urls
