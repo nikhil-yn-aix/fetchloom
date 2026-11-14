@@ -16,10 +16,11 @@ use reqwest::header::{self, HeaderMap, HeaderValue};
 use url::Url;
 
 use super::failure::{self, Failure, Retry};
-use super::{Lane, Net, Shown, host};
+use super::{Lane, Net, host};
 use crate::auth::google::{self, Credentials, DRIVE_READ, STORAGE_READ, TOKEN_ENDPOINT};
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
+use crate::shown::Shown;
 
 use crate::work::Work;
 pub(crate) use drive::{Answered as DriveAnswered, DriveId, Private, is_id, unsigned};
@@ -173,7 +174,7 @@ impl Google {
         if url.scheme() != "https"
             || url.host_str() != Some(STORAGE)
             || url.port().is_some()
-            || super::secret(url).is_some()
+            || crate::shown::secret(url).is_some()
         {
             return None;
         }

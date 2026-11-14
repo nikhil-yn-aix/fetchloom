@@ -866,7 +866,7 @@ async fn finish(
             sha256: fetched.digest,
             md5: remote.md5,
             // what get reports, so a secret in the link stays masked
-            url: crate::net::Shown(&remote.url).to_string(),
+            url: crate::shown::Shown(&remote.url).to_string(),
             unpacks_to: None,
         })
         .collect();
@@ -1021,7 +1021,7 @@ fn unclaimed(folder: PathBuf, taken: &Taken) -> PathBuf {
 
 /// a link as reports show it, a secret in it masked.
 fn shown(link: &str) -> String {
-    net::mask_query(link.trim()).into_owned()
+    crate::shown::mask_query(link.trim()).into_owned()
 }
 
 /// says at once that one of several links failed before the downloads, as the others go on.
@@ -1367,7 +1367,7 @@ fn tell_next(context: &Context, args: &Get, link: &str) {
 
 fn pin_command(args: &Get, link: &str) -> Option<String> {
     // add refuses links holding secrets, and no hint may repeat them
-    let Cow::Borrowed(link) = net::mask_query(link.trim()) else {
+    let Cow::Borrowed(link) = crate::shown::mask_query(link.trim()) else {
         return None;
     };
     let mut parts = vec![

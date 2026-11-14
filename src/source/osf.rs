@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
-use crate::net::{self, Api, Expired};
+use crate::net::{Api, Expired};
 
 /// first path segments on osf.io that are pages, not ids.
 const PAGES: [&str; 12] = [
@@ -248,7 +248,7 @@ pub(super) fn stored_item(url: &Url) -> Option<Error> {
             Kind::ReferenceInvalid,
             format!(
                 "{} names one file or folder of osf:{id} by a storage id, from which fetchloom cannot tell its path",
-                net::Shown(url)
+                crate::shown::Shown(url)
             ),
         )
         .help(format!(
@@ -285,7 +285,7 @@ pub(super) fn versioned(url: &Url) -> Option<Result<Url, Error>> {
         Kind::ReferenceInvalid,
         format!(
             "{} asks for one version of an OSF file, which only its download link fetches",
-            net::Shown(url)
+            crate::shown::Shown(url)
         ),
     )
     .help(help)))

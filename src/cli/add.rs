@@ -216,7 +216,7 @@ impl List {
     /// `line` as a message's subject: where it is in its list, or its link, masked.
     fn subject(&self, line: &Line) -> String {
         self.at(line)
-            .unwrap_or_else(|| crate::net::mask_query(&line.link).into_owned())
+            .unwrap_or_else(|| crate::shown::mask_query(&line.link).into_owned())
     }
 
     /// lets `net` reach the origin of each link typed on the command line, as for one typed link.

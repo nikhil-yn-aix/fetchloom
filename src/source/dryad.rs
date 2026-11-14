@@ -248,7 +248,7 @@ pub(super) fn refused_download(url: &Url) -> Option<Error> {
             Kind::AuthRequired,
             format!(
                 "dryad refused {}: dryad lets only a signed-in API account download files",
-                crate::net::Shown(url)
+                crate::shown::Shown(url)
             ),
         )
         .help("get a key on your datadryad.org account page and sign in with `fetchloom auth login dryad`, or set DRYAD_TOKEN; a key dryad gives lasts 10 hours")

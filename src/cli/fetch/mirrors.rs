@@ -224,7 +224,7 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
                 Kind::Usage,
                 format!(
                     "--mirror {} is no mirror: {}",
-                    crate::net::mask_query(text),
+                    crate::shown::mask_query(text),
                     refusal.reason
                 ),
             )

@@ -2159,7 +2159,7 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
     if let Reference::Url(raw) = parsed
         && Url::parse(typed.trim()).is_ok_and(|typed| typed != *raw)
     {
-        output.step("Using", &format!("raw file {}", crate::net::Shown(raw)));
+        output.step("Using", &format!("raw file {}", crate::shown::Shown(raw)));
     }
 }
 

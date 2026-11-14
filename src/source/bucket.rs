@@ -137,7 +137,7 @@ impl Prefix {
         }
         let bad = || {
             malformed(
-                &format!("{}:{}", store.scheme(), net::mask_query(text)),
+                &format!("{}:{}", store.scheme(), crate::shown::mask_query(text)),
                 "s3:https://minio.lab.example:9000/scans/raw/, for a bucket at another service that speaks S3's API",
             )
         };

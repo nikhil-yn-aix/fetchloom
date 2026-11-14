@@ -368,7 +368,7 @@ pub(super) fn link(text: &str) -> Result<String, &'static str> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err("holds a login");
     }
-    if crate::net::secret(&url).is_some() {
+    if crate::shown::secret(&url).is_some() {
         return Err("holds a secret");
     }
     Ok(url.into())

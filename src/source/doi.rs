@@ -110,7 +110,7 @@ impl Doi {
             match known {
                 Some((source, url)) => Self::unresolved(&format!(
                     "{self} points to a {source} page fetchloom cannot list: {}",
-                    crate::net::Shown(&url)
+                    crate::shown::Shown(&url)
                 )),
                 None => self.invalid("the URL value is not a dataset link"),
             }

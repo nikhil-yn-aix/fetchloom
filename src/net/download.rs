@@ -488,7 +488,7 @@ impl Net {
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         // one span per file, so a timeline shows each download as a bar with its link
-        let span = tracing::debug_span!("download", url = %crate::net::Shown(&fetch.url));
+        let span = tracing::debug_span!("download", url = %crate::shown::Shown(&fetch.url));
         let result =
             tracing::Instrument::instrument(self.download_in_span(fetch, cache, on), span).await;
         if !fetch.mirror
@@ -760,7 +760,7 @@ impl Net {
         self.typed
             .check(&next)
             .map_err(|reason| failure::refused(&next, &reason))?;
-        tracing::debug!(next = %super::Shown(&next), "the page points elsewhere");
+        tracing::debug!(next = %crate::shown::Shown(&next), "the page points elsewhere");
         Ok(next)
     }
 
@@ -849,7 +849,7 @@ impl Net {
             self.heard.answered(&host, *waited);
         }
         let status = response.status();
-        tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
+        tracing::debug!(url = %crate::shown::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
         let response = match self.instead(from, fetch, response).await? {
             Ok(response) => response,
@@ -1130,7 +1130,7 @@ impl Net {
             .map_err(|err| Failure::Final(local(&err)))?;
         if let Some((total, rate)) = body? {
             tracing::debug!(
-                url = %super::Shown(url),
+                url = %crate::shown::Shown(url),
                 rate,
                 at = writer.written(),
                 "one stream is slow, so the download splits"
@@ -1483,7 +1483,7 @@ fn is_page(status: StatusCode, head: &header::HeaderMap) -> bool {
 }
 
 fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
-    let shown = super::Shown(url);
+    let shown = crate::shown::Shown(url);
     if let Some(size) = expect.size
         && size != stored.size
     {
@@ -1539,7 +1539,7 @@ fn lfs_pointer(url: &Url, link: Option<String>) -> Error {
         Kind::SourceInvalid,
         format!(
             "{} sent a git-lfs pointer, not the file it stands for",
-            super::Shown(url)
+            crate::shown::Shown(url)
         ),
     );
     match link {
@@ -1598,7 +1598,7 @@ fn wrong_size(url: &Url, expected: u64, got: Option<u64>) -> Error {
         format!(
             "{} sent {sent} for {}, where {} were expected",
             host(url),
-            super::Shown(url),
+            crate::shown::Shown(url),
             units::size(expected)
         ),
     )

@@ -7,8 +7,9 @@ use reqwest::header::{self, HeaderMap};
 use url::Url;
 
 use super::download::{Event, Listener};
-use super::{Net, Notice, Offline, Shown, address, host, pace};
+use super::{Net, Notice, Offline, address, host, pace};
 use crate::error::{Error, Kind};
+use crate::shown::Shown;
 use crate::units;
 use crate::work::Work;
 

@@ -10,7 +10,6 @@ use clap::{ArgMatches, CommandFactory, ValueEnum};
 use super::{Context, args, finish, level};
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net;
 use crate::output::{ColorChoice, Level, Output, Style};
 
 /// a command-line mistake as one of our errors, in the document `--json` asks for or with the
@@ -111,7 +110,7 @@ fn context_value(err: &clap::Error, kind: ContextKind) -> Option<String> {
     typed(err, kind)
         .into_iter()
         .next()
-        .map(|value| net::mask_query(&value).into_owned())
+        .map(|value| crate::shown::mask_query(&value).into_owned())
 }
 
 /// every value clap recorded for `kind`, as it was typed.
@@ -518,7 +517,7 @@ fn first_line(err: &clap::Error) -> String {
         ContextKind::InvalidSubcommand,
     ] {
         for value in typed(err, kind) {
-            let masked = net::mask_query(&value);
+            let masked = crate::shown::mask_query(&value);
             if masked != value {
                 line = line.replace(&value, &masked);
             }

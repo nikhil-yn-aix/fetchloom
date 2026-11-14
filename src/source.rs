@@ -382,7 +382,7 @@ impl Reference {
         // a link parser drops tabs and line breaks, so what is written and what is fetched could
         // differ, and data.lock's record of the entry could match another one
         if text.contains(char::is_control) {
-            let text = net::mask_query(text);
+            let text = crate::shown::mask_query(text);
             return Err(Error::new(
                 Kind::ReferenceInvalid,
                 format!(
@@ -484,8 +484,8 @@ impl Reference {
     /// the reference as messages and logs show it, a secret in a link masked.
     pub(crate) fn shown(&self) -> String {
         match self {
-            Reference::Url(url) => crate::net::Shown(url).to_string(),
-            other => net::mask_query(&other.to_string()).into_owned(),
+            Reference::Url(url) => crate::shown::Shown(url).to_string(),
+            other => crate::shown::mask_query(&other.to_string()).into_owned(),
         }
     }
 
@@ -743,7 +743,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
     let url = Url::parse(text).map_err(|err| {
         Error::new(
             Kind::ReferenceInvalid,
-            format!("\"{}\" is not a valid link: {err}", net::mask_query(text)),
+            format!("\"{}\" is not a valid link: {err}", crate::shown::mask_query(text)),
         )
         .help("copy the whole link again from the browser's address bar, and keep it in double quotes on the command line")
     })?;
@@ -757,13 +757,13 @@ fn link(text: &str) -> Result<Parsed, Error> {
     if url.host_str().is_none_or(str::is_empty) {
         return Err(Error::new(
             Kind::ReferenceInvalid,
-            format!("\"{}\" names no host", net::mask_query(text)),
+            format!("\"{}\" names no host", crate::shown::mask_query(text)),
         )
         .help(
             "copy the complete link from your browser, including https:// and the website name",
         ));
     }
-    let secret = net::secret(&url);
+    let secret = crate::shown::secret(&url);
     let parsed = |reference, file| Parsed {
         reference,
         file,
@@ -826,7 +826,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
                 Kind::ReferenceInvalid,
                 format!(
                     "fetchloom does not know this kind of {source} link: {}",
-                    net::Shown(&url)
+                    crate::shown::Shown(&url)
                 ),
             )
             .help(other_page_help(source)));
@@ -1076,7 +1076,7 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
     response: &Response,
 ) -> Result<T, Error> {
     let reference = reference.to_string();
-    let reference = net::mask_query(&reference);
+    let reference = crate::shown::mask_query(&reference);
     match response.status {
         200..=299 => response.json(),
         404 | 410 => Err(Error::new(
@@ -1112,14 +1112,14 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
     }
 }
 fn unknown(text: &str) -> Error {
-    let text = net::mask_query(text);
+    let text = crate::shown::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
         .help("use a name to search for, the link of the dataset's page, a DOI, or an id such as kaggle:uciml/iris, as in `fetchloom add https://huggingface.co/datasets/scikit-learn/iris`")
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
 fn malformed(text: &str, expected: &str) -> Error {
-    let text = net::mask_query(text);
+    let text = crate::shown::mask_query(text);
     Error::new(
         Kind::ReferenceInvalid,
         format!("\"{text}\" is not a valid reference"),

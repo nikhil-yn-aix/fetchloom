@@ -103,7 +103,7 @@ impl Response {
                     host(&self.url)
                 ),
             )
-            .detail(format!("from {}", super::Shown(&self.url)))
+            .detail(format!("from {}", crate::shown::Shown(&self.url)))
             .help(crate::error::report_answer())
         })
     }
@@ -404,7 +404,7 @@ impl Net {
             )
             .await?;
         let status = response.status();
-        tracing::debug!(url = %super::Shown(url), status = status.as_u16(), "answer");
+        tracing::debug!(url = %crate::shown::Shown(url), status = status.as_u16(), "answer");
         if failure::is_transient(status) {
             return Err(failure::refusal(url, status, response.headers()));
         }

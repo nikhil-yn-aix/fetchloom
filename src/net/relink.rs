@@ -26,7 +26,7 @@ impl Net {
         if !stale {
             return Ok(link);
         }
-        tracing::debug!(link = %super::Shown(&link), "a signed link expired, so the source is asked for a fresh one");
+        tracing::debug!(link = %crate::shown::Shown(&link), "a signed link expired, so the source is asked for a fresh one");
         self.metadata.invalidate();
         let fresh = relink.found(self.get(relink.asked()).await)?;
         if failed == Some(&fresh) {

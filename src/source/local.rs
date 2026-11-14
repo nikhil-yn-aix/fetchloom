@@ -5,7 +5,6 @@
 use std::path::Path;
 
 use crate::error::{Error, Kind};
-use crate::net;
 
 /// the ref of a dataset imported from files on a machine, in data.toml and data.lock alike. it
 /// names no path, which would mean nothing on another machine and say where the files were.
@@ -155,7 +154,7 @@ pub(crate) fn refused(text: &str) -> Error {
         Kind::ReferenceInvalid,
         format!(
             "\"{}\" is a path on this machine, and fetchloom downloads data from links, DOIs and ids",
-            net::mask_query(text.trim())
+            crate::shown::mask_query(text.trim())
         ),
     )
     .help("give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990")

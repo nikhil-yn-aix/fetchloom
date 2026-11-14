@@ -12,11 +12,11 @@ use std::time::SystemTime;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use super::Shown;
 use super::sign::UNRESERVED;
 use crate::auth::aws::{self, Identity, Keys};
 use crate::error::{Error, Kind};
 use crate::net::sign::{self, Request, Scope};
+use crate::shown::Shown;
 use crate::stop::Stop;
 
 /// the region a signature names when nothing says where a bucket is: the one S3's global
@@ -90,7 +90,7 @@ impl Signing {
     /// the bucket `url` is for: on AWS by its host and path over https, elsewhere when
     /// `s3_buckets` lists a bucket there. none for a link with a signature or another secret.
     pub(crate) fn locate(&self, url: &Url) -> Option<Located> {
-        if crate::net::secret(url).is_some() {
+        if crate::shown::secret(url).is_some() {
             return None;
         }
         let host = url.host_str()?.to_ascii_lowercase();

@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 
 use super::args;
-use crate::net;
 use crate::output::Runnable;
 use crate::suggested::{command_words, shell_word};
 
@@ -198,7 +197,7 @@ fn without_login(word: &str) -> Cow<'_, str> {
 /// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
 /// a name no list knows, as dropbox's `rlkey`, even after `=` or a short option or percent-encoded.
 fn may_hold_secret(arg: &str) -> bool {
-    if matches!(net::mask_query(arg), Cow::Owned(_)) {
+    if matches!(crate::shown::mask_query(arg), Cow::Owned(_)) {
         return true;
     }
     let decoded;

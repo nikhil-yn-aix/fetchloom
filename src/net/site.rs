@@ -10,11 +10,12 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use url::{Host, Url};
 
+use super::Net;
 use super::address::{Proxies, Typed};
-use super::{Net, Shown};
 use crate::account::Account;
 use crate::auth::site::{Saved, moment};
 use crate::error::{Error, Kind};
+use crate::shown::Shown;
 
 /// what one host's saved credential sends.
 #[derive(Clone, Debug)]
@@ -284,7 +285,7 @@ impl Sent {
     /// the link that was moved would be refused again, unless showing it masks a part, which
     /// could not be typed then.
     fn moved_out(&self, url: &Url) -> Error {
-        let ask = match super::mask_query(url.as_str()) {
+        let ask = match crate::shown::mask_query(url.as_str()) {
             Cow::Borrowed(link) => format!("ask for it by the link it is at, {link}, with --web-page"),
             Cow::Owned(_) => "open the link in a browser, then ask for the page by the link the browser shows, with --web-page".to_owned(),
         };

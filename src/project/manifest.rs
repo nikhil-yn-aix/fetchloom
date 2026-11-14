@@ -1299,7 +1299,7 @@ impl NewDataset<'_> {
 
     /// the refusal of a data.toml whose datasets are written inline, where no table can go.
     fn refused_inline(&self) -> Error {
-        let reference = crate::net::mask_query(self.reference);
+        let reference = crate::shown::mask_query(self.reference);
         Error::new(
             Kind::ProjectInvalid,
             "data.toml writes its datasets inline, so fetchloom cannot add to them",

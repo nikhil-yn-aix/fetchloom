@@ -19,7 +19,8 @@ use crate::cache::{PartialWriter, Validators};
 use crate::error::Kind;
 use crate::net::failure::{self, Failure};
 use crate::net::headers::{self, if_range};
-use crate::net::{Net, Shown, Split, Splitting, host};
+use crate::net::{Net, Split, Splitting, host};
+use crate::shown::Shown;
 use crate::work::Work;
 
 /// the smallest file split across streams.

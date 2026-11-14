@@ -276,7 +276,7 @@ fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     let Some(text) = to.to_str() else {
         return Ok(to.clone());
     };
-    let shown = crate::net::mask_query(text);
+    let shown = crate::shown::mask_query(text);
     match Location::parse(text, None) {
         Ok(Location::Folder(folder)) => Ok(folder),
         Ok(Location::Web(_)) => Err(Error::new(

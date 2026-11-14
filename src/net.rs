@@ -31,7 +31,6 @@ use reqwest::header::{self, HeaderName, HeaderValue};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
-pub(crate) use crate::shown::{Shown, depends_on_path, mask_query, secret};
 pub(crate) use address::Allowed;
 pub(crate) use api::{Api, MOST_FILES, Response};
 #[cfg(test)]
@@ -50,6 +49,7 @@ pub(crate) use rules::{Relink, Rules};
 use self::failure::Failure;
 use crate::auth::Credential;
 use crate::error::{Error, Kind};
+use crate::shown::Shown;
 use crate::stop::Stop;
 use crate::work::Work;
 

@@ -893,7 +893,7 @@ fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
             let subject = format!("the link data.lock gives {}/{}", dataset.name, file.path);
             return Err(carried.refused(&subject).help(help));
         }
-        if is_plain && !raw_keys(text).any(crate::net::depends_on_path) {
+        if is_plain && !raw_keys(text).any(crate::shown::depends_on_path) {
             cleared = Some(raw_keys(text).collect());
         }
     }
@@ -965,7 +965,7 @@ impl Carried {
         if !url.username().is_empty() || url.password().is_some() {
             return Some(Carried::Login);
         }
-        crate::net::secret(url).map(Carried::Secret)
+        crate::shown::secret(url).map(Carried::Secret)
     }
 
     /// the error for `subject`, such as "the link data.lock gives x/a.csv", carrying this.

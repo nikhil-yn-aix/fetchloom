@@ -17,12 +17,13 @@ use url::Url;
 
 use super::failure::Failure;
 use super::google::Environment;
-use super::{Authorized, Net, Shown, host};
+use super::{Authorized, Net, host};
 use crate::auth::azure::{
     AccountKey, AzureContainer, Sas, SignIn, Storage, account_of, is_container,
 };
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
+use crate::shown::Shown;
 
 /// the version of azure's API every request to a blob host asks for. without one, a request gets
 /// the account's default, as old as 2009-09-19, under which newer kinds of blob refuse to list;
@@ -184,7 +185,7 @@ impl Azure {
             listed: self.entry(account, container).is_some(),
             account: account.to_owned(),
             container: container.to_owned(),
-            signed: super::secret(url).is_some(),
+            signed: crate::shown::secret(url).is_some(),
             url: url.clone(),
             renewed: AtomicBool::new(false),
         })

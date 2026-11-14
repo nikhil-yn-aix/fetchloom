@@ -1736,7 +1736,7 @@ pub(super) fn known_with_rest(
         Kind::Usage,
         format!(
             "data.toml has no dataset called \"{}\"",
-            crate::net::mask_query(name)
+            crate::shown::mask_query(name)
         ),
     );
     let typed = format!("{name}{rest}");
@@ -1746,7 +1746,10 @@ pub(super) fn known_with_rest(
                 let shown = super::meant(
                     &[&typed],
                     &[&format!("{best}{rest}")],
-                    format!("fetchloom {command} {best}{}", crate::net::mask_query(rest)),
+                    format!(
+                        "fetchloom {command} {best}{}",
+                        crate::shown::mask_query(rest)
+                    ),
                 );
                 error.help(format!("did you mean `{shown}`?"))
             }

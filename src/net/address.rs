@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use hyper_util::client::proxy::matcher::Matcher;
 use url::{Host, Url};
 
-use super::Shown;
 use crate::error::Error;
+use crate::shown::Shown;
 
 /// the origins a person typed, named or allowed, and the proxies this machine sends requests
 /// through.

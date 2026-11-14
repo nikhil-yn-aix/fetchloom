@@ -594,7 +594,7 @@ impl<'a> Watch<'a> {
                         Kind::SourceInvalid,
                         format!(
                             "{} answered with a web page, such as a folder listing, not a file",
-                            crate::net::Shown(&self.job.fetch.url)
+                            crate::shown::Shown(&self.job.fetch.url)
                         ),
                     )
                     .help(format!("open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}")));

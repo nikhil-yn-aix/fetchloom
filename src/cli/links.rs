@@ -9,7 +9,6 @@ use std::path::Path;
 
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net;
 use crate::output::Output;
 use crate::source::search::is_search;
 use crate::source::{Parsed, Reference, local};
@@ -107,7 +106,7 @@ pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
                 Kind::Usage,
                 format!(
                     "\"{}\" on {at} is not a SHA-256",
-                    net::mask_query(given.unwrap_or_default()).escape_debug()
+                    crate::shown::mask_query(given.unwrap_or_default()).escape_debug()
                 ),
             )
             .detail(why)
@@ -178,7 +177,7 @@ pub(super) fn checked(
                 Kind::ReferenceInvalid,
                 format!("{at} is a path on this machine, and a list holds links, DOIs and ids"),
             )
-            .detail(net::mask_query(&line.link).into_owned())
+            .detail(crate::shown::mask_query(&line.link).into_owned())
             .help(help));
         }
         let parsed = Reference::parse(&line.link).map_err(|error| on_line(error, &at))?;
@@ -240,7 +239,7 @@ pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
     let mut seen: HashMap<(String, Option<String>, Option<String>), String> = HashMap::new();
     let mut checked = Vec::with_capacity(links.len());
     for (index, link) in links.into_iter().enumerate() {
-        let shown = net::mask_query(&link).into_owned();
+        let shown = crate::shown::mask_query(&link).into_owned();
         if local::is_path(&link) {
             return Err(Error::new(
                 Kind::Usage,
@@ -287,7 +286,7 @@ fn same_data(parsed: &Parsed) -> (String, Option<String>, Option<String>) {
 }
 
 fn not_a_link(name: &str, number: usize, line: &str) -> Error {
-    let line = net::mask_query(line);
+    let line = crate::shown::mask_query(line);
     let words: Vec<String> = line
         .split_whitespace()
         .map(|word| super::shell_word(word).into_owned())

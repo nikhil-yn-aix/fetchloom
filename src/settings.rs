@@ -816,7 +816,7 @@ fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error>
                 Kind::Usage,
                 format!(
                     "{named} holds \"{}\", which is not an origin such as http://lab.local:8080",
-                    crate::net::mask_query(entry)
+                    crate::shown::mask_query(entry)
                 ),
             )
             .help(format!(
@@ -884,7 +884,7 @@ fn gcs_buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<GcsBucket>>, Erro
                 Kind::Usage,
                 format!(
                     "{named} holds \"{}\", which is not a bucket such as gs://lab-data",
-                    crate::net::mask_query(entry)
+                    crate::shown::mask_query(entry)
                 ),
             )
             .help(format!(
@@ -919,7 +919,7 @@ fn azure_containers(given: &Given<'_>, key: &str) -> Result<Set<Vec<AzureContain
                 Kind::Usage,
                 format!(
                     "{named} holds \"{}\", which is not a container such as azure:lab/raw or its link",
-                    crate::net::mask_query(entry)
+                    crate::shown::mask_query(entry)
                 ),
             )
             .help(format!(
@@ -957,7 +957,7 @@ fn drive_folders(given: &Given<'_>, key: &str) -> Result<Set<Vec<DriveId>>, Erro
                 Kind::Usage,
                 format!(
                     "{named} holds \"{}\", which is not a google drive folder or file: its id or the link drive gives when you share it",
-                    crate::net::mask_query(entry)
+                    crate::shown::mask_query(entry)
                 ),
             )
             .help(format!(
@@ -993,7 +993,7 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
                 Kind::Usage,
                 format!(
                     "{named} holds \"{}\", which is no mirror: {}",
-                    crate::net::mask_query(entry),
+                    crate::shown::mask_query(entry),
                     refusal.reason
                 ),
             )
@@ -1036,7 +1036,7 @@ fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Err
         Origin::File => given.file_path().parent(),
         _ => None,
     };
-    let shown = crate::net::mask_query(text.trim());
+    let shown = crate::shown::mask_query(text.trim());
     match Location::parse(text, base) {
         Ok(Location::Folder(folder)) => Ok(Set {
             value: Some(folder),

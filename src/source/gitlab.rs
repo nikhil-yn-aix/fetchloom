@@ -168,7 +168,7 @@ impl Release {
         let invalid = || {
             self.invalid(&format!(
                 "a download link is not this release's on gitlab.com: {}",
-                crate::net::mask_query(direct)
+                crate::shown::mask_query(direct)
             ))
         };
         let url = Url::parse(direct)
@@ -263,7 +263,9 @@ fn address(link: &str) -> Result<Url, &'static str> {
     if url.scheme() != "https" {
         return Err("its address is not https");
     }
-    if !url.username().is_empty() || url.password().is_some() || crate::net::secret(&url).is_some()
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || crate::shown::secret(&url).is_some()
     {
         return Err("its address holds a secret, which fetchloom does not keep");
     }

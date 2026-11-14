@@ -823,7 +823,7 @@ fn got(
         size,
         sha256,
         // what get reports, so a secret in the link stays masked
-        url: crate::net::Shown(&remote.url).to_string(),
+        url: crate::shown::Shown(&remote.url).to_string(),
         origin,
         method,
         unpacked_from: None,
