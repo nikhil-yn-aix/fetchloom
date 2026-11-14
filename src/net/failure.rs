@@ -1007,6 +1007,38 @@ mod tests {
         );
     }
 
+    /// a 401 or 403 from a known account's host over plain http says keys go only over https and
+    /// offers no sign-in, since no key would go with that link; over https it offers the sign-in.
+    #[test]
+    fn a_known_hosts_refusal_offers_a_sign_in_only_over_https() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let refused = |link: &str| {
+                let url = Url::parse(link).unwrap();
+                let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+                    panic!("a {status} to {link} must not be retried");
+                };
+                assert_eq!(error.kind, Kind::AuthRequired, "{link}");
+                error
+            };
+            let plain = refused("http://huggingface.co/datasets/acme/notes/resolve/main/a.csv");
+            assert_eq!(
+                plain.help.as_deref(),
+                Some(
+                    "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one"
+                )
+            );
+            assert!(plain.need.is_none(), "{status}");
+            let secure = refused("https://huggingface.co/datasets/acme/notes/resolve/main/a.csv");
+            assert_eq!(
+                secure.help.as_deref(),
+                Some(
+                    "if it needs an account, sign in with `fetchloom auth login hf`, then run the same command again"
+                )
+            );
+            assert!(secure.need.is_some(), "{status}");
+        }
+    }
+
     #[test]
     fn a_permanent_http_status_says_what_to_do_without_retrying() {
         let url = Url::parse("https://example.org/data.csv").unwrap();
