@@ -238,10 +238,13 @@ fn a_busy_api_suggests_a_key_and_other_errors_stay_as_they_are() {
     assert_eq!(other.help.as_deref(), Some("later"));
 }
 
-/// requests to the API go one at a time and spaced, and those to semantic scholar's pages do not.
+/// requests to the API go one at a time, a second apart with a key and three without one, and
+/// those to semantic scholar's pages are not paced.
 #[test]
-fn only_the_api_is_asked_one_request_at_a_time_and_spaced() {
-    assert!(spacing(S2_HOST).is_some());
+fn only_the_api_is_asked_one_request_at_a_time_and_spaced_by_its_key() {
+    assert_eq!(spaced(true), Duration::from_secs(1));
+    assert_eq!(spaced(false), Duration::from_secs(3));
+    assert_eq!(spacing(S2_HOST), Some(spaced(keyed())));
     assert_eq!(most_at_once(S2_HOST), Some(1));
     assert_eq!(spacing("www.semanticscholar.org"), None);
     assert_eq!(most_at_once("www.semanticscholar.org"), None);
