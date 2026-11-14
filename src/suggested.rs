@@ -7,11 +7,15 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// the folder a run given `-C` works in, quoted for a shell. unset without `-C`, as in tests.
+/// it is the process's own: `-C` moves the whole process into that folder before any command
+/// runs, and every hint the run prints names it, however deep the code that writes the hint.
 static DIRECTORY: OnceLock<String> = OnceLock::new();
 
-/// has every later [`command`] name `directory`, already quoted for a shell, after `-C`.
+/// has every later [`command`] name `directory`, already quoted for a shell, after `-C`. set once
+/// at start; a second set is a bug, which debug builds stop at.
 pub(crate) fn set_directory(directory: String) {
-    let _ = DIRECTORY.set(directory);
+    let first = DIRECTORY.set(directory).is_ok();
+    debug_assert!(first, "the folder hints name is set once, at start");
 }
 
 /// `fetchloom` and `words`, with `-C` and the run's folder between them when the run had `-C`.

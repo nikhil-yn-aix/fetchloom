@@ -157,12 +157,15 @@ fn gather_folders<'p>(folders: &mut HashSet<&'p str>, path: &'p str) {
 const BESIDE_FROM: u64 = 16 << 20;
 
 /// the run's `resources` level, as its settings give it, by which a survey weighs memory against
-/// time.
+/// time. it is the process's own: settings are read once, before any command runs, and every
+/// survey of the run weighs alike. [`Survey::surveyed_from`] takes it as a value, which tests set.
 static LEVEL: OnceLock<Level> = OnceLock::new();
 
-/// sets the run's `resources` level once its settings are read.
+/// sets the run's `resources` level once its settings are read. a second set is a bug, which
+/// debug builds stop at.
 pub(crate) fn set_level(level: Level) {
-    let _ = LEVEL.set(level);
+    let first = LEVEL.set(level).is_ok();
+    debug_assert!(first, "the resources level is set once, at start");
 }
 
 /// whether a survey reads a whole state of `size` bytes on a thread of its own while it walks the

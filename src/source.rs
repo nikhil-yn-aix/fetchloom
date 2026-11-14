@@ -59,17 +59,24 @@ pub(crate) const MOST_FILES: usize = 100_000;
 /// which sizes [`most_files`] from the memory a run may use.
 pub(crate) const PER_FILE: u64 = 2 << 10;
 
-/// the most files one dataset may list in this run.
-static MOST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(MOST_FILES);
+/// the most files one dataset may list in this run. it is the process's own: a share of the
+/// memory the whole process may use, which every listing of the run draws on, set once at start.
+/// unset, as in tests, it is [`MOST_FILES`].
+static MOST: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
-/// sets the most files one dataset may list, for every later listing in the run.
+/// sets the most files one dataset may list, for every later listing in the run. set once at
+/// start; a second set is a bug, which debug builds stop at.
 pub(crate) fn set_most_files(most: usize) {
-    MOST.store(most.max(1), std::sync::atomic::Ordering::Relaxed);
+    let first = MOST.set(most.max(1)).is_ok();
+    debug_assert!(
+        first,
+        "the most files a dataset may list is set once, at start"
+    );
 }
 
 /// the most files one dataset may list in this run, so memory stays bounded.
 pub(crate) fn most_files() -> usize {
-    MOST.load(std::sync::atomic::Ordering::Relaxed)
+    MOST.get().copied().unwrap_or(MOST_FILES)
 }
 
 /// the error for `subject`, a dataset that lists more than [`most_files`] files, with `instead`

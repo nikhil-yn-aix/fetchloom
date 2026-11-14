@@ -12,7 +12,7 @@ mod model_tests;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -41,11 +41,15 @@ const BASE: u64 = if cfg!(target_env = "musl") {
 
 /// the memory a container's limit leaves this run, past which the kernel ends it with no word.
 /// what a system without such a limit has available is no such wall: it can page out instead.
-static ROOM: AtomicU64 = AtomicU64::new(u64::MAX);
+/// it is the process's own, since the limit holds the whole process, read once at start. unset,
+/// as in tests, means no limit.
+static ROOM: OnceLock<u64> = OnceLock::new();
 
-/// sets [`ROOM`] for every later read of a lock; none means no container limit.
+/// sets [`ROOM`] for every later read of a lock; none means no container limit. set once at
+/// start; a second set is a bug, which debug builds stop at.
 pub(crate) fn set_room(room: Option<u64>) {
-    ROOM.store(room.unwrap_or(u64::MAX), Ordering::Relaxed);
+    let first = ROOM.set(room.unwrap_or(u64::MAX)).is_ok();
+    debug_assert!(first, "the container's room is set once, at start");
 }
 
 /// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
@@ -675,7 +679,7 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
 /// the lock `parsed` gives, with each list it keeps below `root` read and checked. every reader's
 /// datasets pass through here, so the links they give are checked here once.
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
-    fits(&parsed, ROOM.load(Ordering::Relaxed))?;
+    fits(&parsed, ROOM.get().copied().unwrap_or(u64::MAX))?;
     let mut lock = Lock::default();
     for entry in parsed {
         match entry {
