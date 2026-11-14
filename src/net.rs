@@ -85,6 +85,9 @@ pub(crate) struct Credential {
     /// sent on every hop that reaches its host, as curl sends a `.netrc` login, rather than only
     /// before a redirect leaves the first origin. only a login a person tied to a host gets this.
     pub(crate) every_hop: bool,
+    /// sent to every port of its host, as curl, wget and python's requests send the login of a
+    /// `.netrc` line that names no port. a key for the very port a request goes to wins over it.
+    pub(crate) every_port: bool,
 }
 
 /// something the person watching should hear about while the network works.
@@ -303,6 +306,7 @@ struct Key {
     name: HeaderName,
     value: HeaderValue,
     every_hop: bool,
+    every_port: bool,
 }
 
 /// `credentials` as requests carry them. one value per header, host and port: the first, so a
@@ -332,9 +336,10 @@ fn keys(credentials: Vec<Credential>) -> Vec<Key> {
                 name,
                 value,
                 every_hop: credential.every_hop,
+                every_port: credential.every_port,
             })
         })
-        .filter(|key| seen.insert((key.host.clone(), key.port, key.name.clone())))
+        .filter(|key| seen.insert((key.host.clone(), key.port, key.every_port, key.name.clone())))
         .collect()
 }
 
@@ -964,8 +969,9 @@ impl Net {
 
     /// a GET with, when `credentials` allows, the credential for this exact host and port, over
     /// https, or plain http where [`Net::carries`] allows, so a key for port 443 never reaches
-    /// another port (curl's CVE-2022-27776). a website's own saved credential wins over a stored
-    /// one for the same header.
+    /// another port (curl's CVE-2022-27776); only a `.netrc` line without a port answers every
+    /// port, as curl reads one. a website's own saved credential wins over a stored one for the
+    /// same header.
     fn request(
         &self,
         client: &reqwest::Client,
@@ -978,15 +984,25 @@ impl Net {
             && let Some(host) = url.host_str()
         {
             let port = url.port_or_known_default();
-            for key in &*self.credentials {
-                if (credentials || key.every_hop)
-                    && port == Some(key.port)
-                    && host.eq_ignore_ascii_case(&key.host)
-                    && !site.iter().any(|(name, _)| *name == key.name)
+            let mut sent: Vec<&HeaderName> = Vec::new();
+            // a key for this very port goes before one for every port of the host
+            for every_port in [false, true] {
+                for key in self
+                    .credentials
+                    .iter()
+                    .filter(|key| key.every_port == every_port)
                 {
-                    // the header name only; the value is the secret
-                    tracing::debug!(host, header = %key.name, "sending a stored credential");
-                    request = request.header(key.name.clone(), key.value.clone());
+                    if (credentials || key.every_hop)
+                        && (every_port || port == Some(key.port))
+                        && host.eq_ignore_ascii_case(&key.host)
+                        && !site.iter().any(|(name, _)| *name == key.name)
+                        && !sent.contains(&&key.name)
+                    {
+                        // the header name only; the value is the secret
+                        tracing::debug!(host, header = %key.name, "sending a stored credential");
+                        request = request.header(key.name.clone(), key.value.clone());
+                        sent.push(&key.name);
+                    }
                 }
             }
         }
@@ -1244,6 +1260,7 @@ mod tests {
             header: "authorization",
             value: value.to_owned(),
             every_hop: false,
+            every_port: false,
         };
         let options = Options {
             offline: Offline::No,

@@ -336,11 +336,26 @@ impl Account {
     }
 
     /// the tools that read the same key, so a person knows signing in here signs in there too.
+    /// a login kept to a port other than 443 has none: curl, wget and python's requests look a
+    /// `.netrc` line up by host name alone, so they never read one that names a port.
     pub(crate) fn shared_with(&self) -> Option<&'static str> {
         match self {
             Account::HuggingFace => Some("the hf command and the hugging face python libraries"),
             Account::Kaggle => Some("the kaggle command and kagglehub"),
-            Account::Login(_) => Some("curl, wget and python's requests"),
+            Account::Login(host) if !names_a_port(host) => Some("curl, wget and python's requests"),
+            _ => None,
+        }
+    }
+
+    /// what a sign-in that saved this account's key says of the other tools that read it: that
+    /// they use it too, or that they skip a login kept to one port.
+    pub(crate) fn told_shared(&self) -> Option<String> {
+        match (self, self.shared_with()) {
+            (_, Some(tools)) => Some(format!("{tools} use this key too")),
+            (Account::Login(_), None) => Some(
+                "curl, wget and python's requests skip a .netrc line with a port, so only fetchloom uses this login"
+                    .to_owned(),
+            ),
             _ => None,
         }
     }
@@ -405,7 +420,8 @@ impl Account {
             Account::S2 => (S2_HOST.to_owned(), "x-api-key", token.to_owned(), false),
             Account::Dataverse(host) => (host.clone(), "x-dataverse-key", token.to_owned(), false),
             // a login answers wherever its host is reached, as curl's netrc does: earthdata's
-            // archives send a person to urs.earthdata.nasa.gov and back
+            // archives send a person to urs.earthdata.nasa.gov and back. a line without a port
+            // answers every port of its host, as curl reads one
             Account::Login(host) => {
                 let login = found.login.as_deref()?;
                 (
@@ -416,11 +432,13 @@ impl Account {
                 )
             }
         };
+        let every_port = matches!(self, Account::Login(host) if !names_a_port(host));
         Some(Credential {
             host,
             header,
             value,
             every_hop,
+            every_port,
         })
     }
 
@@ -713,6 +731,11 @@ pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
             crate::machine::home(var)
                 .map(|home| home.join(".cache").join("huggingface").join("token"))
         })
+}
+
+/// whether a login's host names its port, as `lab.example.org:8443` does.
+fn names_a_port(host: &str) -> bool {
+    site::without_port(host) != host
 }
 
 /// whether a host is one word, since .netrc and the key index split on spaces and line breaks.

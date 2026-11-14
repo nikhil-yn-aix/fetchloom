@@ -1683,6 +1683,7 @@ mod tests {
             header: "authorization",
             value: "Bearer abc\ndef".to_owned(),
             every_hop: false,
+            every_port: false,
         });
         let _ = context.net().credential_hosts();
         let _ = context.net().credential_hosts();
@@ -1716,6 +1717,7 @@ mod tests {
             header: "authorization",
             value: "Bearer abc\ndef".to_owned(),
             every_hop: false,
+            every_port: false,
         });
         let net = context.net();
         let about = |told: Vec<String>| {
@@ -1859,6 +1861,7 @@ mod tests {
             header: "authorization",
             value: "Bearer k".to_owned(),
             every_hop: false,
+            every_port: false,
         });
         assert!(
             context

@@ -606,6 +606,51 @@ fn a_broken_key_file_is_named_wherever_its_keys_are_missed() -> Result {
     Ok(())
 }
 
+/// a `.netrc` line without a port, as curl, wget and python's requests read it, answers every
+/// port of its host; the login `auth login` keeps to another port than 443 wins on that port, and
+/// its hint says those tools skip it.
+#[test]
+fn a_netrc_line_without_a_port_answers_every_port_while_one_with_a_port_keeps_to_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let csv = || file(b"a,b\n", "\"v1\"");
+    let lab = Routes::start(vec![("/x.csv".to_owned(), csv())])?;
+    let kept = Routes::start(vec![("/x.csv".to_owned(), csv())])?;
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    std::fs::write(
+        home.join(".netrc"),
+        "machine 127.0.0.1 login ada password pw\n",
+    )?;
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", &host_of(&kept), "--with-token"]),
+        "bob:pw2\n",
+    )?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("hint: curl, wget and python's requests skip a .netrc line with a port, so only fetchloom uses this login"),
+        "{stderr}"
+    );
+    assert!(
+        std::fs::read_to_string(home.join(".netrc"))?.contains(&format!(
+            "machine {} login bob password pw2",
+            host_of(&kept)
+        ))
+    );
+    for (server, dir) in [(&lab, "lab"), (&kept, "kept")] {
+        let output = sandbox.run(&["get", &format!("{}/x.csv", server.url), "--dir", dir])?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+    }
+    assert_eq!(
+        heard(&lab, "authorization"),
+        [Some("basic ywrhonb3".to_owned())]
+    );
+    assert_eq!(
+        heard(&kept, "authorization"),
+        [Some("basic ym9ionb3mg==".to_owned())]
+    );
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;

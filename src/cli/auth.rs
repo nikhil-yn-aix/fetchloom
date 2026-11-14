@@ -462,9 +462,9 @@ async fn sign_in(
         unanswered.as_deref(),
     );
     if saved_to.is_some()
-        && let Some(tools) = account.shared_with()
+        && let Some(told) = account.told_shared()
     {
-        output.hint(&format!("{tools} use this key too"));
+        output.hint(&told);
     }
     Ok(Outcome {
         account: account.id(),
@@ -785,7 +785,7 @@ fn save(
 /// keeps keys in. the tools are named once the key is saved, so the question fits a terminal.
 fn save_question(account: &Account, path: &std::path::Path) -> (String, bool) {
     let save = format!("save it to {}?", units::path(path));
-    if account.shared_with().is_some() {
+    if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
         (save, true)
     } else {
         (

@@ -175,6 +175,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
             header: "authorization",
             value,
             every_hop: false,
+            every_port: false,
         })
         .into_iter()
         .collect()

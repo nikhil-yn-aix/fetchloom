@@ -209,12 +209,14 @@ fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
                     header: "authorization",
                     value: "Basic YWRhOnB3".to_owned(),
                     every_hop: true,
+                    every_port: false,
                 },
                 Credential {
                     host: "zenodo.org".to_owned(),
                     header: "authorization",
                     value: "Bearer z".to_owned(),
                     every_hop: false,
+                    every_port: false,
                 },
             ],
             split: crate::net::Splitting::WhenSlow,
@@ -260,6 +262,7 @@ fn keyed(hosts: &[&str]) -> Net {
             header: "authorization",
             value: format!("key {host}"),
             every_hop: false,
+            every_port: false,
         })
         .collect();
     Net::new(
@@ -302,6 +305,60 @@ fn a_key_for_another_port_reaches_that_port_only() {
         "https://sub.dv.lab:8443/x",
     ] {
         assert_eq!(sent(url), None, "{url}");
+    }
+}
+
+/// a `.netrc` line without a port answers every port of its host, as curl, wget and python's
+/// requests read one, while a line for the port asked wins over it, so one login goes.
+#[test]
+fn a_netrc_line_for_the_port_asked_wins_over_one_without_a_port() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".netrc"),
+        "machine lab.example login ada password pw\nmachine lab.example:8443 login bob password pw2\n",
+    )
+    .unwrap();
+    let root = home.path().as_os_str().to_owned();
+    let var = |name: &str| matches!(name, "HOME" | "USERPROFILE").then(|| root.clone());
+    let net = Net::new(
+        Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials: crate::auth::credentials(&var),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    );
+    let client = any_client(&net);
+    let sent = |url: &str| {
+        let url = Url::parse(url).unwrap();
+        let request = net.request(client, &url, true).build().unwrap();
+        request
+            .headers()
+            .get_all(header::AUTHORIZATION)
+            .iter()
+            .map(|value| value.to_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let ada = "Basic YWRhOnB3".to_owned();
+    for url in [
+        "https://lab.example/data.csv",
+        "https://lab.example:9443/data.csv",
+        "https://LAB.example:8080/data.csv",
+    ] {
+        assert_eq!(sent(url), std::slice::from_ref(&ada), "{url}");
+    }
+    assert_eq!(
+        sent("https://lab.example:8443/data.csv"),
+        ["Basic Ym9iOnB3Mg==".to_owned()]
+    );
+    for url in [
+        "https://sub.lab.example:9443/x",
+        "https://other.example:9443/x",
+    ] {
+        assert_eq!(sent(url), Vec::<String>::new(), "{url}");
     }
 }
 
@@ -445,12 +502,13 @@ fn configured_dataverse_keys_do_not_return_after_an_origin_change() {
 }
 
 #[test]
-fn netrc_logins_return_only_to_their_own_https_host_and_port() {
+fn netrc_logins_return_only_over_https_to_the_host_and_ports_their_line_names() {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("netrc");
-    for (owner, other_port) in [
-        ("login.lab", "login.lab:8443"),
-        ("login.lab:8443", "login.lab"),
+    // a line without a port answers every port of its host, as curl reads it
+    for (owner, other_port, every_port) in [
+        ("login.lab", "login.lab:8443", true),
+        ("login.lab:8443", "login.lab", false),
     ] {
         std::fs::write(&path, format!("machine {owner} login ada password pw\n")).unwrap();
         #[cfg(unix)]
@@ -471,9 +529,10 @@ fn netrc_logins_return_only_to_their_own_https_host_and_port() {
             format!("https://{owner}/return"),
         ];
         let value = Some("Basic YWRhOnB3".to_owned());
+        let other = value.clone().filter(|_| every_port);
         assert_eq!(
             redirect_headers(&net, "https://archive.lab/start", &hops, "authorization"),
-            [None, value.clone(), None, None, None, None, value],
+            [None, value.clone(), other, None, None, None, value],
             "{owner}",
         );
     }

@@ -199,6 +199,7 @@ fn credential_values_and_bucket_scopes_cannot_share_a_memo_entry() {
         name: header::AUTHORIZATION,
         value: header::HeaderValue::from_static("Bearer first"),
         every_hop: false,
+        every_port: false,
     });
     let first = key(&net, &url);
     net.credentials[0].value = header::HeaderValue::from_static("Bearer second");
