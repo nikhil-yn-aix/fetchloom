@@ -18,7 +18,7 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
-use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable};
+use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable, estimate};
 use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::{self, Remote};
 use crate::stop::Stop;
@@ -38,7 +38,7 @@ pub(super) struct Job {
 pub(super) struct Description {
     pub(super) label: String,
     pub(super) size: Option<u64>,
-    host: String,
+    pub(super) host: String,
 }
 
 impl Description {
@@ -630,6 +630,79 @@ fn encoded(path: &str, encoding: &str) -> (String, String) {
         format!("decompress it with a tool for {encoding} before reading it")
     };
     (said, help)
+}
+
+/// how long the downloads `jobs` should take, each its host and its size when known, added up
+/// by the name each host is paced under, with what this machine remembers of each host's speed,
+/// the pacing its source asks and the run's job limits.
+pub(super) fn planned(
+    context: &Context,
+    jobs: impl IntoIterator<Item = (String, Option<u64>)>,
+) -> estimate::Total {
+    let mut hosts: std::collections::BTreeMap<String, estimate::Host> =
+        std::collections::BTreeMap::new();
+    for (host, size) in jobs {
+        let planned = hosts.entry(source::paced_as(&host)).or_default();
+        planned.files += 1;
+        match size {
+            Some(size) => {
+                planned.bytes = planned.bytes.saturating_add(size);
+                planned.largest = planned.largest.max(size);
+            }
+            None => planned.unknown += 1,
+        }
+    }
+    let hosts: Vec<estimate::Host> = hosts
+        .into_iter()
+        .map(|(name, host)| estimate::Host {
+            speed: context.speeds.speed(&name),
+            spacing: source::spacing(&name),
+            most: source::most_at_once(&name),
+            ..host
+        })
+        .collect();
+    estimate::Total::of(&hosts, limits(context))
+}
+
+/// the run's limits on downloads at once.
+pub(super) fn limits(context: &Context) -> estimate::Limits {
+    estimate::Limits {
+        jobs: context.settings.jobs.value,
+        host_jobs: context.settings.host_jobs.value,
+    }
+}
+
+/// the host a job's requests start at, as its downloads are queued and its speed remembered.
+pub(super) fn host_of(job: &Job) -> String {
+    crate::net::host(&job.fetch.from).to_ascii_lowercase()
+}
+
+/// says, before downloads start, what `total` brings and about how long it takes, as `Downloading
+/// 3 files · 1.2 GiB · about 3 min`. a total with no size known has nothing to say yet.
+pub(super) fn tell_planned(output: &Output, what: &str, total: &estimate::Total) {
+    tell_total(output, "Downloading", what, total);
+}
+
+/// [`tell_planned`] for a run that would download, as a dry run or `status` tells it: once
+/// there are several files, or a time to add to the one file's own line.
+pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
+    if total.files > 1 || total.time.is_some() {
+        tell_total(output, "Would download", what, total);
+    }
+}
+
+fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total) {
+    if total.files > 0 && total.is_sized() {
+        output.step(verb, &format!("{what} · {}", total.facts()));
+    }
+}
+
+/// what `files` downloads are called before they start: the one file's name, or a count.
+pub(super) fn called<'a>(mut labels: impl Iterator<Item = &'a str>, files: u64) -> String {
+    match (files, labels.next()) {
+        (1, Some(only)) => only.to_owned(),
+        _ => units::count(files, "file", "files"),
+    }
 }
 
 /// downloads every job within the network's limits, returning what each fetched in order. on linux

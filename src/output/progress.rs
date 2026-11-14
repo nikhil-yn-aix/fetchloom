@@ -863,9 +863,12 @@ impl Ticker {
             wake: Condvar::new(),
             say: Box::new(say),
         });
-        // said before the work starts, so even a batch that ends at once has said it began
-        if shared.first == First::Now || (shared.first == First::Sized && unknown == 0) {
+        // said before the work starts, so even a batch that ends at once has said it began. a
+        // download batch whose sizes are all known said so in its plan before it started
+        if shared.first == First::Now {
             shared.begin();
+        } else if shared.first == First::Sized && unknown == 0 {
+            shared.begun.store(true, Ordering::Relaxed);
         }
         let watched = shared.clone();
         // without a thread the batch runs on untold, which costs nothing but the lines
@@ -1362,6 +1365,7 @@ mod tests {
     }
 
     /// even the quickest batch says it began: a download once its size is known, a lookup at once.
+    /// a download whose sizes were all known before it started said so in its plan.
     #[test]
     fn a_network_batch_tells_its_start_at_once() {
         let pace = (Duration::from_mins(1), Duration::from_mins(2));
@@ -1373,7 +1377,7 @@ mod tests {
             pace,
             say,
         ));
-        assert_eq!(*heard.lock().unwrap(), ["Downloading 3 files · 300 B"]);
+        assert!(heard.lock().unwrap().is_empty());
         let (heard, _reported, say) = ear();
         let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
         assert!(heard.lock().unwrap().is_empty());

@@ -815,6 +815,11 @@ impl Net {
         let response = self
             .send_body_holding(from, fetch.mirror, shape, holding)
             .await?;
+        let answer_at = Instant::now();
+        let host = super::paced(&fetch.from);
+        if let Some(super::Answering(waited)) = response.extensions().get() {
+            self.heard.answered(&host, *waited);
+        }
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
@@ -886,6 +891,11 @@ impl Net {
                     {
                         return Err(Failure::Final(crate::source::lfs_pointer(&fetch.url)));
                     }
+                    self.heard.received(
+                        &host,
+                        writer.written().saturating_sub(offset),
+                        answer_at.elapsed(),
+                    );
                     on(Event::Arrived).map_err(Failure::Final)?;
                     return Ok(Answer::Stored {
                         received: self.after_body(&mut state.permits, finish(writer)).await?,

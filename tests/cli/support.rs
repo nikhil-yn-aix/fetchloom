@@ -195,6 +195,19 @@ impl Sandbox {
         }
     }
 
+    /// the file in the sandbox's home where fetchloom remembers each host's speed.
+    pub(crate) fn speeds(&self) -> PathBuf {
+        let home = self.root.join("home");
+        let folder = if cfg!(windows) {
+            home.join("fetchloom").join("state")
+        } else if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/fetchloom")
+        } else {
+            home.join(".local/state/fetchloom")
+        };
+        folder.join("speeds.json")
+    }
+
     /// the command, run in `folder` instead of the work folder.
     pub(crate) fn command_in(&self, folder: &std::path::Path, args: &[&str]) -> Fetchloom {
         let mut command = self.command(args);
@@ -579,6 +592,7 @@ fn leaks(name: &str) -> bool {
                 | "CLICOLOR_FORCE"
                 | "XDG_CACHE_HOME"
                 | "XDG_CONFIG_HOME"
+                | "XDG_STATE_HOME"
                 | "NETRC"
                 // cargo sets both for what it runs, from where openssl keeps its certificates
                 | "SSL_CERT_FILE"

@@ -173,9 +173,13 @@ fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
 
     let status = json(&sandbox.command_in(&moved, &["--json", "status"]).output()?)?;
     let result = status["result"].as_object().ok_or("status has a result")?;
-    for (name, found) in result.iter().filter(|(name, _)| *name != "project") {
+    for (name, found) in result
+        .iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "project" | "to_download"))
+    {
         assert_eq!(found, &serde_json::json!([]), "{name}: {status}");
     }
+    assert_eq!(result["to_download"]["files"], 0, "{status}");
     let told = sandbox.command_in(&moved, &["status"]).output()?;
     assert_eq!(
         text(&told.stderr)?,

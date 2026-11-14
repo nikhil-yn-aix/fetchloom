@@ -829,6 +829,11 @@ impl<'a> Loop<'a> {
         jobs.retain(|job| !available(job));
         self.refuse_offline_with(&jobs, available)?;
         let mut preview = placing.preview(guessed);
+        preview.changes.to_download = Some(fetch::planned(
+            self.context,
+            jobs.iter()
+                .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+        ));
         preview.changes.download = jobs
             .into_iter()
             .map(|job| Download {
@@ -970,14 +975,26 @@ impl<'a> Loop<'a> {
                 .collect();
             fetch::mirrors::sources_allowed(self.context, &lacking)?;
         }
+        let lacking: Vec<&Job> = jobs
+            .iter()
+            .filter(|job| !in_cache(&self.cache, &job.fetch))
+            .collect();
         crate::space::cache_holds(
             self.cache.root(),
-            jobs.iter()
-                .filter(|job| !in_cache(&self.cache, &job.fetch))
+            lacking
+                .iter()
                 .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
         )
         .map_err(|error| self.as_left(error))?;
-        let (size, room) = budget(jobs.iter().filter(|job| !in_cache(&self.cache, &job.fetch)));
+        let (size, room) = budget(lacking.iter().copied());
+        let planned = fetch::planned(
+            self.context,
+            lacking
+                .iter()
+                .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+        );
+        let called = fetch::called(lacking.iter().map(|job| job.label.as_str()), planned.files);
+        fetch::tell_planned(&self.context.output, &called, &planned);
         let roomy = super::confirm(
             &self.context.output,
             self.yes(),
@@ -1133,6 +1150,22 @@ impl<'a> Loop<'a> {
             .filter(|(_, available)| !**available)
             .filter_map(|(description, _)| description.size)
             .fold(0, u64::saturating_add);
+        let lacking = || {
+            descriptions
+                .iter()
+                .zip(available)
+                .filter(|(_, available)| !**available)
+                .map(|(description, _)| description)
+        };
+        let planned = fetch::planned(
+            self.context,
+            lacking().map(|description| (description.host.clone(), description.size)),
+        );
+        let called = fetch::called(
+            lacking().map(|description| description.label.as_str()),
+            planned.files,
+        );
+        fetch::tell_planned(&self.context.output, &called, &planned);
         let roomy = super::confirm(
             &self.context.output,
             self.yes(),

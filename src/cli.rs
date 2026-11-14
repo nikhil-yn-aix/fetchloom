@@ -80,6 +80,8 @@ struct Context {
     /// the parts of file lists this run wrote anew into a project's data.lock.d, with the
     /// project's folder, so the run can end by naming those git does not have.
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
+    /// what this machine remembers of each host's speed, and what this run's transfers add.
+    speeds: net::speeds::Speeds,
 }
 
 /// a refusal that signing in may lift.
@@ -116,6 +118,7 @@ impl Context {
             mirrors: fetch::mirrors::Mirrored::default(),
             building: None,
             lists: std::sync::Mutex::default(),
+            speeds: net::speeds::Speeds::default(),
         }
     }
 
@@ -208,6 +211,7 @@ impl Context {
         #[cfg(debug_assertions)]
         let azure = azure.with_identity_endpoint(net::test_identity_endpoint());
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
+            .hearing(Arc::clone(&self.speeds.run))
             .with_memory(self.settings.memory.value)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
@@ -613,6 +617,7 @@ pub(crate) fn run() -> ExitCode {
         context.output.warn(Warning::TraceUnwritable, refused);
     }
     context.yes = global.yes;
+    context.speeds = net::speeds::Speeds::at(net::speeds::folder(&var));
     context.building = var("FETCHLOOM_BUILDING")
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from);
@@ -739,6 +744,7 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
             None => context.output.error(&refusal.error),
         }
     }
+    context.speeds.save();
     drop(entered);
     end_runtime(runtime, EXIT_WAIT);
     outcome

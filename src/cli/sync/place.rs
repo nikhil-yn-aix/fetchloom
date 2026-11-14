@@ -297,6 +297,9 @@ pub(crate) struct Changes {
     pub(crate) download: Vec<Download>,
     /// archives that would unpack first, whose files a dry run cannot list.
     pub(crate) unpack: Vec<String>,
+    /// the downloads added up, with about how long they take, when the run plans them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) to_download: Option<crate::net::estimate::Total>,
 }
 
 #[derive(Debug, Serialize)]

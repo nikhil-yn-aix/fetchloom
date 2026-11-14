@@ -1115,6 +1115,14 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     )
     .map_err(Error::unchanged)?;
     let (size, room) = needs(&missing);
+    let planned = fetch::planned(
+        context,
+        missing
+            .iter()
+            .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+    );
+    let called = fetch::called(missing.iter().map(|job| job.label.as_str()), planned.files);
+    fetch::tell_planned(&context.output, &called, &planned);
     let what = units::count(missing.len() as u64, "file", "files");
     let doing = if room > size {
         format!("downloading and unpacking {what}")

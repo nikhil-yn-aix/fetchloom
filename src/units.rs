@@ -149,6 +149,62 @@ pub(crate) fn duration(elapsed: Duration) -> String {
     format!("{} min {:02} s", whole / 60, whole % 60)
 }
 
+/// an estimate as a person plans around it, rounded to what it can claim: `a few seconds`,
+/// `about 40 s`, `about 3 min`, `about 15 min`, `about 1 h 30 min`, `about 14 h`, `about 3 days`.
+pub(crate) fn about(estimate: Duration) -> String {
+    let seconds = estimate.as_secs_f64();
+    if seconds < 10.0 {
+        return "a few seconds".to_owned();
+    }
+    format!("about {}", rough(seconds, f64::round))
+}
+
+/// a floor in the steps of [`about`], rounded down so it never claims more: `5 min`, `1 h`.
+pub(crate) fn at_least(floor: Duration) -> String {
+    rough(floor.as_secs_f64(), f64::floor)
+}
+
+/// `seconds` in a step that grows with it, rounded by `round`: tens of seconds, minutes, five
+/// minutes, half hours, hours, then days.
+fn rough(seconds: f64, round: fn(f64) -> f64) -> String {
+    const MINUTE: f64 = 60.0;
+    const HOUR: f64 = 3600.0;
+    let step = |seconds: f64, step: f64| round(seconds / step) * step;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "whole steps of a duration"
+    )]
+    let whole = |value: f64| value as u64;
+    let (tens, minutes, fives, halves) = (
+        step(seconds, 10.0),
+        step(seconds, MINUTE),
+        step(seconds, 5.0 * MINUTE),
+        step(seconds, HOUR / 2.0),
+    );
+    if tens < MINUTE {
+        return format!("{} s", whole(tens).max(10));
+    }
+    if minutes < 10.0 * MINUTE {
+        return format!("{} min", whole(minutes / MINUTE));
+    }
+    if fives < HOUR {
+        return format!("{} min", whole(fives / MINUTE));
+    }
+    if halves < 10.0 * HOUR {
+        let halves = whole(halves / (HOUR / 2.0));
+        return match halves % 2 {
+            0 => format!("{} h", halves / 2),
+            _ => format!("{} h 30 min", halves / 2),
+        };
+    }
+    let hours = step(seconds, HOUR);
+    if hours < 48.0 * HOUR {
+        return format!("{} h", whole(hours / HOUR));
+    }
+    format!("{} days", whole(step(seconds, 24.0 * HOUR) / (24.0 * HOUR)))
+}
+
 /// a duration in whole seconds, for clocks that tick on screen: `12 s`, `4 min 05 s`.
 pub(crate) fn seconds(elapsed: Duration) -> String {
     let whole = elapsed.as_secs();
@@ -334,6 +390,34 @@ mod tests {
             "/srv/x"
         );
         assert_eq!(below_home(Path::new("/srv/x"), None), "/srv/x");
+    }
+
+    /// an estimate rounds to a step that grows with it, and a floor rounds down, never up.
+    #[test]
+    fn estimates_round_to_what_they_can_claim() {
+        let about = |seconds: u64| about(Duration::from_secs(seconds));
+        for (seconds, said) in [
+            (0, "a few seconds"),
+            (9, "a few seconds"),
+            (10, "about 10 s"),
+            (44, "about 40 s"),
+            (55, "about 1 min"),
+            (185, "about 3 min"),
+            (570, "about 10 min"),
+            (1_000, "about 15 min"),
+            (3_450, "about 1 h"),
+            (5_400, "about 1 h 30 min"),
+            (35_100, "about 10 h"),
+            (50_000, "about 14 h"),
+            (259_200, "about 3 days"),
+        ] {
+            assert_eq!(about(seconds), said, "{seconds} s");
+        }
+        let at_least = |seconds: u64| at_least(Duration::from_secs(seconds));
+        assert_eq!(at_least(300), "5 min");
+        assert_eq!(at_least(599), "9 min");
+        assert_eq!(at_least(3_599), "55 min");
+        assert_eq!(at_least(7_199), "1 h 30 min");
     }
 
     #[test]

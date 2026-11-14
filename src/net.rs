@@ -6,6 +6,7 @@ mod api;
 mod azure;
 mod cookies;
 mod download;
+pub(crate) mod estimate;
 mod failure;
 mod google;
 mod headers;
@@ -17,6 +18,7 @@ mod roots;
 mod shown;
 pub(crate) mod sign;
 pub(crate) mod site;
+pub(crate) mod speeds;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -269,7 +271,14 @@ pub(crate) struct Net {
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
+    /// what this run's transfers tell of each host's speed, which the run writes as it ends.
+    heard: Arc<speeds::Run>,
 }
+
+/// how long an answer took from its request to its headers, every hop of it, without the waits
+/// for a host's pace before each.
+#[derive(Clone, Copy)]
+struct Answering(Duration);
 
 /// a credential as requests carry it: to one host and port.
 struct Key {
@@ -455,7 +464,14 @@ impl Net {
             work,
             stop,
             notify,
+            heard: Arc::default(),
         }
+    }
+
+    /// the network, telling `heard` how fast each host answers and sends.
+    pub(crate) fn hearing(mut self, heard: Arc<speeds::Run>) -> Net {
+        self.heard = heard;
+        self
     }
 
     /// the keys requests may carry, from `find` in place of those the options gave, looked for
@@ -631,7 +647,7 @@ impl Net {
         let mut first_origin = true;
         let mut asked_signed = false;
         let mut renewed = false;
-        let mut site_sent = None;
+        let (mut site_sent, mut answering) = (None, Duration::ZERO);
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
@@ -667,6 +683,7 @@ impl Net {
                 .await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             let at = tokio::time::Instant::now().into_std();
+            answering += at.saturating_duration_since(ticket.sent);
             let answer = pace::Answered {
                 status: response.status(),
                 sent: ticket.sent,
@@ -710,6 +727,7 @@ impl Net {
                 if let Some(name) = name {
                     response.extensions_mut().insert(RedirectName(name));
                 }
+                response.extensions_mut().insert(Answering(answering));
                 return Ok(response);
             };
             sent_by = Some(std::mem::replace(&mut hop, next));
@@ -1092,7 +1110,7 @@ pub(crate) fn host(url: &Url) -> &str {
 
 /// the name requests to `url`'s host are paced and counted under, which hosts limited together
 /// share, as arXiv's do.
-fn paced(url: &Url) -> String {
+pub(crate) fn paced(url: &Url) -> String {
     crate::source::paced_as(&host(url).to_ascii_lowercase())
 }
 

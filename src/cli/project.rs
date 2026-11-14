@@ -960,6 +960,18 @@ async fn preview_lock(
             .map_or_else(|| "size unknown".to_owned(), units::size);
         output.step("Would fetch", &format!("{} · {size}", download.path));
     }
+    let to_download = super::fetch::planned(
+        context,
+        dry.jobs
+            .iter()
+            .map(|job| (super::fetch::host_of(job), job.fetch.expect.size)),
+    );
+    let labels = download.iter().map(|download| download.path.as_str());
+    super::fetch::tell_would(
+        output,
+        &super::fetch::called(labels, to_download.files),
+        &to_download,
+    );
     for archive in &dry.unpack {
         output.step("Would open", archive);
     }
@@ -983,6 +995,7 @@ async fn preview_lock(
         changes: Some(Changes {
             download,
             unpack: dry.unpack,
+            to_download: Some(to_download),
             ..Changes::default()
         }),
         merge: None,
@@ -1416,6 +1429,14 @@ pub(super) async fn preview_all(
             .size
             .map_or_else(|| "size unknown".to_owned(), units::size);
         output.step("Would fetch", &format!("{} · {size}", download.path));
+    }
+    if let Some(total) = &preview.changes.to_download {
+        let labels = preview
+            .changes
+            .download
+            .iter()
+            .map(|download| download.path.as_str());
+        super::fetch::tell_would(output, &super::fetch::called(labels, total.files), total);
     }
     for archive in &preview.changes.unpack {
         output.step("Would open", archive);

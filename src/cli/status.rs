@@ -71,6 +71,11 @@ pub(super) struct Status {
     /// recipes with a rebuild that differs from data.lock kept, which `fetchloom build --accept`
     /// pins, each with where its files that differ are.
     candidates: Vec<Kept>,
+    /// what a sync would download for the files it places, with about how long it takes.
+    to_download: crate::net::estimate::Total,
+    /// those downloads by the host each starts at, and its size.
+    #[serde(skip)]
+    downloads: Vec<(String, Option<u64>)>,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
@@ -150,10 +155,14 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         &context.mirrors.mirrors,
         verify.then_some(&context.output),
     )?;
+    let mut status = status;
+    status.to_download = super::fetch::planned(context, std::mem::take(&mut status.downloads));
     let output = &context.output;
     warn_git(output, &project)?;
     list(output, &status);
     if sum_up(output, &status) {
+        let total = &status.to_download;
+        super::fetch::tell_would(output, &units::count(total.files, "file", "files"), total);
         // a sync would pin what the sources serve now, which a clone may not want
         if status.lockless {
             output.hint(&format!(
@@ -512,10 +521,45 @@ fn check(
         }
     }
     unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
+    status.downloads = downloads(&status, &planned, &cache);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
+}
+
+/// the files a sync of `status` would download, each once, by the host its link starts at: a file
+/// it places that neither the cache nor the data folder holds, or the archive holding it when
+/// the cache lacks that too.
+fn downloads(
+    status: &Status,
+    planned: &plan::Plan<'_>,
+    cache: &Cache,
+) -> Vec<(String, Option<u64>)> {
+    let placing: HashSet<&str> = status
+        .missing
+        .iter()
+        .chain(&status.outdated)
+        .chain(&status.damaged)
+        .map(String::as_str)
+        .collect();
+    let mut seen = HashSet::new();
+    let lacks = |sha256: &Sha256, size: u64| {
+        !status.holding.contains(sha256) && cache.find(sha256, Some(size)).is_none()
+    };
+    planned
+        .targets
+        .iter()
+        .filter(|target| placing.contains(target.path.as_str()))
+        .filter(|target| lacks(&target.sha256, target.size))
+        .filter_map(plan::Target::file)
+        .filter(|file| !file.url.is_empty() && seen.insert(file.sha256))
+        .filter(|file| lacks(&file.sha256, file.size))
+        .filter_map(|file| {
+            let url = url::Url::parse(&file.url).ok()?;
+            Some((crate::net::host(&url).to_ascii_lowercase(), Some(file.size)))
+        })
+        .collect()
 }
 
 /// the files of `missing` in a folder that holds no file now, as one deleted whole, each with

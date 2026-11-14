@@ -1213,7 +1213,7 @@ fn lines_told_during_a_question_wait_for_the_answer() {
     let output = telling(false);
     output.asking(|| {
         output.step("Resolving", "iris");
-        let _batch = output.ticker("Downloading", "iris.csv".to_owned(), [Some(81)]);
+        let _batch = output.ticker("Searching", "zenodo".to_owned(), [None]);
         assert_eq!(
             output.said(),
             Vec::<String>::new(),
@@ -1223,7 +1223,7 @@ fn lines_told_during_a_question_wait_for_the_answer() {
     let said = output.said();
     assert_eq!(said.len(), 2, "{said:?}");
     assert!(said[0].contains("Resolving iris"), "{said:?}");
-    assert!(said[1].contains("Downloading iris.csv"), "{said:?}");
+    assert!(said[1].contains("Searching zenodo"), "{said:?}");
 }
 
 /// a terminal drops what it had not yet shown at a ctrl-c. a closing line told after one, or

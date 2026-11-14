@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Result, Sandbox, Server, file, json, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -74,6 +74,7 @@ fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
             "remove": [],
             "download": [],
             "unpack": [],
+            "to_download": {"files": 0, "bytes": 0, "sizes_unknown": 0, "time": null},
         })
     );
     assert_eq!(document["work"]["requests"], 0);
@@ -662,5 +663,66 @@ fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
     assert_eq!(tree(&sandbox.work())?, work, "nothing was written");
     assert!(!sandbox.cache().exists(), "no cache folder was made");
     assert!(csv.requests().is_empty() && zip.requests().is_empty());
+    Ok(())
+}
+
+/// on a fresh machine no time shows; once a sync downloaded from a host, a dry run of other files
+/// from it says about how long they take, and `--json` carries it.
+#[test]
+fn a_dry_run_times_its_downloads_once_a_host_is_known() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, b) = (vec![b'a'; 1 << 20], vec![b'b'; 1 << 20]);
+    let server = Routes::start(vec![
+        ("/a.bin".to_owned(), file(&a, "\"a\"")),
+        ("/b.bin".to_owned(), file(&b, "\"b\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    for name in ["a", "b"] {
+        let link = format!("{}/{name}.bin", server.url);
+        crate::support::ok(&sandbox.run(&["add", &link])?)?;
+    }
+    crate::support::delete(&sandbox.speeds())?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let cold = sandbox.cache().with_file_name("cold");
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cold)
+            .output()
+    };
+    let unknown = text(&run(&["sync", "-n"])?.stderr)?;
+    assert!(
+        unknown.contains("Would download 2 files · 2.0 MiB · the time shows once it starts\n"),
+        "{unknown}"
+    );
+    let first = run(&["sync", "a"])?;
+    let stderr = text(&first.stderr)?;
+    assert_eq!(first.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Downloading a/a.bin · 1.0 MiB · the time shows once it starts\n"),
+        "{stderr}"
+    );
+    let later = text(&run(&["sync", "-n"])?.stderr)?;
+    let line = later
+        .lines()
+        .find(|line| line.contains("Would download"))
+        .ok_or_else(|| format!("no total: {later}"))?;
+    let said = line
+        .strip_prefix("      Would download b/b.bin · 1.0 MiB · ")
+        .ok_or_else(|| format!("not the new file's total: {later}"))?;
+    assert!(
+        said == "a few seconds" || said.starts_with("about "),
+        "{later}"
+    );
+    let document = json(&run(&["--json", "sync", "-n"])?)?;
+    let total = &document["result"]["changes"]["to_download"];
+    assert_eq!(total["files"], 1, "{document}");
+    assert_eq!(total["bytes"], b.len(), "{document}");
+    assert_eq!(total["sizes_unknown"], 0, "{document}");
+    assert_eq!(total["time"]["bound"], "about", "{document}");
+    assert!(total["time"]["seconds"].is_u64(), "{document}");
     Ok(())
 }

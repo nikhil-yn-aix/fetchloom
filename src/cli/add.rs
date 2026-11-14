@@ -1525,7 +1525,7 @@ async fn learn_names(
     if lone.is_empty() {
         return Ok(());
     }
-    let jobs = lone
+    let jobs: Vec<fetch::Job> = lone
         .iter()
         .map(|remote| {
             let mut job = fetch::listed_job(remote, &remote.path, extract);
@@ -1533,6 +1533,18 @@ async fn learn_names(
             job
         })
         .collect();
+    let lacking: Vec<&fetch::Job> = jobs
+        .iter()
+        .filter(|job| job.fetch.cached(cache).is_none())
+        .collect();
+    let planned = fetch::planned(
+        context,
+        lacking
+            .iter()
+            .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+    );
+    let called = fetch::called(lacking.iter().map(|job| job.label.as_str()), planned.files);
+    fetch::tell_planned(&context.output, &called, &planned);
     let started = std::time::Instant::now();
     // the add changes nothing before its downloads are done
     let fetched = fetch::all(context, net, cache, jobs)

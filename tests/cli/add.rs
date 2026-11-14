@@ -828,12 +828,14 @@ fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> 
     let again = sandbox.run(&["add", &server.url])?;
     assert!(!text(&again.stderr)?.contains("Started"));
     let home = sandbox.folder("home")?;
+    // what fetchloom remembers of the server's speed is all an earlier run left there
+    let before = listed(&home)?;
     let refused = sandbox.command_in(&home, &["add", &server.url]).output()?;
     let stderr = text(&refused.stderr)?;
     assert_eq!(refused.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("your home folder"), "{stderr}");
     assert!(stderr.contains("mkdir"), "{stderr}");
-    assert_eq!(listed(&home)?, Vec::<String>::new());
+    assert_eq!(listed(&home)?, before);
     let approved = sandbox
         .command_in(&home, &["--yes", "add", &server.url])
         .output()?;
