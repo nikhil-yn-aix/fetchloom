@@ -708,9 +708,11 @@ fn key(path: &str) -> String {
     name::fold(path)
 }
 
-/// a warning and its help for each dataset whose `path` ends in the name of a file placed straight
-/// inside it, as `path = "train.csv"` gives data/train.csv/train.csv: `path` names a folder.
-pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String, String)> {
+/// a warning and its help for each dataset whose `path` is likely not what was meant: one ending in
+/// the name of a file placed straight inside it, as `path = "train.csv"` gives
+/// data/train.csv/train.csv, or one starting with the data folder's name, as `path = "data/iris"`
+/// gives data/data/iris.
+pub(crate) fn doubtful_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String, String)> {
     let mut warnings = Vec::new();
     for (dataset, entry) in &manifest.datasets {
         let Some(path) = entry
@@ -720,29 +722,73 @@ pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String
         else {
             continue;
         };
-        let (parent, name) = path
-            .rsplit_once('/')
-            .unwrap_or((manifest::DATA_FOLDER_ITSELF, path));
-        let inside = format!("{}/", folder(manifest, dataset));
-        let named = key(name);
-        let Some(file) = plan.targets.iter().find_map(|target| {
-            let file = target.path.strip_prefix(&inside)?;
-            (target.dataset == dataset && !file.contains('/') && key(file) == named).then_some(file)
-        }) else {
-            continue;
-        };
-        let meant = match parent {
-            manifest::DATA_FOLDER_ITSELF => format!("{}/{file}", manifest.data_dir),
-            parent => format!("{}/{parent}/{file}", manifest.data_dir),
-        };
-        warnings.push((
-            format!("path = \"{path}\" makes a folder named {name}, so the file is {inside}{file}"),
-            format!(
-                "path names a folder; to put the file at {meant}, set path = \"{parent}\" on datasets.{dataset} in data.toml"
-            ),
-        ));
+        if let Some(said) = file_shaped(manifest, plan, dataset, path) {
+            warnings.push(said);
+        }
+        if let Some(said) = data_named(manifest, dataset, path) {
+            warnings.push(said);
+        }
     }
     warnings
+}
+
+/// the warning for `path` of `dataset` when it ends in the name of a file placed straight inside
+/// it: `path` names a folder.
+fn file_shaped(
+    manifest: &Manifest,
+    plan: &Plan,
+    dataset: &str,
+    path: &str,
+) -> Option<(String, String)> {
+    let (parent, name) = path
+        .rsplit_once('/')
+        .unwrap_or((manifest::DATA_FOLDER_ITSELF, path));
+    let inside = format!("{}/", folder(manifest, dataset));
+    let named = key(name);
+    let file = plan.targets.iter().find_map(|target| {
+        let file = target.path.strip_prefix(&inside)?;
+        (target.dataset == dataset && !file.contains('/') && key(file) == named).then_some(file)
+    })?;
+    let meant = match parent {
+        manifest::DATA_FOLDER_ITSELF => format!("{}/{file}", manifest.data_dir),
+        parent => format!("{}/{parent}/{file}", manifest.data_dir),
+    };
+    Some((
+        format!("path = \"{path}\" makes a folder named {name}, so the file is {inside}{file}"),
+        format!(
+            "path names a folder; to put the file at {meant}, set path = \"{parent}\" on datasets.{dataset} in data.toml"
+        ),
+    ))
+}
+
+/// the warning for `path` of `dataset` when it starts with the data folder, or the data folder's
+/// own name, as a path written from the project's root does.
+fn data_named(manifest: &Manifest, dataset: &str, path: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let data: Vec<&str> = manifest.data_dir.split('/').collect();
+    let same = |one: &str, other: &str| key(one) == key(other);
+    let skipped = if parts.len() >= data.len() && parts.iter().zip(&data).all(|(a, b)| same(a, b)) {
+        data.len()
+    } else if data.last().is_some_and(|own| same(parts[0], own)) {
+        1
+    } else {
+        return None;
+    };
+    let rest = parts[skipped..].join("/");
+    let (meant, set) = if rest.is_empty() {
+        (manifest.data_dir.clone(), manifest::DATA_FOLDER_ITSELF)
+    } else {
+        (format!("{}/{rest}", manifest.data_dir), rest.as_str())
+    };
+    Some((
+        format!(
+            "path = \"{path}\" starts with the data folder's name, so datasets.{dataset} lands in {}",
+            folder(manifest, dataset)
+        ),
+        format!(
+            "path starts inside the data folder; to put the dataset in {meant}, set path = \"{set}\" on datasets.{dataset} in data.toml"
+        ),
+    ))
 }
 
 /// the sorted paths below the folder of `locked` that windows or a fat disk cannot store, as

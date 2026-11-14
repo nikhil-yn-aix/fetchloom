@@ -222,7 +222,7 @@ impl<'a> Loop<'a> {
         force: bool,
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
-        for (said, help) in plan::file_shaped_paths(manifest, &plan) {
+        for (said, help) in plan::doubtful_paths(manifest, &plan) {
             self.context
                 .output
                 .warn_with(Warning::PlacePathFolder, &said, &help);

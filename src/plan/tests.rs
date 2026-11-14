@@ -964,7 +964,7 @@ fn a_path_named_like_its_file_is_found() {
         let text = format!("[datasets.train]\nref = \"x\"\npath = \"{path}\"\n");
         let manifest = manifest(&text);
         let locked = lock(&[("train", files)]);
-        file_shaped_paths(&manifest, &plan(&manifest, &locked, &|_| None).unwrap())
+        doubtful_paths(&manifest, &plan(&manifest, &locked, &|_| None).unwrap())
     };
     assert_eq!(
         flagged("train.csv", &["train.csv", "README"]),
@@ -991,7 +991,60 @@ fn a_path_named_like_its_file_is_found() {
     let unnamed = manifest("[datasets.iris]\nref = \"x\"\n");
     let locked = lock(&[("iris", &["iris"])]);
     let planned = plan(&unnamed, &locked, &|_| None).unwrap();
-    assert_eq!(file_shaped_paths(&unnamed, &planned), []);
+    assert_eq!(doubtful_paths(&unnamed, &planned), []);
+}
+
+/// `path` is below the data folder, so one that starts with the data folder's own name was likely
+/// written from the project's root.
+#[test]
+fn a_path_that_names_the_data_folder_again_is_found() {
+    let flagged = |project: &str, path: &str| {
+        let text = format!("{project}[datasets.iris]\nref = \"x\"\npath = \"{path}\"\n");
+        let manifest = manifest(&text);
+        let locked = lock(&[("iris", &["iris.csv"])]);
+        doubtful_paths(&manifest, &plan(&manifest, &locked, &|_| None).unwrap())
+    };
+    let said = |path: &str, lands: &str, meant: &str, set: &str| {
+        [(
+            format!(
+                "path = \"{path}\" starts with the data folder's name, so datasets.iris lands in {lands}"
+            ),
+            format!(
+                "path starts inside the data folder; to put the dataset in {meant}, set path = \"{set}\" on datasets.iris in data.toml"
+            ),
+        )]
+    };
+    assert_eq!(
+        flagged("", "data/iris-win"),
+        said(
+            "data/iris-win",
+            "data/data/iris-win",
+            "data/iris-win",
+            "iris-win"
+        )
+    );
+    assert_eq!(
+        flagged("", "Data"),
+        said("Data", "data/Data", "data", "."),
+        "a disk that ignores case"
+    );
+    let deep = "[project]\ndata_dir = \"inputs/raw\"\n";
+    assert_eq!(
+        flagged(deep, "inputs/raw/iris"),
+        said(
+            "inputs/raw/iris",
+            "inputs/raw/inputs/raw/iris",
+            "inputs/raw/iris",
+            "iris"
+        )
+    );
+    assert_eq!(
+        flagged(deep, "raw/iris"),
+        said("raw/iris", "inputs/raw/raw/iris", "inputs/raw/iris", "iris")
+    );
+    for path in ["iris", "database", "flowers/data", "."] {
+        assert_eq!(flagged("", path), [], "{path}");
+    }
 }
 
 #[test]
