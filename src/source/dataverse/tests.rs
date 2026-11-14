@@ -319,6 +319,17 @@ fn an_install_on_another_port_keeps_its_port_in_the_account() {
     }
 }
 
+/// an install whose name holds a character no saved key's host takes, as `!`, is named by its
+/// host alone, without its port.
+#[test]
+fn an_install_no_key_is_saved_for_is_named_by_its_host() {
+    let dataset = Dataset::parse("DV!lab:8443/doi:10.1/X").unwrap();
+    assert_eq!(
+        dataset.account(),
+        crate::account::Account::Dataverse("dv!lab".to_owned())
+    );
+}
+
 #[test]
 fn pasted_versions_are_not_discarded() {
     for page in [
