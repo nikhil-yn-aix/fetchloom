@@ -38,11 +38,8 @@ use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode
 use tracing::Instrument as _;
 use url::Url;
 
-pub(crate) use bucket::{
-    AzureContainer, Bucket, GcsBucket, Keyed, Sas, Signer, Signing, VERSION as AZURE_VERSION,
-    account_of as azure_account, is_account as is_azure_account,
-    is_container as is_azure_container, unversioned, with_version,
-};
+pub(crate) use crate::auth::azure::AzureContainer;
+pub(crate) use bucket::{Bucket, GcsBucket, Keyed, Signer, Signing, unversioned, with_version};
 pub(crate) use drive::DriveId;
 
 use crate::digest::{Md5, Sha256};
@@ -256,7 +253,7 @@ impl Parsed {
         let without =
             "use a link that works without it, or download the file once with `fetchloom get`";
         Err(match &self.reference {
-            Reference::Url(url) if url.host_str().and_then(bucket::account_of).is_some() => error
+            Reference::Url(url) if url.host_str().and_then(crate::auth::azure::account_of).is_some() => error
                 .help(
                     "keep the SAS out of the link: list the container in azure_containers and set AZURE_STORAGE_SAS_TOKEN to the SAS, or download the file once with `fetchloom get`",
                 ),

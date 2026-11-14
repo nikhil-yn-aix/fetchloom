@@ -837,7 +837,7 @@ fn azure_containers_name_containers_and_keep_their_sas_unshown() {
     assert_eq!(
         set.azure_containers.value[0]
             .sas()
-            .map(crate::source::Sas::query),
+            .map(crate::auth::azure::Sas::query),
         Some("sv=2022-11-02&sr=c&sp=rl&sig=abc%3D")
     );
     assert_eq!(set.azure_containers.origin, Origin::File);

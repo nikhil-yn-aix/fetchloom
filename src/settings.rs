@@ -12,11 +12,12 @@ mod resources;
 
 pub(crate) use resources::Level;
 
+use crate::auth::azure::AzureContainer;
 use crate::error::{Error, Kind};
 use crate::machine::{LEAST_MEMORY, Machine, Var, switched};
 use crate::mirror::Location;
 use crate::net::{HOST_JOBS, TIMEOUT};
-use crate::source::{AzureContainer, Bucket, DriveId, GcsBucket};
+use crate::source::{Bucket, DriveId, GcsBucket};
 use crate::units;
 
 /// downloads running at once, across all hosts. downloads wait on the network, not the

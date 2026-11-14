@@ -519,7 +519,7 @@ fn azure_sas_values_and_anonymous_requests_cannot_share_a_metadata_entry() {
         Url::parse("https://lab.blob.core.windows.net/raw?restype=container&comp=list").unwrap();
     let azure = |sas: &'static str| {
         crate::net::Azure::new(
-            vec![crate::source::AzureContainer::parse("azure:lab/raw").unwrap()],
+            vec![crate::auth::azure::AzureContainer::parse("azure:lab/raw").unwrap()],
             Arc::new(move |name: &str| (name == "AZURE_STORAGE_SAS_TOKEN").then(|| sas.into())),
         )
     };

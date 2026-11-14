@@ -220,42 +220,6 @@ fn an_answer_that_is_no_listing_says_why() {
     }
 }
 
-/// a SAS reads as the portal and the az cli give one, and a container's entry as its name or
-/// its link, which may carry its own SAS. neither shows the SAS when printed for debugging.
-#[test]
-fn settings_read_containers_and_sas_as_azure_gives_them() {
-    let sas =
-        Sas::parse("?sv=2022-11-02&sr=c&sp=rl&se=2026-12-31T00%3A00%3A00Z&sig=abc%3D").unwrap();
-    assert_eq!(
-        sas.query(),
-        "sv=2022-11-02&sr=c&sp=rl&se=2026-12-31T00%3A00%3A00Z&sig=abc%3D"
-    );
-    assert_eq!(sas.expiry().as_deref(), Some("2026-12-31T00:00:00Z"));
-    assert_eq!(format!("{sas:?}"), "Sas(***)");
-    for bad in ["", "sv=1", "sig=abc", "sv=1&sig=a b", "sv=1&sig=a#b"] {
-        assert_eq!(Sas::parse(bad), None, "{bad}");
-    }
-    let linked =
-        AzureContainer::parse("https://lab.blob.core.windows.net/raw/?sv=2022-11-02&sig=abc")
-            .unwrap();
-    assert_eq!(linked.to_string(), "azure:lab/raw");
-    assert_eq!(linked.sas().map(Sas::query), Some("sv=2022-11-02&sig=abc"));
-    assert!(!format!("{linked:?}").contains("abc"));
-    assert_eq!(
-        AzureContainer::parse("azure:Lab/raw/").map(|entry| entry.to_string()),
-        Some("azure:lab/raw".to_owned())
-    );
-    for bad in [
-        "azure:lab",
-        "azure:lab/raw/scans",
-        "https://lab.blob.core.windows.net/raw?sp=rl",
-        "https://lab.blob.core.windows.net:8443/raw",
-        "https://lab.example.org/raw",
-    ] {
-        assert_eq!(AzureContainer::parse(bad), None, "{bad}");
-    }
-}
-
 #[test]
 #[ignore = "live: talks to azureopendatastorage.blob.core.windows.net"]
 fn live_azure() {

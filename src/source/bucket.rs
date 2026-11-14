@@ -12,12 +12,10 @@ use std::fmt;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-pub(crate) use self::azure::{
-    AzureContainer, BLOB_HOST, Sas, VERSION, account_of, is_account, is_container,
-};
 pub(crate) use self::gcs::GcsBucket;
 pub(crate) use self::signing::{Keyed, Signer, Signing};
 use super::{Access, Listing, Reference, Remote, malformed};
+use crate::auth::azure::{BLOB_HOST, account_of, is_account, is_container};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::sign::UNRESERVED;
@@ -320,7 +318,7 @@ impl Prefix {
 
     /// the prefix `key` in the azure container `container` of the storage account `account`.
     fn azure(account: &str, container: &str, key: &str) -> Option<Prefix> {
-        if !azure::is_account(account) {
+        if !is_account(account) {
             return None;
         }
         let host = Url::parse(&format!("https://{account}{BLOB_HOST}/")).ok()?;

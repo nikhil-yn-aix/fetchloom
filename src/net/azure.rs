@@ -18,10 +18,16 @@ use url::Url;
 use super::failure::Failure;
 use super::google::Environment;
 use super::{Authorized, Net, Shown, host};
-use crate::auth::azure::{AccountKey, SignIn, Storage};
+use crate::auth::azure::{
+    AccountKey, AzureContainer, Sas, SignIn, Storage, account_of, is_container,
+};
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
-use crate::source::{AZURE_VERSION, AzureContainer, Sas, azure_account, is_azure_container};
+
+/// the version of azure's API every request to a blob host asks for. without one, a request gets
+/// the account's default, as old as 2009-09-19, under which newer kinds of blob refuse to list;
+/// later versions escape some blob names in a way the listing's reader cannot see.
+const VERSION: &str = "2020-10-02";
 
 /// what one run knows about azure access: the containers listed, what the environment gives,
 /// read when first needed, and which containers refused a request without a credential.
@@ -169,9 +175,9 @@ impl Azure {
         if url.scheme() != "https" || url.port().is_some() {
             return None;
         }
-        let account = azure_account(url.host_str()?)?;
+        let account = account_of(url.host_str()?)?;
         let container = url.path_segments()?.next()?;
-        if !is_azure_container(container) {
+        if !is_container(container) {
             return None;
         }
         Some(Located {
@@ -463,7 +469,7 @@ impl Blobbed<'_> {
         if self.located.is_some() {
             headers.insert(
                 HeaderName::from_static("x-ms-version"),
-                HeaderValue::from_static(AZURE_VERSION),
+                HeaderValue::from_static(VERSION),
             );
         }
         if let Some(Credential::Token(bearer)) = &self.credential {

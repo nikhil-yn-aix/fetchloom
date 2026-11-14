@@ -11,8 +11,13 @@ use serde_json::Value;
 use crate::auth::process::{self, PATIENCE};
 use crate::error::{Error, Kind};
 use crate::machine::Var;
-use crate::source::{AzureContainer, Sas, is_azure_account};
 use crate::stop::Stop;
+
+mod container;
+
+pub(crate) use self::container::{
+    AzureContainer, BLOB_HOST, Sas, account_of, is_account, is_container,
+};
 
 /// the resource whose tokens read azure storage, in any account their identity may read.
 pub(crate) const STORAGE: &str = "https://storage.azure.com/";
@@ -119,7 +124,7 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
             account
                 .to_str()
                 .map(str::to_ascii_lowercase)
-                .filter(|account| is_azure_account(account))
+                .filter(|account| is_account(account))
                 .ok_or_else(|| {
                     Error::new(
                         Kind::AuthRequired,
