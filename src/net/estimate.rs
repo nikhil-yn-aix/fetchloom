@@ -152,7 +152,7 @@ pub(crate) struct Total {
     pub(crate) files: u64,
     pub(crate) bytes: u64,
     pub(crate) sizes_unknown: u64,
-    /// none without grounds: the time shows once the downloads start.
+    /// none without grounds, when only a bar can tell the time once the downloads start.
     pub(crate) time: Option<Time>,
 }
 
@@ -179,9 +179,10 @@ impl Total {
         self.files > self.sizes_unknown
     }
 
-    /// the facts after what downloads: `1.2 GiB · about 3 min`, or without grounds `1.2 GiB · the
-    /// time shows once it starts`, with `and 2 of unknown size` when some sizes are not known.
-    pub(crate) fn facts(&self) -> String {
+    /// the facts after what downloads: `1.2 GiB · about 3 min`, with `and 2 of unknown size` when
+    /// some sizes are not known. without grounds for a time, `live` says a bar will show one, as
+    /// `1.2 GiB · the time shows once it starts`; elsewhere the size stands alone.
+    pub(crate) fn facts(&self, live: bool) -> String {
         let size = match (self.sizes_unknown, self.is_sized()) {
             (0, _) => units::size(self.bytes),
             (_, false) => "size unknown".to_owned(),
@@ -191,10 +192,11 @@ impl Total {
                 units::grouped(unknown)
             ),
         };
-        let time = self
-            .time
-            .map_or_else(|| "the time shows once it starts".to_owned(), Time::words);
-        format!("{size} · {time}")
+        match (self.time, live) {
+            (Some(time), _) => format!("{size} · {}", time.words()),
+            (None, true) => format!("{size} · the time shows once it starts"),
+            (None, false) => size,
+        }
     }
 }
 
@@ -368,12 +370,13 @@ mod tests {
         assert_eq!(time(&[a, b, c], few), Some(about(80)));
     }
 
+    /// a time with grounds shows everywhere; without them, only a bar can tell one later.
     #[test]
-    fn a_total_says_its_size_and_time_or_that_the_time_shows_later() {
+    fn a_total_says_its_time_or_that_a_bar_will() {
         let host = known(2, 3 * MIB, 2 * MIB, A_MIB, 0.0);
         let total = Total::of(&[host], LIMITS);
         assert_eq!(total.files, 2);
-        assert_eq!(total.facts(), "3.0 MiB · under 10 s");
+        assert_eq!(total.facts(false), "3.0 MiB · under 10 s");
         let unknown = Host {
             files: Some(3),
             bytes: MIB,
@@ -381,9 +384,11 @@ mod tests {
             unknown: 2,
             ..Host::default()
         };
+        let total = Total::of(&[unknown], LIMITS);
         assert_eq!(
-            Total::of(&[unknown], LIMITS).facts(),
+            total.facts(true),
             "1.0 MiB and 2 of unknown size · the time shows once it starts"
         );
+        assert_eq!(total.facts(false), "1.0 MiB and 2 of unknown size");
     }
 }

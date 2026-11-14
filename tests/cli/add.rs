@@ -1888,7 +1888,7 @@ fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {
         };
         assert_eq!(
             told("Downloading "),
-            ["Downloading 2 files · 2.9 KiB · the time shows once it starts"],
+            ["Downloading 2 files · 2.9 KiB"],
             "{stderr}"
         );
         let after = told("Downloaded ");

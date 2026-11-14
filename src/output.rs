@@ -823,6 +823,11 @@ impl Output {
         }
     }
 
+    /// whether bars draw, so a download's time shows live once it starts.
+    pub(crate) fn shows_bars(&self) -> bool {
+        self.bars.is_some()
+    }
+
     /// a wait for another program, which a person may sit through for a while: on a terminal a
     /// live line that counts its seconds until dropped, elsewhere one line, as a log needs.
     pub(crate) fn waiting(&self, verb: &'static str, text: &str) -> Bar {

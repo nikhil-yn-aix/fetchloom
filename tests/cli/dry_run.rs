@@ -696,14 +696,14 @@ fn a_dry_run_times_its_downloads_once_a_host_is_known() -> Result {
     };
     let unknown = text(&run(&["sync", "-n"])?.stderr)?;
     assert!(
-        unknown.contains("Would download 2 files · 2.0 MiB · the time shows once it starts\n"),
+        unknown.contains("Would download 2 files · 2.0 MiB\n"),
         "{unknown}"
     );
     let first = run(&["sync", "a"])?;
     let stderr = text(&first.stderr)?;
     assert_eq!(first.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("Downloading a/a.bin · 1.0 MiB · the time shows once it starts\n"),
+        stderr.contains("Downloading a/a.bin · 1.0 MiB\n"),
         "{stderr}"
     );
     let later = text(&run(&["sync", "-n"])?.stderr)?;
@@ -725,5 +725,37 @@ fn a_dry_run_times_its_downloads_once_a_host_is_known() -> Result {
     assert_eq!(total["sizes_unknown"], 0, "{document}");
     assert_eq!(total["time"]["bound"], "about", "{document}");
     assert!(total["time"]["seconds"].is_u64(), "{document}");
+    Ok(())
+}
+
+/// a download with no time to give says one shows once it starts only where a bar shows it: at a
+/// terminal, never in a pipe or a log.
+#[cfg(target_os = "linux")]
+#[test]
+fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![("/a.bin".to_owned(), file(&[b'a'; 1 << 20], "\"a\""))])?;
+    sandbox.allow(&server.url);
+    crate::support::ok(&sandbox.run(&["add", &format!("{}/a.bin", server.url)])?)?;
+    let later = "the time shows once it starts";
+    crate::support::delete(&sandbox.speeds())?;
+    let (piped, cache) = crate::mirrors::cold(&sandbox, "piped")?;
+    let mut sync = sandbox.command_in(&piped, &["sync"]);
+    sync.env("FETCHLOOM_CACHE", &cache);
+    let stderr = text(&sync.output()?.stderr)?;
+    assert!(
+        stderr.contains("Downloading a/a.bin · 1.0 MiB\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(later), "{stderr}");
+    crate::support::delete(&sandbox.speeds())?;
+    let (shown, cache) = crate::mirrors::cold(&sandbox, "shown")?;
+    let shown = shown.to_string_lossy();
+    let mut sync = sandbox.command(&["-C", &shown, "sync"]);
+    sync.env("FETCHLOOM_CACHE", &cache);
+    let Some(screen) = sandbox.on_a_terminal_running(&sync)? else {
+        return Ok(());
+    };
+    assert!(screen.contains(later), "{screen}");
     Ok(())
 }

@@ -694,20 +694,21 @@ pub(super) fn host_of(job: &Job) -> String {
 /// says, before downloads start, what `total` brings and about how long it takes, as `Downloading
 /// 3 files · 1.2 GiB · about 3 min`. a total with no size known has nothing to say yet.
 pub(super) fn tell_planned(output: &Output, what: &str, total: &estimate::Total) {
-    tell_total(output, "Downloading", what, total);
+    tell_total(output, "Downloading", what, total, output.shows_bars());
 }
 
 /// [`tell_planned`] for a run that would download, as a dry run or `status` tells it: once
 /// there are several files, or a time to add to the one file's own line.
 pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
     if total.files > 1 || total.time.is_some() {
-        tell_total(output, "Would download", what, total);
+        tell_total(output, "Would download", what, total, false);
     }
 }
 
-fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total) {
+/// `live` says a bar will show the time once the downloads start.
+fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total, live: bool) {
     if total.files > 0 && total.is_sized() {
-        output.step(verb, &format!("{what} · {}", total.facts()));
+        output.step(verb, &format!("{what} · {}", total.facts(live)));
     }
 }
 
