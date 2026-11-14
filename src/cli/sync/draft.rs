@@ -333,6 +333,44 @@ impl Draft {
         jobs
     }
 
+    /// the downloads placing makes once the lock is done: each file whose hash is known, that
+    /// unpacks nothing and that the cache lacks, as [`Draft::jobs`] leaves them for later.
+    pub(super) fn ahead(&self, cache: &Cache) -> Vec<Job> {
+        let mut unpacking = vec![false; self.files.len()];
+        for unit in self.archives().unpack {
+            for index in unit.files() {
+                unpacking[index] = true;
+            }
+        }
+        self.files
+            .iter()
+            .zip(unpacking)
+            .filter_map(|(file, unpacking)| {
+                let (sha256, size) = file.known?;
+                if unpacking
+                    || file.unpacks_to.is_some()
+                    || cache.find(&sha256, Some(size)).is_some()
+                {
+                    return None;
+                }
+                let fetch = Fetch {
+                    expect: Expect {
+                        sha256: Some(sha256),
+                        md5: file.remote.md5,
+                        size: Some(size),
+                    },
+                    ..source::fetch_plan(&file.remote.url)
+                };
+                Some(Job {
+                    fetch,
+                    label: format!("{}/{}", self.name, file.path),
+                    dataset: Some(self.name.clone()),
+                    again: None,
+                })
+            })
+            .collect()
+    }
+
     /// records what the bytes of file `index` turned out to be, and the zip a source wrapped it in.
     pub(super) fn learn(&mut self, index: usize, fetched: &Fetched, cache: &Cache) {
         let file = &mut self.files[index];

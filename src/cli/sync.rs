@@ -117,6 +117,26 @@ pub(super) struct Loop<'a> {
     stops_on_unbuilt: bool,
     /// the command [`Loop::ready`] readies files for, which its help says to run again.
     readying: &'static str,
+    /// whether placing follows relocking, so the first downloads tell what placing adds.
+    places: AtomicBool,
+    /// what relocking told ahead and fetched, which placing's downloads finish telling.
+    ahead: Mutex<Option<Ahead>>,
+}
+
+/// downloads a run told before its first batch: the hashes placing downloads later, and what
+/// the first batch fetched since it started, so the run ends with one line for all of them.
+struct Ahead {
+    digests: HashSet<Sha256>,
+    fetched: Vec<Fetched>,
+    started: Instant,
+}
+
+/// what a batch of downloads fetched, and when it told placing's ahead, their hashes and the
+/// moment it started.
+#[derive(Default)]
+struct Batch {
+    fetched: Vec<Fetched>,
+    ahead: Option<(HashSet<Sha256>, Instant)>,
 }
 
 impl<'a> Loop<'a> {
@@ -140,7 +160,14 @@ impl<'a> Loop<'a> {
             roomy: AtomicBool::new(false),
             stops_on_unbuilt: false,
             readying: "build",
+            places: AtomicBool::new(false),
+            ahead: Mutex::default(),
         }
+    }
+
+    /// says placing follows the next relock, so downloads that learn hashes tell placing's too.
+    pub(super) fn placing_next(&self) {
+        self.places.store(true, Ordering::Relaxed);
     }
 
     /// [`Loop::ready`] readies files for `command`, as `push`, rather than a build.
@@ -472,6 +499,7 @@ impl<'a> Loop<'a> {
                 jobs.push(job);
             }
         }
+        let mut ahead = Vec::new();
         if !jobs.is_empty() {
             // a clash the listings already show stops the run before it downloads anything
             let foreseen: Vec<Locked> = drafts
@@ -479,12 +507,42 @@ impl<'a> Loop<'a> {
                 .map(|draft| draft.foreseen(&self.cache))
                 .collect();
             plan::foresee(manifest, kept.iter().chain(&foreseen), &self.cache)?;
-        }
-        let fetched = self.download(jobs).await?;
-        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
-            if let Some(file) = file {
-                drafts[draft].learn(file, &fetched, &self.cache);
+            if self.places.load(Ordering::Relaxed) && !self.net.offline().enabled() {
+                // placing downloads each SHA-256 once
+                let mut seen: HashSet<Sha256> = jobs
+                    .iter()
+                    .filter_map(|job| job.fetch.expect.sha256)
+                    .collect();
+                ahead = drafts
+                    .iter()
+                    .flat_map(|draft| draft.ahead(&self.cache))
+                    .filter(|job| {
+                        let entry = job
+                            .dataset
+                            .as_deref()
+                            .and_then(|name| manifest.datasets.get(name));
+                        entry.is_none_or(|entry| entry.place)
+                            && job
+                                .fetch
+                                .expect
+                                .sha256
+                                .is_some_and(|sha256| seen.insert(sha256))
+                    })
+                    .collect();
             }
+        }
+        let batch = self.download_with(jobs, ahead).await?;
+        for ((draft, file), fetched) in slots.into_iter().zip(&batch.fetched) {
+            if let Some(file) = file {
+                drafts[draft].learn(file, fetched, &self.cache);
+            }
+        }
+        if let Some((digests, started)) = batch.ahead {
+            *self.ahead.lock().unwrap_or_else(PoisonError::into_inner) = Some(Ahead {
+                digests,
+                fetched: batch.fetched,
+                started,
+            });
         }
         self.unpack_drafts(manifest, &mut drafts).await?;
         self.unpack_pinned(manifest, &mut pinned).await?;
@@ -954,18 +1012,29 @@ impl<'a> Loop<'a> {
 
     /// puts every job's file in the cache, asking first when a lot is about to download.
     async fn download(&self, jobs: Vec<Job>) -> Result<Vec<Fetched>, Error> {
+        Ok(self.download_with(jobs, Vec::new()).await?.fetched)
+    }
+
+    /// [`Loop::download`], whose line before it also tells `ahead`, the downloads placing makes
+    /// later; their hashes come back with what it fetched, and the line after waits for placing's.
+    async fn download_with(&self, jobs: Vec<Job>, mut ahead: Vec<Job>) -> Result<Batch, Error> {
         if jobs.is_empty() {
-            return Ok(Vec::new());
+            return Ok(Batch::default());
         }
         fetch::mirrors::fill(
             self.context,
             &self.net,
             &self.cache,
             &DataFolder::default(),
-            || fetch::mirrors::pinned(&jobs, &self.cache),
+            || {
+                let mut wanted = fetch::mirrors::pinned(&jobs, &self.cache);
+                wanted.extend(fetch::mirrors::pinned(&ahead, &self.cache));
+                wanted
+            },
         )
         .await
         .map_err(|error| self.as_left(error))?;
+        ahead.retain(|job| !in_cache(&self.cache, &job.fetch));
         self.refuse_offline(&jobs)?;
         if self.context.mirrors.mirrors.only {
             let lacking: Vec<(String, Option<Sha256>)> = jobs
@@ -987,13 +1056,12 @@ impl<'a> Loop<'a> {
         )
         .map_err(|error| self.as_left(error))?;
         let (size, room) = budget(lacking.iter().copied());
+        let told = || lacking.iter().copied().chain(&ahead);
         let planned = fetch::planned(
             self.context,
-            lacking
-                .iter()
-                .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+            told().map(|job| (fetch::host_of(job), job.fetch.expect.size)),
         );
-        let called = fetch::called(lacking.iter().map(|job| job.label.as_str()), planned.files);
+        let called = fetch::called(told().map(|job| job.label.as_str()), planned.files);
         fetch::tell_planned(&self.context.output, &called, &planned);
         let roomy = super::confirm(
             &self.context.output,
@@ -1009,8 +1077,21 @@ impl<'a> Loop<'a> {
         let fetched = fetch::all(self.context, &self.net, &self.cache, jobs)
             .await
             .map_err(|error| self.as_left(error))?;
-        self.tell_downloaded(&fetched, started);
-        Ok(fetched)
+        if ahead.is_empty() {
+            self.tell_downloaded(&fetched, started);
+            return Ok(Batch {
+                fetched,
+                ahead: None,
+            });
+        }
+        let digests = ahead
+            .iter()
+            .filter_map(|job| job.fetch.expect.sha256)
+            .collect();
+        Ok(Batch {
+            fetched,
+            ahead: Some((digests, started)),
+        })
     }
 
     /// `error`, saying what a stop before placing left: nothing changed, or once this run wrote
@@ -1107,7 +1188,15 @@ impl<'a> Loop<'a> {
         files: &[(String, &LockedFile)],
         available: Option<&[bool]>,
     ) -> Result<Vec<Fetched>, Error> {
+        let told = self
+            .ahead
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         if files.is_empty() {
+            if let Some(told) = told {
+                self.tell_downloaded(&told.fetched, told.started);
+            }
             return Ok(Vec::new());
         }
         let looked;
@@ -1150,22 +1239,7 @@ impl<'a> Loop<'a> {
             .filter(|(_, available)| !**available)
             .filter_map(|(description, _)| description.size)
             .fold(0, u64::saturating_add);
-        let lacking = || {
-            descriptions
-                .iter()
-                .zip(available)
-                .filter(|(_, available)| !**available)
-                .map(|(description, _)| description)
-        };
-        let planned = fetch::planned(
-            self.context,
-            lacking().map(|description| (description.host.clone(), description.size)),
-        );
-        let called = fetch::called(
-            lacking().map(|description| description.label.as_str()),
-            planned.files,
-        );
-        fetch::tell_planned(&self.context.output, &called, &planned);
+        self.tell_untold(&descriptions, files, available, told.as_ref());
         let roomy = super::confirm(
             &self.context.output,
             self.yes(),
@@ -1190,13 +1264,50 @@ impl<'a> Loop<'a> {
         )
         .await
         .map_err(|error| self.as_left(error))?;
-        self.tell_downloaded(&fetched, started);
+        match told {
+            Some(told) => self.tell_downloaded(told.fetched.iter().chain(&fetched), told.started),
+            None => self.tell_downloaded(&fetched, started),
+        }
         Ok(fetched)
     }
 
-    fn tell_downloaded(&self, fetched: &[Fetched], started: Instant) {
+    /// says what placing downloads before it starts: the `files` `available` says the cache
+    /// lacks, described by `descriptions`, but for those relocking `told` ahead.
+    fn tell_untold(
+        &self,
+        descriptions: &[fetch::Description],
+        files: &[(String, &LockedFile)],
+        available: &[bool],
+        told: Option<&Ahead>,
+    ) {
+        let untold = || {
+            descriptions
+                .iter()
+                .zip(files)
+                .zip(available)
+                .filter(|((_, (_, file)), available)| {
+                    !**available && told.is_none_or(|told| !told.digests.contains(&file.sha256))
+                })
+                .map(|((description, _), _)| description)
+        };
+        let planned = fetch::planned(
+            self.context,
+            untold().map(|description| (description.host.clone(), description.size)),
+        );
+        let called = fetch::called(
+            untold().map(|description| description.label.as_str()),
+            planned.files,
+        );
+        fetch::tell_planned(&self.context.output, &called, &planned);
+    }
+
+    fn tell_downloaded<'f>(
+        &self,
+        fetched: impl IntoIterator<Item = &'f Fetched>,
+        started: Instant,
+    ) {
         let downloaded: Vec<&Fetched> = fetched
-            .iter()
+            .into_iter()
             .filter(|fetched| fetched.origin == Origin::Network)
             .collect();
         if !downloaded.is_empty() {

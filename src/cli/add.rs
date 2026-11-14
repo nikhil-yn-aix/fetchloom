@@ -1039,6 +1039,7 @@ pub(super) async fn sync_add(
     let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads, stop)?;
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
+    work.placing_next();
     let (lock, before) = work
         .relock(manifest, old, &Upgrade::Nothing, given)
         .instrument(tracing::debug_span!("relock"))

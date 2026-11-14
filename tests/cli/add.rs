@@ -1834,3 +1834,77 @@ fn links_of_a_list_that_fail_are_fixed_on_their_lines() -> Result {
     }
     Ok(())
 }
+
+/// a hugging face dataset whose hub states one file's SHA-256 and not the other's downloads the
+/// one to learn its hash before the other, and the run tells both as one total before and after.
+/// a sync of the same entry on a fresh machine tells it alike.
+#[cfg(debug_assertions)]
+#[test]
+fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (card, rows) = (b"# rows\n".as_slice(), vec![b'r'; 3000]);
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let answer = |body: serde_json::Value| {
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+    };
+    let hub = Routes::start(vec![
+        (
+            "/api/datasets/lab/rows/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData".to_owned(),
+            answer(serde_json::json!({"id": "lab/rows", "sha": commit, "tags": []})),
+        ),
+        (
+            format!("/api/datasets/lab/rows/tree/{commit}?recursive=true"),
+            answer(serde_json::json!([
+                {"type": "file", "oid": "1", "size": card.len(), "path": "README.md"},
+                {"type": "file", "oid": "2", "size": rows.len(), "path": "rows.parquet",
+                 "lfs": {"oid": sha256_hex(&rows), "size": rows.len(), "pointerSize": 130}},
+            ])),
+        ),
+    ])?;
+    let resolve = format!("/huggingface.co/datasets/lab/rows/resolve/{commit}");
+    let files = Routes::start(vec![
+        (format!("{resolve}/README.md"), file(card, "\"c\"")),
+        (format!("{resolve}/rows.parquet"), file(&rows, "\"r\"")),
+    ])?;
+    let run = |folder: &std::path::Path, args: &[&str], cache: &std::path::Path| -> Result {
+        let output = sandbox
+            .command_in(folder, args)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_SOURCES", &files.url)
+            .env("FETCHLOOM_CACHE", cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let told = |verb: &str| -> Vec<&str> {
+            stderr
+                .lines()
+                .map(str::trim_start)
+                .filter(|line| line.starts_with(verb))
+                .collect()
+        };
+        assert_eq!(
+            told("Downloading "),
+            ["Downloading 2 files · 2.9 KiB · the time shows once it starts"],
+            "{stderr}"
+        );
+        let after = told("Downloaded ");
+        assert!(
+            matches!(after.as_slice(), [line] if line.starts_with("Downloaded 2 files · 2.9 KiB in ")),
+            "{stderr}"
+        );
+        Ok(())
+    };
+    run(
+        &sandbox.work(),
+        &["add", "hf:datasets/lab/rows"],
+        &sandbox.cache(),
+    )?;
+    let clone = sandbox.folder("clone")?;
+    fs::copy(sandbox.work().join("data.toml"), clone.join("data.toml"))?;
+    run(&clone, &["sync"], &sandbox.folder("cold")?)?;
+    Ok(())
+}

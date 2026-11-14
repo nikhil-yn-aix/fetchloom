@@ -1277,6 +1277,7 @@ pub(super) async fn sync_all(
         }
         Read::Planned(seen) => seen,
     };
+    work.placing_next();
     let (lock, before) = work
         .relock(
             manifest,
