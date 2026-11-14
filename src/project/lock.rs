@@ -1789,9 +1789,9 @@ mod tests {
         );
     }
 
-    /// a dataset that asks for no web page keeps the spec it always had, so data.lock files
-    /// written before stay up to date; taking `web_page = true` away changes it, and the pin made
-    /// with it counts for nothing.
+    /// a dataset that asks for no web page has the spec it has without the key, so its pin stays
+    /// up to date; taking `web_page = true` away changes it, and the pin made with it counts for
+    /// nothing.
     #[test]
     fn web_page_joins_the_spec_only_when_asked() {
         let entry = |extra: &str| {

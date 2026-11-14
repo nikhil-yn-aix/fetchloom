@@ -483,8 +483,8 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     }
 }
 
-/// flushes directory entries on unix, where flushing a file does not publish its name durably.
-/// other platforms keep their own publication behavior.
+/// flushes the entries of the folder `path` on unix, where flushing a file does not make its name
+/// last. elsewhere it does nothing.
 #[cfg_attr(
     not(unix),
     expect(

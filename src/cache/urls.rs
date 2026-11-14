@@ -44,6 +44,7 @@ struct Index {
 }
 
 impl Index {
+    /// where the latest line of `key` this run knows of starts.
     fn latest(&self, key: u64) -> Option<u32> {
         if let Some(start) = self.recent.get(&key) {
             return Some(*start);
@@ -340,6 +341,7 @@ fn tag(key: u64) -> u32 {
     u32::try_from(key & u64::from(u32::MAX)).unwrap_or_default()
 }
 
+/// an entry's key and where its line starts.
 fn parse(entry: &[u8; ENTRY]) -> (u64, u32) {
     let (key, start) = entry.split_at(8);
     (
@@ -404,6 +406,7 @@ fn checked(line: &[u8]) -> Option<&[u8]> {
     (line[CHECK - 1] == b' ' && check(json) == line[..CHECK - 1]).then_some(json)
 }
 
+/// puts `bytes` at `path` in one step, through a file of its own in `scratch`.
 fn replace(scratch: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = scratch.join(format!("{:016x}.urls", fastrand::u64(..)));
     fs::write(&temporary, bytes)?;

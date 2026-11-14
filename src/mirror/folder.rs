@@ -768,6 +768,7 @@ impl Target {
         }
     }
 
+    /// removes `entry` when it is an unfinished push file a day older than `now`.
     fn sweep_one(&self, entry: &fs::DirEntry, now: SystemTime) {
         let unfinished = entry.file_name().to_str().is_some_and(is_unfinished);
         let old = entry

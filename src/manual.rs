@@ -16,9 +16,8 @@ fn rendered() -> String {
             (command.get_name().to_owned(), about.unwrap_or_default())
         })
         .collect();
-    // the name line takes the one-line summary and the description what fetchloom does and the
-    // welcome. clap_mangen would point each command at a page of its own, which the release does
-    // not ship
+    // one page for the whole program: clap_mangen would point each command at a page of its own,
+    // which the release does not ship
     let mut top = definition
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .long_about(crate::cli::description())
