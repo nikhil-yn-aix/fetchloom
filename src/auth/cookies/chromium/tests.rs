@@ -1,10 +1,17 @@
 use std::cell::RefCell;
+use std::ffi::OsString;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
 use rusqlite::Connection;
 
 use super::*;
+
+/// chromium's fixed linux key, PBKDF2-HMAC-SHA1 of "peanuts" over "saltysalt" once, as python's
+/// `hashlib.pbkdf2_hmac` and openssl's `kdf` give it.
+const PEANUTS: [u8; 16] = [
+    0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27, 0x78,
+];
 
 /// a value as chromium seals it with `key` under `tag`: from version 24 after the SHA-256 of its
 /// cookie's domain, then AES-128 in CBC mode over sixteen spaces.
@@ -55,13 +62,7 @@ fn database(path: &Path, version: i64, rows: &[Row<'_>]) {
 /// `components/os_crypt/async/common/encryptor.cc`.
 #[test]
 fn keys_derive_as_chromium_derives_them() {
-    assert_eq!(
-        derive(b"peanuts", 1),
-        [
-            0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27,
-            0x27, 0x78
-        ]
-    );
+    assert_eq!(derive(b"peanuts", 1), PEANUTS);
     assert_eq!(
         derive(b"", 1),
         [
@@ -69,6 +70,48 @@ fn keys_derive_as_chromium_derives_them() {
             0xd1, 0x7f
         ]
     );
+}
+
+/// the store keeps linux's `v11` key and macos's `v10` key, and a test must not open it.
+#[test]
+fn only_linuxs_v10_tag_has_a_key_without_the_credential_store() {
+    let chrome = BROWSERS[0];
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        assert_eq!(chrome.key("v10"), Some(PEANUTS));
+    }
+    for tag in ["", "v1", "v20"] {
+        assert_eq!(chrome.key(tag), None, "{tag:?}");
+    }
+}
+
+/// an `XDG_CONFIG_HOME` counts on linux only when it is absolute, as the XDG base directory
+/// spec says; windows keeps its cookies where only the browser may open them.
+#[test]
+fn a_browsers_folder_is_where_its_system_keeps_it() {
+    let chrome = BROWSERS[0];
+    let root = |config: Option<&str>| {
+        chrome.root(&|name: &str| match name {
+            "HOME" => Some("/home/someone".into()),
+            "XDG_CONFIG_HOME" => config.map(OsString::from),
+            _ => None,
+        })
+    };
+    let default = "/home/someone/.config/google-chrome";
+    for (config, linux) in [
+        (None, default),
+        (Some(""), default),
+        (Some("config"), default),
+        (Some("/xdg"), "/xdg/google-chrome"),
+    ] {
+        let expected = if cfg!(windows) {
+            None
+        } else if cfg!(target_os = "macos") {
+            Some("/home/someone/Library/Application Support/Google/Chrome".into())
+        } else {
+            Some(PathBuf::from(linux))
+        };
+        assert_eq!(root(config), expected, "XDG_CONFIG_HOME {config:?}");
+    }
 }
 
 #[test]
