@@ -1159,11 +1159,16 @@ impl Net {
                         quiet.as_mut().reset(idle);
                         continue;
                     }
-                    break Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        self.idle.as_secs()
-                    )));
+                    // a process stopped past its deadline, as a sleeping laptop's is, finds the
+                    // deadline and the server's waiting bytes ready together
+                    match tokio::time::timeout(Duration::ZERO, response.chunk()).await {
+                        Ok(next) => next,
+                        Err(_) => break Err(failure::transient(format!(
+                            "{} sent nothing for {} s",
+                            host(url),
+                            self.idle.as_secs()
+                        ))),
+                    }
                 }
                 () = &mut lap, if watch.is_some() => {
                     let now = Instant::now();

@@ -50,6 +50,34 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn bytes_waiting_when_the_idle_deadline_is_found_passed_are_no_silence() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let mut net = net(&url);
+    net.idle = std::time::Duration::from_secs(30);
+    // a process stopped for two minutes, as a laptop's lid or SIGSTOP stops it, wakes with its
+    // deadline long gone and the server's bytes in the socket; both are ready at once, and the
+    // order a select picks them in is random, so the stop is tried many times
+    for _ in 0..32 {
+        let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+        let (sender, _written) = tokio::sync::mpsc::channel(16);
+        let listener = |_| Ok(());
+        let mut reading =
+            std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
+        assert!(poll(reading.as_mut()).is_pending());
+        tokio::time::advance(std::time::Duration::from_mins(2)).await;
+        source.send(Bytes::from_static(b"abcd")).await.unwrap();
+        drop(source);
+        let std::task::Poll::Ready(read) = poll(reading.as_mut()) else {
+            panic!("the bytes and the end were both waiting");
+        };
+        assert!(
+            matches!(read, Ok(None)),
+            "the waiting bytes were taken for silence"
+        );
+    }
+}
+
 #[tokio::test]
 async fn an_uncontended_claim_rechecks_bytes_published_after_the_cache_miss() {
     let bytes = b"data";
