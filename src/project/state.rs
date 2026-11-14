@@ -371,10 +371,6 @@ impl serde::de::Visitor<'_> for Kept<'_> {
     fn visit_str<E>(self, path: &str) -> Result<Self::Value, E> {
         Ok((self.0)(path).then(|| path.to_owned()))
     }
-
-    fn visit_string<E>(self, path: String) -> Result<Self::Value, E> {
-        Ok((self.0)(&path).then_some(path))
-    }
 }
 
 /// a block of records: the path of its first record, and where its bytes start and end.
