@@ -13,6 +13,7 @@ use url::{Host, Url};
 use super::address::{Proxies, Typed};
 use super::{Net, Shown};
 use crate::account::Account;
+use crate::auth::site::{Saved, moment};
 use crate::error::{Error, Kind};
 
 /// what one host's saved credential sends.
@@ -70,6 +71,35 @@ impl Site {
             what,
             again,
         })
+    }
+
+    /// the credential `saved` for `host`, as requests carry it. none for a header no request can
+    /// carry.
+    pub(crate) fn saved(host: &str, saved: &Saved) -> Option<Site> {
+        let (headers, cookies) = match saved {
+            Saved::Token { token } => (
+                vec![(header::AUTHORIZATION, format!("Bearer {}", token.trim()))],
+                Vec::new(),
+            ),
+            Saved::Header { name, value } => (
+                vec![(HeaderName::from_bytes(name.as_bytes()).ok()?, value.clone())],
+                Vec::new(),
+            ),
+            Saved::Cookies { cookies, .. } => (
+                Vec::new(),
+                cookies
+                    .iter()
+                    .map(|cookie| Cookie {
+                        name: cookie.name.clone(),
+                        value: cookie.value.clone(),
+                        path: cookie.path.clone(),
+                        secure: cookie.secure,
+                        expires: cookie.expires.map(moment),
+                    })
+                    .collect(),
+            ),
+        };
+        Site::new(host, headers, cookies, saved.what(), saved.again(host))
     }
 
     /// whether the credential is for the host and port of `url`.
@@ -467,13 +497,19 @@ fn cookie_header(
 }
 
 impl Net {
-    /// sends each website's saved credential, from `find`, with the requests for its host and
-    /// port, looked for when the first request needs one.
+    /// sends each website's saved credential, from `find`, each with its host, with the requests
+    /// for that host and port, looked for when the first request needs one.
     pub(crate) fn finding_sites(
         mut self,
-        find: impl FnOnce() -> Vec<Site> + Send + 'static,
+        find: impl FnOnce() -> Vec<(String, Saved)> + Send + 'static,
     ) -> Net {
-        self.sites = Sites(Arc::new(LazyLock::new(Box::new(find))));
+        let sites = move || {
+            find()
+                .iter()
+                .filter_map(|(host, saved)| Site::saved(host, saved))
+                .collect()
+        };
+        self.sites = Sites(Arc::new(LazyLock::new(Box::new(sites))));
         self
     }
 

@@ -27,7 +27,9 @@ fn net(sites: Vec<Site>) -> Net {
         credentials: Vec::new(),
         split: Splitting::Never,
     };
-    Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {})).finding_sites(move || sites)
+    let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+    net.sites = Sites(Arc::new(LazyLock::new(Box::new(move || sites))));
+    net
 }
 
 /// the value of `name` in a request for `url` that `net` builds on its first origin.

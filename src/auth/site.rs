@@ -5,13 +5,12 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use reqwest::header::{self, HeaderName};
+use reqwest::header::HeaderName;
 use serde::{Deserialize, Serialize};
 
 use super::{Origin, store};
 use crate::error::{Error, Kind};
 use crate::machine::Var;
-use crate::net::site::Site;
 
 /// how the key store's ids of websites start.
 const PREFIX: &str = "site:";
@@ -176,34 +175,6 @@ impl Saved {
             Saved::Token { .. } | Saved::Header { .. } => None,
         }
     }
-
-    /// the credential as requests to `host` carry it. none for a header no request can carry.
-    pub(crate) fn site(&self, host: &str) -> Option<Site> {
-        let (headers, cookies) = match self {
-            Saved::Token { token } => (
-                vec![(header::AUTHORIZATION, format!("Bearer {}", token.trim()))],
-                Vec::new(),
-            ),
-            Saved::Header { name, value } => (
-                vec![(HeaderName::from_bytes(name.as_bytes()).ok()?, value.clone())],
-                Vec::new(),
-            ),
-            Saved::Cookies { cookies, .. } => (
-                Vec::new(),
-                cookies
-                    .iter()
-                    .map(|cookie| crate::net::site::Cookie {
-                        name: cookie.name.clone(),
-                        value: cookie.value.clone(),
-                        path: cookie.path.clone(),
-                        secure: cookie.secure,
-                        expires: cookie.expires.map(moment),
-                    })
-                    .collect(),
-            ),
-        };
-        Site::new(host, headers, cookies, self.what(), self.again(host))
-    }
 }
 
 /// a browser's name as people write it, from what `--browser` took: `firefox:work` is firefox.
@@ -324,13 +295,13 @@ pub(crate) fn forget(var: Var<'_>, host: &str) -> std::io::Result<Option<Origin>
     Ok(Some(origin(var, place)))
 }
 
-/// every website's saved credential, as requests carry them: each to its own host alone.
-pub(crate) fn sites(var: Var<'_>) -> Vec<Site> {
+/// every website's saved credential, each with the host it goes to alone.
+pub(crate) fn sites(var: Var<'_>) -> Vec<(String, Saved)> {
     hosts(var)
         .into_iter()
         .filter_map(|host| {
             let (saved, _) = find(var, &host)?;
-            saved.site(&host)
+            Some((host, saved))
         })
         .collect()
 }
