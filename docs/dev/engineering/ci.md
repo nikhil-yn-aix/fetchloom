@@ -121,7 +121,7 @@ external links stay outside PR correctness: an unavailable service can make the 
 
 ## live-source checks
 
-`.github/workflows/live.yml` runs the ignored public-service tests weekly on linux, Windows and macos, outside the required result. `--nocapture` keeps credential-dependent skips visible; their lines also appear in the step summary. no credentials are supplied by the workflow. logs are retained for fourteen days, and all jobs have a 45-minute timeout. each job restores the build cache ci's test job keeps for its platform and saves none of its own.
+`.github/workflows/live.yml` runs the ignored public-service tests weekly on linux, Windows and macos, outside the required result. `--nocapture` keeps credential-dependent skips visible; their lines also appear in the step summary. the Rust tests get the run's own github token, limited to `contents: read`, so github's API allows them 1,000 requests an hour; no other service's credentials are supplied. logs are retained for fourteen days, and all jobs have a 45-minute timeout. each job restores the build cache ci's test job keeps for its platform and saves none of its own.
 
 macos additionally runs the small public Zenodo add/restore/get and catalog-search journey in `python/mac_live.py`, with the debug executable the live tests built; every push checks the release executables in the artifact journeys. the deterministic cache-location, shared-cache, CloudStorage-path, offline-auth and completion checks belong to the [artifact journey](#installed-artifacts), so they do not depend on service uptime. live failures need classification as service, configuration or product failures; they are not retried until green.
 
