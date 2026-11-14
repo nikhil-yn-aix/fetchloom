@@ -105,7 +105,7 @@ impl<'a> Retry<'a> {
         };
         let capped = self.tries + MOST_TRIES.saturating_sub(self.spent + 1);
         let mut most = (self.tries + retries + waits).min(capped);
-        if let Some(left) = self.net.paces.refusals_left(&super::paced(self.url)) {
+        if let Some(left) = self.net.paces.refusals_left(&self.net.paced(self.url)) {
             most = most.min(self.tries + left.saturating_sub(1));
         }
         (self.tries, most.max(self.tries))
@@ -240,7 +240,7 @@ impl<'a> Retry<'a> {
             )));
         }
         // a host that refused for load pauses its next request, and the wait says how long
-        let paced = super::paced(self.url);
+        let paced = self.net.paced(self.url);
         if self.net.paces.busy(&paced) {
             return Err(busy(self.url));
         }
@@ -1570,8 +1570,9 @@ mod tests {
                     kept.lock().unwrap().push(wait);
                 }
             }),
-        );
-        let name = super::super::paced(&url);
+        )
+        .with_rules(crate::source::rules());
+        let name = net.paced(&url);
         let now = || tokio::time::Instant::now().into_std();
         let answer = |status, sent, share| pace::Answered {
             status,
@@ -1634,8 +1635,9 @@ mod tests {
                 }
             }),
         )
-        .with_retries(10);
-        let name = super::super::paced(&url);
+        .with_retries(10)
+        .with_rules(crate::source::rules());
+        let name = net.paced(&url);
         let mut retry = Retry::new(&net, &url);
         let refused = loop {
             let sent = net.pace(&url).await.unwrap().sent;

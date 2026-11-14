@@ -124,7 +124,7 @@ impl Api for Net {
         let url = self.asking(url)?;
         if self
             .paces
-            .holds(&super::paced(&url), tokio::time::Instant::now().into_std())
+            .holds(&self.paced(&url), tokio::time::Instant::now().into_std())
         {
             return Err(Error::new(
                 Kind::NetworkStatus,

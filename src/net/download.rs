@@ -845,7 +845,7 @@ impl Net {
             .send_body_holding(from, fetch.mirror, shape, holding)
             .await?;
         let answer_at = Instant::now();
-        let host = super::paced(&fetch.from);
+        let host = self.paced(&fetch.from);
         if let Some(super::Answering(waited)) = response.extensions().get() {
             self.heard.answered(&host, *waited);
         }

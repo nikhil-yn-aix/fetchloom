@@ -111,7 +111,7 @@ fn concurrent_downloads_respect_the_hosts_quota() {
 
 #[test]
 fn a_host_is_asked_no_faster_than_its_limit_allows() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     for window in 0..3 {
         let at = start + Duration::from_secs(window);
@@ -277,10 +277,11 @@ fn a_503s_retry_after_holds_every_request_to_its_host() {
         None,
         "a 503 that says nothing of when holds nothing"
     );
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let at = |seconds: u64| start + Duration::from_secs(seconds);
-    let arxiv = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
+    let arxiv =
+        crate::source::rules().paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
     for host in ["zenodo.org", arxiv.as_str()] {
         let ticket = paces.admit(host, at(0)).unwrap();
         let refused = answered(StatusCode::SERVICE_UNAVAILABLE, ticket.sent, at(0), 0.0);
@@ -312,7 +313,7 @@ fn limit(remaining: u64, reset: u64, stamp: Option<u64>) -> Limit {
 
 #[test]
 fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let first = paces.admit("zenodo.org", start).unwrap();
     Paces::heard(first, vec![limit(2, 10, None)], start);
@@ -344,7 +345,7 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
 /// waits are too short to tell, and other hosts are not held.
 #[test]
 fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let mut starts = Vec::new();
     let mut at = start;
@@ -381,9 +382,9 @@ fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
 /// to another, while the mirror on google's storage is not held.
 #[test]
 fn requests_to_arxivs_hosts_start_three_seconds_apart_whichever_they_ask() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
-    let name = |link: &str| crate::net::paced(&Url::parse(link).unwrap());
+    let name = |link: &str| crate::source::rules().paced(&Url::parse(link).unwrap());
     let first = paces.admit(&name("https://export.arxiv.org/api/query"), start);
     drop(first.unwrap());
     let later = start + Duration::from_secs(1);
@@ -452,8 +453,9 @@ fn answered(status: StatusCode, sent: Instant, at: Instant, share: f64) -> Answe
 /// longer, until an answer that is no refusal.
 #[test]
 fn a_paced_host_that_refuses_for_load_is_asked_less_often_until_it_answers() {
-    let paces = Paces::default();
-    let host = crate::net::paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
+    let host =
+        crate::source::rules().paced(&Url::parse("https://export.arxiv.org/api/query").unwrap());
     let start = Instant::now();
     let at = |seconds: u64| start + Duration::from_secs(seconds);
     let sent = paces.admit(&host, at(0)).unwrap().sent;
@@ -481,8 +483,9 @@ fn a_paced_host_that_refuses_for_load_is_asked_less_often_until_it_answers() {
 /// the host, unless an answer between them ended the run.
 #[test]
 fn a_paced_host_that_keeps_refusing_is_asked_nothing_more_while_others_are_never_paused() {
-    let paces = Paces::default();
-    let ncbi = crate::net::paced(&Url::parse("https://eutils.ncbi.nlm.nih.gov/x").unwrap());
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
+    let ncbi =
+        crate::source::rules().paced(&Url::parse("https://eutils.ncbi.nlm.nih.gov/x").unwrap());
     let start = Instant::now();
     let later = |minutes: u64| start + Duration::from_secs(61 * minutes);
     let refused = |sent: Instant| answered(StatusCode::TOO_MANY_REQUESTS, sent, sent, 0.0);
@@ -528,7 +531,7 @@ fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
         date("Fri, 30 Oct 2026 08:36:46 GMT"),
         date("Fri, 30 Oct 2026 09:13:26 GMT"),
     ] {
-        let paces = Paces::default();
+        let paces = Paces::spaced_by(crate::source::rules().spacing);
         let start = Instant::now();
         let first = paces.admit("zenodo.org", start).unwrap();
         let stated = limits(
@@ -556,7 +559,7 @@ fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
 /// the first request to wait for the reset tells of the wait; a shorter one passes without a line.
 #[test]
 fn a_wait_is_told_once_while_half_a_second_is_left() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let ticket = paces.admit("zenodo.org", start).unwrap();
     Paces::heard(ticket, vec![limit(0, 2, None)], start);
@@ -573,7 +576,7 @@ fn a_wait_is_told_once_while_half_a_second_is_left() {
 
 #[test]
 fn short_waits_just_after_a_reset_pass_quietly() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let wait = |at: Instant, reset: u64| {
         let ticket = paces.admit("zenodo.org", at).unwrap();
@@ -591,7 +594,7 @@ fn short_waits_just_after_a_reset_pass_quietly() {
 
 #[test]
 fn a_limit_that_resets_too_late_to_wait_for_is_left_to_the_host() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let first = paces.admit("huggingface.co", start).unwrap();
     Paces::heard(first, vec![limit(0, 300, None)], start);
@@ -604,7 +607,7 @@ fn a_reset_too_far_to_add_to_a_clock_is_capped() {
     let answer = headers(&[("ratelimit", "\"api\";r=0;t=18446744073709551615")]);
     let stated = limits(StatusCode::TOO_MANY_REQUESTS, &answer, SystemTime::now());
     assert_eq!(stated[0].reset, FARTHEST);
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let ticket = paces.admit("huggingface.co", start).unwrap();
     Paces::heard(ticket, stated, start);
@@ -613,7 +616,7 @@ fn a_reset_too_far_to_add_to_a_clock_is_capped() {
 
 #[test]
 fn answers_from_one_window_keep_its_lowest_count() {
-    let paces = Paces::default();
+    let paces = Paces::spaced_by(crate::source::rules().spacing);
     let start = Instant::now();
     let tickets: Vec<_> = (0..3)
         .map(|_| paces.admit("zenodo.org", start).unwrap())
@@ -652,7 +655,7 @@ fn answers_from_one_window_keep_its_lowest_count() {
 #[test]
 fn missing_policy_headers_consume_remembered_allowances() {
     for another_policy in [false, true] {
-        let paces = Paces::default();
+        let paces = Paces::spaced_by(crate::source::rules().spacing);
         let start = Instant::now();
         let first = paces.admit("example.org", start).unwrap();
         let mut known = vec![limit(1, 10, Some(1_793_350_624))];

@@ -199,9 +199,16 @@ fn leading_number(text: &str) -> Option<u64> {
 }
 
 /// what the hosts said about their limits, and the requests on their way to each.
-#[derive(Default)]
 pub(super) struct Paces {
     hosts: Mutex<HashMap<String, Arc<Mutex<Pace>>>>,
+    /// how far apart requests paced under a name start, as their sources ask.
+    spacing: fn(&str) -> Option<Duration>,
+}
+
+impl Default for Paces {
+    fn default() -> Paces {
+        Paces::spaced_by(|_| None)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -284,6 +291,14 @@ impl Drop for Ticket {
 }
 
 impl Paces {
+    /// no limit heard yet, with requests paced under each name as far apart as `spacing` says.
+    pub(super) fn spaced_by(spacing: fn(&str) -> Option<Duration>) -> Paces {
+        Paces {
+            hosts: Mutex::default(),
+            spacing,
+        }
+    }
+
     /// a ticket for a request to `host` when its limits allow one at `now`, else the wait. a limit
     /// used up for longer than [`LONGEST`] is left to the host to enforce.
     pub(super) fn admit(&self, host: &str, now: Instant) -> Result<Ticket, Hold> {
@@ -301,7 +316,7 @@ impl Paces {
             .max_by_key(|known| known.reset)
             .copied();
         let Some(known) = blocking else {
-            if let Some(until) = pace.spaced(host, now) {
+            if let Some(until) = pace.spaced((self.spacing)(host), now) {
                 return Err(Hold {
                     until,
                     quota: None,
@@ -335,7 +350,7 @@ impl Paces {
     /// run of refusals. a refusal of a request sent before the last pause ended came in the same
     /// burst, as requests at once to NCBI do, and is not counted again.
     pub(super) fn answered(&self, host: &str, answer: &Answered) {
-        let Some(spacing) = crate::source::spacing(host) else {
+        let Some(spacing) = (self.spacing)(host) else {
             return;
         };
         let shared = {
@@ -441,10 +456,10 @@ pub(super) fn paused(spacing: Duration, refused: u32, share: f64) -> Duration {
 }
 
 impl Pace {
-    /// when a request to `host` at `now` must wait for: the host asks its requests to start apart
+    /// when a request at `now` must wait for: its host asks its requests to start `spacing` apart
     /// and the last one started too recently. else none, and the next may start a spacing later.
-    fn spaced(&mut self, host: &str, now: Instant) -> Option<Instant> {
-        let spacing = crate::source::spacing(host)?;
+    fn spaced(&mut self, spacing: Option<Duration>, now: Instant) -> Option<Instant> {
+        let spacing = spacing?;
         if let Some(next) = self.next.filter(|next| *next > now) {
             return Some(next);
         }

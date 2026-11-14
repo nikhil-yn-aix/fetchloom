@@ -222,7 +222,8 @@ async fn retaking_slots_does_not_consume_a_hosts_spacing_twice() {
         Arc::default(),
         Arc::new(|_| {}),
     )
-    .with_host_jobs(1);
+    .with_host_jobs(1)
+    .with_rules(crate::source::rules());
     let url = Url::parse("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi").unwrap();
     let other = Url::parse("https://healthy.example/file").unwrap();
     let now = || tokio::time::Instant::now().into_std();

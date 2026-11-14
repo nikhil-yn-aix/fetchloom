@@ -555,8 +555,15 @@ impl Net {
 
     /// follows the sources' `rules` about requests to their hosts.
     pub(crate) fn with_rules(mut self, rules: Rules) -> Net {
+        self.paces = pace::Paces::spaced_by(rules.spacing);
         self.rules = rules;
         self
+    }
+
+    /// the name requests to `url`'s host are paced and counted under, which hosts limited
+    /// together share, as arXiv's do.
+    pub(crate) fn paced(&self, url: &Url) -> String {
+        self.rules.paced(url)
     }
 
     /// hashes each download as `hashing` says, the run's batches and checksum processors.
@@ -756,7 +763,7 @@ impl Net {
                 at,
                 share: fastrand::f64(),
             };
-            self.paces.answered(&paced(&hop), &answer);
+            self.paces.answered(&self.paced(&hop), &answer);
             pace::Paces::heard(ticket, limits, at);
             self.mark_site(&mut response, &hop, first_origin, &mut site_sent);
             if !renewed
@@ -1038,7 +1045,7 @@ impl Net {
         url: &Url,
         mut holding: Option<&mut Holding<'_>>,
     ) -> Result<pace::Ticket, Error> {
-        let name = paced(url);
+        let name = self.paced(url);
         loop {
             self.stop.check()?;
             if self.paces.busy(&name) {
@@ -1120,8 +1127,8 @@ impl Net {
     }
 
     fn slots(&self, url: &Url) -> Arc<Semaphore> {
-        let name = paced(url);
-        let most = crate::source::most_at_once(&name)
+        let name = self.paced(url);
+        let most = (self.rules.most_at_once)(&name)
             .map_or(self.host_jobs, |most| most.min(self.host_jobs));
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
@@ -1193,12 +1200,6 @@ pub(crate) fn host(url: &Url) -> &str {
         .map_or("the server", |host| host.trim_end_matches('.'))
 }
 
-/// the name requests to `url`'s host are paced and counted under, which hosts limited together
-/// share, as arXiv's do.
-pub(crate) fn paced(url: &Url) -> String {
-    crate::source::paced_as(&host(url).to_ascii_lowercase())
-}
-
 /// where `response` redirects a request for `from`, when it is a redirect to an http or https
 /// link.
 fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
@@ -1234,7 +1235,8 @@ mod tests {
             credentials: Vec::new(),
             split: Splitting::WhenSlow,
         };
-        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}))
+            .with_rules(crate::source::rules());
         let link = |text: &str| Url::parse(text).unwrap();
         let held = net.try_permit(&link("https://export.arxiv.org/api/query"));
         assert!(held.is_some());
