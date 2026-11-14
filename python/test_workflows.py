@@ -1,4 +1,5 @@
-"""the workflows pin each tool's version once, in their env, and agree on the tools they share."""
+"""the workflows pin each tool's version once, in their env, agree on the tools they share and run
+on named images."""
 
 from pathlib import Path
 import re
@@ -14,7 +15,7 @@ def pins(path):
     return dict(re.findall(r"^  (PIN_\w+): (\S+)$", path.read_text(encoding="utf-8"), re.MULTILINE))
 
 
-class PinTests(unittest.TestCase):
+class WorkflowTests(unittest.TestCase):
     def test_workflows_that_install_one_tool_pin_one_version(self):
         seen = {}
         for path in WORKFLOWS:
@@ -29,6 +30,12 @@ class PinTests(unittest.TestCase):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 with self.subTest(workflow=path.name, line=number):
                     self.assertNotRegex(line, r"^\s+(?:tool|version|checksum): [^$]*\d", "name a PIN_ variable")
+
+    def test_jobs_run_on_named_images(self):
+        """a -latest label moves to a new image without a change here, so a job never uses one."""
+        for path in WORKFLOWS:
+            with self.subTest(workflow=path.name):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^\s+runs-on: \S*-latest\b")
 
 
 if __name__ == "__main__":
