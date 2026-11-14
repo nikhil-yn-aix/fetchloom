@@ -37,7 +37,7 @@ pub(crate) struct Palette {
 pub(crate) enum Theme {
     /// the terminal's own sixteen colors, which follow whatever theme it has
     Ansi,
-    /// a fern green for work and for what a person types, a leaf green for what finished, amber
+    /// a sage green for work and for what a person types, a leaf green for what finished, amber
     /// and red, for a dark background: the docs site's colors, which `python/test_site.py` holds
     /// these to
     Dark,
@@ -58,17 +58,17 @@ impl Theme {
             },
             Theme::Dark => Palette {
                 done: rgb(0xa6, 0xcd, 0x6c),
-                work: rgb(0x79, 0xc9, 0xae),
+                work: rgb(0x97, 0xcf, 0xa8),
                 warn: rgb(0xe3, 0xb2, 0x57),
                 fail: rgb(0xf1, 0x78, 0x86),
-                accent: rgb(0x79, 0xc9, 0xae),
+                accent: rgb(0x97, 0xcf, 0xa8),
             },
             Theme::Light => Palette {
-                done: rgb(0x2a, 0x7e, 0x3b),
-                work: rgb(0x02, 0x78, 0x64),
+                done: rgb(0x36, 0x76, 0x27),
+                work: rgb(0x29, 0x6a, 0x42),
                 warn: rgb(0x89, 0x59, 0x00),
                 fail: rgb(0xb2, 0x26, 0x3a),
-                accent: rgb(0x02, 0x78, 0x64),
+                accent: rgb(0x29, 0x6a, 0x42),
             },
         }
     }
