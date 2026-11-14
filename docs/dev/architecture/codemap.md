@@ -52,6 +52,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/search.rs` | `search`, its candidate rows, and the choice among candidates that `add` and `get` offer | `run`, `pick` | `Report`, `find` |
 | `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache, the weekly size reminder, and `Readers`, the objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop`, `Readers` |
 | `src/cli/cache/inputs.rs` | `cache gc --inputs`: raw data only built recipes read, freed where a folder mirror holds a copy | `gc` |  |
+| `src/cli/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
 | `src/cli/auth/site.rs` | `auth login <host>` with a website's own token, header or cookies from a file or a browser, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees`, `from_file`, `from_browser`, `tell` |
 | `src/cli/settings.rs` | `settings`: each value a run would use and where it came from, the `-v` line of what a run spends, and warnings for misnamed or unread variables | `run` | `Report`, `tell_spending`, `warn_misnamed`, `warn_unread` |
@@ -245,7 +246,6 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/cache/changed.rs` | objects found changed, remembered after repair so projects can check their old hardlinks | `Cache::mark_changed`, `Doubt` | `Cache::trusted`, `Cache::mark_replaced`, `Cache::changed` |
 | `src/cache/upkeep.rs` | the projects that use the cache, scans, verification and gc, and how each project uses the objects it needs | `Cache::register`, `Needed` | `Use`, `Supply`, `Freed`, `Checked`, `Cache::scan_objects`, `Cache::sweep_with_stop`, `sweep_results`, `Cache::verify_scanned`, `Cache::free_input` |
 | `src/cache/urls.rs` | what each link served last: records appended to 16 shards with an index of where each starts, found by a run's first read of a shard's index, and written again by gc | `Shards::find`, `Shards::save` | `Shards::rewrite`, `SHARDS` |
-| `src/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cache/failure.rs` | the filesystem failures inspection and cleanup keep to report | `Failure` |  |
 
 ## archive

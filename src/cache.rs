@@ -12,7 +12,6 @@ mod staging;
 mod unpacked;
 mod upkeep;
 mod urls;
-mod usage;
 
 #[cfg(test)]
 mod link_tests;
@@ -40,8 +39,9 @@ pub(crate) use results::seal_captured;
 pub(crate) use results::{Built, Seen};
 pub(crate) use staging::{Staging, clear_tree, enterable};
 pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
-pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Supply, Use};
-pub(crate) use usage::Usage;
+#[cfg(test)]
+pub(crate) use upkeep::Object;
+pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Use};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};

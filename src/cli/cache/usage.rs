@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-use super::upkeep::{GRACE, Needed, Scan, Use};
+use crate::cache::{GRACE, Needed, Scan, Use};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::Method;
@@ -188,10 +188,9 @@ fn file_has_other_names(path: &Path, metadata: &fs::Metadata) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::super::Cache;
-    use super::super::tests::store;
-    use super::super::upkeep::Object;
     use super::*;
+    use crate::cache::tests::store;
+    use crate::cache::{Cache, Object};
     use crate::digest;
     use crate::place::Method;
     use crate::project::state::{Look, Placed, State};
@@ -264,7 +263,7 @@ mod tests {
             told: true,
             ..Needed::default()
         };
-        let input = Use::Input(super::super::upkeep::Supply::Source);
+        let input = Use::Input(crate::cache::Supply::Source);
         needed.add(digest::sha256(b"input"), input);
         needed.add(digest::sha256(b"placed"), input);
         needed.add(digest::sha256(b"placed"), Use::Placed);
@@ -347,7 +346,7 @@ mod tests {
             &[b"rsync -a\n", b"linked\n"],
         );
         // a drive without links leaves the second one a file of its own too
-        let unlinked = if super::super::tests::hardlinks(folder.path()) {
+        let unlinked = if crate::cache::tests::hardlinks(folder.path()) {
             9
         } else {
             9 + 7

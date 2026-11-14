@@ -2,6 +2,7 @@
 //! and `cache verify` hashes every object again.
 
 mod inputs;
+mod usage;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -12,8 +13,9 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
+use self::usage::Usage;
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Supply, Usage, Use};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Supply, Use};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
