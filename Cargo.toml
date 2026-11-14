@@ -25,11 +25,6 @@ include = [
     "/docs/user/reference/exit-codes.md",
     "/docs/user/reference/json-output.md",
 ]
-default-run = "fetchloom"
-
-[[bin]]
-name = "fetchloom"
-path = "src/main.rs"
 
 [dependencies]
 # decrypt the cookies chromium's browsers keep on linux and macos, AES-128 in CBC mode, whose key
