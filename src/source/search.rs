@@ -644,36 +644,26 @@ fn plain_words(words: &str) -> Vec<String> {
 }
 
 /// arXiv's papers whose titles hold the words, then those that hold them anywhere, as
-/// `super::arxiv::search` asks; arXiv states no size or downloads.
+/// `super::arxiv::search` asks.
 async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
-    Ok(super::arxiv::search(api, &plain_words(words), limit)
-        .await?
-        .into_iter()
-        .map(|found| Candidate {
-            reference: found.reference,
-            title: found.title,
-            source: Catalog::Arxiv.label(),
-            size: None,
-            downloads: None,
-            byline: found.byline,
-            note: found.note,
-            time: None,
-            files: None,
-            largest: None,
-        })
-        .collect())
+    let found = super::arxiv::search(api, &plain_words(words), limit).await?;
+    Ok(papers(found, Catalog::Arxiv))
 }
 
-/// the papers semantic scholar's relevance search finds, as `super::s2::search` asks; it states
-/// no size or downloads.
+/// the papers semantic scholar's relevance search finds, as `super::s2::search` asks.
 async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
-    Ok(super::s2::search(api, &plain_words(words), limit)
-        .await?
+    let found = super::s2::search(api, &plain_words(words), limit).await?;
+    Ok(papers(found, Catalog::S2))
+}
+
+/// the papers `catalog` found, as matches. a catalog of papers states no size or downloads.
+fn papers(found: Vec<super::Found>, catalog: Catalog) -> Vec<Candidate> {
+    found
         .into_iter()
         .map(|found| Candidate {
             reference: found.reference,
             title: found.title,
-            source: Catalog::S2.label(),
+            source: catalog.label(),
             size: None,
             downloads: None,
             byline: found.byline,
@@ -682,7 +672,7 @@ async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>,
             files: None,
             largest: None,
         })
-        .collect())
+        .collect()
 }
 
 async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
