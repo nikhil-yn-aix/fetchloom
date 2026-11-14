@@ -190,6 +190,63 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     Ok(())
 }
 
+/// a try that cannot go on from the bytes an earlier try of the run brought starts over, and says
+/// why: a server that sends the whole file again, or a file that changed on the server.
+#[test]
+fn a_try_that_starts_over_says_why() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let changed: Vec<u8> = body.iter().map(|byte| byte ^ 0xff).collect();
+    let cut = 150_000;
+    let length = body.len().to_string();
+    for (second, version, expected, why) in [
+        (
+            &body,
+            "\"v1\"",
+            &body,
+            "since the server sends the whole file instead of the rest",
+        ),
+        (
+            &changed,
+            "\"v2\"",
+            &changed,
+            "since the file changed on the server",
+        ),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(
+            "/big.bin",
+            vec![
+                reply(
+                    "200 OK",
+                    &[("Content-Length", &length), ("ETag", "\"v1\"")],
+                    &body[..cut],
+                ),
+                reply(
+                    "200 OK",
+                    &[("Content-Length", &length), ("ETag", version)],
+                    second,
+                ),
+            ],
+        )?;
+        let output = sandbox.run(&["get", &server.url, "-o", "big.bin"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let restarts: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.contains("Restarting"))
+            .collect();
+        assert_eq!(
+            restarts,
+            [format!(
+                " Restarting big.bin · the 146.5 KiB downloaded so far cannot be continued, {why}"
+            )],
+            "{stderr}"
+        );
+        assert_eq!(&fs::read(sandbox.work().join("big.bin"))?, expected);
+    }
+    Ok(())
+}
+
 /// how many files the cache's object store holds.
 fn objects(sandbox: &Sandbox) -> usize {
     fs::read_dir(sandbox.cache().join("objects"))

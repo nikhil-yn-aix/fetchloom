@@ -373,19 +373,33 @@ impl<'a> Watch<'a> {
         fetched
     }
 
-    /// says once that the download starts over when it goes on from `resumed`, before the bytes
-    /// an earlier run kept, which are then lost.
-    fn restarting(&self, resumed: u64) {
+    /// says once that the download starts over when it goes on from `resumed`, before bytes it
+    /// held, which are then lost: an earlier run's, or an earlier try's, with why, from what the
+    /// try before allowed and what the new answer, `resumable`, allows.
+    fn restarting(&self, resumed: u64, resumable: Resumable) {
         let earlier = self.earlier.load(Ordering::Relaxed);
-        if resumed < earlier && !self.restarted.swap(true, Ordering::Relaxed) {
-            self.output.mark(
-                "Restarting",
-                &format!(
-                    "{} · the {} an earlier run kept cannot be continued",
-                    self.job.label,
-                    units::size(earlier)
-                ),
-            );
+        let held = self.held.bytes.load(Ordering::Relaxed);
+        let lost = if resumed >= held {
+            return;
+        } else if held <= earlier {
+            format!(
+                "the {} an earlier run kept cannot be continued",
+                units::size(earlier)
+            )
+        } else {
+            let why = match (self.held.resumable(), resumable) {
+                (Resumable::No, _) => "the server cannot continue from them",
+                (_, Resumable::No) => "the server sends the whole file instead of the rest",
+                _ => "the file changed on the server",
+            };
+            format!(
+                "the {} downloaded so far cannot be continued, since {why}",
+                units::size(held)
+            )
+        };
+        if !self.restarted.swap(true, Ordering::Relaxed) {
+            self.output
+                .mark("Restarting", &format!("{} · {lost}", self.job.label));
         }
     }
 
@@ -487,7 +501,7 @@ impl<'a> Watch<'a> {
                 .store(watched.unwrap_or(u64::MAX), Ordering::Relaxed);
             self.free_from.store(resumed, Ordering::Relaxed);
         }
-        self.restarting(resumed);
+        self.restarting(resumed, resumable);
         let bar = self.bar();
         bar.message("Downloading", self.job.label.clone());
         bar.start(total, resumed);
