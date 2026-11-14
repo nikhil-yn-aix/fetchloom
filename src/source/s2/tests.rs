@@ -238,6 +238,36 @@ fn a_busy_api_suggests_a_key_and_other_errors_stay_as_they_are() {
     assert_eq!(other.help.as_deref(), Some("later"));
 }
 
+/// a key semantic scholar refuses is named by where it came from, and the help says how to
+/// replace it there: a variable by setting or unsetting it, a saved key through `fetchloom auth`.
+#[test]
+fn a_refused_s2_key_says_where_it_came_from() {
+    let variable = refused_key("s2:CorpusId:1", &Origin::Variable("S2_API_KEY"));
+    assert_eq!(variable.kind, Kind::AuthRequired);
+    assert_eq!(
+        variable.message,
+        "api.semanticscholar.org refused the key in S2_API_KEY for s2:CorpusId:1"
+    );
+    assert_eq!(
+        variable.help.as_deref(),
+        Some(
+            "the key may be old or wrong: set S2_API_KEY to a current key from https://www.semanticscholar.org/product/api#api-key-form, or unset S2_API_KEY to use the key `fetchloom auth login s2` saves"
+        )
+    );
+    let saved = refused_key(
+        "s2:CorpusId:1",
+        &Origin::File(std::path::PathBuf::from("/lab/credentials.json")),
+    );
+    assert_eq!(
+        saved.message,
+        "api.semanticscholar.org refused the key saved in /lab/credentials.json for s2:CorpusId:1"
+    );
+    assert_eq!(
+        saved.help.as_deref(),
+        Some("the key may be old or wrong: `fetchloom auth` shows where it comes from")
+    );
+}
+
 /// requests to the API go one at a time, a second apart with a key and three without one, and
 /// those to semantic scholar's pages are not paced.
 #[test]
