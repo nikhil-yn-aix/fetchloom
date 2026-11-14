@@ -507,6 +507,57 @@ fn a_website_that_refuses_is_offered_each_way_in() -> Result {
     Ok(())
 }
 
+/// the cookies file a refusal's sign-in asks for takes a path dragged into the terminal, which
+/// comes quoted, and `~`, and is asked for again when no file is at the path typed.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    std::fs::create_dir_all(home.join("my files"))?;
+    std::fs::write(
+        home.join("my files/cookies.txt"),
+        line("127.0.0.1", "/", false, 4_000_000_000, "sid", "s-dragged"),
+    )?;
+    let gated = Server::start(
+        "/data.csv",
+        vec![
+            reply("403 Forbidden", &[("Content-Length", "0")], b""),
+            file(b"a,b\n", "\"v1\""),
+        ],
+    )?;
+    let host = gated.url.trim_start_matches("http://");
+    let host = host.split_once('/').map_or(host, |(host, _)| host);
+    let get = sandbox.command(&["get", &gated.url, "-o", "data.csv"]);
+    let missing = home.join("nope.txt");
+    let keys = format!("2\"{}\"\r'~/my files/cookies.txt' \ry\r", missing.display());
+    let asked = format!("sign in to {host} with");
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &get, "", &asked, &keys)?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains("there is no file at ~/nope.txt"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(&format!(
+            "Signed in to {host} with 1 cookie from a cookies file"
+        )),
+        "{screen}"
+    );
+    assert!(!screen.contains("s-dragged"), "{screen}");
+    let heads = gated.requests();
+    assert!(
+        heads
+            .get(1)
+            .is_some_and(|head| head.contains("cookie: sid=s-dragged")),
+        "{heads:?}\n{screen}"
+    );
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;

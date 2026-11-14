@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Read as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -179,7 +179,10 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
                 ),
             )?;
         }
-        Some(1) => login.cookies = typed("file", "the cookies.txt file's path")?.map(Into::into),
+        Some(1) => match asked_file(output)? {
+            Some(path) => login.cookies = Some(path),
+            None => return Ok(false),
+        },
         Some(2) => login.token = true,
         Some(3) => {
             login.header = typed(
@@ -199,6 +202,66 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
     Ok(true)
 }
 
+/// the path a person typed at a prompt, or dragged in: the quotes a terminal puts around a
+/// dragged file taken off, and `~` read as the `home` folder. where no file is at the path as
+/// typed, the backslashes a mac terminal escapes a dragged path's spaces with are taken out.
+fn typed_path(typed: &str, home: Option<&Path>) -> PathBuf {
+    let text = typed.trim();
+    let text = ['\'', '"']
+        .into_iter()
+        .find_map(|quote| text.strip_prefix(quote)?.strip_suffix(quote))
+        .unwrap_or(text);
+    let read = |text: &str| {
+        let rest = text
+            .strip_prefix('~')
+            .filter(|rest| rest.is_empty() || rest.starts_with(std::path::is_separator));
+        match (rest, home) {
+            (Some(rest), Some(home)) => home.join(rest.trim_start_matches(std::path::is_separator)),
+            _ => PathBuf::from(text),
+        }
+    };
+    let path = read(text);
+    if cfg!(windows) || !text.contains('\\') || path.exists() {
+        return path;
+    }
+    let mut unescaped = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        unescaped.extend(if c == '\\' { chars.next() } else { Some(c) });
+    }
+    read(&unescaped)
+}
+
+/// the cookies.txt file a person names at the prompt, as [`typed_path`] reads it, asked for
+/// again while no file is at the path, three times at most. none when they answer nothing.
+fn asked_file(output: &Output) -> Result<Option<PathBuf>, Error> {
+    output.item("the cookies.txt file's path");
+    let home = crate::machine::home(&crate::machine::env);
+    let mut path = PathBuf::new();
+    for _ in 0..3 {
+        let Some(typed) = output
+            .ask_text("file", false)?
+            .filter(|text| !text.is_empty())
+        else {
+            return Ok(None);
+        };
+        path = typed_path(&typed, home.as_deref());
+        if path.is_file() {
+            return Ok(Some(path));
+        }
+        let shown = crate::units::path(&path);
+        output.item(&if path.is_dir() {
+            format!("{shown} is a folder; type the path of the file in it")
+        } else {
+            format!("there is no file at {shown}; type its path again")
+        });
+    }
+    Err(unreadable(
+        &crate::units::path(&path),
+        &std::io::Error::from(std::io::ErrorKind::NotFound),
+    ))
+}
+
 /// asks before a sign-in replaces what is saved for `host`, as a person at the terminal may
 /// not know it is there.
 fn replacing(context: &Context, host: &str) -> Result<(), Error> {
@@ -216,7 +279,12 @@ fn replacing(context: &Context, host: &str) -> Result<(), Error> {
 /// domain and expiry, with those left out.
 fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error> {
     let shown = crate::units::path(path);
-    let failed = |err: &std::io::Error| Error::io(format!("could not read {shown}"), err);
+    let failed = |err: &std::io::Error| unreadable(&shown, err);
+    if path.is_dir() {
+        return Err(failed(&std::io::Error::from(
+            std::io::ErrorKind::IsADirectory,
+        )));
+    }
     let file = std::fs::File::open(path).map_err(|err| failed(&err))?;
     let mut text = String::new();
     file.take(LARGEST_FILE + 1)
@@ -235,9 +303,7 @@ fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error>
             Kind::Usage,
             format!("{shown} holds no cookies in the cookies.txt format curl and yt-dlp read"),
         )
-        .help(
-            "export them again as cookies.txt, the netscape format: a cookie a line, seven fields apart by tabs",
-        ));
+        .help(EXPORT));
     }
     let picked = cookies::pick(found, host, SystemTime::now());
     tell(&context.output, host, &picked, &format!("in {shown}"));
@@ -260,6 +326,32 @@ fn from_file(context: &Context, host: &str, path: &Path) -> Result<Saved, Error>
         from: Taken::File(path),
         cookies: picked.kept,
     })
+}
+
+/// how to make a file of cookies fetchloom reads, as the error for one that holds none says it.
+const EXPORT: &str = "export them again as cookies.txt, the netscape format: a cookie a line, seven fields apart by tabs";
+
+/// the error for the cookies.txt file `shown`, which `err` kept from being read: a path typed
+/// wrong, a folder or a file that is not text are the person's to fix, as `usage`, and anything
+/// else is the disk's.
+fn unreadable(shown: &str, err: &std::io::Error) -> Error {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => {
+            Error::new(Kind::Usage, format!("there is no file at {shown}"))
+                .help("check the path of the cookies.txt file the browser extension saved")
+        }
+        std::io::ErrorKind::IsADirectory => Error::new(
+            Kind::Usage,
+            format!("{shown} is a folder, not a cookies.txt file"),
+        )
+        .help("give the path of the cookies.txt file in it"),
+        std::io::ErrorKind::InvalidData => Error::new(
+            Kind::Usage,
+            format!("{shown} is not a text file, so it holds no cookies in the cookies.txt format curl and yt-dlp read"),
+        )
+        .help(EXPORT),
+        _ => Error::io(format!("could not read {shown}"), err),
+    }
 }
 
 /// the error for cookies of which `host` takes none, from `place`: expired ones, with `again`
@@ -714,6 +806,82 @@ mod tests {
             ("nas", "nas"),
         ] {
             assert_eq!(site_host(typed).unwrap(), host, "{typed}");
+        }
+    }
+
+    /// a path typed at a prompt reads `~` as the home folder, as a shell would, and loses the
+    /// quotes a terminal puts around a file dragged into it.
+    #[test]
+    fn a_typed_path_reads_the_home_folder_and_drops_a_drags_quotes() {
+        let home = std::path::Path::new("/home/ada");
+        for (typed, path) in [
+            ("~/dl/cookies.txt", "/home/ada/dl/cookies.txt"),
+            ("'~/my cookies.txt' ", "/home/ada/my cookies.txt"),
+            ("\"/tmp/my cookies.txt\"", "/tmp/my cookies.txt"),
+            ("  cookies.txt", "cookies.txt"),
+            ("~bob/cookies.txt", "~bob/cookies.txt"),
+            ("'", "'"),
+        ] {
+            assert_eq!(
+                typed_path(typed, Some(home)),
+                std::path::PathBuf::from(path),
+                "{typed}"
+            );
+        }
+        assert_eq!(
+            typed_path("~/cookies.txt", None),
+            std::path::PathBuf::from("~/cookies.txt")
+        );
+    }
+
+    /// a mac terminal escapes the spaces of a path dragged into it, which reads as written only
+    /// where a file has that very name.
+    #[cfg(unix)]
+    #[test]
+    fn a_dragged_path_with_escaped_spaces_finds_its_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("my cookies (1).txt");
+        std::fs::write(&file, "x").unwrap();
+        let typed = format!("{}/my\\ cookies\\ \\(1\\).txt ", folder.path().display());
+        assert_eq!(typed_path(&typed, None), file);
+        let named = folder.path().join("a\\b.txt");
+        std::fs::write(&named, "x").unwrap();
+        assert_eq!(typed_path(&named.display().to_string(), None), named);
+    }
+
+    /// a cookies file named wrong is the person's to fix, as `usage`: one that is not there, a
+    /// folder, or a file that is not text.
+    #[test]
+    fn a_cookies_file_typed_wrong_is_a_usage_error() {
+        let context = crate::cli::Context::new(crate::output::Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            crate::output::Level::Quiet,
+            false,
+            false,
+        ));
+        let folder = tempfile::tempdir().unwrap();
+        let binary = folder.path().join("junk.txt");
+        std::fs::write(&binary, [0x7f, b'E', b'L', b'F', 0xff, 0xfe, 0, 1]).unwrap();
+        for (path, said) in [
+            (folder.path().join("nope.txt"), "there is no file"),
+            (
+                folder.path().to_path_buf(),
+                "is a folder, not a cookies.txt file",
+            ),
+            (binary, "is not a text file"),
+        ] {
+            let Err(error) = from_file(&context, "127.0.0.1:8080", &path) else {
+                panic!("{} was read", path.display());
+            };
+            assert_eq!(error.kind, Kind::Usage, "{error:?}");
+            assert!(error.message.contains(said), "{error:?}");
         }
     }
 }
