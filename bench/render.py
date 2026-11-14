@@ -224,16 +224,10 @@ def load_results(results):
     all_rows, metas = [], []
     live_origins = {}
     for path in paths:
-        meta_path = path.with_name("meta.json")
-        if not meta_path.is_file():
-            raise ValueError(f"missing metadata for {path}")
-        meta = json.loads(meta_path.read_text())
-        if not isinstance(meta, dict) or meta.get("kind") not in ("lab", "live") or not isinstance(meta.get("quick"), bool):
-            raise ValueError(f"invalid campaign metadata in {meta_path}")
-        records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        meta, records = read_campaign(path)
         datasets = {dataset["service"]: dataset for dataset in meta.get("datasets", [])}
         if len(datasets) != len(meta.get("datasets", [])):
-            raise ValueError(f"live metadata repeats a service in {meta_path}")
+            raise ValueError(f"live metadata repeats a service in {path.with_name('meta.json')}")
         seen = set()
         for row in records:
             if row.get("kind") == "comparison" and meta["kind"] == "live":
@@ -250,55 +244,178 @@ def load_results(results):
                 if identity in seen:
                     raise ValueError(f"duplicate measured row in {path}: {identity}")
                 seen.add(identity)
-            if row["kind"] != "live":
-                continue
-            service = row["service"]
-            if service in live_origins and live_origins[service] != path:
-                raise ValueError(f"live service {service} was measured twice; render campaigns separately")
-            live_origins[service] = path
-            dataset = datasets.get(service)
-            if dataset is None or not dataset.get("expected_sha256"):
-                raise ValueError(f"live metadata has no reference dataset for {service}")
-            expected = dataset["expected_sha256"]
-            if (row.get("count"), row.get("file_size")) != (len(expected), dataset.get("bytes")):
-                raise ValueError(f"mixed live benchmark conditions for {service}")
-            if row.get("status") == "passed" and "files" in row and Counter(row["files"].values()) != Counter(expected.values()):
-                raise ValueError(f"live checked bytes do not match metadata for {service}")
+            if row["kind"] == "live":
+                check_live(row, path, datasets, live_origins)
         all_rows.extend(records)
         metas.append(meta)
     return all_rows, sorted(metas, key=lambda meta: meta.get("date", ""))
 
 
-def render(results, repo):
-    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md, from every
-    campaign under results."""
-    all_rows, metas = load_results(results)
-    rows = [row for row in all_rows if not row.get("warmup") and row.get("kind") in ("lab", "live")]
+def read_campaign(path):
+    """the metadata beside a runs.jsonl and its rows; ValueError when the metadata is missing or
+    names no kind and no quick setting."""
+    meta_path = path.with_name("meta.json")
+    if not meta_path.is_file():
+        raise ValueError(f"missing metadata for {path}")
+    meta = json.loads(meta_path.read_text())
+    if not isinstance(meta, dict) or meta.get("kind") not in ("lab", "live") or not isinstance(meta.get("quick"), bool):
+        raise ValueError(f"invalid campaign metadata in {meta_path}")
+    return meta, [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def check_live(row, path, datasets, origins):
+    """ValueError unless a live row comes from the one campaign of its service and matches that
+    campaign's reference dataset; records the campaign in origins."""
+    service = row["service"]
+    if service in origins and origins[service] != path:
+        raise ValueError(f"live service {service} was measured twice; render campaigns separately")
+    origins[service] = path
+    dataset = datasets.get(service)
+    if dataset is None or not dataset.get("expected_sha256"):
+        raise ValueError(f"live metadata has no reference dataset for {service}")
+    expected = dataset["expected_sha256"]
+    if (row.get("count"), row.get("file_size")) != (len(expected), dataset.get("bytes")):
+        raise ValueError(f"mixed live benchmark conditions for {service}")
+    if row.get("status") == "passed" and "files" in row and Counter(row["files"].values()) != Counter(expected.values()):
+        raise ValueError(f"live checked bytes do not match metadata for {service}")
+
+
+def group(rows, metas):
+    """the measured runs, warmups left out: lab cases in page order and live services by name, each
+    with its file count, file size and every tool's summary. ValueError when one case mixes sizes
+    or campaigns measure a case twice."""
     conditions = {}
+    lab = defaultdict(lambda: defaultdict(list))
+    live = defaultdict(lambda: defaultdict(list))
     for row in rows:
-        if row.get("kind") != "lab":
+        if row.get("warmup") or row.get("kind") not in ("lab", "live"):
+            continue
+        if row["kind"] == "live":
+            if "tool" in row:
+                live[row["service"]][row["tool"]].append(row)
             continue
         key = (row["scenario"], row["profile"], row["filesystem"])
         condition = (row.get("quick"), row.get("count"), row.get("file_size"))
-        if key in conditions and conditions[key] != condition:
+        if conditions.setdefault(key, condition) != condition:
             raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
-        conditions[key] = condition
-    campaigns = [meta for meta in metas if meta.get("kind") == "lab"]
-    # a campaign may be measured in chunks, as long as no case is measured twice
+        lab[key][row["tool"]].append(row)
+    check_chunks([meta for meta in metas if meta.get("kind") == "lab"])
+    cases = []
+    for scenario, profile, fs in sorted(lab):
+        _, count, file_size = conditions[scenario, profile, fs]
+        cases.append(dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
+                          summaries=summaries(lab[scenario, profile, fs])))
+    services = {}
+    for service in sorted(live):
+        sample = next(iter(live[service].values()))[0]
+        services[service] = dict(count=sample["count"], file_size=sample["file_size"],
+                                 summaries=summaries(live[service]))
+    return cases, services
+
+
+def check_chunks(campaigns):
+    """ValueError unless lab campaigns read as one: a campaign may be measured in chunks, as long
+    as each lists its cases, no case is measured twice and none mixes smoke and full runs."""
     measured = [(case["filesystem"], case["profile"], case["id"]) for meta in campaigns for case in meta.get("cases") or []]
     if len(campaigns) > 1 and (any(not meta.get("cases") for meta in campaigns)
                                or len(measured) != len(set(measured))
                                or len({meta.get("quick") for meta in campaigns}) > 1):
         raise ValueError("lab campaigns measure a case twice or mix smoke and full runs; render them separately")
-    charts = repo / "docs" / "assets" / "bench"
+
+
+def summaries(runs):
+    """each tool's runs summarized, in the order the tools first ran."""
+    return {tool: summarize(values) for tool, values in runs.items()}
+
+
+def files(count):
+    """a file count in words, such as 1 file or 1,000 files."""
+    return f"{count:,} file" + ("" if count == 1 else "s")
+
+
+def card_name(case):
+    return f"{case['scenario']}-{case['profile']}-{case['filesystem']}"
+
+
+def subtitle(case):
+    return f"{files(case['count'])} of {size(case['file_size'])}, {case['profile']} network, {case['filesystem']}"
+
+
+def draw(charts, cases, services):
+    """every card, light and dark, in charts, once the cards of an earlier render are gone: one per
+    lab case, a hero for each lan case with a verdict, and one per live service."""
     charts.mkdir(parents=True, exist_ok=True)
     # every card here is generated, so a card the new results do not produce, such as a hero
     # without a verdict, must not survive from an earlier render
     for old in charts.glob("*.svg"):
         old.unlink()
+    for case in cases:
+        title = TITLES[case["scenario"]]
+        hero = verdict(case["summaries"]) if case["profile"] == "lan" else None
+        for suffix, dark in (("", False), ("-dark", True)):
+            chart(charts / f"{card_name(case)}{suffix}.svg", title, subtitle(case), case["summaries"], dark)
+            if hero:
+                chart(charts / f"hero-{case['scenario']}-{case['filesystem']}{suffix}.svg", hero, "",
+                      case["summaries"], dark, label=title)
+    for service, measured in services.items():
+        for suffix, dark in (("", False), ("-dark", True)):
+            chart(charts / f"live-{service}{suffix}.svg", service,
+                  f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
+
+
+METHOD = ("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
+
+
+def page(rows, metas, cases, services):
+    """the results page in markdown: the conditions, a section per lab case, the live services and
+    the notes each run left."""
     lines = ["# benchmark results\n", "measurements from the recorded commands and checked outputs.\n", "## conditions\n"]
-    if any(meta.get("quick") for meta in metas) or any(row.get("quick") for row in rows):
+    if any(meta.get("quick") for meta in metas):
         lines.append("these are smoke-test sizes and rounds, not full benchmark results.\n")
+    lines += machines(metas)
+    lines += networks(metas)
+    lines.append(METHOD)
+    warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in rows)
+    if warmup_failures:
+        lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
+    for case in cases:
+        lines += case_section(case)
+    if any(row.get("kind") == "live" for row in rows):
+        lines += ["## live services\n", "live timings show ranges without ratios. file comparisons retain layout and content differences.\n"]
+    for service, measured in services.items():
+        lines += live_section(service, measured)
+    lines += notes(rows)
+    lines += ["", "sources: `meta.json` and `runs.jsonl` in the supplied results directory. [benchmark design](benchmark-design.md) defines the cases and fairness rules.\n"]
+    return "\n".join(lines)
+
+
+def networks(metas):
+    """the shaping of each network profile as a table, from the first campaign that records it."""
+    shaping = next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
+    if not shaping:
+        return []
+    lines = ["| profile | round-trip delay | loss per direction | server egress |", "|---|---:|---:|---:|"]
+    for name, values in shaping.items():
+        rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
+        lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
+    return lines + [""]
+
+
+def notes(rows):
+    """a line for each skipped run and each live comparison."""
+    lines = []
+    for row in rows:
+        if row.get("status") == "skipped":
+            lines.append(f"- {row.get('service', row.get('tool', 'run'))} skipped: {row.get('reason', 'not recorded')}")
+        if row.get("kind") == "comparison":
+            lines.append(f"- {row['service']} round {row['round']}: `{row['comparison']['status']}`; differences: `{json.dumps(row['comparison'], sort_keys=True)}`")
+    return lines
+
+
+def machines(metas):
+    """each campaign's machine, versions and cases as list lines; chunks of one campaign share a
+    machine and versions, which are shown once."""
+    lines = []
     shared = None
     for meta in metas:
         machine = meta.get("machine", {})
@@ -314,80 +431,56 @@ def render(results, repo):
         recorded = f"- recorded `{meta.get('date', 'unknown')}`" + (f": {cases}" if cases else f": {meta.get('kind', 'unknown')} run")
         if meta.get("filesystems"):
             recorded += f" on `{json.dumps(meta['filesystems'], sort_keys=True)}`"
-        # chunks of one campaign share a machine and versions, which are shown once
         if setting == shared:
             lines.insert(len(lines) - 1, recorded)
             continue
         shared = setting
         lines += setting + [recorded, ""]
-    networks = next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
-    if networks:
-        lines += ["| profile | round-trip delay | loss per direction | server egress |", "|---|---:|---:|---:|"]
-        for name, values in networks.items():
-            rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
-            lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
-        lines.append("")
-    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
-    warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in all_rows)
-    if warmup_failures:
-        lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
-    buckets = defaultdict(lambda: defaultdict(list))
-    for row in rows:
-        if row.get("kind") == "lab":
-            buckets[(row["scenario"], row["profile"], row["filesystem"])][row["tool"]].append(row)
-    groups = {key: {tool: summarize(values) for tool, values in group.items()} for key, group in buckets.items()}
+    return lines
 
-    for (scenario, profile, fs), summaries in sorted(groups.items()):
-        sample = next(iter(buckets[(scenario, profile, fs)].values()))[0]
-        rounds = max(item["rounds"] for item in summaries.values())
-        title = TITLES[scenario]
-        files = f"{sample['count']:,} file" + ("" if sample["count"] == 1 else "s")
-        subtitle = f"{files} of {size(sample['file_size'])}, {profile} network, {fs}"
-        name = f"{scenario}-{profile}-{fs}"
-        lines += [f"## {scenario}: {title} ({profile}, {fs})\n", story(scenario, sample["count"], sample["file_size"]) + f", median of {rounds} runs.\n",
-                  "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
-                  "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
-        base_summary = summaries.get("fetchloom", {})
-        base = None if base_summary.get("failures") else base_summary.get("median")
-        for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
-            ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
-            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {entry['requests'] if entry['requests'] is not None else 'n/a'} | {failures(entry)} |")
-        if scenario == "s7":
-            lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
-            for tool, entry in summaries.items():
-                value = entry["download_ratio"]
-                lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
-            lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both; interruption is at 10 s, with a 5 s kill grace period.\n")
-        for dark in (False, True):
-            chart(charts / f"{name}{'-dark' if dark else ''}.svg", title, subtitle, summaries, dark)
-            if profile == "lan" and verdict(summaries):
-                chart(charts / f"hero-{scenario}-{fs}{'-dark' if dark else ''}.svg", verdict(summaries), "",
-                      summaries, dark, label=title)
-        lines += ["", picture(name, title)]
-    live_groups = defaultdict(lambda: defaultdict(list))
-    for row in rows:
-        if row.get("kind") == "live" and "tool" in row:
-            live_groups[row["service"]][row["tool"]].append(row)
-    if any(row.get("kind") == "live" for row in all_rows):
-        lines += ["## live services\n", "live timings show ranges without ratios. file comparisons retain layout and content differences.\n"]
-    for service, group in sorted(live_groups.items()):
-        lines += [f"### {service}\n", "| tool | median | min to max | CPU | peak memory | disk | requests | failures |", "|---|---:|---|---:|---:|---:|---:|---:|"]
-        summaries = {name: summarize(values) for name, values in group.items()}
-        for name, entry in summaries.items():
-            lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
-        sample = next(iter(group.values()))[0]
-        for dark in (False, True):
-            chart(charts / f"live-{service}{'-dark' if dark else ''}.svg", service,
-                  f"{sample['count']:,} files of {size(sample['file_size'])}, live", summaries, dark)
-        lines += ["", picture(f"live-{service}", service)]
-    for row in all_rows:
-        if row.get("status") == "skipped":
-            lines.append(f"- {row.get('service', row.get('tool', 'run'))} skipped: {row.get('reason', 'not recorded')}")
-        if row.get("kind") == "comparison":
-            lines.append(f"- {row['service']} round {row['round']}: `{row['comparison']['status']}`; differences: `{json.dumps(row['comparison'], sort_keys=True)}`")
-    lines += ["", "sources: `meta.json` and `runs.jsonl` in the supplied results directory. [benchmark design](benchmark-design.md) defines the cases and fairness rules.\n"]
+
+def case_section(case):
+    """a lab case's heading, story, table of every tool and its card."""
+    summaries = case["summaries"]
+    title = TITLES[case["scenario"]]
+    rounds = max(item["rounds"] for item in summaries.values())
+    lines = [f"## {case['scenario']}: {title} ({case['profile']}, {case['filesystem']})\n",
+             story(case["scenario"], case["count"], case["file_size"]) + f", median of {rounds} runs.\n",
+             "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
+             "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
+    own = summaries.get("fetchloom", {})
+    base = None if own.get("failures") else own.get("median")
+    for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
+        ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
+        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {entry['requests'] if entry['requests'] is not None else 'n/a'} | {failures(entry)} |")
+    if case["scenario"] == "s7":
+        lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
+        for tool, entry in summaries.items():
+            value = entry["download_ratio"]
+            lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
+        lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both; interruption is at 10 s, with a 5 s kill grace period.\n")
+    return lines + ["", picture(card_name(case), title)]
+
+
+def live_section(service, measured):
+    """a live service's heading, table of both clients and its card."""
+    lines = [f"### {service}\n", "| tool | median | min to max | CPU | peak memory | disk | requests | failures |", "|---|---:|---|---:|---:|---:|---:|---:|"]
+    for name, entry in measured["summaries"].items():
+        lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
+    return lines + ["", picture(f"live-{service}", service)]
+
+
+def render(results, repo):
+    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md, from every
+    campaign under results; ValueError, before any old card is removed, for results that cannot
+    be read as one set."""
+    rows, metas = load_results(results)
+    cases, services = group(rows, metas)
+    markdown = page(rows, metas, cases, services)
+    charts = repo / "docs" / "assets" / "bench"
+    draw(charts, cases, services)
     output = repo / "docs" / "dev" / "performance" / "benchmarks.md"
-    output.write_text("\n".join(lines))
+    output.write_text(markdown)
     print(f"wrote {output} and {charts}")
 
 
