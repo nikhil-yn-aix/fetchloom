@@ -30,6 +30,12 @@ const SHAPES: [(u32, bool); 4] = [
     (32_768, false),
     (32_768, true),
 ];
+/// chrome's own page size, with a log: the firefox test reads every shape, so chrome's reader,
+/// which shares the pages' reader, needs one.
+const CHROME: (u32, bool) = (4_096, true);
+/// the moment the cookies are picked at, in seconds after 1970, between the rows that expired
+/// long ago and those that expire in 2033, so no row expires while the test lasts.
+const NOW: u64 = 1_800_000_000;
 /// the domains of the rows in turn: the host, domains that cover it, and some that must not.
 const DOMAINS: [&str; 8] = [
     HOST,
@@ -66,7 +72,7 @@ fn value(row: i64) -> String {
     alphabet.repeat(length / alphabet.len() + 2)[start..start + length].to_owned()
 }
 
-/// when row `row` expires, in seconds after 1970: long past, never stated, or in 2033.
+/// when row `row` expires, in seconds after 1970: long before [`NOW`], never stated, or in 2033.
 fn expires(row: i64) -> i64 {
     match row {
         _ if row % 17 == 0 => 1_000_000_000,
@@ -232,7 +238,7 @@ fn sqlite_cookies(
     sql: &str,
     open: &dyn Fn(&rusqlite::Row<'_>) -> rusqlite::Result<Cookie>,
 ) -> Vec<Cookie> {
-    let now = SystemTime::now();
+    let now = now();
     let mut statement = db.prepare(sql).unwrap();
     statement
         .query_map(rusqlite::named_params! {":host": HOST}, |row| open(row))
@@ -246,6 +252,10 @@ fn sqlite_cookies(
             })
         })
         .collect()
+}
+
+fn now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(NOW)
 }
 
 /// where SQL matches a cookie's `domain` column to `:host`.
@@ -456,7 +466,7 @@ fn a_firefox_profile_reads_as_sqlite_reads_it() {
             panic!("{shape:?}: {rows} rows differ, the first {row}: {differs:?}");
         }
         let found = firefox::read(&path).unwrap().found;
-        let ours = pick(found, HOST, SystemTime::now()).kept;
+        let ours = pick(found, HOST, now()).kept;
         let theirs = sqlite_cookies(
             &db,
             &format!(
@@ -485,48 +495,47 @@ fn a_firefox_profile_reads_as_sqlite_reads_it() {
 fn a_chrome_profile_reads_as_sqlite_reads_it() {
     let folder = tempfile::tempdir().unwrap();
     let sealed = Sealed::default();
-    for shape in SHAPES {
-        let path = located(folder.path(), "chrome", shape);
-        let (db, plain) = chrome_profile(&path, shape.0, shape.1, &sealed);
-        shaped(
-            &db,
-            &path,
-            ("cookies", "cookies_unique_index", "encrypted_value"),
-            shape.0,
-        );
-        let (names, theirs) = sqlite_rows(&db, "cookies");
-        let columns: Vec<&str> = names.iter().map(String::as_str).collect();
-        let ours = Database::open(&path)
-            .unwrap()
-            .rows("cookies", &columns)
-            .unwrap();
-        assert_eq!(ours.len(), theirs.len(), "{shape:?}");
-        assert!(ours == theirs, "{shape:?}: the rows differ");
-        let key = |tag: &str| (tag == "v10").then_some(KEY);
-        let found = chromium::read(&path, HOST, &key).unwrap().found;
-        let ours = pick(found, HOST, SystemTime::now()).kept;
-        let theirs = sqlite_cookies(
-            &db,
-            &format!(
-                "SELECT name, host_key, path, is_secure, has_expires, expires_utc FROM cookies \
-                 WHERE top_frame_site_key = '' AND {} ORDER BY rowid",
-                covering("host_key")
-            ),
-            &|row| {
-                let name: String = row.get(0)?;
-                let micros: i64 = row.get(5)?;
-                Ok(Cookie {
-                    value: plain[&name].clone(),
-                    name,
-                    domain: row.get(1)?,
-                    path: row.get(2)?,
-                    secure: row.get::<_, i64>(3)? == 1,
-                    expires: (row.get::<_, i64>(4)? != 0 && micros > 0)
-                        .then(|| micros / 1_000_000 - EPOCHS_APART),
-                })
-            },
-        );
-        assert!(theirs.len() > 1_000, "{shape:?}: {}", theirs.len());
-        assert_eq!(ours, theirs, "{shape:?}");
-    }
+    let (page_size, wal) = CHROME;
+    let path = located(folder.path(), "chrome", CHROME);
+    let (db, plain) = chrome_profile(&path, page_size, wal, &sealed);
+    shaped(
+        &db,
+        &path,
+        ("cookies", "cookies_unique_index", "encrypted_value"),
+        page_size,
+    );
+    let (names, theirs) = sqlite_rows(&db, "cookies");
+    let columns: Vec<&str> = names.iter().map(String::as_str).collect();
+    let ours = Database::open(&path)
+        .unwrap()
+        .rows("cookies", &columns)
+        .unwrap();
+    assert_eq!(ours.len(), theirs.len());
+    assert!(ours == theirs, "the rows differ");
+    let key = |tag: &str| (tag == "v10").then_some(KEY);
+    let found = chromium::read(&path, HOST, &key).unwrap().found;
+    let ours = pick(found, HOST, now()).kept;
+    let theirs = sqlite_cookies(
+        &db,
+        &format!(
+            "SELECT name, host_key, path, is_secure, has_expires, expires_utc FROM cookies \
+             WHERE top_frame_site_key = '' AND {} ORDER BY rowid",
+            covering("host_key")
+        ),
+        &|row| {
+            let name: String = row.get(0)?;
+            let micros: i64 = row.get(5)?;
+            Ok(Cookie {
+                value: plain[&name].clone(),
+                name,
+                domain: row.get(1)?,
+                path: row.get(2)?,
+                secure: row.get::<_, i64>(3)? == 1,
+                expires: (row.get::<_, i64>(4)? != 0 && micros > 0)
+                    .then(|| micros / 1_000_000 - EPOCHS_APART),
+            })
+        },
+    );
+    assert!(theirs.len() > 1_000, "{}", theirs.len());
+    assert_eq!(ours, theirs);
 }
