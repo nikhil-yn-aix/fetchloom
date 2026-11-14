@@ -76,6 +76,10 @@ pub(super) struct Status {
     /// those downloads by the link each starts at, and its size.
     #[serde(skip)]
     downloads: Vec<(url::Url, Option<u64>)>,
+    /// copies a stopped placement left in the data folder under hidden names, which the next
+    /// sync removes.
+    #[serde(skip)]
+    unfinished: usize,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
@@ -212,6 +216,18 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     }
     for kept in status.candidates.iter().filter(|kept| kept.stale) {
         output.hint(&super::build::again(&kept.name));
+    }
+    if status.unfinished > 0 {
+        let them = if status.unfinished == 1 { "it" } else { "them" };
+        output.hint(&format!(
+            "the data folder holds {} from a stopped run; `{}` removes {them}",
+            units::count(
+                status.unfinished as u64,
+                "unfinished copy",
+                "unfinished copies"
+            ),
+            super::project::command("sync")
+        ));
     }
     if !status.candidates.is_empty() && !output.shows_details() {
         output.hint(&format!(
@@ -470,6 +486,7 @@ fn check(
     };
     let cache = super::peek_cache()?;
     let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
+    status.unfinished = survey.leftovers().count();
     status.candidates = survey
         .state
         .candidates

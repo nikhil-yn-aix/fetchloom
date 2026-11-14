@@ -166,6 +166,33 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
     Ok(())
 }
 
+/// a copy a killed sync left under its hidden name is no file of the data, so status says only
+/// that the next sync removes it.
+#[test]
+fn status_names_the_unfinished_copies_a_stopped_sync_left() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(b"iris\n", "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let left = sandbox
+        .work()
+        .join("data")
+        .join("iris")
+        .join(".fetchloom-0123456789abcdef.copy");
+    fs::write(&left, b"ir")?;
+
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n  hint: the data folder holds 1 unfinished copy from a stopped run; `fetchloom sync` removes it\n"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(!left.exists());
+    Ok(())
+}
+
 #[test]
 fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
     let sandbox = Sandbox::new()?;
