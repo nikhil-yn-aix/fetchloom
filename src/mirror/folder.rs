@@ -89,7 +89,7 @@ pub(crate) fn copy_all(
     stop: &Stop,
 ) -> io::Result<Vec<Gave>> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let batch = if wanted.len() > crate::cache::MOST_FLUSHED_ALONE {
+    let batch = if wanted.len() > crate::volume::MOST_FLUSHED_ALONE {
         cache.batch()?
     } else {
         None
@@ -644,7 +644,7 @@ impl Target {
         named: &(dyn Fn(u64) + Sync),
     ) -> Result<Vec<Put>, Failed> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let batch = if items.len() > crate::cache::MOST_FLUSHED_ALONE {
+        let batch = if items.len() > crate::volume::MOST_FLUSHED_ALONE {
             crate::cache::batch_in(&self.root.join(TMP)).map_err(Failed::Flush)?
         } else {
             None
@@ -1551,7 +1551,7 @@ pub(crate) mod tests {
 
     /// more files than the batch rule flushes one by one, each different.
     fn many() -> Vec<Vec<u8>> {
-        (0..=crate::cache::MOST_FLUSHED_ALONE)
+        (0..=crate::volume::MOST_FLUSHED_ALONE)
             .map(|n| format!("file {n}").into_bytes())
             .collect()
     }

@@ -16,9 +16,10 @@ use super::guard::Guard;
 use super::not_written;
 #[cfg(target_os = "linux")]
 use crate::cache::Batch;
-use crate::cache::{Cache, MOST_FLUSHED_ALONE, Member, NewObject, Sealed, Staging};
+use crate::cache::{Cache, Member, NewObject, Sealed, Staging};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::volume::MOST_FLUSHED_ALONE;
 
 /// members up to this size reach a writer as bytes in memory.
 const SMALL: usize = 1 << 20;

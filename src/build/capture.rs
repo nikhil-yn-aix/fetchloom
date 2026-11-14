@@ -238,7 +238,7 @@ pub(crate) fn publish(
 ) -> Result<(), Fault> {
     let _span = tracing::debug_span!("publish", files = found.files.len()).entered();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let batch = if found.files.len() > crate::cache::MOST_FLUSHED_ALONE {
+    let batch = if found.files.len() > crate::volume::MOST_FLUSHED_ALONE {
         cache.batch()?
     } else {
         None

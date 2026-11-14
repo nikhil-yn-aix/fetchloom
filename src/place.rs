@@ -341,7 +341,7 @@ impl Placer {
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
         // for everything other programs wrote there
         let batch = this.durable
-            && (cfg!(not(target_os = "linux")) || count > crate::cache::MOST_FLUSHED_ALONE)
+            && (cfg!(not(target_os = "linux")) || count > crate::volume::MOST_FLUSHED_ALONE)
             && this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
@@ -466,7 +466,7 @@ impl Placer {
         self.batch
             .get_or_init(|| {
                 let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-                crate::cache::syncfs_reports_errors(&release)
+                crate::volume::syncfs_reports_errors(&release)
                     .then(|| {
                         self.location(&self.root.join(".batch"), false)
                             .and_then(|location| location.flush_handle())

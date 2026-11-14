@@ -790,7 +790,7 @@ pub(super) async fn apart(
 /// whether `downloads` wait for the cache's batch flushes, given `open_files`. a few flush one by
 /// one, since a filesystem flush also waits for everything other programs wrote there.
 fn defer(cache: &Cache, downloads: usize, open_files: Option<u64>) -> bool {
-    downloads > crate::cache::MOST_FLUSHED_ALONE
+    downloads > crate::volume::MOST_FLUSHED_ALONE
         && cache.defer_downloads(open_files).unwrap_or(false)
 }
 
@@ -1315,7 +1315,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn only_a_run_of_many_downloads_waits_for_one_flush() {
-        use crate::cache::MOST_FLUSHED_ALONE;
+        use crate::volume::MOST_FLUSHED_ALONE;
 
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();

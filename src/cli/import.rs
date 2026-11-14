@@ -1158,7 +1158,7 @@ pub(super) fn into_cache(
     let found = &walked.files;
     // many objects flush together, since one flush each costs far more than writing a small file
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let batch = if found.len() > crate::cache::MOST_FLUSHED_ALONE {
+    let batch = if found.len() > crate::volume::MOST_FLUSHED_ALONE {
         cache
             .batch()
             .map_err(|err| Error::io("could not open the cache to flush what is imported", &err))?

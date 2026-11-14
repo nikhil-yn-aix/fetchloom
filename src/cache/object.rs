@@ -212,19 +212,13 @@ pub(crate) fn holds_pinned(
     }
 }
 
-/// the most files a run flushes one by one rather than with one flush of their filesystem, which
-/// also waits for everything other programs wrote there. on a busy disk that flush took 0.4 to
-/// 15 s, where 64 small files flushed one by one took 0.2 s. on an idle disk 64 small files cost
-/// 3 to 9 ms more one by one, and one large file the same either way.
-pub(crate) const MOST_FLUSHED_ALONE: usize = 64;
-
 /// starts a batch of new files in `folder` that [`Batch::flush`] flushes with one call, or `None`
 /// when each must flush alone. it opens the filesystem before the first write, as linux reports a
 /// failed write-back only to descriptors opened before it, and to syncfs only from 5.8.
 #[cfg(target_os = "linux")]
 pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
     let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    if !syncfs_reports_errors(&release) {
+    if !crate::volume::syncfs_reports_errors(&release) {
         return Ok(None);
     }
     Ok(Some(Batch::open(folder)?))
@@ -294,17 +288,6 @@ impl Batch {
             Err(rustix::io::Errno::NOTSUP | rustix::io::Errno::INVAL) => Ok(()),
             result => result.map_err(Into::into),
         }
-    }
-}
-
-/// whether a linux kernel of `release`, as `uname -r` gives it, reports write-back errors to
-/// syncfs, which it does from 5.8.
-#[cfg(any(target_os = "linux", test))]
-pub(crate) fn syncfs_reports_errors(release: &str) -> bool {
-    let mut numbers = release.split(['.', '-']).map(str::parse::<u32>);
-    match (numbers.next(), numbers.next()) {
-        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (5, 8),
-        _ => false,
     }
 }
 
@@ -754,19 +737,5 @@ mod tests {
         assert!(copied.is_err_and(|err| err.kind() == io::ErrorKind::Interrupted));
         assert!(cache.find(&pin, None).is_none());
         assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn only_kernels_that_report_write_back_errors_flush_a_batch_at_once() {
-        assert!(syncfs_reports_errors("6.6.87.2-microsoft-standard-WSL2"));
-        assert!(syncfs_reports_errors("5.8.0"));
-        assert!(syncfs_reports_errors("5.15.0-122-generic"));
-        assert!(syncfs_reports_errors("5.14.0-503.el9.aarch64"));
-        assert!(!syncfs_reports_errors("5.7.19"));
-        assert!(!syncfs_reports_errors("4.18.0-553.el8_10.x86_64"));
-        assert!(!syncfs_reports_errors("4.18.0-553.el8_10.aarch64"));
-        assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
-        assert!(!syncfs_reports_errors(""));
-        assert!(!syncfs_reports_errors("unknown"));
     }
 }

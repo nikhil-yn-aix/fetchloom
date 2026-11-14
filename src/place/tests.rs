@@ -762,7 +762,7 @@ fn batched_copies_are_named_only_after_the_flush() {
 #[cfg(target_os = "linux")]
 #[test]
 fn only_a_placement_of_many_copies_waits_for_one_flush() {
-    use crate::cache::MOST_FLUSHED_ALONE;
+    use crate::volume::MOST_FLUSHED_ALONE;
     use rustix::fs::{Mode, OFlags};
 
     let (folder, object) = cache(true);

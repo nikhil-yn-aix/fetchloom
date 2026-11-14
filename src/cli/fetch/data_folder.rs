@@ -263,7 +263,7 @@ impl DataFolder {
         context: &Context,
     ) -> io::Result<Vec<crate::cache::Stored>> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let batch = if asked.len() > crate::cache::MOST_FLUSHED_ALONE {
+        let batch = if asked.len() > crate::volume::MOST_FLUSHED_ALONE {
             cache.batch()?
         } else {
             None
