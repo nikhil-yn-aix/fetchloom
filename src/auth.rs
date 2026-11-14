@@ -20,7 +20,22 @@ use url::Url;
 use crate::account::Account;
 use crate::error::{Error, Kind};
 use crate::machine::Var;
-use crate::net::Credential;
+
+/// a token from where its source keeps it, sent only to its own host and port and only over
+/// https.
+#[derive(Clone)]
+pub(crate) struct Credential {
+    /// the host, with `:port` when the key belongs to another port than 443.
+    pub(crate) host: String,
+    pub(crate) header: &'static str,
+    pub(crate) value: String,
+    /// sent on every hop that reaches its host, as curl sends a `.netrc` login, rather than only
+    /// before a redirect leaves the first origin. only a login a person tied to a host gets this.
+    pub(crate) every_hop: bool,
+    /// sent to every port of its host, as curl, wget and python's requests send the login of a
+    /// `.netrc` line that names no port. a key for the very port a request goes to wins over it.
+    pub(crate) every_port: bool,
+}
 
 /// one step of a sign-in guide.
 #[derive(Debug, PartialEq, Eq)]

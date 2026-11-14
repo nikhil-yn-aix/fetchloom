@@ -199,7 +199,7 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 /// the real network for a `live_` test, with counters of its own and the `credentials` it
 /// signs in with, none for a service anyone may read.
 pub(crate) fn live(
-    credentials: Vec<crate::net::Credential>,
+    credentials: Vec<crate::auth::Credential>,
 ) -> (crate::net::Net, std::sync::Arc<crate::work::Work>) {
     let work = std::sync::Arc::new(crate::work::Work::default());
     let options = crate::net::Options {

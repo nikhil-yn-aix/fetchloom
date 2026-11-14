@@ -48,6 +48,7 @@ pub(crate) use rate::Rate;
 pub(crate) use rules::{Relink, Rules};
 
 use self::failure::Failure;
+use crate::auth::Credential;
 use crate::error::{Error, Kind};
 use crate::stop::Stop;
 use crate::work::Work;
@@ -75,22 +76,6 @@ fn with_causes(err: &dyn std::error::Error) -> String {
 
 /// whether the logs already said a key cannot be sent, which they say once a run.
 static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// a token from where its source keeps it, sent only to its own host and port and only over
-/// https.
-#[derive(Clone)]
-pub(crate) struct Credential {
-    /// the host, with `:port` when the key belongs to another port than 443.
-    pub(crate) host: String,
-    pub(crate) header: &'static str,
-    pub(crate) value: String,
-    /// sent on every hop that reaches its host, as curl sends a `.netrc` login, rather than only
-    /// before a redirect leaves the first origin. only a login a person tied to a host gets this.
-    pub(crate) every_hop: bool,
-    /// sent to every port of its host, as curl, wget and python's requests send the login of a
-    /// `.netrc` line that names no port. a key for the very port a request goes to wins over it.
-    pub(crate) every_port: bool,
-}
 
 /// something the person watching should hear about while the network works.
 pub(crate) enum Notice {

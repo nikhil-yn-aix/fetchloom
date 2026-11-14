@@ -69,7 +69,7 @@ struct Context {
     /// can sign in and run it again.
     needed: std::sync::Mutex<Option<Refusal>>,
     /// a key signed in with during this command but not saved, which the run again still uses.
-    unsaved: std::sync::Mutex<Vec<net::Credential>>,
+    unsaved: std::sync::Mutex<Vec<crate::auth::Credential>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
     cautioned: Arc<std::sync::atomic::AtomicBool>,
     /// the mirrors asked for pinned files before their sources, and what they answered.
@@ -176,7 +176,7 @@ impl Context {
     }
 
     /// the network with only `credentials`, as checking one key needs.
-    fn net_with(&self, credentials: Vec<net::Credential>) -> Net {
+    fn net_with(&self, credentials: Vec<crate::auth::Credential>) -> Net {
         let output = self.output.clone();
         let lines = RetryLines::default();
         let notify: net::Notify = Arc::new(move |notice| match notice {
@@ -264,7 +264,7 @@ impl Context {
 fn caution(
     output: &Output,
     cautioned: &std::sync::atomic::AtomicBool,
-    credentials: &[net::Credential],
+    credentials: &[crate::auth::Credential],
 ) {
     if cautioned.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
@@ -1683,13 +1683,17 @@ mod tests {
             true,
             false,
         ));
-        context.unsaved.lock().unwrap().push(net::Credential {
-            host: "lab.example.org".to_owned(),
-            header: "authorization",
-            value: "Bearer abc\ndef".to_owned(),
-            every_hop: false,
-            every_port: false,
-        });
+        context
+            .unsaved
+            .lock()
+            .unwrap()
+            .push(crate::auth::Credential {
+                host: "lab.example.org".to_owned(),
+                header: "authorization",
+                value: "Bearer abc\ndef".to_owned(),
+                every_hop: false,
+                every_port: false,
+            });
         let _ = context.net().credential_hosts();
         let _ = context.net().credential_hosts();
         let told = context.output.told();
@@ -1717,13 +1721,17 @@ mod tests {
             true,
             false,
         ));
-        context.unsaved.lock().unwrap().push(net::Credential {
-            host: "lab.example.org".to_owned(),
-            header: "authorization",
-            value: "Bearer abc\ndef".to_owned(),
-            every_hop: false,
-            every_port: false,
-        });
+        context
+            .unsaved
+            .lock()
+            .unwrap()
+            .push(crate::auth::Credential {
+                host: "lab.example.org".to_owned(),
+                header: "authorization",
+                value: "Bearer abc\ndef".to_owned(),
+                every_hop: false,
+                every_port: false,
+            });
         let net = context.net();
         let about = |told: Vec<String>| {
             told.iter()
@@ -1861,13 +1869,17 @@ mod tests {
             false,
             false,
         ));
-        context.unsaved.lock().unwrap().push(net::Credential {
-            host: "unsaved.example.org".to_owned(),
-            header: "authorization",
-            value: "Bearer k".to_owned(),
-            every_hop: false,
-            every_port: false,
-        });
+        context
+            .unsaved
+            .lock()
+            .unwrap()
+            .push(crate::auth::Credential {
+                host: "unsaved.example.org".to_owned(),
+                header: "authorization",
+                value: "Bearer k".to_owned(),
+                every_hop: false,
+                every_port: false,
+            });
         assert!(
             context
                 .net()
