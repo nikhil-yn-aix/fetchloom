@@ -192,7 +192,7 @@ impl<'a> RecipeShape<'a> {
             run: recipe
                 .run
                 .iter()
-                .map(crate::recipe::Template::text)
+                .map(crate::project::manifest::recipes::Template::text)
                 .collect(),
             code,
             env: &recipe.env,

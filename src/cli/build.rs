@@ -40,8 +40,9 @@ use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::lock::derived::Derived;
 use crate::project::manifest::Manifest;
+use crate::project::manifest::recipes::Slot;
 use crate::project::state::Candidate;
-use crate::recipe::{self, Slot, Step};
+use crate::recipe::{self, Step};
 use crate::units;
 
 /// what stands in a dry run for a step's private folder, which a build makes in the cache.

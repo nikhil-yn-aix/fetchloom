@@ -1,6 +1,8 @@
 //! `data.toml`: the datasets a project needs. people write it, and `add` and `remove` edit it in
 //! place, keeping comments, order and spacing.
 
+pub(crate) mod recipes;
+
 use std::collections::BTreeMap;
 use std::ops::{Bound, Range};
 
@@ -9,7 +11,7 @@ use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlE
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
-use crate::recipe::{self, Slot, Template};
+use recipes::{Slot, Template};
 
 pub(crate) const FILE: &str = "data.toml";
 /// the data folder of a project whose data.toml names none.
@@ -500,7 +502,7 @@ fn recipes_read_known_datasets(datasets: &BTreeMap<String, Entry>) -> Result<(),
             );
         }
     }
-    let Err(cycle) = recipe::order(datasets) else {
+    let Err(cycle) = recipes::order(datasets) else {
         return Ok(());
     };
     let message = if let [only, _] = cycle.as_slice() {
@@ -971,7 +973,7 @@ impl Reader<'_> {
                 .help("name the datasets run reads in from, as from = [\"raw\"]"));
         }
         for (index, input) in names.iter().enumerate() {
-            if input == recipe::OUT {
+            if input == recipes::OUT {
                 return Err(self
                     .error(
                         item.span(),
@@ -1036,7 +1038,7 @@ impl Reader<'_> {
             if let Slot::Input(input) = slot
                 && !from.iter().any(|known| known == input)
             {
-                let names = from.iter().map(String::as_str).chain([recipe::OUT]);
+                let names = from.iter().map(String::as_str).chain([recipes::OUT]);
                 let help = match name::closest(input, names) {
                     Some(best) => {
                         format!("did you mean {{{best}}}? a name in braces is one of from, or out")

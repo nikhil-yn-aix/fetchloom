@@ -20,7 +20,8 @@ use crate::plan;
 use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
-use crate::recipe::{self, Change, Slot, Step};
+use crate::project::manifest::recipes::Slot;
+use crate::recipe::{self, Change, Step};
 use crate::units;
 
 /// why a step whose key data.lock pins runs: the result is nowhere a build looks.

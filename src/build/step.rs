@@ -15,7 +15,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::recipe::{Slot, Template};
+use crate::project::manifest::recipes::{Slot, Template};
 use crate::stop::Stop;
 
 /// the most of a step's output its log keeps: the latest, once there is more.
