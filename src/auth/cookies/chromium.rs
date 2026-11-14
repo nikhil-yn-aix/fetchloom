@@ -150,14 +150,6 @@ pub(crate) fn derive(secret: &[u8], iterations: u32) -> [u8; 16] {
 /// profile's folder name there, as `Profile 1`, or a folder by its absolute path; without a
 /// name, the one the browser wrote to last.
 pub(crate) fn file(root: &Path, named: Option<&str>) -> Option<PathBuf> {
-    let in_profile = |folder: &Path| {
-        [
-            folder.join("Network").join("Cookies"),
-            folder.join("Cookies"),
-        ]
-        .into_iter()
-        .find(|file| file.is_file())
-    };
     if let Some(named) = named {
         let named = Path::new(named);
         if named.is_absolute() {
@@ -180,6 +172,30 @@ pub(crate) fn file(root: &Path, named: Option<&str>) -> Option<PathBuf> {
         );
     }
     super::newest(found)
+}
+
+/// the cookie database in the profile folder `folder`, where the browser keeps one.
+fn in_profile(folder: &Path) -> Option<PathBuf> {
+    [
+        folder.join("Network").join("Cookies"),
+        folder.join("Cookies"),
+    ]
+    .into_iter()
+    .find(|file| file.is_file())
+}
+
+/// the names of the profiles with cookies in the browser's folder `root`, as `Default` or
+/// `Profile 1`, which `--browser chrome:<profile>` takes.
+pub(crate) fn names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| in_profile(&entry.path()).is_some())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 /// the cookies for `host` in the chromium database at `path`, each value decrypted with the key

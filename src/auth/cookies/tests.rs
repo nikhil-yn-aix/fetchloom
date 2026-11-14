@@ -188,3 +188,55 @@ fn a_profile_is_as_new_as_the_log_beside_its_cookie_file() {
     made("c/cookies.sqlite-wal", 1_700_000_100);
     assert_eq!(newest(vec![a, b, c.clone()]), Some(c));
 }
+
+/// a profile a person names that is not there is told as that, with the names of the profiles
+/// there are, rather than as no profile at all.
+#[test]
+fn a_profile_named_that_is_not_there_names_those_that_are() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().as_os_str().to_owned();
+    let var = |name: &str| match name {
+        "HOME" | "USERPROFILE" | "APPDATA" | "LOCALAPPDATA" => Some(root.clone()),
+        _ => None,
+    };
+    let named = |typed: &str| {
+        Browser::parse(typed)
+            .unwrap()
+            .cookies(&var, "127.0.0.1", SystemTime::now())
+            .unwrap_err()
+    };
+    assert_eq!(
+        named("firefox:nope").message,
+        "found no firefox profile with cookies"
+    );
+    let firefox = firefox::roots(&var).remove(0);
+    for folder in ["q1w2e3r4.default-release", "z9y8x7w6.work", "plain"] {
+        std::fs::create_dir_all(firefox.join(folder)).unwrap();
+        std::fs::write(firefox.join(folder).join("cookies.sqlite"), b"").unwrap();
+    }
+    std::fs::write(
+        firefox.join("profiles.ini"),
+        "[Profile0]\nName=default-release\nIsRelative=1\nPath=q1w2e3r4.default-release\n",
+    )
+    .unwrap();
+    let error = named("firefox:nope");
+    assert_eq!(error.kind, Kind::Usage);
+    assert_eq!(error.message, "firefox has no profile named \"nope\"");
+    assert_eq!(
+        error.details,
+        ["its profiles with cookies are default-release, plain and work"]
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("name one of them, as `--browser firefox:default-release`")
+    );
+    let elsewhere = home.path().join("elsewhere");
+    let error = named(&format!("firefox:{}", elsewhere.display()));
+    assert!(
+        error
+            .message
+            .starts_with("found no firefox profile with cookies at "),
+        "{error:?}"
+    );
+    assert!(error.details.is_empty(), "{error:?}");
+}

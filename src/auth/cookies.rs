@@ -129,13 +129,14 @@ impl Browser {
             }
         };
         let file = file.ok_or_else(|| {
-            let looked: Vec<String> = roots.iter().map(|root| crate::units::path(root)).collect();
-            Error::new(Kind::Usage, format!("found no {name} profile with cookies"))
-                .detail(format!("looked in {}", looked.join(", ")))
-                .help(format!(
-                    "sign in to {} in {name} first, or name the profile's folder, as `--browser {name}:<folder>`",
-                    without_port(host),
-                ))
+            let names = match self.named {
+                Named::Firefox => firefox::names(&roots),
+                Named::Chromium(_) => roots
+                    .iter()
+                    .flat_map(|root| chromium::names(root))
+                    .collect(),
+            };
+            no_profile(name, profile, &names, &roots, host)
         })?;
         let read = match self.named {
             Named::Firefox => firefox::read(&file),
@@ -170,6 +171,51 @@ impl Browser {
             profile = profile.parent().unwrap_or(profile);
         }
         Ok((picked, profile.to_path_buf()))
+    }
+}
+
+/// the error for a browser `name` with no cookies to read: a `profile` a person named that is
+/// not there, told with the `names` of the profiles there are, or none at all, told with the
+/// `roots` looked in.
+fn no_profile(
+    name: &str,
+    profile: Option<&str>,
+    names: &[String],
+    roots: &[PathBuf],
+    host: &str,
+) -> Error {
+    match profile {
+        Some(profile) if Path::new(profile).is_absolute() => Error::new(
+            Kind::Usage,
+            format!(
+                "found no {name} profile with cookies at {}",
+                crate::units::path(Path::new(profile))
+            ),
+        )
+        .help(format!(
+            "name the folder of a {name} profile, as `--browser {name}:<folder>`"
+        )),
+        Some(profile) if !names.is_empty() => Error::new(
+            Kind::Usage,
+            format!("{name} has no profile named \"{}\"", profile.escape_debug()),
+        )
+        .detail(format!(
+            "its profiles with cookies are {}",
+            crate::units::some_of(names, 10)
+        ))
+        .help(format!(
+            "name one of them, as `--browser {}`",
+            crate::suggested::shell_word(&format!("{name}:{}", names[0]))
+        )),
+        _ => {
+            let looked: Vec<String> = roots.iter().map(|root| crate::units::path(root)).collect();
+            Error::new(Kind::Usage, format!("found no {name} profile with cookies"))
+                .detail(format!("looked in {}", looked.join(", ")))
+                .help(format!(
+                    "sign in to {} in {name} first, or name the profile's folder, as `--browser {name}:<folder>`",
+                    without_port(host),
+                ))
+        }
     }
 }
 

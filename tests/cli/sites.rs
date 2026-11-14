@@ -1224,7 +1224,7 @@ fn a_profile_name_never_reads_the_project_folder() -> Result {
         let stderr = text(&refused.stderr)?;
         assert_eq!(refused.status.code(), Some(2), "{relative}: {stderr}");
         assert!(
-            stderr.contains("found no firefox profile with cookies"),
+            stderr.contains(&format!("firefox has no profile named \"{relative}\"")),
             "{stderr}"
         );
     }

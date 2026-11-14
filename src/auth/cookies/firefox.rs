@@ -97,6 +97,31 @@ fn profiles(root: &Path) -> Vec<(PathBuf, Option<String>)> {
     found
 }
 
+/// the names of the profiles with cookies in `roots`, as `--browser firefox:<profile>` takes
+/// them: each one's name in `profiles.ini`, else its folder's name after the first dot, as
+/// `default-release`, once each.
+pub(super) fn names(roots: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = roots
+        .iter()
+        .flat_map(|root| profiles(root))
+        .map(|(folder, name)| {
+            name.unwrap_or_else(|| {
+                let folder = folder
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                match folder.split_once('.') {
+                    Some((_, name)) if !name.is_empty() => name.to_owned(),
+                    _ => folder,
+                }
+            })
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// the cookie file of the profile `named` asks for, in one of `roots`: its name in
 /// `profiles.ini`, or the last part of its folder's name, as `default-release`, or a folder by
 /// its absolute path; without a name, the one firefox wrote to last.
