@@ -328,21 +328,9 @@ impl Net {
             {
                 Ok(response) => return Ok(response),
                 Err(Failure::Final(err)) => return Err(err),
-                Err(Failure::Limited { reason, wait }) => {
+                Err(failure) => {
                     Self::release_for_wait(&mut permits);
-                    retry.limited(reason, wait, false).await?;
-                }
-                Err(Failure::Transient {
-                    reason,
-                    retry_after,
-                    unreachable,
-                }) => {
-                    Self::release_for_wait(&mut permits);
-                    if unreachable {
-                        retry.unreachable(reason, false).await?;
-                    } else {
-                        retry.wait(reason, retry_after, false).await?;
-                    }
+                    retry.after(failure, false).await?;
                 }
             }
         }
@@ -439,38 +427,24 @@ impl Net {
                 mirror,
             });
         let final_url = response.url().clone();
-        let mut body = Vec::new();
-        loop {
-            let chunk = tokio::select! {
-                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
-                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
-            };
-            match chunk {
-                Err(_) => {
-                    return Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        self.idle.as_secs()
-                    )));
-                }
-                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
-                Ok(Ok(None)) => break,
-                Ok(Ok(Some(chunk))) => {
-                    self.throttle(url, chunk.len()).await?;
-                    Work::add(&self.work.bytes_down, chunk.len() as u64);
-                    if body.len() + chunk.len() > LARGEST {
-                        return Err(Failure::Final(Error::new(
-                            Kind::SourceInvalid,
-                            format!(
-                                "{} sent more than 64 MiB where a short answer was expected",
-                                host(url)
-                            ),
-                        )));
-                    }
-                    body.extend_from_slice(&chunk);
-                }
-            }
-        }
+        let body = self
+            .read_body(
+                url,
+                &mut response,
+                LARGEST,
+                || {
+                    format!(
+                        "{} sent more than 64 MiB where a short answer was expected",
+                        host(url)
+                    )
+                },
+                |bytes| async move {
+                    self.throttle(url, bytes).await?;
+                    Work::add(&self.work.bytes_down, bytes as u64);
+                    Ok(())
+                },
+            )
+            .await?;
         if let Some(answered) = &drive {
             self.drive_heard(answered, status.as_u16(), &body)?;
         }
@@ -488,6 +462,44 @@ impl Net {
             },
             sent,
         ))
+    }
+
+    /// the body of `response` from `url`, of at most `most` bytes, past which it fails as
+    /// `too_large` words it. each piece goes through `each` as it comes and must come within the
+    /// idle time, and the run's stop ends the read.
+    pub(super) async fn read_body<Each: Future<Output = Result<(), Failure>>>(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        most: usize,
+        too_large: impl FnOnce() -> String,
+        each: impl Fn(usize) -> Each,
+    ) -> Result<Vec<u8>, Failure> {
+        let mut body = Vec::new();
+        loop {
+            let chunk = tokio::select! {
+                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
+                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+            };
+            match chunk {
+                Err(_) => {
+                    return Err(failure::transient(format!(
+                        "{} sent nothing for {} s",
+                        host(url),
+                        self.idle.as_secs()
+                    )));
+                }
+                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
+                Ok(Ok(None)) => return Ok(body),
+                Ok(Ok(Some(chunk))) => {
+                    each(chunk.len()).await?;
+                    if body.len() + chunk.len() > most {
+                        return Err(Failure::Final(Error::new(Kind::SourceInvalid, too_large())));
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+            }
+        }
     }
 }
 

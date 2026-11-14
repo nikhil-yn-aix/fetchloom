@@ -269,6 +269,25 @@ impl<'a> Retry<'a> {
             () = self.net.stop.asked() => Err(interrupted(self.url)),
         }
     }
+
+    /// waits before the next try after `failure`, as [`Retry::limited`], [`Retry::unreachable`]
+    /// or [`Retry::wait`] does for its kind, or ends with its error when it is final.
+    pub(super) async fn after(&mut self, failure: Failure, has_copy: bool) -> Result<(), Error> {
+        match failure {
+            Failure::Final(error) => Err(error),
+            Failure::Limited { reason, wait } => self.limited(reason, wait, has_copy).await,
+            Failure::Transient {
+                reason,
+                unreachable: true,
+                ..
+            } => self.unreachable(reason, has_copy).await,
+            Failure::Transient {
+                reason,
+                retry_after,
+                ..
+            } => self.wait(reason, retry_after, has_copy).await,
+        }
+    }
 }
 
 impl Net {

@@ -66,23 +66,9 @@ impl Net {
         }
         let mut retry = Retry::new(self, &url);
         loop {
-            let failure = match self.ask_identity(&url).await {
+            match self.ask_identity(&url).await {
                 Ok((status, body)) => return token(status, &body, client_id),
-                Err(failure) => failure,
-            };
-            match failure {
-                Failure::Final(error) => return Err(error),
-                Failure::Limited { reason, wait } => retry.limited(reason, wait, false).await?,
-                Failure::Transient {
-                    reason,
-                    unreachable: true,
-                    ..
-                } => retry.unreachable(reason, false).await?,
-                Failure::Transient {
-                    reason,
-                    retry_after,
-                    ..
-                } => retry.wait(reason, retry_after, false).await?,
+                Err(failure) => retry.after(failure, false).await?,
             }
         }
     }
@@ -143,30 +129,25 @@ impl Net {
                 status.as_u16()
             )));
         }
-        let mut body = Vec::new();
-        loop {
-            let chunk = tokio::select! {
-                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
-                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
-            };
-            match chunk {
-                Err(_) | Ok(Err(_)) => {
-                    return Err(failure::transient(
-                        "azure's metadata service broke off its answer".to_owned(),
-                    ));
+        let body = self
+            .read_body(
+                url,
+                &mut response,
+                LARGEST_ANSWER,
+                || {
+                    "azure's metadata service sent more than 64 KiB where a token was expected"
+                        .to_owned()
+                },
+                |_| async { Ok(()) },
+            )
+            .await
+            .map_err(|failure| match failure {
+                Failure::Transient { .. } => {
+                    failure::transient("azure's metadata service broke off its answer".to_owned())
                 }
-                Ok(Ok(None)) => return Ok((status.as_u16(), body)),
-                Ok(Ok(Some(chunk))) => {
-                    if body.len() + chunk.len() > LARGEST_ANSWER {
-                        return Err(Failure::Final(Error::new(
-                            Kind::SourceInvalid,
-                            "azure's metadata service sent more than 64 KiB where a token was expected",
-                        )));
-                    }
-                    body.extend_from_slice(&chunk);
-                }
-            }
-        }
+                failure => failure,
+            })?;
+        Ok((status.as_u16(), body))
     }
 }
 

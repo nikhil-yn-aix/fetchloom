@@ -588,20 +588,7 @@ impl Net {
                 }
                 Err(failure) => failure,
             };
-            match failure {
-                Failure::Final(error) => return Err(error),
-                Failure::Limited { reason, wait } => retry.limited(reason, wait, false).await?,
-                Failure::Transient {
-                    reason,
-                    unreachable: true,
-                    ..
-                } => retry.unreachable(reason, false).await?,
-                Failure::Transient {
-                    reason,
-                    retry_after,
-                    ..
-                } => retry.wait(reason, retry_after, false).await?,
-            }
+            retry.after(failure, false).await?;
         }
     }
 
@@ -646,37 +633,24 @@ impl Net {
         if failure::is_transient(status) {
             return Err(failure::refusal(url, status, response.headers()));
         }
-        let mut body = Vec::new();
-        loop {
-            let chunk = tokio::select! {
-                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
-                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
-            };
-            match chunk {
-                Err(_) => {
-                    return Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        self.idle.as_secs()
-                    )));
-                }
-                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
-                Ok(Ok(None)) => return Ok((status.as_u16(), body)),
-                Ok(Ok(Some(chunk))) => {
-                    Work::add(&self.work.bytes_down, chunk.len() as u64);
-                    if body.len() + chunk.len() > LARGEST_ANSWER {
-                        return Err(Failure::Final(Error::new(
-                            Kind::SourceInvalid,
-                            format!(
-                                "{} sent more than 64 KiB where a token was expected",
-                                host(url)
-                            ),
-                        )));
-                    }
-                    body.extend_from_slice(&chunk);
-                }
-            }
-        }
+        let body = self
+            .read_body(
+                url,
+                &mut response,
+                LARGEST_ANSWER,
+                || {
+                    format!(
+                        "{} sent more than 64 KiB where a token was expected",
+                        host(url)
+                    )
+                },
+                |bytes| async move {
+                    Work::add(&self.work.bytes_down, bytes as u64);
+                    Ok(())
+                },
+            )
+            .await?;
+        Ok((status.as_u16(), body))
     }
 }
 
