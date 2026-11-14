@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::{Look, State};
+use self::state::{Look, State, Synced};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 
@@ -245,7 +245,13 @@ impl Project {
     }
 
     pub(crate) fn manifest(&self) -> Result<(String, Manifest), Error> {
-        let _span = tracing::debug_span!("read_manifest").entered();
+        let text = self.manifest_text()?;
+        let manifest = Project::parse_manifest(&text)?;
+        Ok((text, manifest))
+    }
+
+    /// data.toml's text, not yet parsed.
+    pub(crate) fn manifest_text(&self) -> Result<String, Error> {
         let path = self.manifest_path();
         // a folder or a pipe there would fail the read, or never end it
         if let Ok(found) = fs::metadata(&path)
@@ -262,17 +268,21 @@ impl Project {
             )
             .help("move it aside, then put the project's data.toml file there, or run the command in another folder"));
         }
-        let text = fs::read_to_string(&path).map_err(|err| {
+        fs::read_to_string(&path).map_err(|err| {
             if err.kind() == io::ErrorKind::InvalidData {
                 Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
                     .help("save it as UTF-8, then run the command again")
             } else {
                 self.unreadable(manifest::FILE, &err)
             }
-        })?;
-        let manifest = Manifest::parse(&text)
-            .map_err(|error| unmerged(manifest::FILE, &text).unwrap_or(error))?;
-        Ok((text, manifest))
+        })
+    }
+
+    /// [`Manifest::parse`] of data.toml's `text`, naming an unfinished merge in place of the
+    /// parser's error.
+    pub(crate) fn parse_manifest(text: &str) -> Result<Manifest, Error> {
+        let _span = tracing::debug_span!("read_manifest").entered();
+        Manifest::parse(text).map_err(|error| unmerged(manifest::FILE, text).unwrap_or(error))
     }
 
     /// data.lock, or nothing when the project has none yet.
@@ -332,6 +342,11 @@ impl Project {
         Self::read_opened(self.open_state(), |file, _| {
             State::read_within(file, folders, keep)
         })
+    }
+
+    /// the settled sync the state records, read from what follows its records alone, or none.
+    pub(crate) fn synced(&self) -> Option<Synced> {
+        self.state_within(&[], &|_| false).0.synced
     }
 
     /// the state file and how it looks, opened without following a link: a planted link to a

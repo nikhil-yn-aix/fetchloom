@@ -1703,3 +1703,127 @@ fn drop_changes_at_once_write_what_changes_one_at_a_time_write() {
         "{failed} of {compared} failed"
     );
 }
+
+/// what [`a_plain_data_toml_reads_as_the_parser_reads_it`] joins: names, lines, near misses.
+const PLAIN_NAMES: [&str; 4] = ["iris", "mnist-2_b", "a", "iris"];
+const PLAIN_LINES: [&str; 8] = [
+    "ref = \"https://example.org/iris.csv\"",
+    "ref = \"zenodo:3608990\"",
+    "ref = \" arxiv:2401.00001 \"",
+    "ref = \"https://example.org/a b?token=x#y\"",
+    "place = false",
+    "place = true",
+    "# a note, with \"quotes\" and = signs",
+    "  \t",
+];
+const NEAR_MISSES: [&str; 33] = [
+    "[datasets.Iris]",
+    "[datasets.\"iris\"]",
+    "[datasets.a.b]",
+    "[ datasets.iris ]",
+    "[datasets]",
+    "[[datasets.iris]]",
+    "[project]",
+    "data_dir = \"raw\"",
+    "ref = \"\"",
+    "ref = \"   \"",
+    "ref = \"a\tb\"",
+    "ref = \"a\\tb\"",
+    "ref = \"a\\\"b\"",
+    "ref = 'zenodo:1'",
+    "ref = \"zenodo:1\" # a note",
+    "ref=\"zenodo:1\"",
+    "ref = \"zenodo:1\"\"",
+    "place = False",
+    "place = \"false\"",
+    "place = 0",
+    "select = [\"*.csv\"]",
+    "from = [\"iris\"]",
+    "run = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]",
+    "copy = true",
+    "ref = \"a\u{7f}b\"",
+    "# a \u{7f} note",
+    "\u{85}",
+    "ref = \"zenodo:1\u{85}\"",
+    "datasets.iris.ref = \"zenodo:1\"",
+    "\"ref\" = \"zenodo:1\"",
+    "ref = \"\"\"zenodo:1\"\"\"",
+    "",
+    "\r",
+];
+
+/// [`read_plain`] reads a data.toml only as [`Manifest::parse`] reads it: the data folder, each
+/// dataset's name, ref and place, and no recipe. tables `add` writes, some lines swapped for near
+/// misses, check it; what it declines goes to the parser.
+#[test]
+fn a_plain_data_toml_reads_as_the_parser_reads_it() {
+    let mut rng = fastrand::Rng::with_seed(4);
+    let mut plain_texts = 0;
+    for round in 0..3_000 {
+        let mut lines: Vec<String> = Vec::new();
+        for _ in 0..rng.usize(0..4) {
+            lines.push(format!(
+                "[datasets.{}]",
+                PLAIN_NAMES[rng.usize(..PLAIN_NAMES.len())]
+            ));
+            for _ in 0..rng.usize(0..4) {
+                lines.push(PLAIN_LINES[rng.usize(..PLAIN_LINES.len())].to_owned());
+            }
+        }
+        if !lines.is_empty() && rng.bool() {
+            let at = rng.usize(..lines.len());
+            lines[at] = NEAR_MISSES[rng.usize(..NEAR_MISSES.len())].to_owned();
+        }
+        let mut text = lines.join(if round % 2 == 0 { "\n" } else { "\r\n" });
+        if rng.bool() {
+            text.push('\n');
+        }
+        if round % 7 == 0 {
+            text.insert(0, '\u{feff}');
+        }
+        let Some(plain) = read_plain(&text) else {
+            continue;
+        };
+        plain_texts += 1;
+        let whole = Manifest::parse(&text)
+            .unwrap_or_else(|error| panic!("{text:?} read plain, but {}", error.message));
+        assert_eq!(plain.data_dir, whole.data_dir, "{text:?}");
+        let names = |manifest: &Manifest| manifest.datasets.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(names(&plain), names(&whole), "{text:?}");
+        for (name, entry) in &whole.datasets {
+            let read = &plain.datasets[name];
+            assert!(entry.recipe().is_none(), "{text:?}");
+            assert_eq!(
+                (&read.source().unwrap().reference, read.place),
+                (&entry.source().unwrap().reference, entry.place),
+                "{text:?}"
+            );
+        }
+    }
+    // a run that read nothing plain would prove nothing
+    assert!(plain_texts > 500, "only {plain_texts} texts read plain");
+    let added = with_datasets(
+        "# my project\n",
+        &[
+            NewDataset {
+                name: "iris",
+                reference: "https://example.org/iris.csv",
+                select: &[],
+                exclude: &[],
+                extract: true,
+                web_page: false,
+            },
+            NewDataset {
+                name: "paper",
+                reference: "arxiv:2401.00001",
+                select: &[],
+                exclude: &[],
+                extract: true,
+                web_page: false,
+            },
+        ],
+    )
+    .unwrap();
+    let plain = read_plain(&added).unwrap_or_else(|| panic!("{added:?} is not read plain"));
+    assert_eq!(plain.datasets.keys().collect::<Vec<_>>(), ["iris", "paper"]);
+}

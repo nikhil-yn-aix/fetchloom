@@ -302,6 +302,111 @@ impl Manifest {
     }
 }
 
+/// data.toml as a settled sync reads it, when it holds only what `add` writes for a dataset of
+/// one ref: `[datasets.<name>]` tables of a `ref` and maybe `place`, blank lines and comments. it
+/// reads them without a TOML parser, and only where [`Manifest::parse`] would read the same; none
+/// for anything else. an entry keeps no select its link implies and cites no line, so a sync that
+/// finds anything to do parses data.toml whole.
+pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut datasets = BTreeMap::new();
+    let mut open: Option<(String, Option<String>, Option<bool>)> = None;
+    for line in text.split_inclusive('\n') {
+        // a carriage return ends a line only before a line feed
+        let line = line
+            .strip_suffix('\n')
+            .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line));
+        let line = line.trim_matches([' ', '\t']);
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('#') {
+            if line.contains(|c: char| c.is_control() && c != '\t') {
+                return None;
+            }
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix("[datasets.")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            put_plain(&mut datasets, open.take())?;
+            // a bare key of valid name characters, so no quote, dot or space can nest a table
+            let bare = name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+            if !bare || name::dataset_name_problem(name).is_some() || datasets.contains_key(name) {
+                return None;
+            }
+            open = Some((name.to_owned(), None, None));
+            continue;
+        }
+        let (_, reference, place) = open.as_mut()?;
+        if let Some(value) = line
+            .strip_prefix("ref = \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
+            // no escape or quote, so the string is its text
+            if reference.is_some()
+                || value.contains(['"', '\\'])
+                || value.contains(char::is_control)
+            {
+                return None;
+            }
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            *reference = Some(value.to_owned());
+            continue;
+        }
+        let value = line.strip_prefix("place = ")?;
+        if place.is_some() {
+            return None;
+        }
+        *place = Some(match value {
+            "true" => true,
+            "false" => false,
+            _ => return None,
+        });
+    }
+    put_plain(&mut datasets, open)?;
+    Some(Manifest {
+        data_dir: DATA_DIR.to_owned(),
+        datasets,
+    })
+}
+
+/// adds a dataset [`read_plain`] read, its name, ref and place, to `datasets`; none when it has
+/// no ref, which only the parser's error answers.
+fn put_plain(
+    datasets: &mut BTreeMap<String, Entry>,
+    read: Option<(String, Option<String>, Option<bool>)>,
+) -> Option<()> {
+    let Some((name, reference, place)) = read else {
+        return Some(());
+    };
+    let origin = Origin::Source(Source {
+        reference: reference?,
+        select: Vec::new(),
+        exclude: Vec::new(),
+        extract: true,
+        members: Members::new(),
+        web_page: false,
+    });
+    datasets.insert(
+        name,
+        Entry {
+            origin,
+            copy: false,
+            path: None,
+            place: place.unwrap_or(true),
+            lines: BTreeMap::new(),
+        },
+    );
+    Some(())
+}
+
 /// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key,
 /// and each env, which should not but may. a message cites such a line by number alone.
 fn private(root: &Table) -> Vec<Range<usize>> {

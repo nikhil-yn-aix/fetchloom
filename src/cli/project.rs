@@ -24,7 +24,7 @@ use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project, git};
 use crate::recipe::{self, Change};
@@ -353,7 +353,23 @@ async fn sync_as_asked(
             Err(error) => return Err(error),
         }
     };
-    let (text, manifest) = project.manifest()?;
+    sync_held(context, project, args).await
+}
+
+/// [`sync_as_asked`] in `project`, held unless it is a dry run.
+async fn sync_held(
+    context: &Context,
+    project: Project,
+    args: args::Sync,
+) -> Result<(Report, Option<Closing>), Error> {
+    let dry_run = args.dry.dry_run;
+    let text = project.manifest_text()?;
+    if let Some((plain, read)) = settled_plain(&project, &text, &args) {
+        return sync_plain(context, &project, &args, &text, (&plain, read))
+            .await
+            .map(|(report, closing)| (report, Some(closing)));
+    }
+    let manifest = Project::parse_manifest(&text)?;
     let scope = selected(&manifest, &args.names, "sync")?;
     if !dry_run
         && !args.locked
@@ -442,6 +458,84 @@ fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
         return Ok(report);
     }
     Err(engine::unbuilt_here(unbuilt).with_report(&report))
+}
+
+/// data.toml as [`manifest::read_plain`] reads its `text`, with the text's SHA-256, for a sync of
+/// every dataset that only checks and places, when the state says the last complete sync read the
+/// same text; none otherwise, and data.toml is parsed.
+fn settled_plain(
+    project: &Project,
+    text: &str,
+    args: &args::Sync,
+) -> Option<(Manifest, digest::Sha256)> {
+    if args.dry.dry_run || args.locked || args.verify || !args.names.is_empty() {
+        return None;
+    }
+    let synced = project.synced().filter(|synced| synced.complete)?;
+    let read = digest::sha256(text.as_bytes());
+    if synced.manifest != read {
+        return None;
+    }
+    manifest::read_plain(text).map(|plain| (plain, read))
+}
+
+/// a sync of every dataset from `plain`, data.toml's `text` as [`settled_plain`] read it with its
+/// SHA-256: settled from it alone, else run from the text parsed whole and the survey made.
+async fn sync_plain(
+    context: &Context,
+    project: &Project,
+    args: &args::Sync,
+    text: &str,
+    (plain, read): (&Manifest, digest::Sha256),
+) -> Result<(Report, Closing), Error> {
+    let lock = project.lock_and_text()?;
+    let seen = Seen {
+        manifest: read,
+        lock: lock
+            .as_ref()
+            .map(|(_, text)| digest::sha256(text.as_bytes())),
+    };
+    let old = lock.map(|(lock, _)| lock);
+    let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?);
+    let survey = surveyed(&work, &plain.data_dir, false)?;
+    let (whole, outcome) =
+        if let Some(outcome) = settle(&work, plain, &survey, &seen, old.as_ref())? {
+            (None, outcome)
+        } else {
+            let whole = Project::parse_manifest(text)?;
+            let run = Run {
+                upgrade: Upgrade::Nothing,
+                force: args.force,
+                verify: false,
+                read: Read::Settled(&seen),
+            };
+            let outcome = sync_surveyed(&work, &whole, old, None, run, survey).await?;
+            (Some(whole), outcome)
+        };
+    let manifest = whole.as_ref().unwrap_or(plain);
+    let Outcome {
+        lock_changed,
+        pins,
+        placed: placement,
+    } = outcome;
+    ignore_data(&work, manifest)?;
+    let closing = closing(
+        project,
+        manifest,
+        &work.scope,
+        lock_changed,
+        &placement,
+        false,
+    );
+    let report = Report {
+        selected: Some(work.scope.clone()),
+        project: project.root.clone(),
+        datasets: pins,
+        lock_changed,
+        placement: Some(placement),
+        ..Report::default()
+    };
+    Ok((report, closing))
 }
 
 /// the datasets `names` asks `command` for, every one when it names none.
@@ -1226,17 +1320,18 @@ pub(super) async fn sync_all(
     given: Option<(String, Listing)>,
     run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
-    let Run {
-        upgrade,
-        force,
-        verify,
-        read,
-    } = run;
     refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    let survey = surveyed(work, &manifest.data_dir, run.verify)?;
+    sync_surveyed(work, manifest, old, given, run, survey).await
+}
+
+/// the data folder as a sync starts from it: read, its doubted links checked, and with `verify`
+/// every file hashed.
+fn surveyed(work: &Loop<'_>, data_dir: &str, verify: bool) -> Result<Survey, Error> {
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
-        &manifest.data_dir,
+        data_dir,
         work.context.threads,
         &work.context.stop,
     )?;
@@ -1246,32 +1341,64 @@ pub(super) async fn sync_all(
         survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
     }
     disk::audit(work.project, &survey, &work.cache)?;
+    Ok(survey)
+}
+
+/// a sync with nothing to do, finished: none unless [`place::untouched`] finds it settled.
+fn settle(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    survey: &Survey,
+    seen: &Seen,
+    old: Option<&Lock>,
+) -> Result<Option<Outcome<Placement>>, Error> {
+    let Some(placement) =
+        place::untouched(work.project, manifest, survey, seen, true, &work.scope)?
+    else {
+        return Ok(None);
+    };
+    work.tell_stale(manifest, old.unwrap_or(&Lock::default()));
+    // files hashing found unchanged settle with a state written now; a project folder
+    // that takes no write fails no run that changed nothing
+    if survey.needs_writing
+        && let Err(error) = work.project.write_state(&survey.state)
+    {
+        tracing::debug!(error = %error, "could not settle the state");
+    }
+    // nothing is left to do, so a stop asked from here on, as by ctrl-c while the
+    // last lines print, leaves the sync done
+    work.context
+        .stop
+        .check()
+        .map_err(|error| work.before_placing(error))?;
+    work.context.stop.finish();
+    register(work);
+    Ok(Some(Outcome {
+        lock_changed: false,
+        pins: Vec::new(),
+        placed: placement,
+    }))
+}
+
+/// [`sync_all`] from `survey`, read as it reads one.
+async fn sync_surveyed(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    old: Option<Lock>,
+    given: Option<(String, Listing)>,
+    run: Run<'_>,
+    mut survey: Survey,
+) -> Result<Outcome<Placement>, Error> {
+    let Run {
+        upgrade,
+        force,
+        verify: _,
+        read,
+    } = run;
     let seen = match read {
         Read::Settled(seen) => {
-            if let Some(placement) =
-                place::untouched(work.project, manifest, &survey, seen, true, &work.scope)?
-            {
-                work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
-                // files hashing found unchanged settle with a state written now; a project folder
-                // that takes no write fails no run that changed nothing
-                if survey.needs_writing
-                    && let Err(error) = work.project.write_state(&survey.state)
-                {
-                    tracing::debug!(error = %error, "could not settle the state");
-                }
-                // nothing is left to do, so a stop asked from here on, as by ctrl-c while the
-                // last lines print, leaves the sync done
-                work.context
-                    .stop
-                    .check()
-                    .map_err(|error| work.before_placing(error))?;
-                work.context.stop.finish();
-                register(work);
-                return Ok(Outcome {
-                    lock_changed: false,
-                    pins: Vec::new(),
-                    placed: placement,
-                });
+            if let Some(outcome) = settle(work, manifest, &survey, seen, old.as_ref())? {
+                return Ok(outcome);
             }
             seen
         }
@@ -2116,6 +2243,71 @@ pub(crate) mod tests {
             stopped.push(synced.err().map(|error| error.kind));
         }
         assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
+    }
+
+    /// a sync of every dataset in a project the last complete sync left as it is, with data.toml
+    /// as `add` writes it, finds the project settled without parsing data.toml; with data.lock
+    /// changed since, it parses data.toml once and syncs from the survey it made.
+    #[test]
+    fn a_settled_sync_of_a_plain_data_toml_parses_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let project = Project { root: root.clone() };
+        std::fs::create_dir(&root).unwrap();
+        let text = "[datasets.iris]\nref = \"https://example.org/iris\"\n";
+        project.write(manifest::FILE, text.as_bytes()).unwrap();
+        let manifest = Manifest::parse(text).unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"5.1,3.5,1.4,0.2\n";
+        crate::cache::tests::store(&cache, bytes);
+        let iris = pinned(
+            "iris",
+            lock::spec(manifest.datasets["iris"].source().unwrap()),
+            vec![pinned_file("iris.csv", "https://example.org/iris", bytes)],
+        );
+        let lock = Lock {
+            datasets: vec![iris],
+            ..Lock::default()
+        };
+        let locked = lock.render();
+        project.write(lock::FILE, locked.as_bytes()).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let first = offline_context();
+        let seen = Seen {
+            manifest: digest::sha256(text.as_bytes()),
+            lock: Some(digest::sha256(locked.as_bytes())),
+        };
+        let work = Loop::new(&first, &project, Arc::new(first.net()), cache.clone());
+        let synced = sync_all(&work, &manifest, Some(lock), None, Run::planned(&seen));
+        super::super::block_on(&first, synced).unwrap();
+        let args = args::Sync {
+            names: Vec::new(),
+            force: false,
+            locked: false,
+            dry: args::DryRun { dry_run: false },
+            verify: false,
+            strict: false,
+        };
+        let sync = || {
+            let context = offline_context();
+            let before = manifest::tests::reads();
+            let project = Project { root: root.clone() };
+            let synced = sync_held(&context, project, args.clone());
+            let (report, _) = super::super::block_on(&context, synced).unwrap();
+            let placement = report.placement.unwrap();
+            let reads = manifest::tests::reads() - before;
+            (placement.unchanged, placement.placed, reads)
+        };
+        assert_eq!(sync(), (1, 0, 0));
+        project
+            .write(lock::FILE, format!("{locked}\n").as_bytes())
+            .unwrap();
+        assert_eq!(sync(), (1, 0, 1));
+        assert_eq!(sync(), (1, 0, 0));
     }
 
     /// a sync of every dataset counts only those it placed, not `place = false` or unbuilt ones.
