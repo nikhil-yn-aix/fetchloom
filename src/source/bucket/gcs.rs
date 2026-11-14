@@ -1,8 +1,6 @@
 //! google cloud storage: the JSON API's object list over HTTPS, without a token unless the
 //! `gcs_buckets` setting lists the bucket and it refused a request without one.
 
-use std::fmt::Write as _;
-
 use serde::Deserialize;
 use url::Url;
 
@@ -139,40 +137,8 @@ fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error
 /// the 16 bytes of an MD5 written in padded standard base64, as cloud storage and azure state
 /// them.
 pub(super) fn base64_md5(text: &str) -> Option<Md5> {
-    let digits = text.strip_suffix("==")?;
-    if digits.len() != 22 {
-        return None;
-    }
-    let mut bits: u32 = 0;
-    let mut held = 0;
-    let mut bytes = Vec::with_capacity(16);
-    for byte in digits.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(value);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            bytes.push(u8::try_from((bits >> held) & 0xff).ok()?);
-        }
-    }
-    // the last digit carries four bits past the sixteenth byte, which must be zero
-    if bits & ((1 << held) - 1) != 0 {
-        return None;
-    }
-    let hex = bytes
-        .iter()
-        .fold(String::with_capacity(32), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        });
-    Md5::from_hex(&hex)
+    let bytes = crate::auth::from_base64(text).filter(|bytes| bytes.len() == 16)?;
+    Md5::from_hex(&crate::digest::hex(&bytes))
 }
 
 #[cfg(test)]

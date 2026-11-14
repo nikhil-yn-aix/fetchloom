@@ -73,7 +73,7 @@ pub(crate) struct AccountKey(Vec<u8>);
 impl AccountKey {
     /// reads a key as the azure portal and `az storage account keys list` give one: base64.
     pub(crate) fn parse(text: &str) -> Option<AccountKey> {
-        decoded(text.trim())
+        crate::auth::from_base64(text.trim())
             .filter(|bytes| !bytes.is_empty())
             .map(AccountKey)
     }
@@ -451,35 +451,6 @@ fn cli_login(var: Var<'_>) -> Login {
     Login::In(chosen.and_then(|subscription| Some(subscription.user.as_ref()?.name.clone())))
 }
 
-/// the bytes `text` writes in base64, with the standard alphabet and its padding.
-fn decoded(text: &str) -> Option<Vec<u8>> {
-    let digits = text.trim_end_matches('=');
-    if text.is_empty() || !text.len().is_multiple_of(4) || text.len() - digits.len() > 2 {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
-    let (mut bits, mut held) = (0_u32, 0);
-    for byte in digits.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(value);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            bytes.push(u8::try_from(bits >> held).ok()?);
-            bits &= (1 << held) - 1;
-        }
-    }
-    // the bits past the last whole byte must be zero, as an encoder leaves them
-    (bits == 0).then_some(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -542,7 +513,7 @@ mod tests {
                 .map(|at| u8::try_from((at * 37 + 11) % 256).unwrap())
                 .collect();
             let written = crate::auth::base64(&bytes);
-            let read = decoded(&written);
+            let read = crate::auth::from_base64(&written);
             if length == 0 {
                 assert_eq!(read, None);
             } else {
@@ -550,7 +521,7 @@ mod tests {
             }
         }
         for unreadable in ["abc", "ab=c", "a===", "ab$d", "QR==", "key with spaces="] {
-            assert_eq!(decoded(unreadable), None, "{unreadable}");
+            assert_eq!(crate::auth::from_base64(unreadable), None, "{unreadable}");
         }
     }
 
