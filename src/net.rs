@@ -274,6 +274,9 @@ pub(crate) struct Net {
     retries: u32,
     /// the most the wait before a first retry takes, which tests of broken answers set to zero.
     first_wait: Duration,
+    /// how much further a try must take its file to count toward no limit, which tests set
+    /// smaller than a real download moves.
+    moving: u64,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
@@ -481,6 +484,7 @@ impl Net {
             host_jobs: HOST_JOBS,
             retries: RETRIES,
             first_wait: failure::FIRST_WAIT,
+            moving: failure::MOVING,
             split: download::starting(options.split),
             work,
             stop,

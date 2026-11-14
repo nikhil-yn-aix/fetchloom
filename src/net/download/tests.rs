@@ -537,12 +537,13 @@ fn breaking(total: u64, step: u64) -> (Url, Arc<std::sync::atomic::AtomicU32>) {
 /// a request has tries in all, and still finishes in one run.
 #[test]
 fn a_download_that_keeps_moving_keeps_going() {
-    let step = crate::net::failure::MOVING;
+    let step = 4096;
     let total = 51 * step + 1000;
     let (url, asked) = breaking(total, step);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let net = net(&url);
+    let mut net = net(&url);
+    net.moving = step;
     let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
     assert_eq!(fetched.size, total);
     assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));

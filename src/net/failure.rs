@@ -131,7 +131,7 @@ impl<'a> Retry<'a> {
         if gained > 0 {
             self.attempt = 1;
         }
-        self.moving = gained >= MOVING;
+        self.moving = gained >= self.net.moving;
     }
 
     /// counts the try that just ended, which moved little unless [`Retry::moved`] said so, and
