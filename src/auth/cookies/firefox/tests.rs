@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::time::{Duration, SystemTime};
 
 use rusqlite::Connection;
@@ -129,4 +130,83 @@ fn the_profile_used_last_is_read_unless_one_is_named() {
     let folder = elsewhere.parent().unwrap().to_str().unwrap().to_owned();
     assert_eq!(file(&[], Some(&folder)), Some(elsewhere));
     assert_eq!(file(&roots, Some("nobody")), None);
+}
+
+/// an `XDG_CONFIG_HOME` counts on linux only when it is absolute, as the XDG base directory
+/// spec says.
+#[test]
+fn firefox_is_looked_for_where_each_system_keeps_it() {
+    let found = |config: Option<&str>| {
+        roots(&|name: &str| {
+            match name {
+                "HOME" => Some("/home/someone"),
+                "XDG_CONFIG_HOME" => config,
+                "APPDATA" => Some(r"C:\Users\someone\AppData\Roaming"),
+                "LOCALAPPDATA" => Some(r"C:\Users\someone\AppData\Local"),
+                _ => None,
+            }
+            .map(OsString::from)
+        })
+    };
+    let linux = |config| {
+        vec![
+            config,
+            "/home/someone/.mozilla/firefox",
+            "/home/someone/.var/app/org.mozilla.firefox/config/mozilla/firefox",
+            "/home/someone/.var/app/org.mozilla.firefox/.mozilla/firefox",
+            "/home/someone/snap/firefox/common/.mozilla/firefox",
+        ]
+    };
+    let default = "/home/someone/.config/mozilla/firefox";
+    for (config, folders) in [
+        (None, linux(default)),
+        (Some(""), linux(default)),
+        (Some("config"), linux(default)),
+        (Some("/xdg"), linux("/xdg/mozilla/firefox")),
+    ] {
+        let folders = if cfg!(windows) {
+            vec![
+                r"C:\Users\someone\AppData\Roaming\Mozilla\Firefox",
+                r"C:\Users\someone\AppData\Local\Packages\Mozilla.Firefox_n80bbvh6b1yt2\LocalCache\Roaming\Mozilla\Firefox",
+            ]
+        } else if cfg!(target_os = "macos") {
+            vec!["/home/someone/Library/Application Support/Firefox"]
+        } else {
+            folders
+        };
+        let expected: Vec<PathBuf> = folders.into_iter().map(PathBuf::from).collect();
+        assert_eq!(found(config), expected, "XDG_CONFIG_HOME {config:?}");
+    }
+}
+
+/// a profile's name in profiles.ini need not match its folder, which is a path from the root
+/// unless `IsRelative=0` makes it absolute.
+#[test]
+fn profiles_ini_names_each_profile_and_finds_its_folder() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("firefox");
+    let near = root.join("Profiles/k3j4h5g6.default-release");
+    let far = base.path().join("lab/p0o9i8u7.field");
+    for folder in [&near, &far] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("cookies.sqlite"), b"").unwrap();
+    }
+    std::fs::write(
+        root.join("profiles.ini"),
+        format!(
+            "[Install4F96D1932A9F858E]\nDefault=Profiles/k3j4h5g6.default-release\n\n\
+             [Profile1]\nName=field notes\nIsRelative=0\nPath={}\n\n\
+             [Profile0]\nName=main\nIsRelative=1\nPath=Profiles/k3j4h5g6.default-release\n\n\
+             [General]\nStartWithLastProfile=1\nVersion=2\n",
+            far.display()
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        profiles(&root),
+        [
+            (far, Some("field notes".to_owned())),
+            (near, Some("main".to_owned()))
+        ]
+    );
 }
