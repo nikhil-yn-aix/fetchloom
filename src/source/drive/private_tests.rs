@@ -359,7 +359,7 @@ fn drives_refusals_and_documents_say_what_to_do() {
 /// sign in with `gcloud auth application-default login --client-id-file=...` and the drive scope.
 /// it lists the folder through drive's api and checks its first file against drive's checksums.
 #[test]
-#[ignore = "live: talks to google drive with application default credentials"]
+#[ignore = "live: talks to www.googleapis.com and oauth2.googleapis.com"]
 fn live_private_drive() {
     let Some(id) = std::env::var("FETCHLOOM_TEST_LIVE_DRIVE_FOLDER")
         .ok()
