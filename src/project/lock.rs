@@ -956,7 +956,7 @@ fn check_resolved(dataset: &Locked) -> Result<(), Error> {
 /// what a link carries that lets anyone holding it in.
 enum Carried {
     Login,
-    /// the key of the query or fragment value [`crate::net::secret`] names, such as `token`.
+    /// the key of the query or fragment value [`crate::shown::secret`] names, such as `token`.
     Secret(String),
 }
 

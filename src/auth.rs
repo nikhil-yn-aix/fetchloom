@@ -787,7 +787,7 @@ pub(crate) fn meant_account(typed: &str) -> Option<Account> {
 }
 
 /// `typed` as a refusal shows it: a link's login and query values masked, as
-/// [`crate::net::mask_query`] masks them, and so is whatever comes before an `@` without a link
+/// [`crate::shown::mask_query`] masks them, and so is whatever comes before an `@` without a link
 /// around it, as the password in `ada:pw@data.example.org`.
 fn masked(typed: &str) -> String {
     let masked = crate::shown::mask_query(typed);
