@@ -30,10 +30,10 @@ each color has one meaning, named by a `Tone` in `src/output/style.rs`:
 | tone | meaning | ansi theme | dark theme | light theme |
 |---|---|---|---|---|
 | `done` | finished work | green | `#a6cd6c` | `#2a7e3b` |
-| `work` | work in progress and its bars | cyan | `#79c9ae` | `#065f46` |
+| `work` | work in progress and its bars | cyan | `#79c9ae` | `#027864` |
 | `warn` | attention or a difference | yellow | `#e3b257` | `#895900` |
 | `fail` | failure | red | `#f17886` | `#b2263a` |
-| `accent` | anything the user types, and choice numbers | cyan | `#79c9ae` | `#065f46` |
+| `accent` | anything the user types, and choice numbers | cyan | `#79c9ae` | `#027864` |
 
 the dark and light colors live in one place, the two color schemes at the top of the documentation site's stylesheet, `docs-site/theme/assets/stylesheets/fetchloom.css`: `python/test_site.py` holds the two themes here to them, and `bench/render.py` draws the benchmark charts from them, so changing a color means changing it there and in `Theme::palette`. the site draws the transcripts its pages show with the same tones: `python/transcript.py` follows `verb_color`, `difference` and the setup, ticker, warning, error, hint and next lines here, so a verb or rule that changes here changes there too.
 

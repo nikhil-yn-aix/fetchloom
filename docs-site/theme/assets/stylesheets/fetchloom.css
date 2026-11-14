@@ -31,8 +31,8 @@
 
 /* the palette, in one place: the cli's light and dark themes (src/output/style.rs) are held to
    these colors by python/test_site.py, and the benchmark charts (bench/render.py) read them from
-   here. a herbarium sheet: graphite ink and a green for what a person types, on a near-white sheet
-   by day, from radix colors' sage, grass and tailwind's emerald, and on green-grey by night */
+   here. a herbarium sheet: graphite ink and a mint for what a person types, on a near-white sheet
+   by day, from radix colors' sage, mint and grass, and on green-grey by night */
 [data-md-color-scheme="default"] {
   --fl-paper: #fbfdfc;
   --fl-surface: #f7f9f8;
@@ -42,7 +42,7 @@
   --fl-hair: #dfe2e0;
   --fl-line: #d7dad9;
   --fl-track: #eef1f0;
-  --fl-accent: #065f46;
+  --fl-accent: #027864;
   --fl-done: #2a7e3b;
   --fl-warn: #895900;
   --fl-fail: #b2263a;

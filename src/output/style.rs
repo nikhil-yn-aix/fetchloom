@@ -65,10 +65,10 @@ impl Theme {
             },
             Theme::Light => Palette {
                 done: rgb(0x2a, 0x7e, 0x3b),
-                work: rgb(0x06, 0x5f, 0x46),
+                work: rgb(0x02, 0x78, 0x64),
                 warn: rgb(0x89, 0x59, 0x00),
                 fail: rgb(0xb2, 0x26, 0x3a),
-                accent: rgb(0x06, 0x5f, 0x46),
+                accent: rgb(0x02, 0x78, 0x64),
             },
         }
     }
