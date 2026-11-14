@@ -53,72 +53,83 @@ def catalog(service, quick):
     id, and each file's name, size, url and checksum. quick picks a small dataset or only its small
     files. ValueError when no file matches."""
     result = dict(service=service, select=[], quick=quick)
-    files = []
-    if service == "zenodo":
-        record = "3608990" if quick else "8164711"
-        data = get_json(f"https://zenodo.org/api/records/{record}")
-        result.update(ref=f"zenodo:{record}", native=record, tool="zenodo_get",
-                      select=[] if quick else ["pbmc.RData"])
-        for item in data["files"]:
-            if not result["select"] or item["key"] in result["select"]:
-                files.append(dict(name=item["key"], size=item["size"], url=item["links"]["self"], checksum=item["checksum"]))
-    elif service == "huggingface":
-        repo = "scikit-learn/iris" if quick else "stanfordnlp/imdb"
-        revision = get_json(f"https://huggingface.co/api/datasets/{repo}")["sha"] if quick else "e6281661ce1c48d982bc483cf8a173c1bbeb5d31"
-        selection = "Iris.csv" if quick else "plain_text/*.parquet"
-        data = get_json(f"https://huggingface.co/api/datasets/{repo}/tree/{revision}?recursive=true&expand=true")
-        result.update(ref=f"hf:datasets/{repo}@{revision}", native=repo, revision=revision,
-                      tool="hf", select=[selection])
-        for item in data:
-            if item["type"] == "file" and fnmatch.fnmatch(item["path"], selection):
-                files.append(dict(name=item["path"], size=item["size"],
-                                  url=f"https://huggingface.co/datasets/{repo}/resolve/{revision}/{item['path']}",
-                                  checksum="sha256:" + item["lfs"]["oid"] if "lfs" in item else None))
-    elif service == "kaggle":
-        repo, version = ("uciml/iris", 2) if quick else ("zynicide/wine-reviews", 4)
-        data = get_json(f"https://www.kaggle.com/api/v1/datasets/list/{repo}?datasetVersionNumber={version}")
-        result.update(ref=f"kaggle:{repo}@{version}", native=f"{repo}/versions/{version}", tool="kagglehub",
-                      select=["Iris.csv" if quick else "winemag-data-130k-v2.csv"])
-        for item in data["datasetFiles"]:
-            if item["name"] not in result["select"]:
-                continue
-            files.append(dict(name=item["name"], size=item["totalBytes"], checksum=None,
-                              url=f"https://api.kaggle.com/v1/datasets/download/{repo}/{quote(item['name'])}?datasetVersionNumber={version}&raw=true"))
-    elif service == "figshare":
-        data = get_json("https://api.figshare.com/v2/articles/5616403")
-        result.update(ref="figshare:5616403", native="10.6084/m9.figshare.5616403", tool="datahugger",
-                      max_file_size=1024 if quick else None)
-        for item in data["files"]:
-            if not quick or item["size"] <= 1024:
-                files.append(dict(name=item["name"], size=item["size"], url=item["download_url"],
-                                  checksum="md5:" + item["computed_md5"]))
-        if quick:
-            result["select"] = [item["name"] for item in files]
-    else:
-        base = "https://dataverse.harvard.edu"
-        data = get_json(base + "/api/datasets/:persistentId/?persistentId=doi:10.7910/DVN/TJCLKP")["data"]
-        version = data["latestVersion"]
-        result.update(ref="dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
-                      native=base + "/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP", tool="datahugger", max_file_size=1024 if quick else None,
-                      version=f"{version['versionNumber']}.{version['versionMinorNumber']}")
-        for entry in data.get("files", version.get("files", [])):
-            item = entry["dataFile"]
-            if entry.get("restricted"):
-                continue
-            if quick and item["filesize"] > 1024:
-                continue
-            name = item.get("originalFileName", item["filename"])
-            folder = entry.get("directoryLabel", "")
-            files.append(dict(name=f"{folder}/{name}" if folder else name,
-                              size=item.get("originalFileSize", item["filesize"]),
-                              url=base + f"/api/access/datafile/{item['id']}?format=original", checksum=None))
-        if quick:
-            result["select"] = ["**/" + Path(item["name"]).name for item in files]
+    fields, files = DATASETS[service](quick)
+    result.update(fields)
     if not files:
         raise ValueError("the public API returned no matching files")
     result["files"] = files
     result["bytes"] = sum(item["size"] for item in files)
     return result
+
+
+def zenodo_dataset(quick):
+    record = "3608990" if quick else "8164711"
+    data = get_json(f"https://zenodo.org/api/records/{record}")
+    select = [] if quick else ["pbmc.RData"]
+    files = [dict(name=item["key"], size=item["size"], url=item["links"]["self"], checksum=item["checksum"])
+             for item in data["files"] if not select or item["key"] in select]
+    return dict(ref=f"zenodo:{record}", native=record, tool="zenodo_get", select=select), files
+
+
+def huggingface_dataset(quick):
+    repo = "scikit-learn/iris" if quick else "stanfordnlp/imdb"
+    revision = get_json(f"https://huggingface.co/api/datasets/{repo}")["sha"] if quick else "e6281661ce1c48d982bc483cf8a173c1bbeb5d31"
+    selection = "Iris.csv" if quick else "plain_text/*.parquet"
+    data = get_json(f"https://huggingface.co/api/datasets/{repo}/tree/{revision}?recursive=true&expand=true")
+    files = [dict(name=item["path"], size=item["size"],
+                  url=f"https://huggingface.co/datasets/{repo}/resolve/{revision}/{item['path']}",
+                  checksum="sha256:" + item["lfs"]["oid"] if "lfs" in item else None)
+             for item in data if item["type"] == "file" and fnmatch.fnmatch(item["path"], selection)]
+    return dict(ref=f"hf:datasets/{repo}@{revision}", native=repo, revision=revision, tool="hf", select=[selection]), files
+
+
+def kaggle_dataset(quick):
+    repo, version = ("uciml/iris", 2) if quick else ("zynicide/wine-reviews", 4)
+    data = get_json(f"https://www.kaggle.com/api/v1/datasets/list/{repo}?datasetVersionNumber={version}")
+    select = ["Iris.csv" if quick else "winemag-data-130k-v2.csv"]
+    files = [dict(name=item["name"], size=item["totalBytes"], checksum=None,
+                  url=f"https://api.kaggle.com/v1/datasets/download/{repo}/{quote(item['name'])}?datasetVersionNumber={version}&raw=true")
+             for item in data["datasetFiles"] if item["name"] in select]
+    return dict(ref=f"kaggle:{repo}@{version}", native=f"{repo}/versions/{version}", tool="kagglehub", select=select), files
+
+
+def figshare_dataset(quick):
+    data = get_json("https://api.figshare.com/v2/articles/5616403")
+    files = [dict(name=item["name"], size=item["size"], url=item["download_url"], checksum="md5:" + item["computed_md5"])
+             for item in data["files"] if not quick or item["size"] <= 1024]
+    fields = dict(ref="figshare:5616403", native="10.6084/m9.figshare.5616403", tool="datahugger",
+                  max_file_size=1024 if quick else None)
+    if quick:
+        fields["select"] = [item["name"] for item in files]
+    return fields, files
+
+
+def dataverse_dataset(quick):
+    base = "https://dataverse.harvard.edu"
+    data = get_json(base + "/api/datasets/:persistentId/?persistentId=doi:10.7910/DVN/TJCLKP")["data"]
+    version = data["latestVersion"]
+    files = []
+    for entry in data.get("files", version.get("files", [])):
+        item = entry["dataFile"]
+        if entry.get("restricted") or quick and item["filesize"] > 1024:
+            continue
+        name = item.get("originalFileName", item["filename"])
+        folder = entry.get("directoryLabel", "")
+        files.append(dict(name=f"{folder}/{name}" if folder else name,
+                          size=item.get("originalFileSize", item["filesize"]),
+                          url=base + f"/api/access/datafile/{item['id']}?format=original", checksum=None))
+    fields = dict(ref="dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
+                  native=base + "/dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP", tool="datahugger",
+                  max_file_size=1024 if quick else None,
+                  version=f"{version['versionNumber']}.{version['versionMinorNumber']}")
+    if quick:
+        fields["select"] = ["**/" + Path(item["name"]).name for item in files]
+    return fields, files
+
+
+# each service's dataset and selection, read from its public api
+DATASETS = {"zenodo": zenodo_dataset, "huggingface": huggingface_dataset, "kaggle": kaggle_dataset,
+            "figshare": figshare_dataset, "dataverse": dataverse_dataset}
 
 
 def reference(dataset, root):
