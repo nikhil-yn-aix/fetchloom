@@ -12,7 +12,6 @@ extend-ignore-re = [
     '"(?:abd|ond|fo|ba)"',
     '(?i)caf(?:\\u\{e9\}|\\xe9|%c3%a9|%e9)',
     '"mesures_e\\u\{301\}chantillon\.csv"',
-    '"[A-Za-z0-9_+/=-]{64,}"',
     'cursor=[A-Za-z0-9_+/=-]{64,}',
 ]
 
