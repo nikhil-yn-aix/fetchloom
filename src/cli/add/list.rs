@@ -437,6 +437,34 @@ mod tests {
     use crate::cli::project::tests::{listed, offline_context, stated};
     use crate::project::Project;
 
+    /// a list line naming a dataset data.toml has with other settings is refused by its line; the
+    /// same settings are no change.
+    #[test]
+    fn a_known_dataset_with_other_settings_on_a_list_line_is_refused() {
+        let entry = |select: &str| {
+            let text = format!("[datasets.iris]\nref = \"https://example.org/iris.zip\"\n{select}");
+            Manifest::parse(&text)
+                .unwrap()
+                .datasets
+                .remove("iris")
+                .unwrap()
+        };
+        let plain = entry("");
+        assert!(same_settings(&plain, &entry(""), "iris", "links.txt:2").is_ok());
+        let error = same_settings(
+            &plain,
+            &entry("select = [\"*.csv\"]\n"),
+            "iris",
+            "links.txt:2",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            "links.txt:2 names iris, which data.toml has already with other settings"
+        );
+    }
+
     /// `count` links in links.txt, each to one file whose hash its source states, as `add -i` has
     /// them once every line resolved.
     fn resolved_list(count: usize) -> (List, Vec<(Listing, Listed)>) {

@@ -1357,6 +1357,43 @@ fn a_run_that_ends_at_once_clears_its_bars_first() {
     assert_eq!(screen.records().len(), drawn + after.len());
 }
 
+/// a match whose title has no room beside what to type puts the title on a line under it, then
+/// its facts, dim, on one more.
+#[test]
+fn a_match_without_room_for_its_title_puts_it_under() {
+    let output = Output::new(
+        Style {
+            color: false,
+            unicode: true,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        },
+        Level::Normal,
+        false,
+        false,
+    );
+    *output.held.lock().unwrap() = Some(Vec::new());
+    output.candidate_under(
+        "arxiv:1706.03762",
+        "Attention Is All You Need",
+        "no open-access pdf",
+    );
+    output.candidate_under("arxiv:1810.04805", "BERT", "");
+    let lines = output.held.lock().unwrap().take().unwrap();
+    assert_eq!(
+        lines,
+        [
+            "            arxiv:1706.03762",
+            "            Attention Is All You Need",
+            "            no open-access pdf",
+            "            arxiv:1810.04805",
+            "            BERT",
+        ]
+    );
+}
+
 /// an author line a server gave shows its control characters as escapes beside a title, as it
 /// does under one, so a surname cannot steer the terminal.
 #[test]

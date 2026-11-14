@@ -1118,6 +1118,29 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
+    /// kaggle.json pasted at the prompt is kept as kaggle's tools write it; anything else is
+    /// refused, saying what kaggle.json needs.
+    #[test]
+    fn a_pasted_kaggle_json_is_kept_as_kaggle_writes_it() {
+        let kept = kaggle_json(r#"{"username": "ada", "key": "0123abcd"}"#).unwrap();
+        let read: serde_json::Value = serde_json::from_str(&kept).unwrap();
+        assert_eq!(
+            (read["username"].as_str(), read["key"].as_str()),
+            (Some("ada"), Some("0123abcd"))
+        );
+        assert!(kept.ends_with('\n'), "{kept}");
+        for (pasted, said) in [
+            ("KGAT_0123", "that is not a kaggle.json"),
+            (
+                r#"{"username": "ada"}"#,
+                "kaggle.json needs a username and a key",
+            ),
+        ] {
+            let error = kaggle_json(pasted).unwrap_err();
+            assert_eq!((error.kind, error.message.as_str()), (Kind::Usage, said));
+        }
+    }
+
     fn context() -> Arc<Context> {
         let style = Style {
             color: false,

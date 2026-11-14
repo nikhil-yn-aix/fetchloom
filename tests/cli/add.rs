@@ -1975,3 +1975,39 @@ fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {
     run(&clone, &["sync"], &sandbox.folder("cold")?)?;
     Ok(())
 }
+
+/// a dry run of links data.toml has already says so, naming the list they came from, if any.
+#[test]
+fn a_dry_run_add_of_links_already_there_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let (iris, wine) = (
+        format!("{}{PATH}", server.url),
+        format!("{}/files/wine.csv", server.url),
+    );
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{iris}\n{wine}\n"),
+    )?;
+    ok(&sandbox.run(&["add", "-i", "links.txt"])?)?;
+    for (args, said) in [
+        (
+            &["add", "-i", "links.txt", "--dry-run"][..],
+            "Ok each link of links.txt is in data.toml already; dry run, nothing was changed",
+        ),
+        (
+            &["add", &iris, &wine, "--dry-run"],
+            "Ok each link is in data.toml already; dry run, nothing was changed",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(said), "{args:?}: {stderr}");
+    }
+    Ok(())
+}

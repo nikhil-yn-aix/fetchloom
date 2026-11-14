@@ -1976,3 +1976,34 @@ fn live_a_saved_login_opens_a_public_basic_auth_endpoint() -> Result {
     assert!(answer.contains("\"authenticated\": true"), "{answer}");
     Ok(())
 }
+
+/// a cookies.txt whose cookies for the host have all expired asks for a new sign-in and saves
+/// nothing.
+#[test]
+fn cookies_that_all_expired_ask_for_a_new_sign_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let host = "data.example.org";
+    std::fs::write(
+        sandbox.work().join("cookies.txt"),
+        line(host, "/", true, 1_000_000_000, "session", "abc"),
+    )?;
+    let output = sandbox.run(&[
+        "--json",
+        "auth",
+        "login",
+        host,
+        "--cookies",
+        "cookies.txt",
+        "--yes",
+    ])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(40), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "auth.required");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!("the cookies for {host} in cookies.txt have expired")
+    );
+    let listed = json(&sandbox.run(&["--json", "auth"])?)?;
+    assert!(!listed.to_string().contains(host), "{listed}");
+    Ok(())
+}

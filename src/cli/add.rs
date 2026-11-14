@@ -1716,6 +1716,21 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
+    /// a link with nothing at it, read from a list, is fixed on its own line of that list.
+    #[test]
+    fn a_moved_link_of_a_list_is_fixed_on_its_line() {
+        let error = Error::new(
+            Kind::ReferenceUnresolved,
+            "https://example.org/gone.csv has nothing at it",
+        )
+        .help(crate::net::MOVED_HELP);
+        let fixed = on_line(error, Some("links.txt:3"), false);
+        assert_eq!(
+            fixed.help.as_deref(),
+            Some("check the link on links.txt:3 in a browser. if it moved, put the new link there")
+        );
+    }
+
     /// a named point of an add, and an edit made in the project folder there.
     type EditAt = (&'static str, fn(&Path));
 

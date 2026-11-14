@@ -2854,3 +2854,25 @@ fn copies_the_data_folders_disk_cannot_hold_ask_first() -> Result {
     assert_eq!(fs::read(&placed)?, body);
     Ok(())
 }
+
+/// a file in the way of a folder data.lock needs keeps what it blocks unplaced, and `--json`
+/// names the file in the way as `blocked_by`.
+#[test]
+fn a_blocked_placement_names_its_blocker_in_json() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    crate::support::ok(&sandbox.run(&["add", &server.url])?)?;
+    delete_folder(&sandbox.work().join("data/iris"))?;
+    fs::write(sandbox.work().join("data/iris"), b"mine\n")?;
+    let document = json(&sandbox.run(&["--json", "sync"])?)?;
+    assert_eq!(
+        document["result"]["placement"]["kept"],
+        serde_json::json!([{
+            "path": "data/iris/iris.csv",
+            "reason": "blocked",
+            "blocked_by": "data/iris"
+        }]),
+        "{document}"
+    );
+    Ok(())
+}

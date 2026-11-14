@@ -739,6 +739,23 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
+    /// a web mirror that refuses says how to sign in to its host; another answer points at whoever
+    /// keeps the mirror.
+    #[test]
+    fn a_refusing_web_mirror_names_its_sign_in() {
+        let web = Location::Web(url::Url::parse("https://mirror.lab.example/data/").unwrap());
+        for status in [401, 403] {
+            assert_eq!(
+                refused_help(&web, status),
+                "if it needs a login, sign in with `fetchloom auth login mirror.lab.example`"
+            );
+        }
+        assert_eq!(
+            refused_help(&web, 500),
+            "ask whoever keeps the mirror, or check its address"
+        );
+    }
+
     /// listing what the cache lacks looks at every file, so a run with nowhere to ask never does.
     #[test]
     fn a_run_without_a_mirror_lists_nothing_to_ask_for() {

@@ -674,3 +674,27 @@ fn a_system_without_certificates_still_downloads() -> Result {
     assert!(output.status.success(), "{}", text(&output.stderr)?);
     Ok(())
 }
+
+/// a rate cap shows in `settings`, in bytes a second for scripts and readable for a person.
+#[test]
+fn settings_show_the_rate_cap() -> Result {
+    let sandbox = Sandbox::new()?;
+    let run = |json_wanted: bool| {
+        let mut args = vec!["settings"];
+        if json_wanted {
+            args.insert(0, "--json");
+        }
+        sandbox.command(&args).env("FETCHLOOM_RATE", "2M").output()
+    };
+    let document = json(&run(true)?)?;
+    let rate = shown(&document, "rate");
+    assert_eq!(rate["value"], 2_097_152, "{document}");
+    assert_eq!(rate["variable"], "FETCHLOOM_RATE");
+    let table = text(&run(false)?.stdout)?;
+    let row = table
+        .lines()
+        .find(|line| line.starts_with("rate "))
+        .ok_or("no rate row")?;
+    assert!(row.contains(" 2.0 MiB/s "), "{row}");
+    Ok(())
+}

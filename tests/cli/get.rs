@@ -2446,3 +2446,28 @@ fn a_ctrl_c_past_gets_mark_lets_it_finish() -> Result {
     }
     Ok(())
 }
+
+/// a link of several that fails before the downloads is told at once, and the others go on.
+#[test]
+fn one_failing_link_of_several_is_told_and_the_rest_go_on() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let zenodo = Server::start(
+        "/",
+        vec![reply("404 Not Found", &[("Content-Length", "0")], b"")],
+    )?;
+    let output = sandbox
+        .command(&["get", &server.url, "zenodo:999999"])
+        .env("FETCHLOOM_TEST_ZENODO_API", &zenodo.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains(
+            "     Failed zenodo:999999 · zenodo:999999 does not exist, or is not public\n"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("iris/iris.csv"))?, IRIS);
+    Ok(())
+}

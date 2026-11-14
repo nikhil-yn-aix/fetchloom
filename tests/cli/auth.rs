@@ -1426,3 +1426,25 @@ fn auth_warns_of_azure_settings_it_cannot_use() -> Result {
     }
     Ok(())
 }
+
+/// a key no request header can carry, as one with a line break, is never sent: `auth` warns,
+/// naming where the key is and never the key.
+#[test]
+fn a_key_no_request_can_carry_is_warned_about_without_showing_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["--json", "auth"])
+        .env("HF_TOKEN", "hf_first\nhf_second")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let warning = crate::support::warning(&document, "auth.key_unsendable");
+    assert_eq!(
+        warning["message"],
+        "the hugging face key in HF_TOKEN is never sent, since it holds a character no request header can carry, such as a line break",
+        "{document}"
+    );
+    assert_eq!(warning["help"], "set HF_TOKEN to the key alone");
+    assert!(!document.to_string().contains("hf_second"), "{document}");
+    Ok(())
+}
