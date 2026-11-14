@@ -18,16 +18,18 @@ def source_file(root, requested):
     return path.relative_to(root.resolve()).as_posix()
 
 
-def selection(file, text):
-    """the first slice of at most ten of the mutants ``text`` lists, and that slice as
-    cargo-mutants' ``--shard`` names it, refused unless each is ``file``'s own, once and plain."""
+def selection(file, text, slice=0):
+    """slice ``slice`` of the mutants ``text`` lists, cut into slices of at most ten as cargo-mutants
+    cuts them, and that slice as its ``--shard`` names it; refused unless each mutant is ``file``'s
+    own, once and plain, and the file has that slice."""
     names = [name for name in text.splitlines() if name.strip()]
     require(names and len(names) == len(set(names))
             and all(name.startswith(file + ':') and '\x1b' not in name for name in names),
             'mutation listing is empty, duplicated, colored or escaped the requested file')
     shards = (len(names) + 9) // 10
     size = (len(names) + shards - 1) // shards
-    return names[:size], f'0/{shards}'
+    require(0 <= slice < shards, f'{file} has {shards} slices of mutants: choose a slice from 0 to {shards - 1}')
+    return names[slice * size:(slice + 1) * size], f'{slice}/{shards}'
 
 
 def require_selection(expected, actual):
@@ -49,6 +51,8 @@ def arguments(argv=None):
     parser.add_argument('file')
     parser.add_argument('--tests', choices=sorted(TESTS), default='lib',
                         help='the tests that judge each mutant: lib, or all for a file only the binary reaches')
+    parser.add_argument('--slice', type=int, default=0,
+                        help="which slice of at most ten of the file's mutants to test, from 0")
     parser.add_argument('--output', type=Path, default=Path('target/ci-mutants'))
     return parser.parse_args(argv)
 
@@ -66,12 +70,12 @@ def main():
         require(all(mutant['file'] == file for mutant in document), 'mutation listing escaped the requested file')
         return [mutant['name'] for mutant in document]
 
-    names, shard = selection(file, '\n'.join(listing(command)))
+    names, shard = selection(file, '\n'.join(listing(command)), args.slice)
     command += ['--shard', shard, '--sharding', 'slice']
     require_selection(names, listing(command))
     (args.output / 'selected.json').write_text(json.dumps(names, indent=2) + '\n', encoding='utf-8')
-    print(f'{len(names)} selected mutants in {file}, slice {shard}, judged by the {args.tests} tests; '
-          'the unmutated baseline runs first', flush=True)
+    print(f'{len(names)} selected mutants in {file}, slice {shard.replace("/", " of ")}, judged by the {args.tests} '
+          'tests; the unmutated baseline runs first', flush=True)
     print('\n'.join(names), flush=True)
     result = subprocess.run(mutation_run(command, args.tests, args.output.resolve()), cwd=ROOT)
     planned = json.loads((args.output / 'mutants.out/mutants.json').read_text(encoding='utf-8'))

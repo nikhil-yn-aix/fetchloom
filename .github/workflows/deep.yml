@@ -19,6 +19,10 @@ on:
         type: choice
         options: [lib, all]
         default: lib
+      slice:
+        description: which slice of at most ten of the file's mutants to test, from 0; each run says how many there are
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -211,11 +215,12 @@ jobs:
         env:
           MUTATION_FILE: ${{ inputs.file }}
           MUTATION_TESTS: ${{ inputs.tests }}
+          MUTATION_SLICE: ${{ inputs.slice }}
         shell: bash
         run: |
           mkdir -p target/ci-mutants
           timeout --signal=TERM --kill-after=30s 28m python3 python/run_mutants.py "$MUTATION_FILE" \
-            --tests "$MUTATION_TESTS" 2>&1 | tee target/ci-mutants/run.log
+            --tests "$MUTATION_TESTS" --slice "$MUTATION_SLICE" 2>&1 | tee target/ci-mutants/run.log
       - name: summarize the mutation scope
         if: always()
         run: |

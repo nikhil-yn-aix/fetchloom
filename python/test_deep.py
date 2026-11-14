@@ -101,6 +101,14 @@ class MutationTests(unittest.TestCase):
             self.assertGreater(len(chosen), 0)
             self.assertLessEqual(len(chosen), 10)
 
+    def test_a_later_slice_is_the_next_run_of_names_and_one_past_the_last_is_refused(self):
+        file = 'src/place.rs'
+        names = '\n'.join(f'{file}:{number}: replace place -> bool with false' for number in range(12))
+        self.assertEqual(selection(file, names, 1), (names.splitlines()[6:], '1/2'))
+        for slice in [2, -1]:
+            with self.subTest(slice=slice), self.assertRaisesRegex(AssertionError, 'choose a slice from 0 to 1'):
+                selection(file, names, slice)
+
     def test_tool_preview_and_executed_mutants_must_match_the_selection(self):
         expected = ['src/place.rs:1: replace function', 'src/place.rs:2: replace condition']
         require_selection(expected, list(reversed(expected)))
@@ -175,10 +183,10 @@ class MutationRun(unittest.TestCase):
         (out / 'outcomes.json').write_text(json.dumps({'outcomes': outcomes}), encoding='utf-8')
         return subprocess.CompletedProcess(command, self.code)
 
-    def main(self):
+    def main(self, *options):
         """run_mutants.py's exit code and what it printed."""
         printed = io.StringIO()
-        with patch.object(sys, 'argv', ['run_mutants.py', self.FILE, '--output', str(self.output)]), \
+        with patch.object(sys, 'argv', ['run_mutants.py', self.FILE, '--output', str(self.output), *options]), \
              patch.object(run_mutants.subprocess, 'run', side_effect=self.mutants), \
              contextlib.redirect_stdout(printed), self.assertRaises(SystemExit) as stopped:
             run_mutants.main()
@@ -191,11 +199,19 @@ class MutationRun(unittest.TestCase):
                 exit_code, printed = self.main()
                 self.assertEqual(exit_code, code)
                 self.assertEqual(printed.splitlines(), [
-                    f'6 selected mutants in {self.FILE}, slice 0/2, judged by the lib tests; '
+                    f'6 selected mutants in {self.FILE}, slice 0 of 2, judged by the lib tests; '
                     'the unmutated baseline runs first', *self.names[:6]])
                 self.assertEqual(json.loads((self.output / 'selected.json').read_text(encoding='utf-8')), self.names[:6])
                 self.assertEqual(self.ran[0][:11], ['cargo', 'mutants', '--file', self.FILE, '--colors', 'never',
                                                     '--shard', '0/2', '--sharding', 'slice', '--baseline'])
+
+    def test_a_later_slice_is_announced_and_run(self):
+        self.planned = self.names[6:]
+        exit_code, printed = self.main('--slice', '1')
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(printed.splitlines()[0], f'6 selected mutants in {self.FILE}, slice 1 of 2, judged by the lib tests; '
+                                                  'the unmutated baseline runs first')
+        self.assertEqual(self.ran[0][6:9], ['--shard', '1/2', '--sharding'])
 
     def test_a_run_that_tested_other_mutants_fails(self):
         # the plan is checked whatever the run's end, the outcomes when it judged every mutant:
