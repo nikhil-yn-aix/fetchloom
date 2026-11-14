@@ -532,7 +532,7 @@ fn s3_says_a_link_expired_in_two_ways() {
 /// search, a few seconds apart. the pool every program without a key shares is often busy, and a
 /// run it turns away says so and checks nothing.
 #[test]
-#[ignore = "asks semantic scholar's API"]
+#[ignore = "live: talks to api.semanticscholar.org"]
 fn live_semantic_scholar_paper_and_search() {
     let (net, _work) = crate::source::recorded::live(Vec::new());
     let busy = |error: &Error| {
@@ -565,7 +565,7 @@ fn live_semantic_scholar_paper_and_search() {
 /// a dataset's links need a key, which the owner sets in `S2_API_KEY`; without one this says so
 /// and passes.
 #[test]
-#[ignore = "asks semantic scholar's API with the key in S2_API_KEY"]
+#[ignore = "live: talks to api.semanticscholar.org with the key in S2_API_KEY"]
 fn live_semantic_scholar_dataset_with_a_key() {
     let Some(key) = std::env::var_os("S2_API_KEY").filter(|key| !key.is_empty()) else {
         eprintln!("skipped: S2_API_KEY is not set");
