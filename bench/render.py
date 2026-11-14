@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 from statistics import median
 
+# what each network profile stands for, in words a reader knows from their own connection, in the
+# order the results lead with: the links most people have before the lab's own
+LINKS = {"home": "home broadband", "poor": "poor connection", "far": "distant server", "lan": "local network"}
 TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files"}
@@ -28,6 +31,26 @@ def summarize(rows):
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
                 cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
                 requests=metric("requests"), download_ratio=metric("download_ratio"))
+
+
+def link(profile, shaping=None):
+    """a network profile in plain words, with its rate, round trip and loss when its shaping is
+    known, such as home broadband, about 100 Mbit and 20 ms."""
+    name = LINKS.get(profile, profile)
+    if not shaping:
+        return name
+    delay, loss, rate = shaping[:3]
+    if not (delay or loss or rate):
+        return f"{name}, no added delay or limit"
+    facts = [f"{rate} Mbit" if rate else "no rate limit", f"{delay} ms"] + ([f"{loss}% loss"] if loss else [])
+    return f"{name}, {'about ' if rate else ''}{', '.join(facts[:-1])} and {facts[-1]}"
+
+
+def lead(profile):
+    """where a profile's results go on the page: the links in LINKS in their order, then the rest by
+    name."""
+    order = list(LINKS)
+    return (order.index(profile), "") if profile in LINKS else (len(order), profile)
 
 
 def no_bar(result):
@@ -281,9 +304,9 @@ def check_live(row, path, datasets, origins):
 
 
 def group(rows, metas):
-    """the measured runs, warmups left out: lab cases in page order and live services by name, each
-    with its file count, file size and every tool's summary. ValueError when one case mixes sizes
-    or campaigns measure a case twice."""
+    """the measured runs, warmups left out: lab cases in page order, home and poor links first, and
+    live services by name, each with its file count, file size and every tool's summary.
+    ValueError when one case mixes sizes or campaigns measure a case twice."""
     conditions = {}
     lab = defaultdict(lambda: defaultdict(list))
     live = defaultdict(lambda: defaultdict(list))
@@ -300,11 +323,12 @@ def group(rows, metas):
             raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
         lab[key][row["tool"]].append(row)
     check_chunks([meta for meta in metas if meta.get("kind") == "lab"])
+    shaping = network_profiles(metas)
     cases = []
-    for scenario, profile, fs in sorted(lab):
+    for scenario, profile, fs in sorted(lab, key=lambda key: (lead(key[1]), key)):
         _, count, file_size = conditions[scenario, profile, fs]
         cases.append(dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
-                          summaries=summaries(lab[scenario, profile, fs])))
+                          link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs])))
     services = {}
     for service in sorted(live):
         sample = next(iter(live[service].values()))[0]
@@ -338,32 +362,43 @@ def card_name(case):
 
 
 def subtitle(case):
-    return f"{files(case['count'])} of {size(case['file_size'])}, {case['profile']} network, {case['filesystem']}"
+    return f"{files(case['count'])} of {size(case['file_size'])}, {case['link']}, {case['filesystem']}"
+
+
+def network_profiles(metas):
+    """each profile's recorded shaping, delay, loss and rate first, from the first campaign that
+    records them."""
+    return next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
 
 
 def draw(charts, cases, services):
     """every card, light and dark, in charts, once the cards of an earlier render are gone: one per
-    lab case, a hero for each lan case with a verdict, and one per live service."""
+    lab case, one per live service, and a hero for each scenario and filesystem from its first case
+    on the page when that case has a verdict."""
     charts.mkdir(parents=True, exist_ok=True)
     # every card here is generated, so a card the new results do not produce, such as a hero
     # without a verdict, must not survive from an earlier render
     for old in charts.glob("*.svg"):
         old.unlink()
+    led = set()
     for case in cases:
         title = TITLES[case["scenario"]]
-        hero = verdict(case["summaries"]) if case["profile"] == "lan" else None
+        first = (case["scenario"], case["filesystem"]) not in led
+        led.add((case["scenario"], case["filesystem"]))
+        # a hero never falls back to another link, which would pick the link that flatters
+        hero = verdict(case["summaries"]) if first else None
         for suffix, dark in (("", False), ("-dark", True)):
             chart(charts / f"{card_name(case)}{suffix}.svg", title, subtitle(case), case["summaries"], dark)
             if hero:
                 chart(charts / f"hero-{case['scenario']}-{case['filesystem']}{suffix}.svg", hero, "",
-                      case["summaries"], dark, label=title)
+                      case["summaries"], dark, label=f"{title}, {link(case['profile'])}")
     for service, measured in services.items():
         for suffix, dark in (("", False), ("-dark", True)):
             chart(charts / f"live-{service}{suffix}.svg", service,
                   f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
 
 
-METHOD = ("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
+METHOD = ("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -390,14 +425,14 @@ def page(rows, metas, cases, services):
 
 
 def networks(metas):
-    """the shaping of each network profile as a table, from the first campaign that records it."""
-    shaping = next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
+    """the shaping of each network profile as a table, home and poor links first."""
+    shaping = network_profiles(metas)
     if not shaping:
         return []
-    lines = ["| profile | round-trip delay | loss per direction | server egress |", "|---|---:|---:|---:|"]
-    for name, values in shaping.items():
-        rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
-        lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
+    lines = ["| profile | stands for | round-trip delay | loss per direction | server egress |", "|---|---|---:|---:|---:|"]
+    for name in sorted(shaping, key=lead):
+        delay, loss, rate = shaping[name][:3]
+        lines.append(f"| {name} | {link(name)} | {delay} ms | {loss}% | {f'{rate} Mbit/s' if rate else 'unlimited'} |")
     return lines + [""]
 
 
@@ -444,8 +479,8 @@ def case_section(case):
     summaries = case["summaries"]
     title = TITLES[case["scenario"]]
     rounds = max(item["rounds"] for item in summaries.values())
-    lines = [f"## {case['scenario']}: {title} ({case['profile']}, {case['filesystem']})\n",
-             story(case["scenario"], case["count"], case["file_size"]) + f", median of {rounds} runs.\n",
+    lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
+             f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
              "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
              "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
     own = summaries.get("fetchloom", {})

@@ -312,9 +312,37 @@ class PageTests(Quiet):
         self.assertIn("- measured CPUs: `[2, 3]`; nginx threads: `{'41': [4]}`", page)
         self.assertIn(f"- supplied executable: `/home/fl/bin/fetchloom`; SHA-256: `{'a' * 64}`", page)
         self.assertIn('- recorded `unknown`: lab run on `{"ext4": "ext4 rw"}`', page)
-        self.assertIn("| lan | 0 ms | 0% | unlimited |\n| far | 150 ms | 1% | 50 Mbit/s |", page)
+        self.assertIn("| far | distant server | 150 ms | 1% | 50 Mbit/s |\n| lan | local network | 0 ms | 0% | unlimited |", page)
         self.assertIn("1 warmup commands failed; their records remain in runs.jsonl.", page)
         self.assertNotIn("smoke-test", page)
+
+    def test_home_and_poor_links_lead_and_each_link_is_said_in_plain_words(self):
+        import xml.etree.ElementTree as ET
+        shaping = dict(lan=[0, 0, None, 1, 1], home=[20, 0, 100, 1, 1], far=[150, 1, 50, 1, 1], poor=[300, 3, 10, 1, 1])
+        rows = [lab_row(profile=profile, quick=False) for profile in ("lan", "far", "poor", "home")]
+        rows += [lab_row(profile=profile, quick=False, tool="curl", wall_seconds=2) for profile in ("lan", "home")]
+        page = self.render(rows, dict(kind="lab", quick=False, network_profiles=shaping))
+        self.assertEqual([line for line in page.splitlines() if line.startswith("## s1")],
+                         ["## s1: one large file, home broadband (ext4)", "## s1: one large file, poor connection (ext4)",
+                          "## s1: one large file, distant server (ext4)", "## s1: one large file, local network (ext4)"])
+        self.assertIn("home broadband, about 100 Mbit and 20 ms: 1 file of 4 B, downloaded and checked", page)
+        self.assertIn("\npoor connection, about 10 Mbit, 300 ms and 3% loss: 1 file", page)
+        self.assertIn("\nlocal network, no added delay or limit: 1 file", page)
+        self.assertIn("| profile | stands for | round-trip delay | loss per direction | server egress |\n|---|---|---:|---:|---:|\n"
+                      "| home | home broadband | 20 ms | 0% | 100 Mbit/s |\n| poor | poor connection | 300 ms | 3% | 10 Mbit/s |", page)
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        svg = "{http://www.w3.org/2000/svg}"
+        texts = [element.text for element in ET.parse(cards / "s1-home-ext4.svg").iter(svg + "text")]
+        self.assertEqual(texts[1], "1 file of 4 B, home broadband, about 100 Mbit and 20 ms, ext4")
+        hero = [element.text for element in ET.parse(cards / "hero-s1-ext4.svg").iter(svg + "text")]
+        self.assertEqual(hero[:2], ["one large file, home broadband", "2\u00d7 faster"])
+
+    def test_a_hero_without_a_verdict_on_home_broadband_takes_no_other_link(self):
+        rows = [lab_row(profile="home", status="failed"), lab_row(profile="home", tool="curl", wall_seconds=2),
+                lab_row(), lab_row(tool="curl", wall_seconds=2)]
+        self.render(rows, dict(kind="lab", quick=True))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
 
     def test_runs_that_differ_show_their_range_and_one_case_keeps_one_size(self):
         import xml.etree.ElementTree as ET
@@ -364,7 +392,7 @@ class PageTests(Quiet):
         hero = ET.parse(cards / "hero-s1-ext4.svg")
         self.assertEqual({element.get("font-family") for element in hero.iter(svg + "text")}, {render.SERIF})
         self.assertEqual(hero.find(svg + "style").text.count("@font-face"), 1)
-        self.assertEqual([element.text for element in hero.iter(svg + "text")][:2], ["one large file", "3\u00d7 faster"])
+        self.assertEqual([element.text for element in hero.iter(svg + "text")][:2], ["one large file, local network", "3\u00d7 faster"])
 
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
@@ -382,6 +410,13 @@ class WordingTests(unittest.TestCase):
         self.assertEqual([render.size(value) for value in (None, 512, 1536, 3 * 1024 ** 5)], ["n/a", "512 B", "1.5 KiB", "3072 TiB"])
         self.assertEqual([render.ratio(*pair) for pair in ((2, None), (2, 0), (1.02, 1), (3, 1.5))], ["n/a", "n/a", "even (<5%)", "2.00x"])
         self.assertEqual([render.times(value) for value in (12.4, 1.6, 3.0)], ["12\u00d7", "1.6\u00d7", "3\u00d7"])
+
+    def test_a_link_reads_as_its_name_and_shaping(self):
+        self.assertEqual([render.link(*pair) for pair in (("home", [20, 0, 100]), ("poor", [300, 3, 10]), ("far", [150, 1, 50]),
+                                                         ("lan", [0, 0, None]), ("home", None), ("cable", [5, 0, None]))],
+                         ["home broadband, about 100 Mbit and 20 ms", "poor connection, about 10 Mbit, 300 ms and 3% loss",
+                          "distant server, about 50 Mbit, 150 ms and 1% loss", "local network, no added delay or limit",
+                          "home broadband", "cable, no rate limit and 5 ms"])
 
     def test_a_verdict_needs_a_measured_fetchloom_and_a_rival(self):
         def summary(median, failures=0):
