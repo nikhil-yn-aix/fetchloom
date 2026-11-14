@@ -831,6 +831,24 @@ mod tests {
         }
     }
 
+    /// a recipe data.toml no longer has, or a dataset no longer made by one, takes its kept rebuild
+    /// with it, and only the call that drops them says so.
+    #[test]
+    fn kept_rebuilds_go_with_their_recipes_once() {
+        let manifest = Manifest::parse(
+            "[datasets.raw]\nref = \"zenodo:1\"\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n",
+        )
+        .unwrap();
+        let mut state = State::default();
+        for name in ["clean", "removed", "raw"] {
+            let candidate = kept(digest::sha256(name.as_bytes()), digest::sha256(b"pinned"));
+            state.candidates.insert(name.to_owned(), candidate);
+        }
+        assert!(state.forget_removed(&manifest));
+        assert_eq!(state.candidates.keys().collect::<Vec<_>>(), ["clean"]);
+        assert!(!state.forget_removed(&manifest));
+    }
+
     /// a small folder beside a large one reads little past its records, however large the state.
     #[test]
     fn a_read_within_a_folder_reads_little_beyond_its_records() {
