@@ -121,7 +121,6 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/search.rs` | `search` across public catalogs, its candidates interleaved, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `search`, `near` | `Candidate`, `Search`, `is_search`, `Near` |
 | `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `reads_as_path`, `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere`, `several_imported_elsewhere` |
 | `src/source/doi.rs` | DOIs, routed by the host doi.org names, never by their prefix | `Doi::locate` |  |
-| `src/source/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
 | `src/source/zenodo.rs` | zenodo records, with the MD5 zenodo states for every file | `Record` | `Record::resolve` |
 | `src/source/figshare.rs` | figshare articles, optionally at a version | `Article` | `Article::resolve` |
 | `src/source/dataverse.rs` | datasets on any dataverse install, by host and persistent id | `Dataset` | `Dataset::resolve` |
@@ -313,6 +312,7 @@ every layer shares these small types and limits; [primitives](primitives.md) giv
 | `src/space.rs` | free and total space on the disk holding a folder, statvfs on unix and the volume list on windows, checked before a download starts; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file; the room a build needs | `free`, `Needs` | `short`, `Filesystem`, `cache_holds`, `peak`, `floor` |
 | `src/threads.rs` | the optional ceiling on local worker groups, and the scoped worker helper | `Threads`, `scoped` | `read`, `limit`, `archives` |
 | `src/shown.rs` | which query names hold secrets, and links as messages and logs show them, every query value masked unless its name is known to be harmless | `Shown`, `mask_query` | `secret`, `depends_on_path` |
+| `src/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
 | `src/account.rs` | an account at one source, or a login for one host: the plain data a refusal's `Need` names, whose keys `auth` finds, checks and names | `Account` |  |
 | `src/error.rs` | failures with stable kinds, exit codes and advice, for people and scripts: details cut to the first few, a command's report so far, and the help for an answer only a newer fetchloom can read | `Error`, `Kind` | `FileFailure`, `exit_code`, `with_result`, `name`, `advice`, `details_up_to`, `with_report`, `report_answer`, `ISSUES` |
 | `src/stop.rs` | cancellation every task shares, as an `Error` or, for work on files, an `io::Error`; the first ctrl-c asks every task to wind down and keep what it has | `Stop` | `ask`, `asked`, `is_asked`, `check`, `check_io` |

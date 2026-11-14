@@ -30,6 +30,7 @@ mod threads;
 mod units;
 mod volume;
 mod work;
+mod xml;
 
 #[cfg(test)]
 mod manual;

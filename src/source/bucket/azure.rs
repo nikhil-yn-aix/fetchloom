@@ -9,7 +9,7 @@ use super::{Listed, Object, Prefix, object_url, query};
 use crate::auth::azure::BLOB_HOST;
 use crate::error::Error;
 use crate::net::{Api, Response};
-use crate::source::xml;
+use crate::xml;
 
 /// the container's link, ending in `/`, which its blobs' links extend.
 fn container_url(prefix: &Prefix) -> Result<Url, Error> {

@@ -8,7 +8,7 @@ use url::Url;
 use super::{API, Id, OAI};
 use crate::error::{Error, Kind};
 use crate::net::{self, Api};
-use crate::source::xml;
+use crate::xml;
 
 /// a paper as the API's feed describes it, at the version it names.
 pub(super) struct Entry {

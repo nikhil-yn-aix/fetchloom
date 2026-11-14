@@ -9,19 +9,19 @@ const DEEPEST: usize = 32;
 
 /// one element: its name without a namespace prefix, its text and the elements inside it.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct Element {
-    pub(super) name: String,
-    pub(super) text: String,
-    pub(super) children: Vec<Element>,
+pub(crate) struct Element {
+    pub(crate) name: String,
+    pub(crate) text: String,
+    pub(crate) children: Vec<Element>,
 }
 
 impl Element {
-    pub(super) fn children<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Element> {
+    pub(crate) fn children<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Element> {
         self.children.iter().filter(move |child| child.name == name)
     }
 
     /// the text of the first child called `name`.
-    pub(super) fn text_of(&self, name: &str) -> Option<&str> {
+    pub(crate) fn text_of(&self, name: &str) -> Option<&str> {
         self.children
             .iter()
             .find(|child| child.name == name)
@@ -30,7 +30,7 @@ impl Element {
 }
 
 /// reads a whole document into its root element.
-pub(super) fn parse(text: &str) -> Result<Element, String> {
+pub(crate) fn parse(text: &str) -> Result<Element, String> {
     let mut rest = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut open: Vec<Element> = Vec::new();
     let mut root = None;

@@ -27,7 +27,6 @@ mod s2;
 pub(crate) mod search;
 
 pub(crate) use s2::Relink;
-mod xml;
 mod zenodo;
 
 use std::collections::HashSet;
