@@ -4,6 +4,7 @@ tracks."""
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,6 +30,12 @@ class SnapshotTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which("git"), "lists the tracked snapshots with git")
 class TrackedSnapshots(unittest.TestCase):
     def setUp(self):
+        # a GIT_DIR from a git hook or `git rebase --exec` would send every git command here, and the
+        # one check_snapshots.py runs, to that repository instead of this test's
+        environment = patch.dict(os.environ, {name: value for name, value in os.environ.items()
+                                              if not name.startswith("GIT_")}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
@@ -75,3 +82,19 @@ class TrackedSnapshots(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "pending snapshots must not be committed"):
                     self.check()
                 subprocess.run(["git", "rm", "-q", "--cached", "--", pending], cwd=self.root, check=True)
+
+
+@unittest.skipUnless(shutil.which("git"), "makes git repositories")
+class GitEnvironmentTests(unittest.TestCase):
+    def test_a_git_dir_from_a_hook_leaves_its_repository_alone(self):
+        """a git hook, or `git rebase --exec` in a linked worktree, names its repository in GIT_DIR."""
+        clean = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+        with tempfile.TemporaryDirectory() as folder:
+            outer = Path(folder)
+            subprocess.run(["git", "init", "-q", str(outer)], check=True, env=clean)
+            ran = subprocess.run([sys.executable, "-m", "unittest", "-q", "test_snapshots.TrackedSnapshots"],
+                                 cwd=Path(__file__).parent, env=dict(clean, GIT_DIR=str(outer / ".git")),
+                                 capture_output=True, text=True)
+            staged = subprocess.run(["git", "ls-files"], cwd=outer, env=clean, capture_output=True, text=True,
+                                    check=True).stdout
+        self.assertEqual((ran.returncode, staged), (0, ""), ran.stderr)
