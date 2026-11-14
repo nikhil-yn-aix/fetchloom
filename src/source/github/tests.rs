@@ -302,10 +302,12 @@ fn release_pages_name_releases_and_other_links_stay_as_they_were() {
     );
 }
 
+/// with the keys this machine gives, `GH_TOKEN` among them, so the live job's token is used.
 #[test]
 #[ignore = "live: talks to api.github.com"]
 fn live_github() {
-    let (net, work) = crate::source::recorded::live(Vec::new());
+    let credentials = crate::auth::credentials(&crate::machine::env);
+    let (net, work) = crate::source::recorded::live(credentials);
     let start = Instant::now();
     let reference = Reference::parse("github:jqlang/jq@jq-1.8.2")
         .unwrap()
