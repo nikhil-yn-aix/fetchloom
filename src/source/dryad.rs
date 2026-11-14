@@ -10,7 +10,7 @@ use url::Url;
 
 use super::doi::Doi;
 use super::{Access, Listing, Reference, Remote, malformed};
-use crate::auth::Account;
+use crate::account::Account;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::Api;

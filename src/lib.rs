@@ -2,6 +2,7 @@
 //!
 //! the `fetchloom` binary calls [`main`]. everything else is private to the crate.
 
+mod account;
 mod archive;
 mod auth;
 mod build;

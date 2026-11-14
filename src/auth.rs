@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use url::Url;
 
+use crate::account::Account;
 use crate::error::{Error, Kind};
 use crate::net::Credential;
 use crate::source::Var;
@@ -27,26 +28,6 @@ use crate::source::Var;
 pub(crate) enum Step {
     Open(String),
     Do(String),
-}
-
-/// an account at one source, or a login for one host.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Account {
-    HuggingFace,
-    Kaggle,
-    Zenodo,
-    Figshare,
-    Osf,
-    Dryad,
-    GitHub,
-    GitLab,
-    /// semantic scholar's API: its key gives a rate of its own, and the files of its datasets.
-    S2,
-    /// one installation's host, with its port when that is not 443: a dataverse key works only
-    /// on the server that made it.
-    Dataverse(String),
-    /// a username and password for one host, kept in `.netrc`, as for nasa earthdata or physionet.
-    Login(String),
 }
 
 const EARTHDATA: &str = "urs.earthdata.nasa.gov";
@@ -59,20 +40,6 @@ pub(crate) const S2_KEYS: &str = "https://www.semanticscholar.org/product/api#ap
 
 /// what a person types after `fetchloom auth login`.
 pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata, physionet or a host name";
-
-/// what a refused request needs: the account to sign in to, and a page whose terms the person
-/// must accept first, when a key alone is not enough.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Need {
-    pub(crate) account: Account,
-    pub(crate) terms: Option<String>,
-    /// the page that shows the name asked, from a source that answers alike for a name that
-    /// does not exist, so the name may be wrong rather than the account missing.
-    pub(crate) maybe_missing: Option<String>,
-    /// a website whose refusal named no way in, so the person picks one: a browser's cookies,
-    /// a cookies.txt file, a token, a header or a username and password.
-    pub(crate) site: bool,
-}
 
 /// the kind of secret an account takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

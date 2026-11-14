@@ -276,7 +276,7 @@ fn signing_in(url: &Url) -> Option<String> {
         None => url.host_str()?.to_owned(),
     };
     let host = crate::auth::dataverse_host(&host)?;
-    let command = crate::auth::Account::Dataverse(host.clone()).command();
+    let command = crate::account::Account::Dataverse(host.clone()).command();
     Some(format!(
         "leave key out of the link: sign in once with `{command}`, and fetchloom sends your key to {host} itself"
     ))
@@ -1173,7 +1173,7 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
         Kind::AuthRequired,
         format!("{host} refused access to {reference}"),
     );
-    match crate::auth::Account::from_host(host) {
+    match crate::account::Account::from_host(host) {
         Some(account) => error
             .help(format!(
                 "if the dataset is private or restricted, sign in with `{}`, then run the same command again",
@@ -1220,7 +1220,7 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_account_that_lifts_it() {
-        use crate::auth::Account;
+        use crate::account::Account;
         for (host, account, command) in [
             ("zenodo.org", Account::Zenodo, "fetchloom auth login zenodo"),
             (

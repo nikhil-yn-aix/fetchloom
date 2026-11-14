@@ -15,7 +15,8 @@ use url::Url;
 pub(crate) use self::dataset::{Dataset, Relink};
 pub(crate) use self::paper::Paper;
 use super::{Found, Reference, malformed};
-use crate::auth::{Account, Origin, S2_HOST, S2_KEYS};
+use crate::account::Account;
+use crate::auth::{Origin, S2_HOST, S2_KEYS};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 

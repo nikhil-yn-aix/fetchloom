@@ -10,7 +10,8 @@ use serde::Deserialize;
 use url::Url;
 
 use super::{API, answer, busy, sent_key};
-use crate::auth::{Account, S2_KEYS};
+use crate::account::Account;
+use crate::auth::S2_KEYS;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 use crate::source::{Access, Listing, Reference, Remote};

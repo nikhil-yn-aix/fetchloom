@@ -8,8 +8,9 @@ use serde::Serialize;
 
 use super::Context;
 use super::args::{Auth, AuthAction, Login, Logout};
-use crate::auth::{self, Account, Found, Home, Need, Origin, Secret, Step, store};
-use crate::error::{Error, Kind};
+use crate::account::Account;
+use crate::auth::{self, Found, Home, Origin, Secret, Step, store};
+use crate::error::{Error, Kind, Need};
 use crate::net::Api;
 use crate::output::Warning;
 use crate::units;

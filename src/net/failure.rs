@@ -304,7 +304,7 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 format!("{host} refused access to {} ({code})", Shown(url)),
             );
             // any other website is offered its own sign-in by `Net::refused` before this
-            match crate::auth::Account::from_host(&host) {
+            match crate::account::Account::from_host(&host) {
                 Some(_) if url.scheme() != "https" => error.help(
                     "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one",
                 ),

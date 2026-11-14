@@ -3,7 +3,8 @@
 use serde::Deserialize;
 
 use super::{Repo, RepoKind, is_id};
-use crate::auth::{Account, Origin};
+use crate::account::Account;
+use crate::auth::Origin;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 use crate::source::Access;

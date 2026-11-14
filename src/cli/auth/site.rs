@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use super::{Outcome, Report, State, agree, answered_no};
+use crate::account::Account;
 use crate::auth::cookies::{self, Picked, Why};
 use crate::auth::site::{self, Saved, Taken};
-use crate::auth::{self, Account, Origin, store};
+use crate::auth::{self, Origin, store};
 use crate::cli::Context;
 use crate::cli::args::{Login, Logout};
 use crate::error::{Error, Kind};

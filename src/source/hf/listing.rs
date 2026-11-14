@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(
             err.need.map(|need| (need.account, need.maybe_missing)),
             Some((
-                crate::auth::Account::HuggingFace,
+                crate::account::Account::HuggingFace,
                 Some("https://huggingface.co/datasets/stanfordnlp/no-such-dataset".to_owned())
             )),
             "the offer to sign in says first that the name may be wrong, and where to check it"
@@ -453,7 +453,7 @@ mod tests {
             "{help}"
         );
         let need = err.need.unwrap();
-        assert_eq!(need.account, crate::auth::Account::HuggingFace);
+        assert_eq!(need.account, crate::account::Account::HuggingFace);
         assert_eq!(
             need.terms.as_deref(),
             Some("https://huggingface.co/meta-llama/Llama-2-7b")

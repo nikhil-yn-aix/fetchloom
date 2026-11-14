@@ -241,7 +241,7 @@ fn a_restricted_file_answered_with_success_is_still_refused() {
     );
     assert_eq!(
         error.need.map(|need| need.account),
-        Some(crate::auth::Account::Dataverse(
+        Some(crate::account::Account::Dataverse(
             "dataverse.harvard.edu".into()
         ))
     );

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use url::Url;
 
 use super::{HOST, is_part, malformed, parts, selected, unusable};
-use crate::auth::Account;
+use crate::account::Account;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 use crate::source::{Access, Listing, Reference, Remote};
@@ -506,7 +506,7 @@ mod tests {
         let need = err.need.unwrap();
         assert_eq!(
             (need.account, need.terms),
-            (crate::auth::Account::Kaggle, None)
+            (crate::account::Account::Kaggle, None)
         );
     }
 
@@ -548,7 +548,7 @@ mod tests {
                 err.details
             );
             let need = err.need.unwrap();
-            assert_eq!(need.account, crate::auth::Account::Kaggle);
+            assert_eq!(need.account, crate::account::Account::Kaggle);
             assert_eq!(need.terms.as_deref(), Some(rules));
         };
         let refused = Recorded::default()

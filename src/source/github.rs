@@ -9,7 +9,7 @@ use serde::Deserialize;
 use url::Url;
 
 use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
-use crate::auth::Account;
+use crate::account::Account;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};

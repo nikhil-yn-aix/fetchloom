@@ -1787,7 +1787,7 @@ mod tests {
     /// accept; with no key, it stays as it was.
     #[test]
     fn a_refusal_with_a_key_here_says_to_check_the_key() {
-        use crate::auth::Account;
+        use crate::account::Account;
         let key = |name: &str| (name == "ZENODO_TOKEN").then(|| "z".into());
         let none = |_: &str| None;
         let refused = || Error::new(Kind::AuthRequired, "zenodo:1 is restricted").help("sign in");

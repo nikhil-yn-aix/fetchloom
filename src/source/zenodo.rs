@@ -91,7 +91,7 @@ impl Record {
                 .help(format!(
                     "request access at {page}, then sign in with `fetchloom auth login zenodo` and run the same command again"
                 ))
-                .needs(crate::auth::Account::Zenodo, Some(page)));
+                .needs(crate::account::Account::Zenodo, Some(page)));
             }
             _ => return Err(self.invalid("the access condition is not recognized")),
         };
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(error.kind, Kind::AuthRequired);
         assert!(error.message.contains("embargoed"));
         let need = error.need.unwrap();
-        assert_eq!(need.account, crate::auth::Account::Zenodo);
+        assert_eq!(need.account, crate::account::Account::Zenodo);
         assert_eq!(
             need.terms.as_deref(),
             Some("https://zenodo.org/records/3608990")

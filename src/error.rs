@@ -2,6 +2,8 @@
 
 use std::{fmt, io};
 
+use crate::account::Account;
+
 pub(crate) const ISSUES: &str = "https://github.com/nikhil-yn-aix/fetchloom/issues";
 
 /// the help for a service's answer fetchloom cannot read, which only a newer fetchloom fixes,
@@ -113,6 +115,20 @@ pub(crate) struct FileFailure {
     pub(crate) help: Option<String>,
 }
 
+/// what a refused request needs: the account to sign in to, and a page whose terms the person
+/// must accept first, when a key alone is not enough.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Need {
+    pub(crate) account: Account,
+    pub(crate) terms: Option<String>,
+    /// the page that shows the name asked, from a source that answers alike for a name that
+    /// does not exist, so the name may be wrong rather than the account missing.
+    pub(crate) maybe_missing: Option<String>,
+    /// a website whose refusal named no way in, so the person picks one: a browser's cookies,
+    /// a cookies.txt file, a token, a header or a username and password.
+    pub(crate) site: bool,
+}
+
 /// a failure: what happened in one sentence, supporting lines, and what to do next.
 #[derive(Clone, Debug)]
 pub(crate) struct Error {
@@ -124,7 +140,7 @@ pub(crate) struct Error {
     pub(crate) result: Option<Box<serde_json::Value>>,
     pub(crate) failures: Box<[FileFailure]>,
     /// the account that would let the request through, so a person can sign in and retry.
-    pub(crate) need: Option<Box<crate::auth::Need>>,
+    pub(crate) need: Option<Box<Need>>,
     /// the source showed no dataset of the name asked: none exists, or none this machine may
     /// see, so the name may be what is wrong.
     pub(crate) unseen: bool,
@@ -197,8 +213,8 @@ impl Error {
 
     /// marks the error as a refusal `account` could lift, after accepting `terms` where a source
     /// asks for that too.
-    pub(crate) fn needs(mut self, account: crate::auth::Account, terms: Option<String>) -> Error {
-        self.need = Some(Box::new(crate::auth::Need {
+    pub(crate) fn needs(mut self, account: Account, terms: Option<String>) -> Error {
+        self.need = Some(Box::new(Need {
             account,
             terms,
             maybe_missing: None,
@@ -210,8 +226,8 @@ impl Error {
     /// marks the error as a refusal from the website `host`, with its port when that is not
     /// 443, which a sign-in of the person's choosing could lift.
     pub(crate) fn needs_site(mut self, host: String) -> Error {
-        self.need = Some(Box::new(crate::auth::Need {
-            account: crate::auth::Account::Login(host),
+        self.need = Some(Box::new(Need {
+            account: Account::Login(host),
             terms: None,
             maybe_missing: None,
             site: true,
@@ -221,8 +237,8 @@ impl Error {
 
     /// marks the error as a refusal `account` could lift, from a source that refuses a missing
     /// name as it refuses a private one, so the name may be wrong: `page` shows which.
-    pub(crate) fn needs_or_missing(mut self, account: crate::auth::Account, page: String) -> Error {
-        self.need = Some(Box::new(crate::auth::Need {
+    pub(crate) fn needs_or_missing(mut self, account: Account, page: String) -> Error {
+        self.need = Some(Box::new(Need {
             account,
             terms: None,
             maybe_missing: Some(page),

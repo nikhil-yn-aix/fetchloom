@@ -11,7 +11,7 @@ use url::{Host, Url};
 
 use super::address::{Proxies, Typed};
 use super::{Net, Shown};
-use crate::auth::Account;
+use crate::account::Account;
 use crate::error::{Error, Kind};
 
 /// what one host's saved credential sends.

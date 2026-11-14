@@ -313,7 +313,7 @@ fn an_install_on_another_port_keeps_its_port_in_the_account() {
     ] {
         assert_eq!(
             account(text),
-            crate::auth::Account::Dataverse(host.to_owned()),
+            crate::account::Account::Dataverse(host.to_owned()),
             "{text}"
         );
     }
@@ -385,7 +385,7 @@ fn http_refusals_name_the_install_account() {
         ("DV.example.edu:8443", "dv.example.edu:8443"),
         ("[::1]:8443", "[::1]:8443"),
     ] {
-        let account = crate::auth::Account::Dataverse(account_host.to_owned());
+        let account = crate::account::Account::Dataverse(account_host.to_owned());
         for (item, path) in [
             (
                 "doi:10.7910/DVN/TJCLKP",

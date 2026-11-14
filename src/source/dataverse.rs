@@ -135,10 +135,10 @@ impl Dataset {
 
     /// the account a key for this install is saved under: its host, with its port when that is
     /// not 443, as the key only goes there.
-    pub(super) fn account(&self) -> crate::auth::Account {
+    pub(super) fn account(&self) -> crate::account::Account {
         let host = crate::auth::dataverse_host(&self.host)
             .unwrap_or_else(|| self.host_name().to_ascii_lowercase());
-        crate::auth::Account::Dataverse(host)
+        crate::account::Account::Dataverse(host)
     }
 
     /// asks the install's native API for the dataset's files.

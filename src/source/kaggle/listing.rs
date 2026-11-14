@@ -103,7 +103,7 @@ impl Dataset {
             err.help(format!(
                 "check the name at {page}. a private dataset needs an account that can read it: sign in with `fetchloom auth login kaggle`"
             ))
-            .needs_or_missing(crate::auth::Account::Kaggle, page)
+            .needs_or_missing(crate::account::Account::Kaggle, page)
         }
     }
 
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(
             without.need.map(|need| (need.account, need.maybe_missing)),
             Some((
-                crate::auth::Account::Kaggle,
+                crate::account::Account::Kaggle,
                 Some("https://www.kaggle.com/datasets/uciml/nope".to_owned())
             )),
             "the offer to sign in says first that the name may be wrong, and where to check it"
