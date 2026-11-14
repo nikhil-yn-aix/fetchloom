@@ -132,14 +132,24 @@ fn probed(path: &Path) -> Filesystem {
 
 #[cfg(windows)]
 fn probed(path: &Path) -> Filesystem {
-    let Ok(path) = std::fs::canonicalize(path) else {
-        return Filesystem::Other;
-    };
-    let Ok(disks) =
-        sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing())
-    else {
-        return Filesystem::Other;
-    };
+    holding(path, sysinfo::DiskRefreshKind::nothing(), |disk| {
+        disk.file_system().to_str().map(Filesystem::named)
+    })
+    .flatten()
+    .unwrap_or(Filesystem::Other)
+}
+
+/// what `read` takes from the disk holding `path`, which must exist: of the disks windows lists
+/// with what `kind` refreshes, the one whose mount point is the longest start of `path`, both
+/// canonical. none when the path or the list cannot be read, or no disk holds it.
+#[cfg(windows)]
+fn holding<T>(
+    path: &Path,
+    kind: sysinfo::DiskRefreshKind,
+    read: impl Fn(&sysinfo::Disk) -> T,
+) -> Option<T> {
+    let path = std::fs::canonicalize(path).ok()?;
+    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(kind).ok()?;
     disks
         .iter()
         .filter_map(|disk| {
@@ -148,8 +158,7 @@ fn probed(path: &Path) -> Filesystem {
                 .then_some((mount.components().count(), disk))
         })
         .max_by_key(|(length, _)| *length)
-        .and_then(|(_, disk)| disk.file_system().to_str().map(Filesystem::named))
-        .unwrap_or(Filesystem::Other)
+        .map(|(_, disk)| read(disk))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -179,20 +188,8 @@ fn measured(path: &Path) -> Option<u64> {
 
 #[cfg(windows)]
 fn measured(path: &Path) -> Option<u64> {
-    let path = std::fs::canonicalize(path).ok()?;
-    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
-        sysinfo::DiskRefreshKind::nothing().with_storage(),
-    )
-    .ok()?;
-    disks
-        .iter()
-        .filter_map(|disk| {
-            let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
-            path.starts_with(&mount)
-                .then_some((mount.components().count(), disk.available_space()))
-        })
-        .max_by_key(|(length, _)| *length)
-        .map(|(_, free)| free)
+    let storage = sysinfo::DiskRefreshKind::nothing().with_storage();
+    holding(path, storage, sysinfo::Disk::available_space)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -238,20 +235,8 @@ fn sized(path: &Path) -> Option<u64> {
 
 #[cfg(windows)]
 fn sized(path: &Path) -> Option<u64> {
-    let path = std::fs::canonicalize(path).ok()?;
-    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
-        sysinfo::DiskRefreshKind::nothing().with_storage(),
-    )
-    .ok()?;
-    disks
-        .iter()
-        .filter_map(|disk| {
-            let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
-            path.starts_with(&mount)
-                .then_some((mount.components().count(), disk.total_space()))
-        })
-        .max_by_key(|(length, _)| *length)
-        .map(|(_, total)| total)
+    let storage = sysinfo::DiskRefreshKind::nothing().with_storage();
+    holding(path, storage, sysinfo::Disk::total_space)
 }
 
 #[cfg(not(any(unix, windows)))]
