@@ -294,55 +294,65 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
 
 /// a website that refuses a link and names no way in is offered each way to sign in: in its
 /// help, and at a terminal as a choice that saves the key and runs the command again.
-/// a page the site moved the link to, as a release's latest notes are, is the data when asked
-/// for, though a saved token went; unasked, the help names the link the page is at.
+/// a page the site moved the link to, below the link's own path, as a release's notes moved to
+/// their newest version are, is the data when asked for, though a saved token went; unasked, or
+/// moved beside the link, the help names the link the page is at, which works when asked for.
 #[test]
 fn a_page_a_signed_in_site_moved_the_link_to_is_the_data_when_asked() -> Result {
     let sandbox = Sandbox::new()?;
     let notes = b"<html><body>the v3 notes</body></html>";
     let length = notes.len().to_string();
+    let page = || {
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html"), ("Content-Length", &length)],
+            notes,
+        )
+    };
+    let moved = |location: &str| {
+        reply(
+            "302 Found",
+            &[("Location", location), ("Content-Length", "0")],
+            b"",
+        )
+    };
     let site = Routes::start(vec![
-        (
-            "/latest".to_owned(),
-            reply(
-                "302 Found",
-                &[("Location", "/v3/"), ("Content-Length", "0")],
-                b"",
-            ),
-        ),
-        (
-            "/v3/".to_owned(),
-            reply(
-                "200 OK",
-                &[("Content-Type", "text/html"), ("Content-Length", &length)],
-                notes,
-            ),
-        ),
+        ("/notes".to_owned(), moved("/notes/v3/")),
+        ("/notes/v3/".to_owned(), page()),
+        ("/latest".to_owned(), moved("/v3/")),
+        ("/v3/".to_owned(), page()),
     ])?;
     sign_in_with_token(&sandbox, &host_of(&site), "t-1")?;
-    let latest = format!("{}/latest", site.url);
-    let unasked = sandbox.run(&["get", &latest, "-o", "v3.html"])?;
-    let stderr = text(&unasked.stderr)?;
-    assert_eq!(unasked.status.code(), Some(40), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            "if that page itself is the data, ask for it by the link it is at, {}/v3/, with --web-page",
-            site.url
-        )),
-        "{stderr}"
-    );
+    let told = |output: &std::process::Output, at: &str| -> Result {
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "if that page itself is the data, ask for it by the link it is at, {}{at}, with --web-page",
+                site.url
+            )),
+            "{stderr}"
+        );
+        Ok(())
+    };
+    let link = |path: &str| format!("{}{path}", site.url);
+    told(
+        &sandbox.run(&["get", &link("/notes"), "-o", "v3.html"])?,
+        "/notes/v3/",
+    )?;
     assert!(!sandbox.work().join("v3.html").exists());
-    let asked = sandbox.run(&["get", &latest, "-o", "v3.html", "--web-page"])?;
+    let asked = sandbox.run(&["get", &link("/notes"), "-o", "v3.html", "--web-page"])?;
     assert!(asked.status.success(), "{}", text(&asked.stderr)?);
     assert_eq!(std::fs::read(sandbox.work().join("v3.html"))?, notes);
+    let beside = ["get", &link("/latest"), "-o", "latest.html", "--web-page"];
+    told(&sandbox.run(&beside)?, "/v3/")?;
+    assert!(!sandbox.work().join("latest.html").exists());
+    let at = sandbox.run(&["get", &link("/v3/"), "-o", "latest.html", "--web-page"])?;
+    assert!(at.status.success(), "{}", text(&at.stderr)?);
+    assert_eq!(std::fs::read(sandbox.work().join("latest.html"))?, notes);
     assert_eq!(
         heard(&site, "authorization"),
-        [
-            Some("bearer t-1".to_owned()),
-            Some("bearer t-1".to_owned()),
-            Some("bearer t-1".to_owned()),
-            Some("bearer t-1".to_owned())
-        ]
+        vec![Some("bearer t-1".to_owned()); 7]
     );
     Ok(())
 }
