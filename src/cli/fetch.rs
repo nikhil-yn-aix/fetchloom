@@ -5,7 +5,7 @@ mod again;
 pub(super) mod data_folder;
 pub(super) mod mirrors;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -98,6 +98,10 @@ struct Overall {
     /// the sizes known so far, added up, and how many files have yet to tell theirs: the bar takes
     /// that sum as its length only once none is left, so it promises no time left before then.
     length: std::sync::Mutex<(u64, usize)>,
+    /// the downloads by host as [`planned`] counts them, each size added as its download tells it,
+    /// so the line said once every size is known has a time too.
+    hosts: std::sync::Mutex<BTreeMap<String, estimate::Host>>,
+    limits: estimate::Limits,
     /// the run's stop, told how many downloads still receive and how many the disk keeps, so a
     /// first ctrl-c with only the disk left lets the run finish. `waiting` counts those not begun.
     stop: Arc<Stop>,
@@ -110,7 +114,11 @@ impl Overall {
             [only] => only.label.clone(),
             _ => units::count(jobs.len() as u64, "file", "files"),
         };
-        Self::from_sizes(context, jobs.len(), what, || {
+        let hosts = hosts(
+            context,
+            jobs.iter().map(|job| (host_of(job), job.fetch.expect.size)),
+        );
+        Self::from_sizes(context, (jobs.len(), what, hosts), || {
             jobs.iter().map(|job| job.fetch.expect.size)
         })
     }
@@ -120,15 +128,20 @@ impl Overall {
             [only] => only.label.clone(),
             _ => units::count(descriptions.len() as u64, "file", "files"),
         };
-        Self::from_sizes(context, descriptions.len(), what, || {
+        let hosts = hosts(
+            context,
+            descriptions
+                .iter()
+                .map(|description| (description.host.clone(), description.size)),
+        );
+        Self::from_sizes(context, (descriptions.len(), what, hosts), || {
             descriptions.iter().map(|job| job.size)
         })
     }
 
     fn from_sizes<I: Iterator<Item = Option<u64>>>(
         context: &Context,
-        count: usize,
-        what: String,
+        (count, what, hosts): (usize, String, BTreeMap<String, estimate::Host>),
         sizes: impl Fn() -> I,
     ) -> Overall {
         let bar = (count > 1).then(|| {
@@ -148,6 +161,8 @@ impl Overall {
             what,
             sizes,
             length,
+            hosts: std::sync::Mutex::new(hosts),
+            limits: limits(context),
             stop: context.stop.clone(),
             waiting: AtomicUsize::new(count),
         }
@@ -180,8 +195,9 @@ impl Overall {
         }
     }
 
-    fn sized(&self, bytes: u64) {
-        if let Some(bar) = &self.bar {
+    /// adds the size a download from `host` just told.
+    fn sized(&self, host: &str, bytes: u64) {
+        let known = {
             let mut length = self
                 .length
                 .lock()
@@ -189,13 +205,35 @@ impl Overall {
             let (total, unknown) = &mut *length;
             *total = total.saturating_add(bytes);
             *unknown = unknown.saturating_sub(1);
-            if *unknown == 0 {
-                bar.length(*total);
-            }
+            (*unknown == 0).then_some(*total)
+        };
+        if let (Some(bar), Some(total)) = (&self.bar, known) {
+            bar.length(total);
         }
+        let time = self
+            .timed(host, bytes, known.is_some())
+            .map(estimate::Time::words);
         if let Some(ticker) = self.ticker.get() {
-            ticker.sized(bytes);
+            ticker.sized(bytes, time.as_deref());
         }
+    }
+
+    /// counts `bytes` among `host`'s downloads, and once every size is `known`, how long the
+    /// batch should take.
+    fn timed(&self, host: &str, bytes: u64, known: bool) -> Option<estimate::Time> {
+        let mut hosts = self
+            .hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(planned) = hosts.get_mut(&source::paced_as(host)) {
+            planned.unknown = planned.unknown.saturating_sub(1);
+            add_size(planned, bytes);
+        }
+        if !known {
+            return None;
+        }
+        let hosts: Vec<estimate::Host> = hosts.values().cloned().collect();
+        estimate::time(&hosts, self.limits)
     }
 }
 
@@ -430,7 +468,8 @@ impl<'a> Watch<'a> {
     /// sent in chunks does, from the bytes it received, so the batch can learn its total.
     fn ended(&self) {
         if self.job.fetch.expect.size.is_none() && !self.sized.swap(true, Ordering::Relaxed) {
-            self.overall.sized(self.received.load(Ordering::Relaxed));
+            self.overall
+                .sized(&host_of(self.job), self.received.load(Ordering::Relaxed));
         }
     }
 
@@ -492,7 +531,7 @@ impl<'a> Watch<'a> {
             if let Some(total) = total
                 && !self.sized.swap(true, Ordering::Relaxed)
             {
-                self.overall.sized(total);
+                self.overall.sized(&host_of(self.job), total);
             }
             self.unbounded.store(total.is_none(), Ordering::Relaxed);
             self.received.store(resumed, Ordering::Relaxed);
@@ -653,29 +692,36 @@ pub(super) fn planned(
     context: &Context,
     jobs: impl IntoIterator<Item = (String, Option<u64>)>,
 ) -> estimate::Total {
-    let mut hosts: std::collections::BTreeMap<String, estimate::Host> =
-        std::collections::BTreeMap::new();
+    let hosts: Vec<estimate::Host> = hosts(context, jobs).into_values().collect();
+    estimate::Total::of(&hosts, limits(context))
+}
+
+/// [`planned`]'s downloads by the name each host is paced under, before they are added up.
+fn hosts(
+    context: &Context,
+    jobs: impl IntoIterator<Item = (String, Option<u64>)>,
+) -> BTreeMap<String, estimate::Host> {
+    let mut hosts: BTreeMap<String, estimate::Host> = BTreeMap::new();
     for (host, size) in jobs {
         let planned = hosts.entry(source::paced_as(&host)).or_default();
         *planned.files.get_or_insert(0) += 1;
         match size {
-            Some(size) => {
-                planned.bytes = planned.bytes.saturating_add(size);
-                planned.largest = planned.largest.max(size);
-            }
+            Some(size) => add_size(planned, size),
             None => planned.unknown += 1,
         }
     }
-    let hosts: Vec<estimate::Host> = hosts
-        .into_iter()
-        .map(|(name, host)| estimate::Host {
-            speed: context.speeds.speed(&name),
-            spacing: source::spacing(&name),
-            most: source::most_at_once(&name),
-            ..host
-        })
-        .collect();
-    estimate::Total::of(&hosts, limits(context))
+    for (name, host) in &mut hosts {
+        host.speed = context.speeds.speed(name);
+        host.spacing = source::spacing(name);
+        host.most = source::most_at_once(name);
+    }
+    hosts
+}
+
+/// counts a file of `size` among `host`'s bytes.
+fn add_size(host: &mut estimate::Host, size: u64) {
+    host.bytes = host.bytes.saturating_add(size);
+    host.largest = host.largest.max(size);
 }
 
 /// the run's limits on downloads at once.
@@ -1322,6 +1368,11 @@ mod tests {
             what: String::new(),
             sizes: (0, 0),
             length: std::sync::Mutex::default(),
+            hosts: std::sync::Mutex::default(),
+            limits: estimate::Limits {
+                jobs: 1,
+                host_jobs: 1,
+            },
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),
         }
@@ -1766,9 +1817,9 @@ mod tests {
         let overall = Overall::new(&context, &jobs);
         let total = || overall.bar.as_ref().and_then(Bar::total);
         assert_eq!(total(), None, "150 B is not what the batch fills to");
-        overall.sized(10);
+        overall.sized("example.org", 10);
         assert_eq!(total(), None);
-        overall.sized(20);
+        overall.sized("example.org", 20);
         assert_eq!(total(), Some(180));
         assert_eq!(
             batch(1, 12),

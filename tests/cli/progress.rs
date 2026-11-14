@@ -75,6 +75,35 @@ fn a_long_download_says_what_it_is_doing_once() -> Result {
     Ok(())
 }
 
+/// a link's size comes with its answer, and once its host's speed is remembered, the line that
+/// says what downloads tells about how long it takes too.
+#[test]
+fn a_links_line_says_its_time_once_its_host_is_known() -> Result {
+    let sandbox = Sandbox::new()?;
+    let speeds = sandbox.speeds();
+    std::fs::create_dir_all(speeds.parent().ok_or("no folder")?)?;
+    std::fs::write(
+        &speeds,
+        r#"{"hosts":{"127.0.0.1":{"rate":1048576.0,"overhead":0.1,"heard":1}}}"#,
+    )?;
+    let server = Server::start("/files/iris.csv", vec![slow_iris()])?;
+    let output = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_TEST_TICKER", "on")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let started = stderr
+        .lines()
+        .find(|line| line.starts_with("Downloading iris.csv"));
+    assert_eq!(
+        started,
+        Some("Downloading iris.csv · 32 B · under 10 s"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// `--json` alone keeps stderr empty, and stdout holds one document either way; the run without
 /// `--progress` starts first, so it has run longer when the other tells its first line.
 #[test]

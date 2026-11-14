@@ -790,8 +790,9 @@ impl Shared {
         (self.unknown.load(Ordering::Relaxed) == 0).then(|| self.total.load(Ordering::Relaxed))
     }
 
-    /// says what the batch does, unless it has. whether it said so now.
-    fn begin(&self) -> bool {
+    /// says what the batch does, unless it has, ending with `time` when one is known. whether it
+    /// said so now.
+    fn begin(&self, time: Option<&str>) -> bool {
         if self.begun.swap(true, Ordering::Relaxed) {
             return false;
         }
@@ -802,7 +803,10 @@ impl Shared {
             Duration::ZERO,
             true,
         );
-        (self.say)(verb, &text);
+        match time {
+            Some(time) => (self.say)(verb, &format!("{text} · {time}")),
+            None => (self.say)(verb, &text),
+        }
         true
     }
 }
@@ -866,7 +870,7 @@ impl Ticker {
         // said before the work starts, so even a batch that ends at once has said it began. a
         // download batch whose sizes are all known said so in its plan before it started
         if shared.first == First::Now {
-            shared.begin();
+            shared.begin(None);
         } else if shared.first == First::Sized && unknown == 0 {
             shared.begun.store(true, Ordering::Relaxed);
         }
@@ -889,8 +893,9 @@ impl Ticker {
     }
 
     /// adds the size a download just told. a download that knows its whole batch's size now says
-    /// what it does, unless it told none, as one refused before its body, which never began.
-    pub(crate) fn sized(&self, bytes: u64) {
+    /// what it does and, with grounds, about how long it takes, as `time` words it, unless it told
+    /// none, as one refused before its body, which never began.
+    pub(crate) fn sized(&self, bytes: u64, time: Option<&str>) {
         if let Some(shared) = &self.shared
             && shared
                 .unknown
@@ -905,7 +910,7 @@ impl Ticker {
                     Some(total.saturating_add(bytes))
                 });
             if shared.first == First::Sized && bytes > 0 && shared.total().is_some() {
-                shared.begin();
+                shared.begin(time);
             }
         }
     }
@@ -946,7 +951,7 @@ fn tick(shared: &Shared, (moment, every): (Duration, Duration)) {
         }
         drop(finished);
         // a batch that said what it does before its moment next says how far it got
-        if shared.begin() || next == moment {
+        if shared.begin(None) || next == moment {
             next = every;
             continue;
         }
@@ -1381,13 +1386,13 @@ mod tests {
         let (heard, _reported, say) = ear();
         let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
         assert!(heard.lock().unwrap().is_empty());
-        ticker.sized(32);
+        ticker.sized(32, None);
         assert_eq!(*heard.lock().unwrap(), ["Downloading iris.csv · 32 B"]);
         drop(ticker);
         // a download refused before its body tells no size, and never began
         let (heard, _reported, say) = ear();
         let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
-        ticker.sized(0);
+        ticker.sized(0, None);
         drop(ticker);
         assert!(heard.lock().unwrap().is_empty());
         for verb in ["Resolving", "Searching"] {
@@ -1395,6 +1400,22 @@ mod tests {
             drop(Ticker::paced(verb, "iris".to_owned(), (0, 1), pace, say));
             assert_eq!(*heard.lock().unwrap(), [format!("{verb} iris")]);
         }
+    }
+
+    /// once the last size is known, so is how long the batch takes, which its start line says.
+    #[test]
+    fn a_download_batch_says_its_time_once_its_sizes_are_known() {
+        let pace = (Duration::from_mins(1), Duration::from_mins(2));
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced("Downloading", "2 files".to_owned(), (0, 2), pace, say);
+        ticker.sized(32, None);
+        assert!(heard.lock().unwrap().is_empty());
+        ticker.sized(64, Some("under 10 s"));
+        drop(ticker);
+        assert_eq!(
+            *heard.lock().unwrap(),
+            ["Downloading 2 files · 96 B · under 10 s"]
+        );
     }
 
     /// work on this machine says nothing until it lasts a moment.
@@ -1417,8 +1438,8 @@ mod tests {
         let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
         let ticker = Ticker::paced("Downloading", "3 files".to_owned(), (200, 1), pace, say);
-        ticker.sized(100);
-        ticker.sized(7);
+        ticker.sized(100, None);
+        ticker.sized(7, None);
         ticker.advance(150);
         for _ in 0..2 {
             reported.recv_timeout(Duration::from_mins(1)).unwrap();
