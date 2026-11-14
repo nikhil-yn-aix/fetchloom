@@ -28,12 +28,7 @@ impl Logs {
 }
 
 pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsString>) -> Logs {
-    let filter = var("FETCHLOOM_LOG")
-        .and_then(|value| value.to_str()?.parse::<Targets>().ok())
-        .or_else(|| {
-            (level >= Level::Debug)
-                .then(|| Targets::new().with_target("fetchloom", LevelFilter::DEBUG))
-        });
+    let filter = filter(level, var);
     let timeline = var("FETCHLOOM_TRACE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
@@ -95,6 +90,45 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
     }
 }
 
+/// what logs on stderr show: what `FETCHLOOM_LOG` asks when it reads as a filter, else
+/// fetchloom's debug events at `-vv`. none when neither asks for any. other crates show their
+/// warnings and errors alone whatever it asks: below that some log what fetchloom keeps out of
+/// its own log, as `cookie_store` does each cookie a server sets.
+fn filter(level: Level, var: &dyn Fn(&str) -> Option<OsString>) -> Option<Targets> {
+    let asked = var("FETCHLOOM_LOG")
+        .and_then(|value| value.to_str()?.parse::<Targets>().ok())
+        .or_else(|| {
+            (level >= Level::Debug)
+                .then(|| Targets::new().with_target("fetchloom", LevelFilter::DEBUG))
+        })?;
+    let ours = [
+        tracing::Level::TRACE,
+        tracing::Level::DEBUG,
+        tracing::Level::INFO,
+        tracing::Level::WARN,
+        tracing::Level::ERROR,
+    ]
+    .into_iter()
+    .find(|event| asked.would_enable("fetchloom", event))
+    .map_or(LevelFilter::OFF, LevelFilter::from_level);
+    let capped = asked
+        .iter()
+        .fold(Targets::new(), |capped, (target, level)| {
+            let fetchloom = target == "fetchloom" || target.starts_with("fetchloom::");
+            let level = if fetchloom {
+                level
+            } else {
+                level.min(LevelFilter::WARN)
+            };
+            capped.with_target(target, level)
+        })
+        .with_target("fetchloom", ours);
+    Some(match asked.default_level() {
+        Some(level) => capped.with_default(level.min(LevelFilter::WARN)),
+        None => capped,
+    })
+}
+
 /// in a debug build, the file `FETCHLOOM_TEST_LOG` names, which gets the debug log as it happens,
 /// an event a write, so a test that ends a stuck run can show where it waited.
 fn kept(var: &dyn Fn(&str) -> Option<OsString>) -> Option<std::fs::File> {
@@ -123,6 +157,48 @@ mod tests {
             });
             assert!(!logs.on_stderr());
         }
+    }
+
+    /// whatever `FETCHLOOM_LOG` asks, other crates log their warnings and errors alone, since
+    /// below that `cookie_store` logs each cookie a server sets; fetchloom's own log as asked.
+    #[test]
+    fn other_crates_log_warnings_alone_whatever_the_filter_asks() {
+        use tracing::Level as Event;
+
+        let asked = |log: &str| {
+            let log = OsString::from(log);
+            filter(Level::Normal, &|name| {
+                (name == "FETCHLOOM_LOG").then(|| log.clone())
+            })
+            .unwrap()
+        };
+        for log in [
+            "trace",
+            "debug,cookie_store=trace",
+            "cookie_store=debug,fetchloom=info",
+            "f=trace",
+        ] {
+            let filter = asked(log);
+            assert!(
+                !filter.would_enable("cookie_store::cookie_store", &Event::DEBUG),
+                "{log}"
+            );
+            assert!(
+                !filter.would_enable("reqwest::connect", &Event::INFO),
+                "{log}"
+            );
+        }
+        let everything = asked("trace");
+        assert!(everything.would_enable("fetchloom::net::site", &Event::TRACE));
+        assert!(everything.would_enable("cookie_store::cookie_store", &Event::WARN));
+        let narrow = asked("trace,fetchloom::net=debug");
+        assert!(narrow.would_enable("fetchloom::net::site", &Event::DEBUG));
+        assert!(!narrow.would_enable("fetchloom::net::site", &Event::TRACE));
+        assert!(narrow.would_enable("fetchloom::cli", &Event::TRACE));
+        assert!(!asked("cookie_store=debug").would_enable("fetchloom", &Event::ERROR));
+        let default = filter(Level::Debug, &|_| None).unwrap();
+        assert!(default.would_enable("fetchloom::net", &Event::DEBUG));
+        assert!(!default.would_enable("hyper::proto", &Event::WARN));
     }
 
     #[test]
