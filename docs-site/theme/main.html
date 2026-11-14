@@ -11,6 +11,7 @@
 {% endblock %}
 {% block extrahead %}
   <link rel="preload" href="{{ 'assets/fonts/source-serif-4-latin-opsz-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{ 'assets/fonts/source-sans-3-latin-wght-normal.woff2' | url }}" as="font" type="font/woff2" crossorigin>
 {% endblock %}
 {% block scripts %}
   <script>
@@ -30,7 +31,10 @@
             style.textContent = "*, *::before, *::after { border-radius: 0 !important; box-shadow: none !important;"
               + " -webkit-backdrop-filter: none !important; backdrop-filter: none !important;"
               + " --alpha-light: 1 !important; --alpha-lighter: .9 !important; }"
-              + " [id$='-path'] { opacity: 1 !important; color: rgb(var(--color-foreground) / .72) !important; }";
+              + " [id$='-path'] { opacity: 1 !important; color: rgb(var(--color-foreground) / .72) !important; }"
+              + " *, *::before, *::after { letter-spacing: normal !important; }"
+              + " h1, h2, h3, h4, h5, h6 { font-weight: 600 !important; }"
+              + " code, kbd, pre { font-family: var(--fl-mono) !important; }";
             node.shadowRoot.append(style);
           }
         });

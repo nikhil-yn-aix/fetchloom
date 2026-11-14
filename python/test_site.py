@@ -191,7 +191,8 @@ class Pin(Folder):
         root, site = self.source(), self.folder()
         fonts = "docs-site/theme/assets/fonts"
         (root / fonts).mkdir(parents=True)
-        shutil.copy(build_site.ROOT / fonts / "source-serif-4-latin-opsz-normal.woff2", root / fonts)
+        for face in ("source-serif-4-latin-opsz-normal.woff2", "source-sans-3-latin-wght-normal.woff2"):
+            shutil.copy(build_site.ROOT / fonts / face, root / fonts)
         add_icons(root, site)
         images = site / "assets/images"
         icon = (images / "favicon.ico").read_bytes()

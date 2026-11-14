@@ -4,7 +4,7 @@
 
 # The same research data on every machine
 
-<p class="fl-lede">fetchloom adds a dataset to your project and records each file's size and SHA&#8209;256 in data.lock. One shared cache keeps every file once, and anyone who clones the project gets exactly the same bytes.</p>
+<p class="fl-lede">fetchloom adds a dataset to your project and records each file's size and <span style="white-space: nowrap">SHA-256</span> in data.lock. One shared cache keeps every file once, and anyone who clones the project gets exactly the same bytes.</p>
 
 <p class="fl-step">Install it with Rust</p>
 
@@ -21,7 +21,7 @@ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 </div>
 
 <figure class="fl-label" data-file="Iris.csv">
-<figcaption>Like a specimen in a collection, every file is pinned with a label: where it came from, its size and its SHA&#8209;256.</figcaption>
+<figcaption>Like a specimen in a collection, every file is pinned with a label: where it came from, its size and its <span style="white-space: nowrap">SHA-256</span>.</figcaption>
 </figure>
 
 <div class="fl-where fl-mine" markdown>

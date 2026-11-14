@@ -2,10 +2,13 @@
    pinned to the sheet. the label is the one loud thing; everything else keeps to one scale of type
    and one measure of space. */
 
-/* source serif 4 and source code pro are the latin subsets @fontsource-variable/source-serif-4 and
-   @fontsource-variable/source-code-pro 5.3.1 publish, unchanged: the roman with its optical sizes,
-   the italic and the code face with their weights. the OFL file beside each carries its licence
-   and copyright. */
+/* the source trio: source serif 4 to read, source sans 3 to find your way, and source code pro for
+   what a person types and what fetchloom records. each is the latin subset its 5.3.1 package on
+   npm publishes, unchanged: the roman serif with its optical sizes and weights from
+   @fontsource-variable/source-serif-4, its one italic, a static 400 for the specimen's name, from
+   @fontsource/source-serif-4, and the sans and the code face with their weights from
+   @fontsource-variable/source-sans-3 and @fontsource-variable/source-code-pro. the OFL file beside
+   each carries its licence and copyright. */
 
 @font-face {
   font-family: "Source Serif 4";
@@ -17,9 +20,16 @@
 @font-face {
   font-family: "Source Serif 4";
   font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/source-serif-4-latin-400-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
   font-weight: 200 900;
   font-display: swap;
-  src: url("../fonts/source-serif-4-latin-wght-italic.woff2") format("woff2");
+  src: url("../fonts/source-sans-3-latin-wght-normal.woff2") format("woff2");
 }
 @font-face {
   font-family: "Source Code Pro";
@@ -73,10 +83,12 @@
   color-scheme: dark;
 }
 
-/* one scale, a major third apart, from the 18px of the text; one measure of space, half a line of
-   it. a phone takes the same steps, the largest one step down */
+/* one scale, a major third apart, from the 18px of the text, with everything small on its lowest
+   step and code at .85 of the text it sits in; two weights, 400 and 600, in all three faces; one
+   measure of space, half a line of it. a phone takes the same steps, the largest one step down */
 :root {
   --fl-text: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --fl-ui: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
   --fl-mono: "Source Code Pro", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --fl-s-1: .72rem;
   --fl-s0: .9rem;
@@ -84,12 +96,16 @@
   --fl-s2: 1.406rem;
   --fl-s3: 1.758rem;
   --fl-s4: 2.197rem;
+  --fl-code-size: .765rem;
+  --fl-lh-display: 1.2;
+  --fl-lh-small: 1.5;
+  --fl-lh-text: 1.6;
   --fl-u: .72rem;
-  --fl-heading: 560;
+  --fl-heading: 600;
 }
 
 [data-md-color-scheme] {
-  --md-text-font: "Source Serif 4";
+  --md-text-font: "Source Sans 3";
   --md-code-font: "Source Code Pro";
   --md-default-bg-color: var(--fl-paper);
   --md-default-bg-color--light: var(--fl-paper);
@@ -138,7 +154,7 @@
   --md-shadow-z1: none;
   --md-shadow-z2: none;
   --md-shadow-z3: none;
-  --md-mermaid-font-family: var(--fl-text);
+  --md-mermaid-font-family: var(--fl-ui);
   --md-mermaid-edge-color: var(--fl-muted);
   --md-mermaid-node-bg-color: var(--fl-surface);
   --md-mermaid-node-fg-color: var(--fl-ink);
@@ -191,8 +207,10 @@ body {
   max-width: 68rem;
 }
 
-/* the header: the pin and the name, then search and the repository */
+/* the header: the pin and the name, then search and the repository. chrome is set in the sans,
+   the name in the serif, as the link card draws it */
 .md-header {
+  font-family: var(--fl-ui);
   background-color: var(--fl-paper);
   color: var(--fl-ink);
 }
@@ -202,8 +220,11 @@ body {
   font-weight: 600;
   letter-spacing: 0;
 }
-/* the pin the cli lays beside its welcome, stood up as the favicon draws it, which
-   python/build_site.py draws from src/output.rs */
+.md-header__title .md-header__topic {
+  font-weight: 600;
+}
+/* the pin whose head the cli prints before its welcome, from the side as the favicon draws it,
+   which python/build_site.py draws */
 .md-header__topic:first-child .md-ellipsis::before {
   content: "";
   display: inline-block;
@@ -227,11 +248,11 @@ body {
   opacity: 1;
 }
 .md-source {
-  font-family: var(--fl-text);
+  font-family: var(--fl-ui);
   font-size: var(--fl-s-1);
+  line-height: var(--fl-lh-small);
   color: var(--fl-muted);
   padding: 0 var(--fl-u);
-  line-height: 2.4rem;
 }
 .md-source:hover {
   color: var(--fl-accent);
@@ -240,7 +261,9 @@ body {
 .md-search__button,
 .md-search__button:focus,
 .md-search__button:hover {
-  font-family: var(--fl-text);
+  font-family: var(--fl-ui);
+  font-size: var(--fl-s-1);
+  line-height: var(--fl-lh-small);
   color: var(--fl-muted);
   background-color: var(--fl-surface);
   border: 0;
@@ -252,17 +275,21 @@ body {
 .md-search__button::before {
   background-color: var(--fl-muted);
 }
+/* a key is code */
 .md-search__button::after {
-  font-family: var(--fl-text);
+  font-family: var(--fl-mono);
+  font-size: .85em;
   color: var(--fl-muted);
   background: none;
 }
 .md-tabs {
+  font-family: var(--fl-ui);
   background-color: var(--fl-paper);
   color: var(--fl-muted);
 }
 .md-tabs__link {
   font-size: var(--fl-s-1);
+  line-height: var(--fl-lh-small);
   opacity: 1;
   color: var(--fl-muted);
 }
@@ -272,6 +299,7 @@ body {
 }
 .md-tabs__item--active {
   border-bottom-color: transparent;
+  font-weight: 600;
 }
 .md-tabs__item--active .md-tabs__link {
   text-decoration: underline;
@@ -280,14 +308,29 @@ body {
   text-underline-offset: .5em;
 }
 
-/* the sidebars: quiet text, the page you are on in ink */
+/* the sidebars: quiet text in the sans, the page you are on in ink at 600 */
+.md-sidebar,
+.md-nav {
+  font-family: var(--fl-ui);
+}
 .md-nav {
   font-size: var(--fl-s-1);
-  line-height: 1.4;
+  line-height: var(--fl-lh-small);
+}
+/* the contents wrap each heading in the text's class, which the theme sets at 14px */
+.md-nav .md-typeset {
+  font: inherit;
 }
 .md-nav__title {
   color: var(--fl-ink);
   background: none;
+}
+.md-nav--secondary .md-nav__title {
+  font-weight: 600;
+}
+/* one left edge: a group's name where a page's name sits beside it, and its pages one step in */
+.md-nav__container > .md-nav__link {
+  padding-left: 0;
 }
 .md-nav__link {
   color: var(--fl-muted);
@@ -308,6 +351,13 @@ body {
 .md-nav__item--section > .md-nav__link,
 .md-nav__item--nested > .md-nav__link {
   color: var(--fl-ink);
+}
+.md-nav__item--section > .md-nav__link:not(.md-nav__link--active),
+.md-nav__item--nested > .md-nav__link:not(.md-nav__link--active) {
+  font-weight: 400;
+}
+.md-nav__item--section > .md-nav__link--active {
+  font-weight: 600;
 }
 .md-path {
   font-size: var(--fl-s-1);
@@ -352,12 +402,12 @@ body {
 }
 .md-typeset h1 {
   font-size: var(--fl-s3);
-  line-height: 1.2;
+  line-height: var(--fl-lh-display);
   margin: var(--fl-u) 0 calc(2 * var(--fl-u));
 }
 .md-typeset h2 {
   font-size: var(--fl-s2);
-  line-height: 1.25;
+  line-height: var(--fl-lh-display);
   margin: calc(4 * var(--fl-u)) 0 var(--fl-u);
 }
 .md-typeset h3 {
@@ -367,8 +417,7 @@ body {
 }
 .md-typeset :is(h4, h5, h6) {
   font-size: var(--fl-s0);
-  line-height: 1.6;
-  font-weight: 600;
+  line-height: var(--fl-lh-text);
   margin: calc(2 * var(--fl-u)) 0 calc(.5 * var(--fl-u));
 }
 .md-typeset .headerlink {
@@ -429,15 +478,17 @@ body {
 [data-md-color-scheme="default"] .md-typeset pre > code {
   background-color: var(--fl-surface);
 }
-.md-typeset :is(h1, h2, h3, h4, h5, h6) code {
+.md-typeset :is(h1, h2, h3, h4, h5, h6, .fl-step) code {
   font-size: .85em;
+  font-weight: inherit;
 }
 .md-typeset pre {
   margin: 0 0 calc(2 * var(--fl-u));
 }
+/* a block or a transcript takes .85 of the text's 18px, the size of code in the sentence above it */
 .md-typeset pre > code {
-  font-size: var(--fl-s-1);
-  line-height: 1.6;
+  font-size: var(--fl-code-size);
+  line-height: var(--fl-lh-text);
   padding: var(--fl-u);
   border-radius: 6px;
   background-color: var(--fl-surface);
@@ -520,8 +571,9 @@ body {
   width: auto;
   max-width: none;
   min-width: 0;
+  font-family: var(--fl-ui);
   font-size: var(--fl-s-1);
-  line-height: 1.5;
+  line-height: var(--fl-lh-small);
   font-variant-numeric: tabular-nums lining-nums;
   background: none;
   border: 0;
@@ -565,6 +617,7 @@ body {
 
 /* the footer: the page before and after, in words alone, with no rule above them */
 .md-footer {
+  font-family: var(--fl-ui);
   background-color: var(--fl-paper);
   color: var(--fl-ink);
   border-top: 0;
@@ -582,14 +635,20 @@ body {
   max-width: none;
   padding: 0 var(--fl-u);
   font-size: var(--fl-s0);
+  line-height: var(--fl-lh-small);
   white-space: normal;
 }
 .md-footer__link:hover .md-footer__title,
 .md-footer__link:focus .md-footer__title {
   color: var(--fl-accent);
 }
-.md-footer__direction {
+.md-footer__direction,
+.md-copyright,
+.md-skip {
   font-size: var(--fl-s-1);
+  line-height: var(--fl-lh-small);
+}
+.md-footer__direction {
   color: var(--fl-muted);
   opacity: 1;
 }
@@ -636,8 +695,7 @@ body {
 .md-typeset .fl-intro h1 {
   max-width: 14em;
   font-size: var(--fl-s3);
-  font-weight: 500;
-  line-height: 1.2;
+  line-height: var(--fl-lh-display);
   margin: 0 0 var(--fl-u);
 }
 .md-typeset .fl-lede {
@@ -645,6 +703,8 @@ body {
   margin: 0 0 calc(3 * var(--fl-u));
 }
 .md-typeset .fl-step {
+  font-size: var(--fl-s0);
+  line-height: var(--fl-lh-text);
   font-weight: 600;
   margin: 0 0 calc(.5 * var(--fl-u));
 }
@@ -705,9 +765,13 @@ body {
 [data-md-color-scheme="slate"] .md-typeset figure.fl-label::before {
   background-image: url("../images/pin-slate.svg");
 }
+/* the label: printed names in the sans, what fetchloom recorded in the code face, as typed, and
+   the specimen's name in the serif's italic */
 .md-typeset .fl-label-file {
   margin: 0;
-  font-size: var(--fl-s-1);
+  font-family: var(--fl-mono);
+  font-size: var(--fl-code-size);
+  line-height: var(--fl-lh-text);
   color: var(--fl-muted);
 }
 .md-typeset .fl-label-name {
@@ -722,23 +786,30 @@ body {
   grid-template-columns: max-content minmax(0, 1fr);
   column-gap: calc(1.5 * var(--fl-u));
   row-gap: calc(.5 * var(--fl-u));
+  align-items: baseline;
   margin: 0 0 calc(2 * var(--fl-u));
 }
 .md-typeset .fl-label :is(dt, dd) {
   margin: 0;
   padding: 0;
-  line-height: 1.5;
 }
+/* a name's row is as tall as its value's: 1.7 of 14.4px is 1.6 of 15.3px */
 .md-typeset .fl-label dt {
+  font-family: var(--fl-ui);
+  font-size: var(--fl-s-1);
+  line-height: 1.7;
+  white-space: nowrap;
   color: var(--fl-muted);
+}
+.md-typeset .fl-label dd {
+  font-family: var(--fl-mono);
+  font-size: var(--fl-code-size);
+  line-height: var(--fl-lh-text);
 }
 .md-typeset .fl-label .fl-hash {
   display: grid;
   grid-template-columns: repeat(4, max-content);
   column-gap: 1ch;
-  font-family: var(--fl-mono);
-  font-size: var(--fl-s-1);
-  line-height: 1.8;
 }
 /* a narrow label puts each name above its value, and the hash in two columns if it must */
 @container (max-width: 20rem) {
@@ -758,9 +829,10 @@ body {
 .md-typeset .fl-label figcaption {
   max-width: none;
   margin: 0;
+  font-family: var(--fl-ui);
   font-size: var(--fl-s-1);
   font-style: normal;
-  line-height: 1.5;
+  line-height: var(--fl-lh-small);
   color: var(--fl-muted);
 }
 
@@ -779,13 +851,15 @@ body {
 .md-typeset .fl-routes ul li {
   margin: 0;
   color: var(--fl-muted);
+  font-family: var(--fl-ui);
   font-size: var(--fl-s-1);
-  line-height: 1.5;
+  line-height: var(--fl-lh-small);
 }
 .md-typeset .fl-routes a {
   display: block;
   margin-bottom: calc(.25 * var(--fl-u));
   font-size: var(--fl-s0);
+  line-height: var(--fl-lh-small);
 }
 
 @media screen and (max-width: 60em) {

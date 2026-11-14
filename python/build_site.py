@@ -259,8 +259,9 @@ def ico(images):
 
 
 def preview(root, colors):
-    """the 1200 by 630 image a link to the site shows: the pin, glinting, beside fetchloom's name and,
-    under it, the one line its welcome says it is for, on the sheet of ``colors``."""
+    """the 1200 by 630 image a link to the site shows: the pin, glinting, beside fetchloom's name in
+    the serif and, under it in the sans, as the site sets them, the one line its welcome says it is
+    for, on the sheet of ``colors``."""
     from PIL import ImageDraw, ImageFont
     card = drawn(LARGE, 630, colors["accent"], colors["paper"], span=.42, at=(240, 315))
     card = card.crop((0, 0, 1200, 630))
@@ -268,8 +269,8 @@ def preview(root, colors):
     fonts = root / "docs-site/theme/assets/fonts"
     name = ImageFont.truetype(str(fonts / "source-serif-4-latin-opsz-normal.woff2"), 132)
     name.set_variation_by_axes([600, 60])
-    line = ImageFont.truetype(str(fonts / "source-serif-4-latin-opsz-normal.woff2"), 42)
-    line.set_variation_by_axes([400, 20])
+    line = ImageFont.truetype(str(fonts / "source-sans-3-latin-wght-normal.woff2"), 40)
+    line.set_variation_by_axes([400])
     draw = ImageDraw.Draw(card)
     draw.text((452, 300), "fetchloom", font=name, fill=colors["ink"], anchor="ls")
     lines = [""]
@@ -373,7 +374,7 @@ def label(recorded, path):
             shown = "".join(f"<dt>{name}</dt><dd>{html.escape(value)}</dd>" for name, value in rows)
             return (f'<figure class="fl-label"><p class="fl-label-file">data.lock</p>'
                     f'<p class="fl-label-name">{html.escape(dataset["name"])}</p><dl>{shown}'
-                    f'<dt>SHA&#8209;256</dt><dd class="fl-hash">{groups}</dd></dl>')
+                    f'<dt>SHA-256</dt><dd class="fl-hash">{groups}</dd></dl>')
     raise ValueError(f"{RECORDED}/data.lock pins no {path}")
 
 
