@@ -1001,10 +1001,20 @@ fn expired_cookies_are_named_with_the_command_that_takes_them_again() -> Result 
     let lines = text(&sandbox.run(&["auth", "--offline"])?.stderr)?;
     assert!(
         lines.contains(&format!(
-            "Expired 1 cookie from firefox for {host}, the soonest expiring 2001-09-09; {again}\n"
+            "Expired 1 cookie from firefox for {host}, the soonest expired 2001-09-09; {again}\n"
         )),
         "{lines}"
     );
+    let listed = json(&sandbox.run(&["auth", "--offline", "--json"])?)?;
+    let row = listed["result"]["accounts"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["account"] == format!("site:{host}"))
+        })
+        .ok_or("no row for the site")?;
+    assert_eq!(row["valid"], false, "{row}");
+    assert_eq!(row["expires"], "2001-09-09T01:46:40Z", "{row}");
     let link = format!("{}/data.csv", site.url);
     let output = sandbox.run(&["--json", "get", &link])?;
     assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);

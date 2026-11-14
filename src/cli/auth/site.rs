@@ -113,9 +113,7 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
         // lets it finish
         context.stop.finish();
         let origin = keep(context, &host, &saved, told)?;
-        let when = saved.soonest().map_or_else(String::new, |soonest| {
-            format!(", the soonest expiring {}", date(soonest))
-        });
+        let when = expiring(&saved, SystemTime::now());
         context.output.done(
             "Signed in",
             &format!(
@@ -459,7 +457,7 @@ fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
     for cookie in &picked.kept {
         let ends = cookie.expires.map_or_else(
             || "ends with the browser's session".to_owned(),
-            |expires| format!("expires {}", date(expires)),
+            |expires| format!("expires {}", date(expires, SystemTime::now())),
         );
         output.item(&format!(
             "{} \u{b7} {} \u{b7} {ends}",
@@ -674,16 +672,34 @@ fn described(saved: &Saved) -> String {
 
 use crate::auth::site::moment;
 
-/// the date `seconds` after 1970 is, as `2026-12-01`.
-fn date(seconds: i64) -> String {
-    let mut stamp = crate::units::timestamp(moment(seconds));
-    stamp.truncate(10);
-    stamp
+/// when `seconds` after 1970 is, next to `now`: its date, as `2026-12-01`, or on the same day
+/// its time, as `today at 14:30 UTC`.
+fn date(seconds: i64, now: SystemTime) -> String {
+    let stamp = crate::units::timestamp(moment(seconds));
+    if stamp[..10] == crate::units::timestamp(now)[..10] {
+        format!("today at {} UTC", &stamp[11..16])
+    } else {
+        stamp[..10].to_owned()
+    }
+}
+
+/// when the soonest of `saved`'s cookies expires, past or still to come at `now`, as a line
+/// tells it after what is saved. empty for a token, a header, or cookies that all end with the
+/// browser's session.
+fn expiring(saved: &Saved, now: SystemTime) -> String {
+    saved.soonest().map_or_else(String::new, |soonest| {
+        let verb = if moment(soonest) <= now {
+            "expired"
+        } else {
+            "expiring"
+        };
+        format!(", the soonest {verb} {}", date(soonest, now))
+    })
 }
 
 /// a line for each website with a saved credential: its host, the kind, where it is kept and,
 /// for cookies, when the soonest expires; cookies past it are marked expired with how to save
-/// new ones.
+/// new ones, and their row is not valid.
 pub(super) fn listed(output: &Output) -> Vec<State> {
     let var = &crate::machine::env;
     let now = SystemTime::now();
@@ -693,10 +709,9 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
             continue;
         };
         let soonest = saved.soonest();
-        let when = soonest.map_or_else(String::new, |soonest| {
-            format!(", the soonest expiring {}", date(soonest))
-        });
-        if soonest.is_some_and(|soonest| moment(soonest) <= now) {
+        let when = expiring(&saved, now);
+        let expired = soonest.is_some_and(|soonest| moment(soonest) <= now);
+        if expired {
             output.mark(
                 "Expired",
                 &format!(
@@ -720,7 +735,8 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
             signed_in: true,
             from: Some(origin.to_string()),
             user: None,
-            valid: None,
+            // cookies past their expiry are refused without asking the site
+            valid: expired.then_some(false),
             kind: Some(saved.kind()),
             expires: soonest.map(|soonest| crate::units::timestamp(moment(soonest))),
         });
@@ -847,6 +863,44 @@ mod tests {
         let named = folder.path().join("a\\b.txt");
         std::fs::write(&named, "x").unwrap();
         assert_eq!(typed_path(&named.display().to_string(), None), named);
+    }
+
+    /// a cookie's expiry reads as past or still to come, with its time on the day it falls.
+    #[test]
+    fn an_expiry_reads_as_past_or_to_come_with_its_time_on_the_day() {
+        // 2026-11-14T10:00:00Z
+        let now = 1_794_650_400;
+        let saved = |expires: i64| Saved::Cookies {
+            from: Taken::Browser("firefox".to_owned()),
+            cookies: vec![crate::auth::site::Cookie {
+                name: "session".to_owned(),
+                value: "s".to_owned(),
+                domain: "data.example.org".to_owned(),
+                path: "/".to_owned(),
+                secure: true,
+                expires: Some(expires),
+            }],
+        };
+        for (expires, said) in [
+            (now + 30 * 86_400, ", the soonest expiring 2026-12-14"),
+            (
+                now + 4 * 3_600 + 30 * 60,
+                ", the soonest expiring today at 14:30 UTC",
+            ),
+            (now - 3_600, ", the soonest expired today at 09:00 UTC"),
+            (now - 3 * 86_400, ", the soonest expired 2026-11-11"),
+        ] {
+            assert_eq!(expiring(&saved(expires), moment(now)), said, "{expires}");
+        }
+        assert_eq!(
+            expiring(
+                &Saved::Token {
+                    token: "t".to_owned()
+                },
+                moment(now)
+            ),
+            ""
+        );
     }
 
     /// a cookies file named wrong is the person's to fix, as `usage`: one that is not there, a
