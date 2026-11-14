@@ -565,6 +565,66 @@ fn a_download_waits_for_a_lost_network_instead_of_spending_its_tries() {
     assert_eq!(asked.lock().unwrap().len(), 1);
 }
 
+/// what a lookup of a name no DNS server knows fails with, as each system words it. a mac whose
+/// network is gone is said to answer every lookup so.
+fn no_such_host() -> io::Error {
+    if cfg!(windows) {
+        io::Error::from_raw_os_error(11001)
+    } else {
+        io::Error::other(
+            "failed to lookup address information: nodename nor servname provided, or not known",
+        )
+    }
+}
+
+/// a host this run already reached that stops resolving, as on a mac whose wifi drops, waits for
+/// the network like any lookup that failed for now, while a name that never resolved fails at once.
+#[test]
+fn a_known_host_that_stops_resolving_waits_while_a_typo_fails_at_once() {
+    let (served, asked) = serve(vec![
+        reply("200 OK", &[], b"first"),
+        reply("200 OK", &[], b"second"),
+    ]);
+    let port = served.port().unwrap();
+    let first = Url::parse(&format!("http://data.test:{port}/first")).unwrap();
+    let typo = Url::parse(&format!("http://dta.test:{port}/x")).unwrap();
+    let mut net = net(&first);
+    net.typed(&typo);
+    let lookups = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let looked = lookups.clone();
+    let gone = crate::net::RETRIES + 3;
+    net.lookups = Some(Arc::new(move |host| {
+        if host == "dta.test" {
+            return Err(no_such_host());
+        }
+        // the first lookup finds the host, then the network goes for more lookups than tries
+        let count = looked.fetch_add(1, Ordering::SeqCst);
+        if count == 0 || count > gone {
+            Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], 0))])
+        } else {
+            Err(no_such_host())
+        }
+    }));
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    block_on(net.download(&Fetch::new(first.clone()), &cache, &|_| Ok(()))).unwrap();
+    let second = Fetch::new(first.join("second").unwrap());
+    let fetched = block_on(net.download(&second, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"second"
+    );
+    assert_eq!(lookups.load(Ordering::SeqCst), gone + 2);
+    let error = block_on(net.download(&Fetch::new(typo), &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkUnreachable);
+    assert!(
+        error.message.contains("dta.test is not a known host"),
+        "{}",
+        error.message
+    );
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
 #[test]
 fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
     let (url, asked) = serve(vec![reply(

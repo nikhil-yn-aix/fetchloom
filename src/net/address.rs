@@ -32,6 +32,9 @@ struct Hosts {
     allowed: Allowed,
     /// names this run's lookups for a trusted origin found on a private address.
     private: HashSet<String>,
+    /// names this run's lookups found, which a lookup that later says they do not exist cannot
+    /// make unknown: a mac whose network is gone is said to answer every lookup so.
+    resolved: HashSet<String>,
 }
 
 /// the `allowed_origins` setting as refusals and hints quote it: the origins it lists and where
@@ -622,6 +625,11 @@ impl reqwest::dns::Resolve for Resolver {
             };
             let found: Vec<SocketAddr> = match looked_up {
                 Ok(found) => found,
+                Err(err) if is_unknown(&err) && typed.hosts().resolved.contains(&host) => {
+                    return Err(
+                        Box::new(Unanswered(err)) as Box<dyn std::error::Error + Send + Sync>
+                    );
+                }
                 Err(err) if is_unknown(&err) => {
                     return Err(
                         Box::new(Unknown(host.clone())) as Box<dyn std::error::Error + Send + Sync>
@@ -648,9 +656,12 @@ impl reqwest::dns::Resolve for Resolver {
             }
             // noted so an add can say its typed origin needs allowed_origins later, with no
             // lookup of its own
+            let mut hosts = typed.hosts();
             if reach == Reach::Trusted && kept.iter().any(|address| is_private(address.ip())) {
-                typed.hosts().private.insert(key(&host));
+                hosts.private.insert(key(&host));
             }
+            hosts.resolved.insert(host);
+            drop(hosts);
             Ok(Box::new(kept.into_iter()) as reqwest::dns::Addrs)
         })
     }
