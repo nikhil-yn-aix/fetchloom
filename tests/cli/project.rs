@@ -2544,6 +2544,7 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
     let large = Server::start("/files/huge.bin", vec![file(b"eleven byte", "\"h\"")])?;
     let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
     for (server, name) in [(&large, "huge"), (&cows, "cows")] {
+        sandbox.allow(&server.url);
         let output = sandbox.run(&["add", &server.url, "--as", name])?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     }

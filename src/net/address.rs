@@ -197,6 +197,13 @@ impl super::Net {
     pub(crate) fn on_private_address(&self, origin: &url::Origin) -> bool {
         self.typed.on_private_address(origin)
     }
+
+    /// the refusal a request for `url` meets before it is sent, as a private address written out
+    /// that no trusted origin covers; a name's address is known only once it is looked up.
+    pub(crate) fn refusal(&self, url: &Url) -> Option<crate::error::Error> {
+        let reason = self.typed.check(url).err()?;
+        Some(super::failure::refused(url, &reason))
+    }
 }
 
 impl Hosts {

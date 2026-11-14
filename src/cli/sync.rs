@@ -886,6 +886,7 @@ impl<'a> Loop<'a> {
             |job: &Job| in_cache_where(&self.cache, &job.fetch, |digest| !damaged.contains(digest));
         jobs.retain(|job| !available(job));
         self.refuse_offline_with(&jobs, available)?;
+        self.refuse_unasked(jobs.iter().map(|job| &job.fetch.from))?;
         let mut preview = placing.preview(guessed);
         preview.changes.to_download = Some(fetch::planned(
             self.context,
@@ -1048,6 +1049,14 @@ impl<'a> Loop<'a> {
             .iter()
             .filter(|job| !in_cache(&self.cache, &job.fetch))
             .collect();
+        self.refuse_unasked(
+            lacking
+                .iter()
+                .copied()
+                .chain(&ahead)
+                .map(|job| &job.fetch.from),
+        )
+        .map_err(|error| self.as_left(error))?;
         crate::space::cache_holds(
             self.cache.root(),
             lacking
@@ -1222,6 +1231,13 @@ impl<'a> Loop<'a> {
             descriptions.push(description);
             urls.push(url);
         }
+        self.refuse_unasked(
+            urls.iter()
+                .zip(available)
+                .filter(|(_, available)| !**available)
+                .map(|(url, _)| url),
+        )
+        .map_err(|error| self.as_left(error))?;
         crate::space::cache_holds(
             self.cache.root(),
             descriptions
@@ -1322,6 +1338,15 @@ impl<'a> Loop<'a> {
                 )
             );
             self.context.output.step("Downloaded", &text);
+        }
+    }
+
+    /// refuses the first of `links` a request would be refused before it is sent, as a private
+    /// address `allowed_origins` does not list, so no line says it downloads.
+    fn refuse_unasked<'u>(&self, links: impl IntoIterator<Item = &'u Url>) -> Result<(), Error> {
+        match links.into_iter().find_map(|link| self.net.refusal(link)) {
+            Some(refusal) => Err(refusal),
+            None => Ok(()),
         }
     }
 

@@ -724,6 +724,37 @@ fn add_size(host: &mut estimate::Host, size: u64) {
     host.largest = host.largest.max(size);
 }
 
+/// the downloads at `links` a sync may ask for, each by its host and size. a link a request is
+/// refused before it is sent, as a private address `allowed_origins` does not list, is left out,
+/// with a warning for each origin, so nothing says it downloads.
+pub(super) fn askable(
+    context: &Context,
+    links: Vec<(Url, Option<u64>)>,
+) -> Vec<(String, Option<u64>)> {
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let net = context.net();
+    let mut warned = std::collections::HashSet::new();
+    links
+        .into_iter()
+        .filter_map(|(link, size)| {
+            let Some(refusal) = net.refusal(&link) else {
+                return Some((crate::net::host(&link).to_ascii_lowercase(), size));
+            };
+            if warned.insert(link.origin()) {
+                context.output.warn_detailed(
+                    Warning::NetworkPrivateOrigin,
+                    &refusal.message,
+                    refusal.help.as_deref(),
+                    std::iter::empty::<&str>(),
+                );
+            }
+            None
+        })
+        .collect()
+}
+
 /// the run's limits on downloads at once.
 pub(super) fn limits(context: &Context) -> estimate::Limits {
     estimate::Limits {

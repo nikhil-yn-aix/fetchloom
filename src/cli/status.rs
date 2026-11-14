@@ -73,9 +73,9 @@ pub(super) struct Status {
     candidates: Vec<Kept>,
     /// what a sync would download for the files it places, with about how long it takes.
     to_download: crate::net::estimate::Total,
-    /// those downloads by the host each starts at, and its size.
+    /// those downloads by the link each starts at, and its size.
     #[serde(skip)]
-    downloads: Vec<(String, Option<u64>)>,
+    downloads: Vec<(url::Url, Option<u64>)>,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
@@ -156,7 +156,8 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         verify.then_some(&context.output),
     )?;
     let mut status = status;
-    status.to_download = super::fetch::planned(context, std::mem::take(&mut status.downloads));
+    let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
+    status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
     warn_git(output, &project)?;
     list(output, &status);
@@ -528,14 +529,14 @@ fn check(
     Ok(status)
 }
 
-/// the files a sync of `status` would download, each once, by the host its link starts at: a file
-/// it places that neither the cache nor the data folder holds, or the archive holding it when
-/// the cache lacks that too.
+/// the files a sync of `status` would download, each once, by the link it starts at: a file it
+/// places that neither the cache nor the data folder holds, or the archive holding it when the
+/// cache lacks that too.
 fn downloads(
     status: &Status,
     planned: &plan::Plan<'_>,
     cache: &Cache,
-) -> Vec<(String, Option<u64>)> {
+) -> Vec<(url::Url, Option<u64>)> {
     let placing: HashSet<&str> = status
         .missing
         .iter()
@@ -555,10 +556,7 @@ fn downloads(
         .filter_map(plan::Target::file)
         .filter(|file| !file.url.is_empty() && seen.insert(file.sha256))
         .filter(|file| lacks(&file.sha256, file.size))
-        .filter_map(|file| {
-            let url = url::Url::parse(&file.url).ok()?;
-            Some((crate::net::host(&url).to_ascii_lowercase(), Some(file.size)))
-        })
+        .filter_map(|file| Some((url::Url::parse(&file.url).ok()?, Some(file.size))))
         .collect()
 }
 

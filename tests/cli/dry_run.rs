@@ -30,8 +30,10 @@ fn tree(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
     Ok(found)
 }
 
-/// a project with iris added from `server`, whose first response serves it.
+/// a project with iris added from `server`, whose first response serves it, and whose later
+/// runs may reach it, as `allowed_origins` lets them.
 fn added(sandbox: &Sandbox, server: &Server) -> Result {
+    sandbox.allow(&server.url);
     let output = sandbox.run(&["add", &server.url])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     Ok(())
@@ -134,6 +136,7 @@ fn sync_dry_run_tells_the_lock_a_new_dataset_would_get() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let other = Server::start("/files/cows.csv", vec![file(b"cow\nbess\n", "\"c1\"")])?;
+    sandbox.allow(&other.url);
     added(&sandbox, &server)?;
     let manifest = sandbox.work().join("data.toml");
     let updated = format!(
@@ -757,5 +760,45 @@ fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
         return Ok(());
     };
     assert!(screen.contains(later), "{screen}");
+    Ok(())
+}
+
+/// a clone's link to a private address that `allowed_origins` does not list: status warns that a
+/// sync will not follow it and counts no download, a dry run stops where the sync stops, and the
+/// sync refuses before it says it downloads anything.
+#[test]
+fn a_link_a_sync_refuses_is_never_announced_as_a_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    crate::support::ok(&sandbox.run(&["add", &server.url])?)?;
+    let speeds = sandbox.speeds();
+    fs::write(
+        &speeds,
+        r#"{"hosts":{"127.0.0.1":{"rate":1048576.0,"overhead":0.1,"heard":1}}}"#,
+    )?;
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let refusal = format!("will not follow {}", server.url);
+    let announced = |told: &str| {
+        ["Would download", "Would fetch", "Downloading"]
+            .iter()
+            .any(|line| told.contains(line))
+    };
+    let status = text(&run(&["status"])?.stderr)?;
+    assert!(status.contains(&refusal), "{status}");
+    assert!(!announced(&status), "{status}");
+    for args in [&["sync", "--dry-run"][..], &["sync"]] {
+        let output = run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(20), "{args:?}: {stderr}");
+        assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
+        assert!(!announced(&stderr), "{args:?}: {stderr}");
+    }
+    assert_eq!(server.requests().len(), 1, "the clone asked nothing");
     Ok(())
 }
