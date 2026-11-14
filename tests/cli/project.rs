@@ -632,6 +632,22 @@ fn changed_bytes_upstream_stop_sync_with_both_ways_on() -> Result {
     Ok(())
 }
 
+/// an upgrade of a link whose bytes changed names the link once, since the ref did not move.
+#[test]
+fn an_upgrade_of_changed_bytes_names_its_link_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let changed = file(b"species\nsetosa\n", "\"v2\"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), changed])?;
+    added(&sandbox, &server)?;
+    let upgraded = text(&sandbox.run(&["lock", "--upgrade"])?.stderr)?;
+    assert!(
+        upgraded.contains(&format!("Upgraded iris · {} · 1 file changed", server.url)),
+        "{upgraded}"
+    );
+    assert!(!upgraded.contains('→'), "{upgraded}");
+    Ok(())
+}
+
 #[test]
 fn changed_bytes_from_a_source_that_states_md5_get_the_same_fix() -> Result {
     let sandbox = Sandbox::new()?;
