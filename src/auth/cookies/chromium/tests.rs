@@ -84,6 +84,31 @@ fn only_linuxs_v10_tag_has_a_key_without_the_credential_store() {
     }
 }
 
+/// chromium's own tags and iterations, from `keychain_key_provider.mm`, `posix_key_provider.cc`
+/// and `freedesktop_secret_key_provider.cc` in `components/os_crypt/async/browser`, decided for
+/// each system without opening its store.
+#[test]
+fn each_system_keeps_a_tags_secret_where_chromium_puts_it() {
+    let chrome = BROWSERS[0];
+    let keychain = Secret::Keychain {
+        service: "Chrome Safe Storage",
+        account: "Chrome",
+    };
+    let service = Secret::Service {
+        application: "chrome",
+    };
+    for (macos, tag, expected) in [
+        (true, "v10", Some((keychain, 1003))),
+        (true, "v11", None),
+        (true, "v20", None),
+        (false, "v10", Some((Secret::Fixed, 1))),
+        (false, "v11", Some((service, 1))),
+        (false, "v20", None),
+    ] {
+        assert_eq!(chrome.secret(macos, tag), expected, "macos {macos}, {tag}");
+    }
+}
+
 /// an `XDG_CONFIG_HOME` counts on linux only when it is absolute, as the XDG base directory
 /// spec says; windows keeps its cookies where only the browser may open them.
 #[test]

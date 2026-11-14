@@ -102,35 +102,59 @@ impl Chromium {
     /// the key the browser encrypts the cookies of `tag` with, from its secret in the system's
     /// credential store: `v11` on linux, `v10` on macos. on linux, `v10` is chromium's fixed key.
     pub(crate) fn key(&self, tag: &str) -> Option<[u8; 16]> {
-        if cfg!(target_os = "macos") {
-            let (service, account) = self.keychain;
-            let secret = (tag == "v10")
-                .then(|| {
-                    keyring::Entry::new(service, account)
-                        .ok()?
-                        .get_secret()
-                        .ok()
-                })
-                .flatten()?;
-            return Some(derive(&secret, 1003));
-        }
-        match tag {
-            "v10" => Some(derive(b"peanuts", 1)),
-            "v11" => {
+        let (secret, iterations) = self.secret(cfg!(target_os = "macos"), tag)?;
+        let secret = match secret {
+            Secret::Fixed => b"peanuts".to_vec(),
+            Secret::Keychain { service, account } => keyring::Entry::new(service, account)
+                .ok()?
+                .get_secret()
+                .ok()?,
+            Secret::Service { application } => {
                 // the store keyring sets up; its search finds a key by the attributes chromium
                 // gives it
                 keyring::Entry::store_status().as_ref().ok()?;
-                let found = keyring_core::Entry::search(&HashMap::from([(
-                    "application",
-                    self.application,
-                )]))
-                .ok()?;
-                let secret = found.first()?.get_secret().ok()?;
-                Some(derive(&secret, 1))
+                let found =
+                    keyring_core::Entry::search(&HashMap::from([("application", application)]))
+                        .ok()?;
+                found.first()?.get_secret().ok()?
             }
+        };
+        Some(derive(&secret, iterations))
+    }
+
+    /// where the secret behind the key of `tag` is kept, on macos when `macos` and on linux
+    /// otherwise, with the iterations that derive the key from it: none for a tag the browser
+    /// does not write there.
+    fn secret(&self, macos: bool, tag: &str) -> Option<(Secret, u32)> {
+        if macos {
+            let (service, account) = self.keychain;
+            return (tag == "v10").then_some((Secret::Keychain { service, account }, 1003));
+        }
+        match tag {
+            "v10" => Some((Secret::Fixed, 1)),
+            "v11" => Some((
+                Secret::Service {
+                    application: self.application,
+                },
+                1,
+            )),
             _ => None,
         }
     }
+}
+
+/// where the secret a cookie key derives from is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Secret {
+    /// chromium's fixed linux secret, "peanuts", which no store keeps.
+    Fixed,
+    /// the macos keychain's entry under a service and account.
+    Keychain {
+        service: &'static str,
+        account: &'static str,
+    },
+    /// the linux secret service's entry chromium keeps for an application.
+    Service { application: &'static str },
 }
 
 /// the AES-128 key PBKDF2 with HMAC-SHA1 derives from `secret` over chromium's salt.
