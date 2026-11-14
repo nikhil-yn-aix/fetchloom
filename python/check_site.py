@@ -1,6 +1,6 @@
-"""check a built site: every docs address fetchloom prints reaches a page and its heading, every
-heading keeps the id github gives it, no link names a markdown file, and no page loads anything
-from another host."""
+"""check a built site: every docs address fetchloom prints reaches a page and its heading with no
+redirect, every heading keeps the id github gives it, no link names a markdown file, and no page
+loads anything from another host."""
 
 import argparse
 import html.parser
@@ -89,12 +89,16 @@ def page_file(site, path):
 
 
 def unreached(site, url):
-    """what is wrong with a docs address, or none when it reaches a page and its #fragment there."""
+    """what is wrong with a docs address, or none when it reaches a page and its #fragment there
+    with no redirect."""
     path, _, fragment = url[len(SITE_URL):].partition("#")
     address = SITE_URL + path
     file = page_file(site, path.lstrip("/"))
     if not file:
         return f"{address} reaches no page"
+    # github pages answers a folder's address without its closing slash, the root's too, with a 301
+    if not path.endswith("/") and (site / path.lstrip("/")).is_dir():
+        return f"{address} redirects to {address}/"
     if fragment and fragment not in parsed(file).ids:
         return f"{address} has no #{fragment} on {file.relative_to(site).as_posix()}"
     return None
@@ -157,7 +161,7 @@ def main():
         print(problem)
     if problems:
         sys.exit(f"{len(problems)} problems in {site}")
-    print(f"{len(addresses)} addresses fetchloom prints reach their pages and headings; "
+    print(f"{len(addresses)} addresses fetchloom prints reach their pages and headings with no redirect; "
           f"{len(pages(site))} html files link no markdown and load nothing from another host")
 
 

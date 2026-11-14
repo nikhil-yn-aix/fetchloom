@@ -304,13 +304,24 @@ class BuiltSite(Folder):
         site = self.folder()
         self.page(site, "index.html")
         self.page(site, "user/guides/clusters/index.html", '<h2 id="scratch">scratch</h2>')
-        for address in ("", "/", "/user/guides/clusters/", "/user/guides/clusters", "/user/guides/clusters/#scratch"):
+        self.write(site / "llms.txt")
+        for address in ("/", "/user/guides/clusters/", "/user/guides/clusters/#scratch", "/llms.txt"):
             with self.subTest(address=address):
                 self.assertIsNone(check_site.unreached(site, check_site.SITE_URL + address))
         self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/gone/"),
                          f"{check_site.SITE_URL}/user/gone/ reaches no page")
         self.assertEqual(check_site.unreached(site, check_site.SITE_URL + "/user/guides/clusters/#nodes"),
                          f"{check_site.SITE_URL}/user/guides/clusters/ has no #nodes on user/guides/clusters/index.html")
+
+    def test_a_folders_address_without_its_slash_is_a_redirect(self):
+        site = self.folder()
+        self.page(site, "index.html")
+        self.page(site, "user/guides/clusters/index.html", '<h2 id="scratch">scratch</h2>')
+        for address in ("", "/user/guides/clusters", "/user/guides/clusters#scratch"):
+            with self.subTest(address=address):
+                folder = check_site.SITE_URL + address.partition("#")[0]
+                self.assertEqual(check_site.unreached(site, check_site.SITE_URL + address),
+                                 f"{folder} redirects to {folder}/")
 
     def test_a_link_to_a_markdown_file_is_found(self):
         site = self.folder()
