@@ -1,5 +1,6 @@
 /target
 __fuzz__/
+/.fuzz/
 __pycache__/
 /.cargo/config.toml
 /site

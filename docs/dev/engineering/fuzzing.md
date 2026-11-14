@@ -43,7 +43,7 @@ ASAN_OPTIONS=detect_odr_violation=1 cargo bolero test --toolchain nightly-2026-1
 
 `ASAN_OPTIONS=detect_odr_violation=1` keeps the address sanitizer's check of one definition made twice to definitions of different sizes. the tests build cookie databases with SQLite, which `cc` compiles with the sanitizer as rustc instruments the Rust code; its one C file holds two equal tables named `aiOff`, which gcc's sanitizer otherwise reports as one definition made twice before any target starts.
 
-`Cargo.toml` defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source, which git ignores. the explicit `.fuzz` folder is local run data; do not stage it.
+`Cargo.toml` defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source. git ignores both folders.
 
 when a crash appears, preserve the input, minimize it, and add a deterministic regression test that fails before fixing the parser. run that test and the parser's module after the fix, then repeat the fuzz target. keep only inputs needed to explain and reproduce the behavior.
 
