@@ -883,13 +883,13 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
     Ok(())
 }
 
-/// the pin lies beside the name only where its lines fit and the whole welcome still fits below
-/// it, and a narrow terminal gets the welcome wrapped between words.
+/// the pin's head hangs before the name only where its lines fit and the whole welcome still fits
+/// below it, and a narrow terminal gets the welcome wrapped between words.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
-    let drawn = "\u{25cf}\u{2500}\u{2500}\u{2500}\u{2574}";
-    let pin = format!(" {drawn}  fetchloom ");
+    let drawn = "\u{2022}";
+    let pin = format!("{drawn} fetchloom ");
     let sandbox = Sandbox::new()?;
     let piped = text(&sandbox.run(&[])?.stdout)?;
     let words = |text: &str| -> Vec<String> {
@@ -906,10 +906,11 @@ fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
     assert_eq!(code, Some(0), "{wide}");
     assert!(wide.contains(&pin), "{wide}");
     assert_eq!(words(&wide), words(&piped), "{wide}");
-    let (_, narrow) = at("rows 40 cols 60")?.unwrap_or_default();
+    // the purpose is 55 columns and sits two in, so 57 is too narrow for the pin
+    let (_, narrow) = at("rows 40 cols 57")?.unwrap_or_default();
     assert!(!narrow.contains(&pin), "{narrow}");
     assert!(
-        narrow.lines().all(|line| line.chars().count() <= 60),
+        narrow.lines().all(|line| line.chars().count() <= 57),
         "{narrow}"
     );
     assert_eq!(

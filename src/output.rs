@@ -1542,14 +1542,14 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     out.join("\n")
 }
 
-/// fetchloom's mark: a pin laid on its side, a cell each for its head, its shaft and its point,
-/// beside what a terminal that shows only ascii draws instead. a terminal draws lines only across
-/// and down, so here the pin lies along the name's line; `python/build_site.py` stands the same
-/// cells up at an angle for the site's pins and its favicon.
-const PIN: [(&str, &str); 5] = [("●", "o"), ("─", "-"), ("─", "-"), ("─", "-"), ("╴", "-")];
+/// fetchloom's mark: the pin's head, as a pin pushed into a sheet shows from above, beside what a
+/// terminal that shows only ascii draws instead, which is nothing. `python/build_site.py` draws
+/// the same pin from the side for the site, and holds its head to this glyph.
+const PIN: (&str, &str) = ("•", "");
 
-/// the welcome's first lines and a blank line: the pin in the accent beside the name in bold and
-/// the version, and `purpose` under the name. none when either line needs `width` columns or more.
+/// the welcome's first lines and a blank line: the pin's head in the accent before the name in bold
+/// and the version, and `purpose` under the name. none when either line needs `width` columns or
+/// more.
 pub(crate) fn pinned_title(
     version: &str,
     purpose: &str,
@@ -1557,8 +1557,8 @@ pub(crate) fn pinned_title(
     color: bool,
     unicode: bool,
 ) -> String {
-    // the pin, a space before it and two after it
-    let indent = 1 + PIN.len() + 2;
+    let mark = if unicode { PIN.0 } else { PIN.1 };
+    let indent = if mark.is_empty() { 0 } else { 2 };
     let name = format!("fetchloom {version}");
     if [name.as_str(), purpose]
         .iter()
@@ -1566,15 +1566,16 @@ pub(crate) fn pinned_title(
     {
         return String::new();
     }
-    let pin: String = PIN
-        .iter()
-        .map(|(glyph, ascii)| if unicode { *glyph } else { *ascii })
-        .collect();
-    let tint = paint(color, accent());
+    let tint = paint(color, accent().bold());
     let bold = paint(color, Paint::new().bold());
     let dim = paint(color, Paint::new().dimmed());
+    let head = if mark.is_empty() {
+        String::new()
+    } else {
+        format!("{tint}{mark}{tint:#} ")
+    };
     format!(
-        " {tint}{pin}{tint:#}  {bold}fetchloom{bold:#} {dim}{version}{dim:#}\n{}{purpose}\n\n",
+        "{head}{bold}fetchloom{bold:#} {dim}{version}{dim:#}\n{}{purpose}\n\n",
         " ".repeat(indent)
     )
 }

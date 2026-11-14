@@ -828,27 +828,25 @@ fn hashes_on_a_line_read_apart_however_late_they_differ() {
     }
 }
 
-/// the pin lies on the name's line, with the purpose under the name, where both lines fit.
+/// the pin's head hangs before the name, with the purpose under the name, where both lines fit.
 #[test]
-fn the_pin_lies_beside_the_name_only_where_it_fits() {
+fn the_pins_head_hangs_before_the_name_only_where_it_fits() {
     let purpose = "exact research data for every project";
     let title = |width, color| super::pinned_title("0.1.0", purpose, width, color, true);
-    assert_eq!(title(45, false), "");
+    assert_eq!(title(39, false), "");
     assert_eq!(
-        title(46, false),
-        format!(
-            " \u{25cf}\u{2500}\u{2500}\u{2500}\u{2574}  fetchloom 0.1.0\n        {purpose}\n\n"
-        )
+        title(40, false),
+        format!("\u{2022} fetchloom 0.1.0\n  {purpose}\n\n")
     );
-    assert!(title(46, true).contains('\u{1b}'));
+    assert!(title(40, true).contains('\u{1b}'));
 }
 
-/// a terminal that shows only ascii gets the pin in ascii, as wide.
+/// a terminal that shows only ascii gets no mark: the name, with the purpose under it.
 #[test]
-fn the_pin_falls_back_to_ascii() {
+fn a_terminal_without_unicode_gets_the_name_alone() {
     assert_eq!(
         super::pinned_title("0.1.0", "exact data", 80, false, false),
-        " o----  fetchloom 0.1.0\n        exact data\n\n"
+        "fetchloom 0.1.0\nexact data\n\n"
     );
 }
 

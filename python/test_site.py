@@ -123,56 +123,67 @@ class Mermaid(Folder):
 
 
 class Pin(Folder):
-    CELLS = '("\u25cf", "o"), ("\u2500", "-"), ("\u2500", "-"), ("\u2500", "-"), ("\u2574", "-")'
-    # the head's middle at the origin, 9 pixels across, a pixel in from the top and the right of the
-    # favicon's 16; the point four cells, 9.5 pixels, across and down from it, the shaft a quarter
-    # pixel off its middle
-    BODY = ("M0.75 0.75L-6.629 8.129L-9.25 9.75L-7.629 7.129L-0.25 -0.25z"
-            "M-4.5 0a4.5 4.5 0 1 1 9 0a4.5 4.5 0 1 1 -9 0z")
+    # the 16 pixel drawing: the needle's sides a quarter pixel either side of x + y = 16, narrowing
+    # to its point over the last 4.5, and the head 6 pixels across on whole pixels
+    SIXTEEN = ("M12.312 4.312L4.994 11.631L1.5 14.5L4.369 11.006L11.688 3.688z"
+               "M9 4a3 3 0 1 1 6 0a3 3 0 1 1 -6 0z")
 
-    def source(self, cells=CELLS):
-        """a repository whose src/output.rs lays out a pin of ``cells``, with the site's two schemes
+    def source(self, head="\u2022"):
+        """a repository whose src/output.rs prints ``head`` as the pin's, with the site's two schemes
         and the line fetchloom's welcome says it is for."""
         root = self.folder()
-        self.write(root / "src/output.rs", f"const PIN: [(&str, &str); {cells.count('(')}] = [{cells}];\n")
+        self.write(root / "src/output.rs", f'const PIN: (&str, &str) = ("{head}", "");\n')
         self.write(root / "src/cli/args.rs", 'pub(crate) const PURPOSE: &str = "exact research data";\n')
         self.write(root / build_site.STYLESHEET,
                    '[data-md-color-scheme="default"] {\n  --fl-paper: #fbfdfc;\n  --fl-surface: #f7f9f8;\n'
-                   '  --fl-ink: #121613;\n  --fl-muted: #4d5650;\n  --fl-accent: #027864;\n}\n'
+                   '  --fl-ink: #121613;\n  --fl-muted: #4d5650;\n  --fl-accent: #296a42;\n}\n'
                    '[data-md-color-scheme="slate"] {\n  --fl-paper: #121613;\n  --fl-surface: #1b221d;\n'
-                   '  --fl-ink: #e4e9e4;\n  --fl-muted: #9ba69e;\n  --fl-accent: #79c9ae;\n}\n')
+                   '  --fl-ink: #e4e9e4;\n  --fl-muted: #9ba69e;\n  --fl-accent: #97cfa8;\n}\n')
         return root
 
-    def test_the_site_and_its_favicon_draw_the_pin_the_cli_draws(self):
+    def test_the_site_draws_from_the_side_the_pin_whose_head_the_cli_prints(self):
         root, site = self.source(), self.folder()
         add_pin(root, site)
         images = site / "assets/images"
-        box = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.5 -5.5 16 16">'
-        self.assertEqual((images / "pin.svg").read_text(encoding="utf-8"), f'{box}<path d="{self.BODY}"/></svg>\n')
+        box = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+        self.assertEqual((images / "pin.svg").read_text(encoding="utf-8"), f'{box}<path d="{self.SIXTEEN}"/></svg>\n')
         self.assertEqual((images / "favicon.svg").read_text(encoding="utf-8"),
-                         f'{box}<style>path{{fill:#027864}}@media (prefers-color-scheme:dark){{path{{fill:#79c9ae}}}}'
-                         f'</style><path d="{self.BODY}"/></svg>\n')
-        # the label's pin, finer, with the light its head catches: its accent halfway to white
-        label = (images / "pin-slate.svg").read_text(encoding="utf-8")
-        self.assertIn('<path fill="#79c9ae" d="M0.604 0.604L', label)
-        self.assertIn('<path fill="#bce4d6" d="M-2.95 -1.6a1.35 1.35 0 1 1 2.7 0', label)
-        self.assertIn('<path fill="#027864" d=', (images / "pin-default.svg").read_text(encoding="utf-8"))
+                         f'{box}<style>path{{fill:#296a42}}@media (prefers-color-scheme:dark){{path{{fill:#97cfa8}}}}'
+                         f'</style><path d="{self.SIXTEEN}"/></svg>\n')
+        # the label's pin is the finer drawing, with the light its head catches: its accent halfway
+        # to white, up and to the left of the head's middle
+        self.assertEqual((images / "pin-slate.svg").read_text(encoding="utf-8"),
+                         f'{box}<path fill="#97cfa8" d="M12.141 4.141L5.838 10.445L1.1 14.9L5.555 10.162'
+                         'L11.859 3.859zM9.4 4a2.6 2.6 0 1 1 5.2 0a2.6 2.6 0 1 1 -5.2 0z"/>'
+                         '<path fill="#cbe7d3" d="M10.258 2.96a0.702 0.702 0 1 1 1.404 0a0.702 0.702 0 1 1 -1.404 0z"/>'
+                         '</svg>\n')
+        self.assertIn('<path fill="#296a42" d=', (images / "pin-default.svg").read_text(encoding="utf-8"))
+        self.assertIn('<path fill="#94b4a0" d=', (images / "pin-default.svg").read_text(encoding="utf-8"))
 
-    def test_a_longer_shaft_in_the_terminal_is_a_longer_pin_on_the_site(self):
-        root, site = self.source(self.CELLS.replace('("\u2574"', '("\u2500", "-"), ("\u2574"')), self.folder()
-        add_pin(root, site)
-        self.assertIn('viewBox="-12.875 -5.5 18.375 18.375"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
+    def test_each_drawing_fills_its_needle_and_head_as_one_and_meets_the_pixels(self):
+        for drawing in (build_site.SIXTEEN, build_site.THIRTY_TWO, build_site.LARGE):
+            with self.subTest(drawing=drawing):
+                needle, circles = build_site.shapes(drawing)
+                # a needle that went round against its head would cut itself out of the head
+                turn = sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(needle, needle[1:] + needle[:1]))
+                self.assertGreater(turn, 0)
+                # the needle's line, x + y = 16, runs through the middle of each pixel it crosses
+                self.assertEqual((sum(drawing.head), sum(drawing.point)), (16, 16))
+        for drawing in (build_site.SIXTEEN, build_site.THIRTY_TWO):
+            (x, y), radius = drawing.head, drawing.radius
+            self.assertTrue(all(float(edge).is_integer() for edge in (x - radius, x + radius, y - radius, y + radius)))
 
-    def test_a_source_without_a_pin_is_refused(self):
-        for cells in ('("\u2500", "-"), ("\u25cf", "o"), ("\u2574", "-")',
-                      '("\u25cf", "o"), ("#", "#"), ("\u2574", "-")',
-                      '("\u25cf", "o"), ("\u2500", "-"), ("\u2500", "-")',
-                      '("\u25cf", "o"), ("\u2502", "|"), ("\u2575", "\'")'):
-            with self.subTest(cells=cells), self.assertRaisesRegex(ValueError, "src/output.rs has no PIN"):
-                add_pin(self.source(cells), self.folder())
+    def test_a_head_the_site_does_not_draw_is_refused(self):
+        for head in ("\u25cf", "o", ""):
+            with self.subTest(head=head), self.assertRaisesRegex(ValueError, "not the"):
+                add_pin(self.source(head), self.folder())
+        root = self.source()
+        self.write(root / "src/output.rs", "const MARK: &str = \"\u2022\";\n")
+        with self.assertRaisesRegex(ValueError, "src/output.rs has no PIN"):
+            add_pin(root, self.folder())
 
-    def test_the_repository_draws_a_pin_the_site_can_draw(self):
-        self.assertEqual(build_site.pin(build_site.ROOT)[0], "\u25cf")
+    def test_the_repository_prints_the_head_the_site_draws(self):
+        self.assertEqual(build_site.pin(build_site.ROOT), "\u2022")
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "pillow comes with the site's toolchain")
     def test_the_browsers_icons_and_link_card_draw_the_same_pin_in_the_sites_colors(self):
@@ -190,8 +201,8 @@ class Pin(Folder):
             width, height, *_, length, offset = struct.unpack("<BBBBHHII", icon[6 + 16 * index:22 + 16 * index])
             drawn = Image.open(io.BytesIO(icon[offset:offset + length])).convert("RGBA")
             sizes.append((width, height, drawn.size))
-            # the head's middle is the light accent, the corners nothing
-            self.assertEqual(drawn.getpixel((width * 10 // 16, height * 5 // 16)), (0x02, 0x78, 0x64, 255))
+            # inside the head is the light accent, the corners nothing
+            self.assertEqual(drawn.getpixel((width * 11 // 16, height * 3 // 16)), (0x29, 0x6a, 0x42, 255))
             self.assertEqual(drawn.getpixel((0, 0))[3], 0)
         self.assertEqual(sizes, [(16, 16, (16, 16)), (32, 32, (32, 32))])
         for name, size in (("apple-touch-icon.png", (180, 180)), ("icon-192.png", (192, 192)),
@@ -200,7 +211,7 @@ class Pin(Folder):
                 drawn = Image.open(images / name).convert("RGB")
                 self.assertEqual(drawn.size, size)
                 self.assertEqual(drawn.getpixel((0, 0)), (0x12, 0x16, 0x13))
-                self.assertIn((0x79, 0xc9, 0xae), {color for _, color in drawn.getcolors(1 << 20)})
+                self.assertIn((0x97, 0xcf, 0xa8), {color for _, color in drawn.getcolors(1 << 20)})
         manifest = json.loads((site / "manifest.webmanifest").read_text(encoding="utf-8"))
         self.assertEqual((manifest["description"], manifest["theme_color"], manifest["background_color"]),
                          ("exact research data", "#121613", "#121613"))
