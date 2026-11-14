@@ -11,7 +11,8 @@ type SiteOf = Box<dyn Fn(&Url) -> Option<String> + Send + Sync>;
 /// whether a request for a link may carry a cookie, as `site::carried` judges.
 type Carries = Box<dyn Fn(&Url) -> bool + Send + Sync>;
 
-/// whether a link's host has a saved credential, on any port, or a `.netrc` login.
+/// whether a link's host has a saved credential, on any port, or a key, as a `.netrc` login or a
+/// source's token.
 type Guarded = Box<dyn Fn(&Url) -> bool + Send + Sync>;
 
 /// the cookies this run's answers set: one jar a request draws on by cookie rules where a saved

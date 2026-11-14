@@ -524,8 +524,7 @@ impl Net {
             .get_or_init(|| {
                 let keys = Arc::clone(&self.credentials);
                 let cookies = self.sites.cookies(move |host| {
-                    keys.iter()
-                        .any(|key| key.every_hop && host.eq_ignore_ascii_case(&key.host))
+                    keys.iter().any(|key| host.eq_ignore_ascii_case(&key.host))
                 });
                 let wire = Wire::new(&self.typed, self.offline.enabled(), self.connect, cookies);
                 #[cfg(test)]

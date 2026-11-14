@@ -157,10 +157,11 @@ impl Default for Sites {
 impl Sites {
     /// the run's cookie store, which keeps the cookies a site with a saved credential sets in a
     /// jar of that site's own, and none an answer that credential could not go with sets for its
-    /// host, on any port, nor for a host `login` says has a `.netrc` login.
+    /// host, on any port, nor for a host `keyed` says has a key, as a `.netrc` login or a source's
+    /// token.
     pub(super) fn cookies(
         &self,
-        login: impl Fn(&str) -> bool + Send + Sync + 'static,
+        keyed: impl Fn(&str) -> bool + Send + Sync + 'static,
     ) -> super::cookies::Cookies {
         let (sites, guarded) = (Arc::clone(&self.0), Arc::clone(&self.0));
         super::cookies::Cookies::by_site(move |url| {
@@ -171,7 +172,7 @@ impl Sites {
                 guarded
                     .iter()
                     .any(|site| site.host.eq_ignore_ascii_case(host))
-                    || login(host)
+                    || keyed(host)
             })
         })
     }

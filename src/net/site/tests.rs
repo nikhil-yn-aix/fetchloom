@@ -456,40 +456,46 @@ fn a_plain_http_answer_sets_no_cookie_a_signed_in_host_sends() {
     }
 }
 
-/// a host with a `.netrc` login takes no cookie from an answer its login could not go with, so its
-/// https requests never carry one a plain-http answer set beside the login; an https answer still
-/// renews its session.
+/// a host with a key, a `.netrc` login or a source's token, takes no cookie from an answer its key
+/// could not go with, so its https requests never carry one a plain-http answer set beside the
+/// key; an https answer still sets its cookies.
 #[test]
-fn a_plain_http_answer_sets_no_cookie_for_a_host_with_a_login() {
+fn a_plain_http_answer_sets_no_cookie_for_a_host_with_a_key() {
     use reqwest::cookie::CookieStore as _;
 
-    let options = Options {
-        offline: crate::net::Offline::No,
-        jobs: 1,
-        credentials: vec![Credential {
-            host: "urs.lab".to_owned(),
-            header: "authorization",
-            value: "Basic YWRhOnB3".to_owned(),
-            every_hop: true,
-            every_port: true,
-        }],
-        split: Splitting::Never,
-    };
-    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
-    let cookies = &net.wire().unwrap().cookies;
-    let url = |text: &str| Url::parse(text).unwrap();
-    let set = |cookie: &'static str, from: &str| {
-        let value = HeaderValue::from_static(cookie);
-        cookies.set_cookies(&mut std::iter::once(&value), &url(from));
-    };
-    set("planted=1; Path=/", "http://urs.lab/x");
-    set("planted=2; Path=/", "http://urs.lab:443/x");
-    assert_eq!(cookies.cookies(&url("https://urs.lab/oauth")), None);
-    set("session=fresh; Path=/", "https://urs.lab/x");
-    assert_eq!(
-        cookies.cookies(&url("https://urs.lab/oauth")),
-        Some(HeaderValue::from_static("session=fresh"))
-    );
+    for (host, value, every_hop) in [
+        ("urs.lab", "Basic YWRhOnB3", true),
+        ("api.github.com", "Bearer github-test", false),
+    ] {
+        let options = Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials: vec![Credential {
+                host: host.to_owned(),
+                header: "authorization",
+                value: value.to_owned(),
+                every_hop,
+                every_port: every_hop,
+            }],
+            split: Splitting::Never,
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let cookies = &net.wire().unwrap().cookies;
+        let url = |path: &str| Url::parse(&path.replace("host", host)).unwrap();
+        let set = |cookie: &'static str, from: &str| {
+            let value = HeaderValue::from_static(cookie);
+            cookies.set_cookies(&mut std::iter::once(&value), &url(from));
+        };
+        set("planted=1; Path=/", "http://host/x");
+        set("planted=2; Path=/", "http://host:443/x");
+        assert_eq!(cookies.cookies(&url("https://host/next")), None, "{host}");
+        set("session=fresh; Path=/", "https://host/x");
+        assert_eq!(
+            cookies.cookies(&url("https://host/next")),
+            Some(HeaderValue::from_static("session=fresh")),
+            "{host}"
+        );
+    }
 }
 
 #[test]
