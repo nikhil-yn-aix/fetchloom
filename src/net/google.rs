@@ -6,6 +6,7 @@ mod drive;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -19,10 +20,9 @@ use super::{Lane, Net, Shown, host};
 use crate::auth::google::{self, Credentials, DRIVE_READ, STORAGE_READ, TOKEN_ENDPOINT};
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
-use crate::source::{DriveId, GcsBucket};
 
 use crate::work::Work;
-pub(crate) use drive::{Answered as DriveAnswered, Private};
+pub(crate) use drive::{Answered as DriveAnswered, DriveId, Private, is_id, unsigned};
 
 /// the host every cloud storage request with a token goes to.
 const STORAGE: &str = "storage.googleapis.com";
@@ -33,6 +33,40 @@ const LARGEST_ANSWER: usize = 64 * 1024;
 
 /// reads the environment for the google settings, as [`crate::machine::env`] does.
 pub(crate) type Environment = Arc<dyn Fn(&str) -> Option<OsString> + Send + Sync>;
+
+/// a cloud storage bucket as the `gcs_buckets` setting names it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GcsBucket(String);
+
+impl GcsBucket {
+    /// reads `gs://name` or a bare name, with or without a final `/`.
+    pub(crate) fn parse(text: &str) -> Option<GcsBucket> {
+        let text = text.trim();
+        let text = text.strip_suffix('/').unwrap_or(text);
+        let name = match text.split_once("://") {
+            Some((scheme, name)) if scheme.eq_ignore_ascii_case("gs") => name,
+            Some(_) => return None,
+            None => text,
+        };
+        is_bucket(name).then(|| GcsBucket(name.to_owned()))
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GcsBucket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "gs://{}", self.0)
+    }
+}
+
+/// whether `name` follows cloud storage's bucket naming rules: S3's, up to 222 characters and with
+/// `_` allowed.
+pub(crate) fn is_bucket(name: &str) -> bool {
+    super::s3::named(name, 222, true)
+}
 
 /// what one run knows about google access: the buckets listed, the credentials, read when first
 /// needed, the token, and which buckets refused a request without one.

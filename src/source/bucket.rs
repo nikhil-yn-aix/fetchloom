@@ -11,7 +11,6 @@ use std::fmt;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-pub(crate) use self::gcs::GcsBucket;
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::auth::azure::{BLOB_HOST, account_of, is_account, is_container};
 use crate::digest::Md5;
@@ -494,7 +493,7 @@ impl fmt::Display for Prefix {
 fn is_bucket(store: Store, name: &str) -> bool {
     match store {
         Store::S3 => crate::net::s3::is_bucket(name),
-        Store::Gcs => crate::net::s3::named(name, 222, true),
+        Store::Gcs => crate::net::google::is_bucket(name),
         Store::Azure => is_container(name),
     }
 }

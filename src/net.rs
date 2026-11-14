@@ -8,7 +8,7 @@ mod cookies;
 mod download;
 pub(crate) mod estimate;
 mod failure;
-mod google;
+pub(crate) mod google;
 mod headers;
 mod pace;
 mod rate;

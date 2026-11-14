@@ -3,6 +3,7 @@
 //! account can see, so nothing data.toml or data.lock says decides what gets one.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use reqwest::header::HeaderMap;
@@ -16,8 +17,64 @@ use crate::cache::{Cache, UrlRecord};
 use crate::error::{Error, Kind};
 use crate::net::download::{Fetch, Fetched, Listener};
 use crate::net::failure::{self, Failure};
-use crate::source::DriveId;
-use crate::source::drive::{self as source, GUIDE, LOGIN, is_id};
+use crate::source::drive as source;
+
+/// where fetchloom's docs say how to let it read private drive items.
+const GUIDE: &str = "https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files";
+/// the login that grants the drive scope, which google keeps gcloud's own oauth client from.
+const LOGIN: &str = "`gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`";
+
+/// a file or folder the `drive_folders` setting names, by its drive id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DriveId(String);
+
+impl DriveId {
+    /// `id` as a listed item, when it reads as a drive id.
+    pub(crate) fn new(id: &str) -> Option<DriveId> {
+        is_id(id).then(|| DriveId(id.to_owned()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DriveId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// drive ids are long runs of letters, digits, `-` and `_`.
+pub(crate) fn is_id(text: &str) -> bool {
+    text.len() >= 10
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+/// the id of a drive file known by its `uc` link, as data.lock pins drive files.
+fn file_id(url: &Url) -> Option<String> {
+    if url.host_str() != Some("drive.google.com") || url.path() != "/uc" {
+        return None;
+    }
+    url.query_pairs()
+        .find(|(key, _)| key == "id")
+        .map(|(_, id)| id.into_owned())
+        .filter(|id| is_id(id))
+}
+
+/// `refused`, the refusal of an item `drive_folders` names, when no google credentials were
+/// found to ask drive's api with.
+pub(crate) fn unsigned(mut refused: Error) -> Error {
+    refused.message = format!(
+        "{}, and no google application default credentials were found",
+        refused.message
+    );
+    refused.help(format!(
+        "set GOOGLE_APPLICATION_CREDENTIALS to the key file of a service account it is shared with, or sign in with an oauth client of your own: {LOGIN}. how: {GUIDE}"
+    ))
+}
 
 /// what [`Net::drive_refused`] answers, in time.
 pub(crate) type Refused<'a> =
@@ -483,8 +540,7 @@ impl Net {
         known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
-        let Some(id) = source::file_id(&fetch.url).filter(|_| !self.google.drive.listed.is_empty())
-        else {
+        let Some(id) = file_id(&fetch.url).filter(|_| !self.google.drive.listed.is_empty()) else {
             return self.claim_and_download(fetch, cache, known, on).await;
         };
         if self.google.drive.may_carry(&id) {
@@ -496,7 +552,7 @@ impl Net {
         };
         match self.drive_refused(&id).await? {
             Private::Ready => self.private_download(fetch, &id, cache, on).await,
-            Private::Unsigned => Err(source::unsigned(refused)),
+            Private::Unsigned => Err(unsigned(refused)),
             Private::Unlisted => Err(refused),
         }
     }

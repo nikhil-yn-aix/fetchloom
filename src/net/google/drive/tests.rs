@@ -14,7 +14,7 @@ const ELSEWHERE: &str = "1SomeoneElsesPrivateFileAbCdEfGhI";
 const UNLISTED_ITEM: &str = "1ItemOfAnUnlistedFolderAbCdEfGhIj";
 
 fn listed(ids: &[&str]) -> Vec<DriveId> {
-    ids.iter().map(|id| DriveId::parse(id).unwrap()).collect()
+    ids.iter().map(|id| DriveId::new(id).unwrap()).collect()
 }
 
 /// a network that sends google tokens to drive's api for the `listed` items, from the login at

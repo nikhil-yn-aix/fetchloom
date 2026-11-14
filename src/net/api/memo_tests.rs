@@ -380,13 +380,13 @@ fn refreshed_google_tokens_and_scopes_change_the_metadata_identity() {
         let _told = Told(&asked);
         let named = credentials.into_os_string();
         let google = crate::net::Google::new(
-            vec![crate::source::GcsBucket::parse("private-bucket").unwrap()],
+            vec![crate::net::google::GcsBucket::parse("private-bucket").unwrap()],
             Arc::new(move |name: &str| {
                 (name == "GOOGLE_APPLICATION_CREDENTIALS").then(|| named.clone())
             }),
         )
         .with_drive(vec![
-            crate::source::DriveId::parse("private_folder_123456789").unwrap(),
+            crate::net::google::DriveId::new("private_folder_123456789").unwrap(),
         ])
         .with_token_endpoint(Some(endpoint));
         let url = Url::parse(if drive {

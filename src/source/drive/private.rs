@@ -7,13 +7,12 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use super::{Item, ItemKind, file_url, folder, is_id, unsigned};
+use super::{Item, ItemKind, file_url, folder};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
+use crate::net::google::{DriveId, is_id, unsigned};
 use crate::net::{Api, Private, Response};
-use crate::source::{
-    Access, DriveId, Listing, Reference, Remote, Unavailable, most_files, too_many_of,
-};
+use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many_of};
 
 /// where drive's api reads files and lists folders.
 const FILES: &str = "https://www.googleapis.com/drive/v3/files";

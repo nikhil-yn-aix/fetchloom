@@ -375,7 +375,7 @@ fn live_private_drive() {
         return;
     }
     let google = crate::net::Google::new(Vec::new(), std::sync::Arc::new(crate::machine::env))
-        .with_drive(vec![DriveId::parse(&id).unwrap()]);
+        .with_drive(vec![DriveId::new(&id).unwrap()]);
     let (net, work) = crate::source::recorded::live(Vec::new());
     let net = net.with_google(google);
     let listing = block_on(folder(&id).resolve(&net)).unwrap();

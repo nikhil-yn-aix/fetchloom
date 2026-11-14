@@ -16,8 +16,9 @@ use crate::auth::azure::AzureContainer;
 use crate::error::{Error, Kind};
 use crate::machine::{LEAST_MEMORY, Machine, Var, switched};
 use crate::mirror::Location;
+use crate::net::google::{DriveId, GcsBucket};
 use crate::net::{HOST_JOBS, TIMEOUT};
-use crate::source::{Bucket, DriveId, GcsBucket};
+use crate::source::Bucket;
 use crate::units;
 
 /// downloads running at once, across all hosts. downloads wait on the network, not the
@@ -950,7 +951,7 @@ fn drive_folders(given: &Given<'_>, key: &str) -> Result<Set<Vec<DriveId>>, Erro
         .map(|entry| entry.trim())
         .filter(|entry| !entry.is_empty())
     {
-        let Some(id) = DriveId::parse(entry) else {
+        let Some(id) = crate::source::drive::listed(entry) else {
             return Err(Error::new(
                 Kind::Usage,
                 format!(
