@@ -1718,8 +1718,15 @@ fn crafted() -> Vec<(&'static str, Plan)> {
     ]
 }
 
+/// the seeds' folder in the package the tests run from: nextest tells tests it moved in an
+/// archive where the package now is, which need not be where they were built.
 fn seeds_folder() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fuzz/cookie-databases")
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            std::path::PathBuf::from,
+        )
+        .join("tests/fixtures/fuzz/cookie-databases")
 }
 
 /// the rows the reader gives for what `plan` builds.
@@ -1738,7 +1745,9 @@ fn read(plan: &Plan) -> Result<Vec<Vec<Value>>, super::super::Broken> {
 #[test]
 fn the_seeds_reach_what_they_were_made_for() {
     for (name, plan) in seeds() {
-        let bytes = std::fs::read(seeds_folder().join(name)).unwrap_or_default();
+        let path = seeds_folder().join(name);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|why| panic!("{}: {why}: run write_the_seeds", path.display()));
         assert_eq!(
             bytes,
             plan.bytes(),
