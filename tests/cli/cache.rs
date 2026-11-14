@@ -11,6 +11,7 @@ const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
 const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 /// the help for a cache read-only for this account, as a lab's shared cache may be for everyone but
 /// whoever keeps it.
+#[cfg(unix)]
 const SHARED: &str = "help: the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
 
 /// one line counts the projects, so ten long paths never fill the screen.
