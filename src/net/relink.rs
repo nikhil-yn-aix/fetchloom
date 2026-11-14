@@ -6,9 +6,8 @@ use std::time::SystemTime;
 
 use url::Url;
 
-use super::{Net, failure};
+use super::{Api as _, Net, Relink, failure};
 use crate::error::Error;
-use crate::source::Relink;
 
 /// fresh links one download may ask for after the one before expired.
 const MOST_RELINKS: u32 = 3;
@@ -19,17 +18,17 @@ impl Net {
     /// rather than taken from this run's memory of the listing.
     pub(super) async fn relinked(
         &self,
-        relink: &Relink,
+        relink: &dyn Relink,
         failed: Option<&Url>,
     ) -> Result<Url, Error> {
-        let link = relink.link(self).await?;
-        let stale = failed == Some(&link) || crate::source::link_expired(&link, SystemTime::now());
+        let link = relink.found(self.get(relink.asked()).await)?;
+        let stale = failed == Some(&link) || (self.rules.link_expired)(&link, SystemTime::now());
         if !stale {
             return Ok(link);
         }
         tracing::debug!(link = %super::Shown(&link), "a signed link expired, so the source is asked for a fresh one");
         self.metadata.invalidate();
-        let fresh = relink.link(self).await?;
+        let fresh = relink.found(self.get(relink.asked()).await)?;
         if failed == Some(&fresh) {
             return Err(relink.stale());
         }
@@ -40,7 +39,7 @@ impl Net {
     /// links that expired too often already. the download holds no slot while it asks.
     pub(super) async fn refreshed(
         &self,
-        relink: &Relink,
+        relink: &dyn Relink,
         from: &Url,
         relinks: &mut u32,
     ) -> Result<Url, Error> {

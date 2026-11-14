@@ -291,15 +291,8 @@ impl Relink {
         })
     }
 
-    /// the signed link to the file, from the API's listing of the dataset's links, which `api`
-    /// answers again from this run's memory until it is told to forget it.
-    pub(crate) async fn link(&self, api: &impl Api) -> Result<Url, Error> {
-        let response = api.get(&self.asked).await.map_err(busy)?;
-        self.found(&response)
-    }
-
     /// the signed link to the file among those the API's `response` gives.
-    fn found(&self, response: &Response) -> Result<Url, Error> {
+    fn found_in(&self, response: &Response) -> Result<Url, Error> {
         let links = self.dataset.links(response).map_err(busy)?;
         links
             .files
@@ -323,9 +316,21 @@ impl Relink {
                 ))
             })
     }
+}
+
+impl crate::net::Relink for Relink {
+    /// the API's listing of the dataset's links, which the network answers again from this run's
+    /// memory until it is told to forget it.
+    fn asked(&self) -> &Url {
+        &self.asked
+    }
+
+    fn found(&self, answer: Result<Response, Error>) -> Result<Url, Error> {
+        self.found_in(&answer.map_err(busy)?)
+    }
 
     /// the error for a signed link that semantic scholar gave again once it had expired.
-    pub(crate) fn stale(&self) -> Error {
+    fn stale(&self) -> Error {
         Error::new(
             Kind::NetworkStatus,
             format!(

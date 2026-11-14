@@ -26,7 +26,6 @@ pub(crate) mod recorded;
 mod s2;
 pub(crate) mod search;
 
-pub(crate) use s2::Relink;
 mod zenodo;
 
 use std::collections::HashSet;
@@ -675,6 +674,8 @@ pub(crate) fn rules() -> net::Rules {
         paced_as: arxiv::paced_as,
         spacing,
         most_at_once,
+        relink,
+        link_expired,
         refused_download,
         drive_search: |net, root| Box::pin(drive::search(net, root)),
         drive_name: |net, id| Box::pin(async move { Ok(drive::file(net, id).await?.name) }),
@@ -696,12 +697,12 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
 
 /// a file of a source's dataset whose download link the source gives only for a while, as
 /// semantic scholar's, by the stable link data.lock keeps: the request for a fresh link to it.
-pub(crate) fn relink(url: &Url) -> Option<Relink> {
-    s2::relink(url)
+fn relink(url: &Url) -> Option<Box<dyn net::Relink>> {
+    s2::relink(url).map(|relink| Box::new(relink) as Box<dyn net::Relink>)
 }
 
 /// whether a signed link a source gave for a while expires before `now`, or too soon after it.
-pub(crate) fn link_expired(link: &Url, now: std::time::SystemTime) -> bool {
+fn link_expired(link: &Url, now: std::time::SystemTime) -> bool {
     s2::link_expired(link, now)
 }
 

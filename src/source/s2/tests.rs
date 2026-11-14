@@ -443,7 +443,7 @@ fn a_stable_link_finds_its_files_fresh_link_by_name() {
         "no release pinned"
     );
     let recorded = Recorded::default().fixture(LINKS, "s2/dataset.json");
-    let link = block_on(first.link(&recorded)).unwrap();
+    let link = fresh(&first, &recorded).unwrap();
     assert_eq!(
         link.as_str(),
         format!(
@@ -451,7 +451,7 @@ fn a_stable_link_finds_its_files_fresh_link_by_name() {
         )
     );
     let gone = relink(&Url::parse(&format!("{LINKS}#gone.gz")).unwrap()).unwrap();
-    let error = block_on(gone.link(&recorded)).unwrap_err();
+    let error = fresh(&gone, &recorded).unwrap_err();
     assert_eq!(error.kind, Kind::ReferenceUnresolved);
     assert_eq!(
         error.message,
@@ -546,7 +546,13 @@ fn live_semantic_scholar_dataset_with_a_key() {
     assert_eq!(listing.license.as_deref(), Some("ODC-By-1.0"));
     assert!(!listing.files.is_empty(), "the release lists its files");
     let first = relink(&listing.files[0].url).unwrap();
-    let link = block_on(first.link(&net)).unwrap();
+    let link = fresh(&first, &net).unwrap();
     assert_eq!(link.host_str(), Some("ai2-s2ag.s3.amazonaws.com"));
     assert!(!link_expired(&link, std::time::SystemTime::now()));
+}
+
+/// the fresh link `relink` finds in what `api` answers for its listing, as a download asks it.
+fn fresh(relink: &Relink, api: &impl Api) -> Result<Url, Error> {
+    use crate::net::Relink as _;
+    relink.found(block_on(api.get(relink.asked())))
 }

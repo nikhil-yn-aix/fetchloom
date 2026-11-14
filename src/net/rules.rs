@@ -3,12 +3,12 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use url::Url;
 
-use super::Net;
 use super::google::DriveId;
+use super::{Net, Response};
 use crate::error::Error;
 
 /// the answer of a rule that asks the network again before it can say.
@@ -26,6 +26,12 @@ pub(crate) struct Rules {
     /// how many requests paced under a name may run at once, for hosts that ask for fewer than
     /// the network allows.
     pub(crate) most_at_once: fn(&str) -> Option<usize>,
+    /// the request for a fresh link to a file whose source links it only for a while, by the
+    /// stable link data.lock keeps.
+    pub(crate) relink: fn(&Url) -> Option<Box<dyn Relink>>,
+    /// whether a link such a source gave expires before a moment, or too soon after it to start
+    /// a download on.
+    pub(crate) link_expired: fn(&Url, SystemTime) -> bool,
     /// a source's own error for a download it refused with a status, when it says more than the
     /// status does.
     pub(crate) refused_download: fn(&Url, u16) -> Option<Error>,
@@ -36,6 +42,23 @@ pub(crate) struct Rules {
     pub(crate) drive_name: for<'a> fn(&'a Net, &'a str) -> Asking<'a, String>,
 }
 
+/// a file a source links only for a while, by the stable link data.lock keeps: the request that
+/// lists a fresh link to it, and how that link is found in the answer.
+pub(crate) trait Relink: Send + Sync {
+    /// the request whose answer lists a fresh link.
+    fn asked(&self) -> &Url;
+
+    /// the fresh link to the file among those `answer` lists, or why there is none.
+    ///
+    /// # Errors
+    ///
+    /// the failed request, worded for its source, or the file missing from the listing.
+    fn found(&self, answer: Result<Response, Error>) -> Result<Url, Error>;
+
+    /// the error for a fresh link the source gave again once it had expired.
+    fn stale(&self) -> Error;
+}
+
 impl Default for Rules {
     /// no source's rules, as a network a test makes has.
     fn default() -> Rules {
@@ -43,6 +66,8 @@ impl Default for Rules {
             paced_as: |_| None,
             spacing: |_| None,
             most_at_once: |_| None,
+            relink: |_| None,
+            link_expired: |_, _| false,
             refused_download: |_, _| None,
             drive_search: unsearched,
             drive_name: unnamed,

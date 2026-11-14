@@ -348,7 +348,7 @@ enum Answer {
     /// the server sent a page, and the page says where the file is.
     Divert(Url),
     /// the link the source gave only for a while expired, so the source is asked for a fresh one.
-    Relink(Box<crate::source::Relink>),
+    Relink(Box<dyn super::Relink>),
 }
 
 /// what an answer said of the bytes it brought: the file name it gave, and whether they came as
@@ -363,7 +363,7 @@ enum Instead {
     /// the link a page points to.
     Divert(Url),
     /// a fresh link from the source, for one that expired.
-    Relink(Box<crate::source::Relink>),
+    Relink(Box<dyn super::Relink>),
 }
 
 /// splitting and request ownership across this file's retries.
@@ -526,10 +526,10 @@ impl Net {
         }
         // a link the source gives only for a while is asked for afresh by the stable one
         let relinked;
-        let fetch = match crate::source::relink(&fetch.from) {
+        let fetch = match (self.rules.relink)(&fetch.from) {
             Some(relink) => {
                 relinked = Fetch {
-                    from: self.relinked(&relink, None).await?,
+                    from: self.relinked(&*relink, None).await?,
                     ..fetch.clone()
                 };
                 &relinked
@@ -722,7 +722,7 @@ impl Net {
                 Ok(Answer::Relink(relink)) => {
                     // asking the source takes slots of its own, which these may be all of
                     Self::release_for_wait(&mut state.permits);
-                    from = self.refreshed(&relink, &from, &mut relinks).await?;
+                    from = self.refreshed(&*relink, &from, &mut relinks).await?;
                 }
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason, wait }) => {
@@ -1063,8 +1063,8 @@ impl Net {
         {
             let head = response.headers().clone();
             if self.expired_link(from, response, expired).await? {
-                if let Some(relink) = crate::source::relink(&fetch.url) {
-                    return Ok(Err(Instead::Relink(Box::new(relink))));
+                if let Some(relink) = (self.rules.relink)(&fetch.url) {
+                    return Ok(Err(Instead::Relink(relink)));
                 }
                 return Err(failure::transient(format!(
                     "{} supplied an expired download link",
