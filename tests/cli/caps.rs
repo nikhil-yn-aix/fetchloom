@@ -95,6 +95,46 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
+/// a debug build takes the machine from `FETCHLOOM_TEST_PROCESSORS`, `FETCHLOOM_TEST_ROOM` and
+/// `FETCHLOOM_TEST_OPEN_FILES`, so a docs example prints the same anywhere: `settings`, the
+/// settings sized from the machine, and what `-v` says a run spends.
+#[test]
+fn settings_show_the_machine_a_debug_build_is_given() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(sandbox.work().join("data.toml"), "")?;
+    let given = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_PROCESSORS", "3")
+            .env("FETCHLOOM_TEST_ROOM", (8_u64 << 30).to_string())
+            .env("FETCHLOOM_TEST_OPEN_FILES", "1048576")
+            .output()?)
+    };
+    let table = given(&["settings"])?;
+    assert!(table.status.success());
+    let told = text(&table.stderr)?;
+    assert!(
+        told.contains(
+            "    Machine 3 processors \u{b7} 8.0 GiB of memory available \u{b7} 1,048,576 open files at most\n"
+        ),
+        "{told}"
+    );
+    let document = json(&given(&["--json", "settings"])?)?;
+    assert_eq!(
+        document["result"]["machine"],
+        serde_json::json!({"processors": 3, "memory": 8_u64 << 30, "open_files": 1_048_576})
+    );
+    assert_eq!(shown(&document, "memory")["value"], 2_u64 << 30);
+    let synced = given(&["-v", "sync"])?;
+    let spent = text(&synced.stderr)?;
+    assert!(
+        spent.contains("3 local workers, 2.0 GiB for buffers, 2 hash lanes\n")
+            && !spent.contains("this run may use"),
+        "{spent}"
+    );
+    Ok(())
+}
+
 /// each knob lean sets shows `resources` as its origin, but `most_files` is not sized from lean's
 /// memory, and a knob set by name keeps its own value.
 #[test]

@@ -39,23 +39,21 @@ pub(crate) struct Machine {
 impl Machine {
     /// reads this machine, raising the process's open-file limit on the way.
     pub(crate) fn read() -> Machine {
-        // a container of a chosen size, for CLI tests; release builds never read it
-        #[cfg(debug_assertions)]
-        let memory = std::env::var("FETCHLOOM_TEST_ROOM")
-            .ok()
-            .and_then(|text| text.parse().ok())
+        // FETCHLOOM_TEST_ROOM is a container of a chosen size
+        let memory = pretended("FETCHLOOM_TEST_ROOM")
             .map(|bytes| Room {
                 bytes,
                 in_cgroup: true,
             })
             .or_else(memory);
-        #[cfg(not(debug_assertions))]
-        let memory = memory();
+        let open_files = raise_open_files();
         Machine {
-            processors: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            processors: pretended_processors().unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+            }),
             memory: memory.map(|room| room.bytes),
             memory_in_cgroup: memory.is_some_and(|room| room.in_cgroup),
-            open_files: raise_open_files(),
+            open_files: pretended("FETCHLOOM_TEST_OPEN_FILES").or(open_files),
         }
     }
 }
@@ -100,9 +98,33 @@ fn memory_under(root: &Path) -> Option<Room> {
     Some(Room { bytes, in_cgroup })
 }
 
+/// the number a debug build takes from the variable `name` in place of this machine's, so CLI
+/// tests and docs examples print the same anywhere. release builds never read it.
+fn pretended(name: &str) -> Option<u64> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(name).ok()?.parse().ok()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = name;
+        None
+    }
+}
+
+/// the processors `FETCHLOOM_TEST_PROCESSORS` gives a debug build, all of them online.
+fn pretended_processors() -> Option<usize> {
+    pretended("FETCHLOOM_TEST_PROCESSORS")
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|&count| count > 0)
+}
+
 /// how many processors the system has online, whatever this process may use of them: none where
 /// it does not say.
 pub(crate) fn processors_online() -> Option<usize> {
+    if let Some(count) = pretended_processors() {
+        return Some(count);
+    }
     #[cfg(target_os = "linux")]
     {
         fs::read_to_string("/sys/devices/system/cpu/online")
