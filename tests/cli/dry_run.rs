@@ -649,6 +649,7 @@ fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
             "remove": [],
             "download": [{"path": "iris.csv", "size": null}],
             "unpack": [],
+            "to_download": {"files": 1, "bytes": 0, "sizes_unknown": 1, "time": null},
         })
     );
     assert_eq!(result["files"], serde_json::json!([]));

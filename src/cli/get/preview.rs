@@ -28,6 +28,8 @@ struct Planned {
     place: PathBuf,
     /// the files it would download, by their listed paths, with the size each source states.
     download: Vec<Download>,
+    /// the host each of those downloads starts at, with its size, in the same order.
+    hosts: Vec<(String, Option<u64>)>,
     /// files whose bytes the cache holds from the last get, whose server is asked whether they
     /// changed.
     check: Vec<String>,
@@ -75,8 +77,17 @@ pub(super) async fn run(
         }
         plans.push(planned.inspect_err(|error| tell_failed(context, &asked.link, error))?);
     }
-    tell(context, &plans);
-    let report = report(args, lone, &links, &plans);
+    let total = fetch::planned(
+        context,
+        plans
+            .iter()
+            .flat_map(|planned| planned.hosts.iter().cloned()),
+    );
+    tell(context, &plans, &total);
+    let mut report = report(args, lone, &links, &plans);
+    if let Some(dry) = &mut report.dry {
+        dry.changes.to_download = Some(total);
+    }
     dry_run_done(&context.output, None);
     Ok(report)
 }
@@ -100,6 +111,7 @@ fn plan(
         let mut planned = Planned {
             place: path.clone(),
             download: Vec::new(),
+            hosts: Vec::new(),
             check: Vec::new(),
             unpack: Vec::new(),
             paths: None,
@@ -138,6 +150,7 @@ fn plan(
     let mut planned = Planned {
         place,
         download: Vec::new(),
+        hosts: Vec::new(),
         check: Vec::new(),
         unpack: Vec::new(),
         paths,
@@ -191,19 +204,25 @@ fn fetching(
         path: job.label.clone(),
         size: job.fetch.expect.size,
     });
+    planned
+        .hosts
+        .push((fetch::host_of(job), job.fetch.expect.size));
     Ok(())
 }
 
 /// tells the plans as a dry run of add does: each download with its size, each archive that
 /// would unpack, then where each link's files would land.
-fn tell(context: &Context, plans: &[Planned]) {
+fn tell(context: &Context, plans: &[Planned], total: &crate::net::estimate::Total) {
     let output = &context.output;
-    for download in plans.iter().flat_map(|planned| &planned.download) {
+    let downloads = || plans.iter().flat_map(|planned| &planned.download);
+    for download in downloads() {
         let size = download
             .size
             .map_or_else(|| "size unknown".to_owned(), units::size);
         output.step("Would fetch", &format!("{} · {size}", download.path));
     }
+    let labels = downloads().map(|download| download.path.as_str());
+    fetch::tell_would(output, &fetch::called(labels, total.files), total);
     for name in plans.iter().flat_map(|planned| &planned.check) {
         output.step(
             "Would check",
