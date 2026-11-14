@@ -200,14 +200,17 @@ impl Memory {
             .map_or(0, |since| since.as_secs());
         memory.learn(heard, seconds);
         let text = serde_json::to_vec(&memory).map_err(std::io::Error::other)?;
-        if let Some(folder) = path.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
-        let written = path.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
-        std::fs::write(&written, text)?;
-        std::fs::rename(&written, path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&written);
-        })
+        let folder = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(folder)?;
+        // made new under a name no one can guess, mode 0600 on unix, so it never writes through a
+        // link someone planted
+        let mut written = tempfile::Builder::new()
+            .prefix(&format!(".{FILE}."))
+            .suffix(".tmp")
+            .tempfile_in(folder)?;
+        std::io::Write::write_all(&mut written, &text)?;
+        written.persist(path).map_err(|err| err.error)?;
+        Ok(())
     }
 }
 
@@ -328,6 +331,30 @@ mod tests {
         assert_eq!(memory.hosts.len(), MOST_HOSTS);
         assert!(!memory.hosts.contains_key("host0.org"), "the oldest goes");
         assert!(memory.hosts.contains_key("host256.org"));
+    }
+
+    /// the file is made new under a name no one can guess, readable by its owner alone, so a link
+    /// planted where it is written never takes the bytes somewhere else.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_written_new_and_never_through_a_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(FILE);
+        let victim = folder.path().join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        let planted = path.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &planted).unwrap();
+        let run = Run::default();
+        run.answered("zenodo.org", Duration::from_millis(200));
+        run.received("zenodo.org", 8 * MIB, Duration::from_secs(2));
+        Memory::save(&path, &run, SystemTime::UNIX_EPOCH).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        let written = std::fs::symlink_metadata(&path).unwrap();
+        assert!(written.file_type().is_file());
+        assert_eq!(written.permissions().mode() & 0o777, 0o600);
+        assert!(Memory::read(&path).speed("zenodo.org").is_some());
     }
 
     #[test]
