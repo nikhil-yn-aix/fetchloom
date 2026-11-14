@@ -486,6 +486,18 @@ mod tests {
 
     use super::*;
 
+    /// a token's debug form says how long it lives, never the token.
+    #[test]
+    fn a_tokens_debug_shows_no_value() {
+        let token = Token {
+            value: "eyJ0eXAi.token-secret".to_owned(),
+            lifetime: Duration::from_secs(3_600),
+        };
+        let shown = format!("{token:?}");
+        assert!(shown.contains("3600s"), "{shown}");
+        assert!(!shown.contains("token-secret"), "{shown}");
+    }
+
     fn environment(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
         let pairs = pairs.to_vec();
         move |name| {

@@ -650,6 +650,41 @@ mod tests {
         url::Url::parse(link).unwrap().origin()
     }
 
+    /// an identity's debug form names where its keys come from, never the keys or the arguments
+    /// a program that gives them runs with.
+    #[test]
+    fn an_identitys_debug_shows_no_keys() {
+        let home = tempfile::tempdir().unwrap();
+        let tools = home.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        runnable_file(&tools, "keys");
+        files(
+            home.path(),
+            "",
+            "[profile lab]\ncredential_process = keys --password hunter2\n",
+        );
+        let path = tools.to_str().unwrap();
+        let written = [
+            ("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEKEYWXYZ"),
+            ("AWS_SECRET_ACCESS_KEY", "written-secret"),
+            ("AWS_SESSION_TOKEN", "session-token"),
+        ];
+        let program = [("AWS_PROFILE", "lab"), ("PATH", path)];
+        for pairs in [&written[..], &program[..]] {
+            let identity = find(&machine(home.path(), pairs), None).unwrap().unwrap();
+            let shown = format!("{identity:?}");
+            assert!(shown.contains(&identity.origin), "{shown}");
+            for secret in [
+                "AKIAEXAMPLEKEYWXYZ",
+                "written-secret",
+                "session-token",
+                "hunter2",
+            ] {
+                assert!(!shown.contains(secret), "{shown}");
+            }
+        }
+    }
+
     /// the key id, where it came from and the region of what `find` found for AWS.
     fn found(home: &Path, pairs: &[(&str, &str)]) -> Option<(String, String, Option<String>)> {
         find(&machine(home, pairs), None).unwrap().map(|identity| {
