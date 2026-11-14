@@ -567,7 +567,7 @@ impl Reader<'_> {
         }
         let origin = if RECIPE_KEYS.iter().any(|key| table.contains_key(key)) {
             Origin::Derived(self.recipe(table, name)?)
-        } else if !table.contains_key("ref") && table.iter().all(|(key, _)| key == "members") {
+        } else if table.contains_key("members") && table.iter().all(|(key, _)| key == "members") {
             return Err(self.left_members(datasets, table, name, item.span().or(key_span)));
         } else {
             Origin::Source(self.source(table, name, item.span().or(key_span))?)

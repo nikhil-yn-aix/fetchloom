@@ -176,6 +176,12 @@ fn mistakes_point_at_their_line_and_suggest_a_fix() {
     assert_eq!(typo.help.as_deref(), Some("did you mean `select`?"));
     let no_ref = fails("[datasets.eeg]\nselect = \"*\"\n");
     assert!(no_ref.message.contains("has no ref"), "{}", no_ref.message);
+    let empty = fails("[datasets.iris]\n");
+    assert_eq!(empty.message, "datasets.iris in data.toml has no ref");
+    assert_eq!(
+        empty.help.as_deref(),
+        Some("add a line such as ref = \"zenodo:3608990\"")
+    );
     let name = fails("[datasets.EEG]\nref = \"osf:abc12\"\n");
     assert!(
         name.help
