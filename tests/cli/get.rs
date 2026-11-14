@@ -1031,7 +1031,7 @@ fn a_connection_that_breaks_partway_through_a_file_says_so() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.contains(
-            "warning: the connection to 127.0.0.1 broke partway through the file. trying again in "
+            "warning: the connection to 127.0.0.1 broke partway through the file. trying iris.csv again in "
         ),
         "{stderr}"
     );
@@ -1155,7 +1155,7 @@ fn a_rate_limit_is_waited_out_without_spending_tries() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(server.requests().len(), 7);
-    assert!(!stderr.contains("trying again"), "{stderr}");
+    assert!(!stderr.contains("(try "), "{stderr}");
     assert_eq!(
         fs::read(sandbox.work().join("iris").join("iris.csv"))?,
         IRIS

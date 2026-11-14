@@ -267,6 +267,6 @@ fn a_proxy_that_cannot_be_reached_is_named_and_not_tried_again() -> Result {
         "check HTTPS_PROXY, or unset HTTPS_PROXY to connect without a proxy. `fetchloom help environment` lists the proxy settings"
     );
     assert_eq!(document["work"]["retries"], 0, "{document}");
-    assert!(!text(&output.stderr)?.contains("trying again"));
+    assert!(!text(&output.stderr)?.contains("(try "));
     Ok(())
 }

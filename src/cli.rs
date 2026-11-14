@@ -182,18 +182,17 @@ impl Context {
         let notify: net::Notify = Arc::new(move |notice| match notice {
             Notice::Retrying {
                 host,
+                what,
                 reason,
                 wait,
                 next,
                 of,
+                waited,
             } => {
                 if lines.tell(&host, Instant::now()) {
                     output.warn(
                         Warning::NetworkRetry,
-                        &format!(
-                            "{reason}. trying again in {} (try {next} of {of})",
-                            units::duration(wait)
-                        ),
+                        &retry_line(&what, &reason, wait, (next, of), waited),
                     );
                 }
             }
@@ -330,6 +329,27 @@ pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
         .strip_prefix(root)
         .map_or(0, |inside| inside.components().count());
     "../".repeat(depth)
+}
+
+/// a warning that `what` goes out again after `wait`, as try `next` of `of`: `127.0.0.1 answered
+/// 503. trying iris.csv again in 1.2 s (try 2 of 5)`. tries that `waited` for a rate limit were
+/// told as waits, so a count that starts past them says so.
+fn retry_line(
+    what: &str,
+    reason: &str,
+    wait: Duration,
+    (next, of): (u32, u32),
+    waited: u32,
+) -> String {
+    let waits = match waited {
+        0 => String::new(),
+        1 => ", after 1 wait for its rate limit".to_owned(),
+        waited => format!(", after {waited} waits for its rate limit"),
+    };
+    format!(
+        "{reason}. trying {what} again in {} (try {next} of {of}{waits})",
+        units::duration(wait)
+    )
 }
 
 /// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
@@ -1591,6 +1611,21 @@ mod tests {
         assert_eq!(
             rate_wait("127.0.0.1", Some(133), None, Duration::from_millis(600)),
             "1 s for 127.0.0.1, whose limit of 133 requests is used up"
+        );
+    }
+
+    /// lines for several requests to one host name each request, and a count that starts past
+    /// the tries that waited for a rate limit says they were waits.
+    #[test]
+    fn a_retry_line_names_its_request_and_the_waits_before_it() {
+        let second = Duration::from_millis(1200);
+        assert_eq!(
+            retry_line("iris.csv", "127.0.0.1 answered 503", second, (2, 5), 0),
+            "127.0.0.1 answered 503. trying iris.csv again in 1.2 s (try 2 of 5)"
+        );
+        assert_eq!(
+            retry_line("big.bin", "127.0.0.1 answered 429", second, (12, 15), 10),
+            "127.0.0.1 answered 429. trying big.bin again in 1.2 s (try 12 of 15, after 10 waits for its rate limit)"
         );
     }
 

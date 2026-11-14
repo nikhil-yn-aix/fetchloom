@@ -172,10 +172,7 @@ fn a_dropped_connection_never_shows_the_token() -> Result {
     let output = sandbox.run(&["get", &format!("{}?private_token=abc123", server.url)])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(10), "{stderr}");
-    assert!(
-        stderr.contains("trying again"),
-        "the retry is told: {stderr}"
-    );
+    assert!(stderr.contains("(try "), "the retry is told: {stderr}");
     assert!(!stderr.contains("abc123"), "{stderr}");
     Ok(())
 }

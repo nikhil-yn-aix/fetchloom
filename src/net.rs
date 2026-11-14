@@ -89,14 +89,17 @@ pub(crate) struct Credential {
 
 /// something the person watching should hear about while the network works.
 pub(crate) enum Notice {
-    /// a request to `host` failed for `reason` and goes out again after `wait`, as try `next`
-    /// of `of`.
+    /// a request to `host` for `what`, its link's last part, failed for `reason` and goes out
+    /// again after `wait`, as try `next` of `of`, `waited` of the tries before it having waited
+    /// for the host's rate limit.
     Retrying {
         host: String,
+        what: String,
         reason: String,
         wait: Duration,
         next: u32,
         of: u32,
+        waited: u32,
     },
     /// requests to `host` wait for its rate limit to reset. `quota` and `window` are the limit,
     /// when the host stated them.

@@ -93,11 +93,12 @@ impl<'a> Retry<'a> {
     }
 
     /// which try comes next, of how many it may get while none makes progress: the retries
-    /// left, and while it is `waiting` for the host's rate limit, the waits for it left too. a
-    /// host refusing for load is asked nothing more after a few refusals in a row, which caps it.
-    fn numbered(&self, waiting: bool) -> (u32, u32) {
+    /// left, and once it waited for the host's rate limit, the waits for it left too, so the
+    /// count never drops between a wait and a broken try. a host refusing for load is asked
+    /// nothing more after a few refusals in a row, which caps it.
+    fn numbered(&self) -> (u32, u32) {
         let retries = (self.net.retries + 1).saturating_sub(self.attempt);
-        let waits = if waiting {
+        let waits = if self.limited > 0 {
             LIMITED.saturating_sub(self.limited)
         } else {
             0
@@ -114,7 +115,7 @@ impl<'a> Retry<'a> {
     /// host when it names one.
     fn tell(&self, wait: Duration, limit: Option<String>) {
         if let Some(on) = self.on {
-            let (next, of) = self.numbered(limit.is_some());
+            let (next, of) = self.numbered();
             let _ = on(Event::Retrying {
                 next,
                 of,
@@ -251,13 +252,15 @@ impl<'a> Retry<'a> {
         self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
         Work::add(&self.net.work.retries, 1);
-        let (next, of) = self.numbered(false);
+        let (next, of) = self.numbered();
         (self.net.notify)(Notice::Retrying {
             host: host(self.url).to_owned(),
+            what: tried(self.url),
             reason,
             wait,
             next,
             of,
+            waited: self.limited,
         });
         self.tell(wait, None);
         tokio::select! {
@@ -288,6 +291,14 @@ impl Net {
         self.connect = super::CONNECT.max(timeout);
         self
     }
+}
+
+/// what a retry line names a request by: its link's last part, as a file's name or an api's
+/// endpoint, so lines for several requests to one host tell their counts apart.
+fn tried(url: &Url) -> String {
+    url.path_segments()
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        .map_or_else(|| host(url).to_owned(), str::to_owned)
 }
 
 /// the error for a request to a host that asks its requests to start apart, and that refused so
@@ -1572,14 +1583,58 @@ mod tests {
         assert_eq!(*heard.lock().unwrap(), [(2, 4), (3, 4), (4, 4)]);
     }
 
-    /// after one wait for the host's rate limit, the count still comes from the retries, since the
-    /// host may never set that limit again.
+    /// a request that waited for a host's rate limit and then broke never shows fewer tries in
+    /// all than it showed before: the waits it has left count until they are spent.
     #[tokio::test(start_paused = true)]
-    async fn a_broken_try_is_numbered_by_the_retries_left() {
-        use crate::net::{Notice, Options, Splitting};
+    async fn the_tries_a_request_shows_never_count_down() {
+        use crate::net::{Options, Splitting};
         use std::sync::{Arc, Mutex};
 
         let url = Url::parse("https://example.org/file").unwrap();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(|_| {}),
+        );
+        let shown = Mutex::new(Vec::new());
+        let on = |event| {
+            if let Event::Retrying { next, of, .. } = event {
+                shown.lock().unwrap().push((next, of));
+            }
+            Ok(())
+        };
+        let mut retry = Retry::new(&net, &url).telling(&on);
+        retry
+            .limited("limited".to_owned(), Duration::from_secs(1), false)
+            .await
+            .unwrap();
+        retry.wait("broke".to_owned(), None, false).await.unwrap();
+        retry.wait("broke".to_owned(), None, false).await.unwrap();
+        let shown = shown.lock().unwrap();
+        assert_eq!(shown.len(), 3);
+        assert_eq!(shown[0], (2, RETRIES + LIMITED + 1), "the waits left count");
+        assert!(
+            shown
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0 && pair[0].1 <= pair[1].1),
+            "{shown:?}"
+        );
+    }
+
+    /// a 429 that outlasts the waits for its limit says, in its first retry line, which request
+    /// it is and that the tries before it waited, so a count that starts at 12 explains itself.
+    #[tokio::test(start_paused = true)]
+    async fn the_first_retry_after_rate_limit_waits_counts_them() {
+        use crate::net::{Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let url = Url::parse("https://example.org/data/file.bin").unwrap();
         let heard = Arc::new(Mutex::new(Vec::new()));
         let kept = heard.clone();
         let net = Net::new(
@@ -1592,18 +1647,34 @@ mod tests {
             Arc::default(),
             Arc::default(),
             Arc::new(move |notice| {
-                if let Notice::Retrying { next, of, .. } = notice {
-                    kept.lock().unwrap().push((next, of));
+                if let Notice::Retrying {
+                    what,
+                    next,
+                    of,
+                    waited,
+                    ..
+                } = notice
+                {
+                    kept.lock().unwrap().push((what, next, of, waited));
                 }
             }),
         );
         let mut retry = Retry::new(&net, &url);
-        retry
-            .limited("limited".to_owned(), Duration::from_secs(1), false)
-            .await
-            .unwrap();
-        retry.wait("broke".to_owned(), None, false).await.unwrap();
-        assert_eq!(*heard.lock().unwrap(), [(3, RETRIES + 2)]);
+        for _ in 0..=LIMITED {
+            retry
+                .limited("example.org answered 429".to_owned(), Duration::ZERO, false)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [(
+                "file.bin".to_owned(),
+                LIMITED + 2,
+                LIMITED + RETRIES + 1,
+                LIMITED
+            )]
+        );
     }
 
     /// a network whose loss each request hears of, as a closure records it: `gone` for each
