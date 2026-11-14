@@ -190,7 +190,7 @@ fn problem<T: serde::de::DeserializeOwned>(path: &Path) -> Option<String> {
     match fs::read_to_string(path) {
         Ok(text) => serde_json::from_str::<T>(&text)
             .err()
-            .map(|err| format!("is not valid JSON ({err})")),
+            .map(|err| format!("is not valid JSON ({})", stopped(&err))),
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(err) => Some(format!("could not be read: {}", crate::error::said(&err))),
     }
@@ -204,14 +204,27 @@ fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> io::Result<T> 
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "{} is not valid JSON: {err}; fix or delete it",
-                    path.display()
+                    "{} is not valid JSON ({}); fix or delete it",
+                    path.display(),
+                    stopped(&err)
                 ),
             )
         }),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(T::default()),
         Err(err) => Err(err),
     }
+}
+
+/// where reading a key file stopped, and why in a word, as `a syntax error at line 1 column 2`.
+/// `serde_json`'s own words may quote what the file holds, a key among it.
+fn stopped(err: &serde_json::Error) -> String {
+    let what = match err.classify() {
+        serde_json::error::Category::Syntax => "a syntax error",
+        serde_json::error::Category::Data => "an unexpected value",
+        serde_json::error::Category::Eof => "an early end",
+        serde_json::error::Category::Io => "a read error",
+    };
+    format!("{what} at line {} column {}", err.line(), err.column())
 }
 
 fn json<T: serde::Serialize>(value: &T) -> io::Result<Vec<u8>> {
@@ -408,10 +421,11 @@ mod tests {
         assert!(keys.contains("d-key"));
     }
 
-    /// an index of saved keys that does not read leaves every key unfound, so it is named; one
-    /// that is not there yet is no problem.
+    /// a key file or index that does not read leaves every key in it unfound, so it is named, by
+    /// where it stops reading and never by what it holds, which may be a key; one that is not
+    /// there yet is no problem.
     #[test]
-    fn an_index_that_does_not_read_is_named() {
+    fn a_key_file_that_does_not_read_is_named_without_what_it_holds() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().as_os_str().to_owned();
         let var = |name: &str| -> Option<OsString> {
@@ -423,15 +437,29 @@ mod tests {
         assert!(unreadable(&var).is_none());
         let folder = crate::machine::settings_folder(&var).unwrap();
         fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join("accounts.json"), r#"{"zenodo": "drawer"}"#).unwrap();
-        let error = unreadable(&var).unwrap();
+        let index = folder.join("accounts.json");
+        fs::write(&index, r#"{"zenodo": "secret"}"#).unwrap();
+        let message = unreadable(&var).unwrap().message;
         assert!(
-            error
-                .message
-                .contains("accounts.json is not valid JSON (unknown variant"),
-            "{}",
-            error.message
+            message.contains(
+                "accounts.json is not valid JSON (an unexpected value at line 1 column 19), so"
+            ),
+            "{message}"
         );
+        assert!(!message.contains("secret"), "{message}");
+        fs::write(&index, "{}").unwrap();
+        let keys = folder.join("credentials.json");
+        for (text, value) in [(r#""secret""#, "secret"), (r#"{"k": 123}"#, "123")] {
+            fs::write(&keys, text).unwrap();
+            let message = unreadable(&var).unwrap().message;
+            assert!(
+                message.contains("credentials.json is not valid JSON ("),
+                "{message}"
+            );
+            assert!(!message.contains(value), "{message}");
+            let refused = load::<BTreeMap<String, String>>(&keys).unwrap_err();
+            assert!(!refused.to_string().contains(value), "{refused}");
+        }
     }
 
     thread_local! {

@@ -666,7 +666,7 @@ fn a_broken_key_file_is_named_wherever_its_keys_are_missed() -> Result {
     .join("credentials.json");
     let saved = std::fs::read_to_string(&keys)?;
     std::fs::write(&keys, saved.replacen('{', "{,", 1))?;
-    let named = "credentials.json is not valid JSON (key must be a string at line 1 column 2), so fetchloom uses none of the keys saved in it";
+    let named = "credentials.json is not valid JSON (a syntax error at line 1 column 2), so fetchloom uses none of the keys saved in it";
     let listed = json(&sandbox.run(&["auth", "--offline", "--json"])?)?;
     let warnings = crate::support::warned(&listed);
     assert!(
