@@ -372,7 +372,7 @@ async fn resolve_lines(
 }
 
 /// the last lines of `add -i`: each added dataset and where its files are, or that it has none,
-/// then each one data.toml had already, then the closing lines naming the `private` origins.
+/// then each one data.toml had already, counted past a few dozen, then the `private` origins.
 fn tell_list(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -382,19 +382,37 @@ fn tell_list(
     private: &[url::Origin],
 ) {
     let output = &work.context.output;
-    for name in names {
-        if placed.contains(name) {
-            let folder = from_here(work.project, here, &plan::folder(manifest, name));
-            output.done("Added", &format!("{name}, its files are in {folder}"));
-        } else {
-            output.done(
-                "Added",
-                &format!("{name}, its archives contain no regular files"),
-            );
+    let datasets = |count: usize| units::count(count as u64, "dataset", "datasets");
+    if crate::cli::fetch::one_by_one(output, names.len()) {
+        for name in names {
+            if placed.contains(name) {
+                let folder = from_here(work.project, here, &plan::folder(manifest, name));
+                output.done("Added", &format!("{name}, its files are in {folder}"));
+            } else {
+                output.done(
+                    "Added",
+                    &format!("{name}, its archives contain no regular files"),
+                );
+            }
         }
+    } else {
+        output.done(
+            "Added",
+            &format!("{} · `-v` lists them", datasets(names.len())),
+        );
     }
-    for name in already {
-        output.done("Ok", &format!("{name} is already in data.toml"));
+    if crate::cli::fetch::one_by_one(output, already.len()) {
+        for name in already {
+            output.done("Ok", &format!("{name} is already in data.toml"));
+        }
+    } else {
+        output.done(
+            "Ok",
+            &format!(
+                "{} are already in data.toml · `-v` lists them",
+                datasets(already.len())
+            ),
+        );
     }
     match names {
         [] => return,

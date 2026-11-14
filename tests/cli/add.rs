@@ -1234,6 +1234,42 @@ fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
     Ok(())
 }
 
+/// past a few dozen datasets a list's add counts them on one line.
+#[test]
+fn a_long_list_counts_the_datasets_it_adds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(
+        (0..41)
+            .map(|number| {
+                let body = format!("{number}\n");
+                (
+                    format!("/files/f{number:02}.csv"),
+                    file(body.as_bytes(), "\"1\""),
+                )
+            })
+            .collect(),
+    )?;
+    sandbox.allow(&server.url);
+    let links = (0..41)
+        .map(|number| format!("{}/files/f{number:02}.csv", server.url))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(sandbox.work().join("links.txt"), &links)?;
+    let output = sandbox.run(&["add", "-i", "links.txt"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let added: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("      Added"))
+        .collect();
+    assert_eq!(
+        added,
+        ["      Added 41 datasets · `-v` lists them"],
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a list typed at a terminal says where it is read and how to end it, so `add -i -` and
 /// `get -i -` never wait there in silence.
 #[cfg(target_os = "linux")]
