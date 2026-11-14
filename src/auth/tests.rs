@@ -351,7 +351,7 @@ fn auth_checks_a_kaggle_key_with_the_header_downloads_send() {
             .find(&var)
             .and_then(|found| account.credential(&found))
             .map(|credential| credential.value);
-        let sent = crate::source::kaggle::credentials(&var)
+        let sent = super::kaggle::credentials(&var)
             .into_iter()
             .next()
             .map(|credential| credential.value);
@@ -382,7 +382,7 @@ fn auth_checks_a_kaggle_key_with_the_header_downloads_send() {
         Account::Kaggle.find(&var).is_none(),
         "a key needs its username"
     );
-    assert!(crate::source::kaggle::credentials(&var).is_empty());
+    assert!(super::kaggle::credentials(&var).is_empty());
 }
 
 #[cfg(target_os = "linux")]

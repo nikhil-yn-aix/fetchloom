@@ -6,8 +6,9 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{HOST, is_part, malformed, parts, selected, unusable};
+use super::{is_part, malformed, parts, selected, unusable};
 use crate::account::Account;
+use crate::auth::kaggle::HOST;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 use crate::source::{Access, Listing, Reference, Remote};
@@ -619,12 +620,12 @@ mod tests {
     #[test]
     #[ignore = "live: talks to api.kaggle.com with a kaggle account"]
     fn live_titanic_lists_its_files() {
-        if super::super::token::find(&crate::machine::env).is_none() {
+        if crate::auth::kaggle::find(&crate::machine::env).is_none() {
             eprintln!("skipped: no KAGGLE_API_TOKEN, access_token or kaggle.json on this machine");
             return;
         }
         let (net, work) =
-            crate::source::recorded::live(crate::source::kaggle::credentials(&crate::machine::env));
+            crate::source::recorded::live(crate::auth::kaggle::credentials(&crate::machine::env));
         let reference = Reference::parse("kaggle:competitions/titanic")
             .unwrap()
             .reference;

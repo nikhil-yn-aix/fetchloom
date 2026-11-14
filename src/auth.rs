@@ -5,6 +5,7 @@ pub(crate) mod aws;
 pub(crate) mod azure;
 pub(crate) mod cookies;
 pub(crate) mod google;
+pub(crate) mod kaggle;
 pub(crate) mod lease;
 pub(crate) mod netrc;
 pub(crate) mod process;
@@ -386,7 +387,7 @@ impl Account {
                 false,
             ),
             Account::Kaggle => {
-                let (host, value) = crate::source::kaggle::pasted(token)?;
+                let (host, value) = kaggle::pasted(token)?;
                 // a legacy key goes with its username, as downloads send it
                 let value = found
                     .login
@@ -579,7 +580,7 @@ impl Account {
         };
         match self {
             Account::HuggingFace => set("HF_TOKEN").or_else(|| hf_file(var).and_then(file)),
-            Account::Kaggle => crate::source::kaggle::locate(var),
+            Account::Kaggle => kaggle::locate(var),
             Account::Zenodo => set("ZENODO_TOKEN").or_else(|| stored(&self.id())),
             Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
             Account::Osf => set("OSF_TOKEN").or_else(|| stored(&self.id())),
@@ -620,10 +621,8 @@ impl Account {
             Account::HuggingFace => hf_file(var).map_or(Home::Store, Home::File),
             // the kaggle CLI reads kaggle.json from KAGGLE_CONFIG_DIR, but kagglesdk reads
             // access_token only from ~/.kaggle
-            Account::Kaggle if secret.trim_start().starts_with('{') => {
-                crate::source::kaggle::config_folder(var)
-                    .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json")))
-            }
+            Account::Kaggle if secret.trim_start().starts_with('{') => kaggle::config_folder(var)
+                .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json"))),
             Account::Kaggle => crate::machine::home(var).map_or(Home::Store, |home| {
                 Home::File(home.join(".kaggle").join("access_token"))
             }),
@@ -678,7 +677,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
             login: Some(entry.login),
         })
     }));
-    found.extend(crate::source::kaggle::credentials(var));
+    found.extend(kaggle::credentials(var));
     found
 }
 

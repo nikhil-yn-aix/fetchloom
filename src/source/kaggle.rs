@@ -3,7 +3,6 @@
 
 mod competition;
 mod listing;
-mod token;
 
 use std::fmt;
 
@@ -11,14 +10,8 @@ use url::Url;
 
 pub(crate) use self::competition::Competition;
 pub(super) use self::competition::{may_wrap, refused_download};
-pub(crate) use self::token::{config_folder, locate};
 use super::{Reference, malformed};
-use crate::auth::Credential;
 use crate::error::{Error, Kind};
-use crate::machine::Var;
-
-/// the host of kaggle's API, and the only host kaggle's credentials go to.
-const HOST: &str = "api.kaggle.com";
 
 /// reads the part after `kaggle:`: a dataset such as `uciml/iris@2`, or a competition such as
 /// `competitions/titanic`.
@@ -167,29 +160,8 @@ impl fmt::Display for Dataset {
     }
 }
 
-/// kaggle's API token or legacy key, sent to kaggle's API and nowhere else.
-pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    token::find(var)
-        .map(|value| Credential {
-            host: HOST.to_owned(),
-            header: "authorization",
-            value,
-            every_hop: false,
-            every_port: false,
-        })
-        .into_iter()
-        .collect()
-}
-
-/// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
-pub(crate) fn pasted(secret: &str) -> Option<(&'static str, String)> {
-    token::pasted(secret).map(|value| (HOST, value))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-
     use super::*;
     use crate::error::Kind;
 
@@ -321,23 +293,6 @@ mod tests {
                 .unwrap_err()
                 .message
                 .contains("kaggle link")
-        );
-    }
-
-    #[test]
-    fn credentials_go_to_the_api_host_only() {
-        let var = |name: &str| (name == "KAGGLE_API_TOKEN").then(|| OsString::from("KGAT_abc"));
-        let found = credentials(&var);
-        let [credential] = found.as_slice() else {
-            panic!("{} credentials", found.len());
-        };
-        assert_eq!(
-            (
-                credential.host.as_str(),
-                credential.header,
-                credential.value.as_str()
-            ),
-            ("api.kaggle.com", "authorization", "Bearer KGAT_abc")
         );
     }
 }

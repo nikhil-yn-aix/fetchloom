@@ -137,7 +137,6 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/kaggle.rs` | kaggle datasets by owner and name, and competitions by name, downloaded one file at a time | `Dataset`, `parse` |  |
 | `src/source/kaggle/listing.rs` | a dataset at one version, its files read page by page | `Dataset::resolve` |  |
 | `src/source/kaggle/competition.rs` | competition files, for a signed-in account that accepted the rules | `Competition` | `Competition::resolve` |
-| `src/source/kaggle/token.rs` | kaggle's credentials, where the kaggle CLI keeps them | `find` |  |
 | `src/source/ena.rs` | ENA runs by run, experiment, sample or study accession; one kind of file per reference, FASTQ unless it names submitted or SRA files; the count asked before the report, which has no pages; runs under controlled access left out | `Accession` | `Files`, `Accession::resolve` |
 | `src/source/geo.rs` | GEO series, samples and platforms from the folder indexes of NCBI's file server, read to at most 64 folders, with no stated hash or exact size; the spacing NCBI's hosts ask for, which `source::spacing` gives the network | `Accession` | `Accession::resolve`, `spacing` |
 | `src/source/arxiv.rs` | arXiv papers by id, version and pasted link, months and categories' months; the mirror lookup; the pace arXiv's hosts share | `parse`, `Paper` | `Id`, `search`, `paced_as`, `spacing`, `most_at_once` |
@@ -176,6 +175,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/auth/cookies/sqlite.rs` | a read-only reader of the SQLite files browsers keep cookies in: one table's rows, from the file and the committed pages of its write-ahead log, with no lock and no SQL | `Database` | `Value`, `Broken`, `columns` |
 | `src/auth/cookies/chromium.rs` | the cookies of chromium's browsers on linux and macos: their profiles, the key each keeps in the secret service or the keychain, and AES-128-CBC values behind the domain's SHA-256 | `read`, `Chromium` | `BROWSERS`, `derive`, `file` |
 | `src/auth/cookies/firefox.rs` | firefox's `cookies.sqlite` in the profile it used last or the one named, its expiry in seconds or milliseconds by schema, containers left apart | `read`, `file` | `roots` |
+| `src/auth/kaggle.rs` | kaggle's credentials, where the kaggle CLI keeps them, sent to kaggle's API alone | `find`, `credentials` | `locate`, `pasted`, `config_folder`, `HOST` |
 | `src/auth/site.rs` | a website's own credential, a token, a header or cookies, kept in the key store under `site:<host>`; the header names it refuses | `Saved`, `sites` | `host`, `header_name`, `find`, `save`, `forget` |
 | `src/auth/aws.rs` | AWS keys from the environment, the shared profile files or the program a profile names, bound to an endpoint: an S3-compatible one gets them only where the AWS settings say | `find` | `Identity`, `Source` |
 | `src/auth/aws/program.rs` | a profile's `credential_process`, or the AWS CLI's `configure export-credentials`, run by full path without a shell and read as version 1 JSON | `Program` | `Issued`, `words`, `installed` |

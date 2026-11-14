@@ -1,12 +1,15 @@
-//! kaggle's credentials, found where the kaggle CLI keeps them.
+//! kaggle's credentials, found where the kaggle CLI keeps them, and sent to kaggle's API alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::auth::{Found, Origin};
+use super::{Credential, Found, Origin};
 use crate::machine::Var;
+
+/// the host of kaggle's API, and the only host kaggle's credentials go to.
+pub(crate) const HOST: &str = "api.kaggle.com";
 
 /// the legacy key in `kaggle.json`.
 #[derive(Default, Deserialize)]
@@ -17,7 +20,7 @@ struct Key {
 
 /// the `authorization` value the kaggle CLI would send: an API token as a bearer token, else a
 /// legacy username and key as basic authentication.
-pub(super) fn find(var: Var<'_>) -> Option<String> {
+pub(crate) fn find(var: Var<'_>) -> Option<String> {
     let found = locate(var)?;
     Some(match &found.login {
         Some(username) => crate::auth::basic(username, &found.secret),
@@ -31,7 +34,7 @@ pub(crate) fn locate(var: Var<'_>) -> Option<Found> {
     api_token(var).or_else(|| legacy_key(var))
 }
 /// the `authorization` value for a key a person pasted: the text of a `kaggle.json`, or a token.
-pub(super) fn pasted(secret: &str) -> Option<String> {
+fn pasted_value(secret: &str) -> Option<String> {
     let secret = clean(secret)?;
     if let Ok(Key {
         username: Some(username),
@@ -124,6 +127,25 @@ fn clean(text: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+/// kaggle's API token or legacy key, sent to kaggle's API and nowhere else.
+pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
+    find(var)
+        .map(|value| Credential {
+            host: HOST.to_owned(),
+            header: "authorization",
+            value,
+            every_hop: false,
+            every_port: false,
+        })
+        .into_iter()
+        .collect()
+}
+
+/// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
+pub(crate) fn pasted(secret: &str) -> Option<(&'static str, String)> {
+    pasted_value(secret).map(|value| (HOST, value))
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
@@ -174,12 +196,15 @@ mod tests {
 
     #[test]
     fn a_pasted_token_or_kaggle_json_becomes_the_header_kaggle_takes() {
-        assert_eq!(pasted(" KGAT_abc \n").as_deref(), Some("Bearer KGAT_abc"));
         assert_eq!(
-            pasted(r#"{"username":"user","key":"key"}"#).as_deref(),
+            pasted_value(" KGAT_abc \n").as_deref(),
+            Some("Bearer KGAT_abc")
+        );
+        assert_eq!(
+            pasted_value(r#"{"username":"user","key":"key"}"#).as_deref(),
             Some("Basic dXNlcjprZXk=")
         );
-        assert_eq!(pasted("  "), None);
+        assert_eq!(pasted_value("  "), None);
     }
 
     #[test]
@@ -269,5 +294,22 @@ mod tests {
             assert_eq!(crate::auth::base64(text.as_bytes()), encoded, "{text}");
         }
         assert_eq!(crate::auth::base64(&[0xff, 0xfe, 0xfd]), "//79");
+    }
+
+    #[test]
+    fn credentials_go_to_the_api_host_only() {
+        let var = |name: &str| (name == "KAGGLE_API_TOKEN").then(|| OsString::from("KGAT_abc"));
+        let found = credentials(&var);
+        let [credential] = found.as_slice() else {
+            panic!("{} credentials", found.len());
+        };
+        assert_eq!(
+            (
+                credential.host.as_str(),
+                credential.header,
+                credential.value.as_str()
+            ),
+            ("api.kaggle.com", "authorization", "Bearer KGAT_abc")
+        );
     }
 }

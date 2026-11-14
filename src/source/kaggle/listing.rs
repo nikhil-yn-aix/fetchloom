@@ -4,7 +4,8 @@
 use serde::Deserialize;
 use url::Url;
 
-use super::{Dataset, HOST, is_part, unusable};
+use super::{Dataset, is_part, unusable};
+use crate::auth::kaggle::HOST;
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Access, Listing, Reference, Remote};
@@ -80,7 +81,7 @@ impl Dataset {
         crate::source::json(self, &response).map_err(|err| {
             if err.kind == Kind::AuthRequired {
                 // kaggle answers 403 alike for a private dataset and for one that does not exist
-                let signed_in = super::token::find(&crate::source::env).is_some();
+                let signed_in = crate::auth::kaggle::find(&crate::source::env).is_some();
                 self.hidden(err, signed_in)
             } else {
                 err
