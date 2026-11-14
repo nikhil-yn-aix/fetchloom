@@ -14,6 +14,11 @@ write `kaggle:` and the owner and dataset name, with `@<version>` for one versio
 
 a kaggle DOI such as `doi:10.34740/kaggle/dsv/2736749` names one dataset version, which fetchloom resolves through the `kaggle.com/dsv/` link it points to. each file downloads through the kaggle API, and SHA-256 and size pin the bytes.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
+| kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
+
 ## competitions
 
 use `kaggle:competitions/` followed by the name in the competition's link, such as `kaggle:competitions/titanic`. links under `kaggle.com/competitions/` and `kaggle.com/c/` work too, and `?select=` in a data page link picks that file.
@@ -32,10 +37,10 @@ competition downloads have no `raw=true` option, and [kaggle's CLI](https://gith
 
 ## credentials
 
-public datasets need no key. competitions take a key from `fetchloom auth login kaggle`, or the kaggle command's own credentials, `KAGGLE_API_TOKEN`, `~/.kaggle/access_token` or `kaggle.json`, in the [order environment gives](../reference/environment.md#credentials).
+public datasets need no key. competitions take a key from `fetchloom auth login kaggle`, or the kaggle command's own credentials, `KAGGLE_API_TOKEN`, `~/.kaggle/access_token` or `kaggle.json`, in the [order environment gives](../reference/credentials.md).
 
 ## limits
 
 kaggle's api does not send the files of every dataset it lists. for those it answers `This dataset type is not supported through the API.`, and fetchloom stops with `reference.unresolved`, exit 10, saying the dataset cannot be fetched through kaggle's api. that answer does not change on a later try; the dataset's page shows how kaggle offers it.
 
-follow [offline preparation](../concepts.md#offline) before disconnecting.
+follow [offline preparation](../concepts/offline-and-recovery.md#offline) before disconnecting.

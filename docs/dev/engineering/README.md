@@ -27,7 +27,7 @@ python3 -m unittest discover -s bench
 typos
 ```
 
-CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a local run leaves out the rest of CI: the installed artifact journeys, windows, macos, the filesystem lanes, cargo-deny, zizmor and cargo-machete. [windows clippy](building-and-testing.md#windows-clippy-from-linux) catches most windows-only compile errors before CI does.
+CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a local run leaves out the rest of CI: the installed artifact journeys, windows, macos, the filesystem lanes, cargo-deny, zizmor and cargo-machete. [windows clippy](other-platforms.md#windows-clippy-from-linux) catches most windows-only compile errors before CI does.
 
 ## commands
 
@@ -55,11 +55,11 @@ CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a 
 | page | covers |
 |---|---|
 | [building and testing](building-and-testing.md) | toolchain, test layers, WSL and filesystem reproduction |
-| [running benchmarks](benchmarks.md) | linux lab setup, smoke runs, full comparisons and result records |
+| [running benchmarks](../performance/README.md#running-benchmarks) | linux lab setup, smoke runs, full comparisons and result records |
 | [profiling](profiling.md) | [reported-problem reproduction](profiling.md#reproduce-a-reported-problem), work counters, traces, CPU samples and memory |
 | [fuzzing](fuzzing.md) | parser targets, longer linux runs and the weekly eight-target matrix |
 | [CI](ci.md) | required platforms, filesystems, installed artifacts, weekly coverage and manual mutation pilots |
 | [releasing](releasing.md) | artifacts, installers, wheels and publication |
 | [versioning](versioning.md) | what a release may change and what stays stable |
 
-related: [style](../style.md) for prose and commits, [decisions](../decisions.md) for the boundaries a change keeps, and [performance](../performance/README.md) for the evidence a speed or memory claim needs.
+related: [style](../style.md) for prose and commits, [decisions](../decisions/README.md) for the boundaries a change keeps, and [performance](../performance/README.md) for the evidence a speed or memory claim needs.

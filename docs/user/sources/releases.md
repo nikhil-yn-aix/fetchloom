@@ -31,6 +31,11 @@ a gitlab release lists links, each with the path the release gives it, as `binar
 
 downloads record each file's SHA-256 and size; bytes that differ from a stated SHA-256 or from the lock stop with `integrity.mismatch` and are never placed. a release has no license or DOI to record, and `access` is left out, since neither site says who may read a release.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| github release | `github:<owner>/<repo>@<tag>` | the file's download link on github.com, `/releases/download/<tag>/<name>` |
+| gitlab release | `gitlab:<project>@<tag>` | the address the link points to, on gitlab.com or another host |
+
 ## keys and limits
 
 public releases need no key. github answers 60 requests an hour from one address without a key; listing a release takes one. once they are used up, fetchloom stops with `network.rate_limited`, exit 20, saying so, and at a terminal offers to sign in. a key raises the limit to 5,000 an hour: set `GH_TOKEN` or `GITHUB_TOKEN`, as the gh command reads them, or run `fetchloom auth login github`. a gitlab key, from `GITLAB_TOKEN` or `fetchloom auth login gitlab`, lets fetchloom list a private project's releases and download the links stored on gitlab.com.

@@ -61,7 +61,8 @@ def parsed(page):
 def printed(root):
     """every docs address in src/ and tests/: written out, or put together from the SITE constant of
     src/cli/args.rs, where {name} stands for each command's page."""
-    commands = sorted(page.stem for page in (root / "docs/user/commands").glob("*.md") if page.stem != "README")
+    commands = sorted(page.stem for page in (root / "docs/user/commands").glob("*.md")
+                      if page.stem not in ("README", "global-options"))
     found = set()
     for folder in ("src", "tests"):
         for path in sorted((root / folder).rglob("*")):

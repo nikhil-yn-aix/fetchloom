@@ -22,7 +22,7 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 
 a raw link to a file git-lfs keeps answers with git-lfs's pointer, a few lines git keeps in the file's place, rather than the file. a download under 1 KiB that starts as a pointer does is refused with `source.invalid`, exit 10, before anything is pinned or placed, and its help names the link that serves the file itself: `https://media.githubusercontent.com/media/...` for a github raw link, or gitlab's api with `lfs=true` for a gitlab one.
 
-a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../concepts.md#archives) as from any source.
+a `Content-Disposition` file name the server sends, also after redirects, replaces the name guessed from the link; selection patterns match the name from the link. archives [unpack](../reference/archives.md) as from any source.
 
 a link whose name has no extension, such as a folder link ending in `/`, is refused with `source.invalid`, exit 10, when it answers with a web page and nothing says the bytes are a file: such an answer is a folder listing or a site's page, so nothing enters the cache or data.lock. open the page in a browser and give fetchloom the link of each file instead, or publish the folder packed, as `tar czf many.tar.gz many`, and add the archive's link, which unpacks into the dataset's folder. when the page is the data, ask for it, as [web pages as data](#web-pages-as-data) says. a web page served under a name that looks like data gets a warning; check the file and use a download or raw link. a server that answers with something HTTP does not allow, as a broken server does, a port that serves something else, or an `http://` link to a port that wants `https://`, fails with `<host> sent a reply that is not valid HTTP`, and no other try is made, since none would get another answer.
 
@@ -66,7 +66,7 @@ error: http://127.0.0.1:19353/many/ answered with a web page, such as a folder l
   help: open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add web_page = true to [datasets.notes] in data.toml
 ```
 
-the rule holds for a page fetchloom kept before, too: a later run without `--web-page` is refused when the server answers that the page is unchanged, and offline, where only the cache answers. taking `web_page = true` out of data.toml makes the next sync ask the link again, as `lock --check` warns, and refuses its page, even when other lines of the entry changed with it, since data.lock marks a page's pin `web_page = true`. the setting only lets a page through, and adds no host, header or key, so data.toml may carry it. most pages change between visits, so a clone that fetches the page again gets other bytes than data.lock pins and is refused, as for any [changed file](../troubleshooting.md#errors); whoever pinned it can push the pinned copy to a folder the clone reads.
+the rule holds for a page fetchloom kept before, too: a later run without `--web-page` is refused when the server answers that the page is unchanged, and offline, where only the cache answers. taking `web_page = true` out of data.toml makes the next sync ask the link again, as `lock --check` warns, and refuses its page, even when other lines of the entry changed with it, since data.lock marks a page's pin `web_page = true`. the setting only lets a page through, and adds no host, header or key, so data.toml may carry it. most pages change between visits, so a clone that fetches the page again gets other bytes than data.lock pins and is refused, as for any [changed file](../troubleshooting/errors.md); whoever pinned it can push the pinned copy to a folder the clone reads.
 
 ## dry runs
 
@@ -84,6 +84,10 @@ $ fetchloom add --dry-run http://127.0.0.1:19354/many/
 ## pins
 
 a plain link is recorded as both `resolved` and the file's download link, and its SHA-256 and size pin its bytes, even though what the link serves can change. a DOI pins what the source it routes to records. `lock --upgrade` checks the link again, while a sync needs the pinned bytes.
+
+| source | `resolved` | file `url` |
+|---|---|---|
+| plain URL | the parsed URL | the same URL |
 
 ## credentials
 

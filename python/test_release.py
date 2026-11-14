@@ -125,7 +125,7 @@ class GateDocumentation(unittest.TestCase):
         cases = [
             (".github/pull_request_template.md", "", None),
             ("docs/dev/engineering/README.md", "run the full gate:", "## commands"),
-            ("docs/dev/engineering/building-and-testing.md", "## WSL gate", "## xfs loop mount"),
+            ("docs/dev/engineering/other-platforms.md", "## WSL gate", "## xfs loop mount"),
         ]
         for path, start, end in cases:
             text = (ROOT / path).read_text(encoding="utf-8")

@@ -17,7 +17,7 @@ fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 | a link to a file's page on zenodo | select that file, unless `--select` is given |
 | a DOI zenodo registered | list the record it names |
 
-a record may hold one large archive cut into parts, such as `scans.zip.001` to `scans.zip.003`. they unpack as that one archive when the dataset lists every part; a `--select` that keeps only some of them leaves them packed with a warning, as [split archives](../concepts.md#split-archives) explains.
+a record may hold one large archive cut into parts, such as `scans.zip.001` to `scans.zip.003`. they unpack as that one archive when the dataset lists every part; a `--select` that keeps only some of them leaves them packed with a warning, as [split archives](../reference/archives.md#split-archives) explains.
 
 ## search
 
@@ -30,6 +30,10 @@ a record may hold one large archive cut into parts, such as `scans.zip.001` to `
 zenodo lets owners make [minor file corrections](https://help.zenodo.org/docs/deposit/manage-files/#modify) within 30 days of publication, and republish within 45, without a new DOI. so resolving a record again, also after a filter change, can pin corrected bytes: read the lock's diff before you commit it. a sync of an unchanged lock still wants the pinned size and hashes.
 
 metadata keeps zenodo's casing, so the iris record gives `license = "cc-by-4.0"`.
+
+| source | `resolved` | file `url` |
+|---|---|---|
+| zenodo | `zenodo:<record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
 
 ## credentials and limits
 

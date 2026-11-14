@@ -9,9 +9,9 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [agent skill](skills/fetchloom/SKILL.md): which command fits a task, what to ask the user first and how to read a failure
 - [JSON output](docs/user/reference/json-output.md): what `--json` prints: each command's result fields, warning kinds, dry runs and work counters
 - [exit codes](docs/user/reference/exit-codes.md): what each exit code and error kind means, and the next step
-- [AI agents](docs/user/ai-agents.md): where to put the skill, what agents can rely on and why there is no MCP server
-- [offline](docs/user/concepts.md#offline): what `--offline` or `FETCHLOOM_OFFLINE=1` may use: the cache, the data folder and folder mirrors
-- [CI](docs/user/ci.md): how a job checks exact inputs: a cache kept between jobs, keyed on data.lock, `sync --locked --yes` and keys from CI secrets
+- [AI agents](docs/user/guides/ai-agents.md): where to put the skill, what agents can rely on and why there is no MCP server
+- [offline](docs/user/concepts/offline-and-recovery.md#offline): what `--offline` or `FETCHLOOM_OFFLINE=1` may use: the cache, the data folder and folder mirrors
+- [CI](docs/user/guides/ci.md): how a job checks exact inputs: a cache kept between jobs, keyed on data.lock, `sync --locked --yes` and keys from CI secrets
 
 ## commands
 
@@ -38,20 +38,20 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 
 - [front page](README.md): install and quick start
 - [user guide](docs/user/README.md): every user page and when to read it
-- [getting started](docs/user/getting-started.md): install from source until the first release, a first project, restoring it and undoing it
-- [concepts](docs/user/concepts.md): data.toml, data.lock, the cache, placement, archives, offline work, approval and interruptions
-- [working with raw data](docs/user/raw-data.md): results outside the data folder, bad samples, edits with copy = true and freeing space
-- [other tools](docs/user/other-tools.md): the fetchloom command for each download step from curl, gdown, kaggle, hf, aws s3, dvc or pooch, and working beside dvc, git-lfs and datalad
-- [recipes](docs/user/recipes.md): how to make a dataset from others with a command of yours: from, run, code and env, built with `fetchloom build`
-- [scripting](docs/user/scripting.md): how scripts read `--json` answers, and the python helper
-- [mirrors](docs/user/mirrors.md): how a folder or web server that holds pinned files by SHA-256 stands in for sources
-- [clusters](docs/user/hpc.md): where the cache goes on home and scratch disks, many jobs, offline compute nodes and one cache for a lab
-- [resources](docs/user/resources.md): how `resources` or `FETCHLOOM_RESOURCES`, lean, default or max, trades speed against memory
-- [notebooks and containers](docs/user/notebooks.md): where the cache lasts in hosted notebooks, dev containers and kubernetes jobs
-- [windows](docs/user/windows.md): drives, synced folders, long paths and recipe steps
-- [macos](docs/user/macos.md): the cache, apfs clones, icloud drive and unicode names
-- [troubleshooting](docs/user/troubleshooting.md): what an error or warning means and its fix
-- [limits](docs/user/limits.md): what fetchloom does not do, and its size limits
+- [getting started](docs/user/start/README.md): install from source until the first release, a first project, restoring it and undoing it
+- [concepts](docs/user/concepts/README.md): data.toml, data.lock, the cache, placement, archives, offline work, approval and interruptions
+- [working with raw data](docs/user/guides/edit-input-files.md): results outside the data folder, bad samples, edits with copy = true and freeing space
+- [other tools](docs/user/guides/other-tools.md): the fetchloom command for each download step from curl, gdown, kaggle, hf, aws s3, dvc or pooch, and working beside dvc, git-lfs and datalad
+- [recipes](docs/user/guides/recipes.md): how to make a dataset from others with a command of yours: from, run, code and env, built with `fetchloom build`
+- [scripting](docs/user/guides/scripts.md): how scripts read `--json` answers, and the python helper
+- [mirrors](docs/user/guides/mirrors.md): how a folder or web server that holds pinned files by SHA-256 stands in for sources
+- [clusters](docs/user/guides/clusters.md): where the cache goes on home and scratch disks, many jobs, offline compute nodes and one cache for a lab
+- [resources](docs/user/guides/speed-and-memory.md): how `resources` or `FETCHLOOM_RESOURCES`, lean, default or max, trades speed against memory
+- [notebooks and containers](docs/user/guides/notebooks-and-containers.md): where the cache lasts in hosted notebooks, dev containers and kubernetes jobs
+- [windows](docs/user/guides/windows.md): drives, synced folders, long paths and recipe steps
+- [macos](docs/user/guides/macos.md): the cache, apfs clones, icloud drive and unicode names
+- [troubleshooting](docs/user/troubleshooting/README.md): what an error or warning means and its fix
+- [limits](docs/user/reference/limits.md): what fetchloom does not do, and its size limits
 
 ## sources
 
@@ -76,7 +76,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [dropbox](docs/user/sources/dropbox.md): shared files and folder zips
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, private ones once `s3_buckets` or `gcs_buckets` lists them
 - [azure blob storage](docs/user/sources/azure.md): `azure:` containers and folders, private ones once `azure_containers` lists them, with a SAS, an account key, the az cli's login or a managed identity
-- [signing in](docs/user/signing-in.md): which sources need a key, `fetchloom auth login` or the source's variable, and the settings that let keys reach private buckets, containers and drive folders
+- [signing in](docs/user/guides/sign-in.md): which sources need a key, `fetchloom auth login` or the source's variable, and the settings that let keys reach private buckets, containers and drive folders
 
 ## reference
 
@@ -95,5 +95,5 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [engineering](docs/dev/engineering/README.md): builds, tests and releases
 - [performance](docs/dev/performance/README.md): performance work and its conditions
 - [style](docs/dev/style.md): prose, code and commit conventions
-- [decisions](docs/dev/decisions.md): design choices
+- [decisions](docs/dev/decisions/README.md): design choices
 - [roadmap](docs/dev/roadmap.md): future work

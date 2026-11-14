@@ -33,19 +33,13 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [cloud buckets](buckets.md) | S3, services that speak its API, and google cloud storage | `s3://<bucket>/<prefix>/`, `gs://<bucket>/<prefix>/` | private buckets |
 | [azure blob storage](azure.md) | azure containers | `azure:<account>/<container>/<prefix>/` | private containers |
 
-[signing in](../signing-in.md) says how to give fetchloom a key. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts.md#recovery) can find a file's new link while keeping its pinned hashes.
+[signing in](../guides/sign-in.md) says how to give fetchloom a key. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts/offline-and-recovery.md#recovery) can find a file's new link while keeping its pinned hashes.
 
 ## references and paths
 
 a reference is never a path on this machine. `add` given a path, such as `./flowers`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv`, imports the files there, [pinned by their bytes](../commands/add.md#files-on-this-machine) with `ref = "local"`, and sends nothing anywhere. `get` refuses a path with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml; [choosing a dataset](../commands/search.md#choosing-a-dataset) says what a plain word that names a folder here does.
 
 a link to a folder or a site's page, which answers with a web page rather than a file, is refused with `source.invalid` before anything is cached or pinned; [URLs and DOIs](urls-and-dois.md) says when.
-
-## choosing files
-
-`--select` and `--exclude` match the paths a source lists, before anything downloads. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions, and some files must remain. patterns do not reach members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom drop`](../commands/drop.md) writes one.
-
-the limit on how many files a dataset lists applies before filtering, and filters cannot get around a source's access checks, such as zenodo's, figshare's or dataverse's. a selected google docs entry is different: exclude it, and the fixed files around it still download.
 
 ## what a pin records
 

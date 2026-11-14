@@ -17,7 +17,7 @@ fetchloom drop [options] <path>...
 |---|---|
 | `-n`, `--dry-run` | show what would change on disk without changing it |
 
-[global options](README.md#global-options) also apply. each path is a file or a folder in the data folder, from the current folder or the folder `-C` names, and may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name, never a pattern, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there. on windows `\` separates folders too, and names are compared ignoring case.
+[global options](global-options.md) also apply. each path is a file or a folder in the data folder, from the current folder or the folder `-C` names, and may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name, never a pattern, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there. on windows `\` separates folders too, and names are compared ignoring case.
 
 ## what happens
 
@@ -67,7 +67,7 @@ exclude = ["00000005.wav"]
 
 the `00000005.wav` of `shard-000000.tar` and `shard-000002.tar` stays, and so does the choice of the other shards. edit both tables to change what every shard keeps.
 
-commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them, and the build first when a [recipe](../recipes.md) is made from the dataset. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees it.
+commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them, and the build first when a [recipe](../guides/recipes.md) is made from the dataset. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees it.
 
 an `exclude` written by hand does not reach a file inside an archive. the next sync that lists the source warns about one that names such a file, and gives the drop that leaves it out:
 
@@ -78,7 +78,7 @@ warning: exclude "data/train.csv" in datasets.dataset names a file inside datase
 
 ## raw data only recipes read
 
-a dataset with `place = false` keeps its files out of the data folder, but a [recipe](../recipes.md) still reads them, so a bad sample there still reaches the result. name the file by the path it would have in the data folder, which is where it lands in the folder a build's step reads too. stderr when a researcher drops a black frame from `images`, the zip `shapes.zip` that the recipe `thumbs` reads:
+a dataset with `place = false` keeps its files out of the data folder, but a [recipe](../guides/recipes.md) still reads them, so a bad sample there still reaches the result. name the file by the path it would have in the data folder, which is where it lands in the folder a build's step reads too. stderr when a researcher drops a black frame from `images`, the zip `shapes.zip` that the recipe `thumbs` reads:
 
 ```text
 $ fetchloom drop data/images/images/img_009.png
@@ -101,7 +101,7 @@ each refusal changes nothing.
 | a file left out already | 2, `usage` | nothing: the error names the pattern in data.toml that leaves it out. delete that pattern and run `fetchloom sync` to bring the file back |
 | a file inside an archive this machine never unpacked | 2, `usage` | run `fetchloom sync` first, so fetchloom knows what the archive holds |
 | every file of a dataset | 2, `usage` | run [`fetchloom remove <name>`](remove.md) to take the dataset out |
-| a file of a [recipe's](../recipes.md) result | 2, `usage` | choose its files inside the recipe's step |
+| a file of a [recipe's](../guides/recipes.md) result | 2, `usage` | choose its files inside the recipe's step |
 | a drop that leaves one archive the only file of its dataset | 2, `usage` | a dataset that is one archive places its files straight in its folder, so the archive's files would move. keep the files, or write the exclude by hand and run `fetchloom sync` |
 | a file the source lists, while data.toml changed the dataset since data.lock was written | 1, `lock.outdated` | run `fetchloom sync`, then drop again |
 | a dataset or a members table written inline | 50, `project.invalid` | write it as a table, as `[datasets.pets]` |
@@ -136,7 +136,7 @@ drop plans everything before it writes, which in a dataset of many files takes a
     Stopped at your request, so nothing changed
 ```
 
-once drop starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions](../concepts.md#interruptions) explains.
+once drop starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains.
 
 ## JSON
 

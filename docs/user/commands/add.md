@@ -30,12 +30,12 @@ fetchloom add [options] -i <file>
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
-[global options](README.md#global-options) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; several are one search, quoted or not, as in `fetchloom add fashion mnist`, when none is a link, an id, a DOI or a path. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
+[global options](global-options.md) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; several are one search, quoted or not, as in `fetchloom add fashion mnist`, when none is a link, an id, a DOI or a path. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
 
 ## what happens
 
 1. find the nearest project, or start one in the current folder, which a closing `Started a project in <folder>` line names. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given. its help suggests a folder of its own, `mkdir my-project` and `cd my-project`, and repeats your command for that folder, each relative path one folder further up, as `fetchloom add ../stuff` for `fetchloom add ./stuff`.
-2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../concepts.md#webdataset-shards) get a hint before anything downloads.
+2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
 3. download every file the project lacks into the cache, with the project still as it was.
 4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
 5. in a git repository, add the data folder to `.gitignore` if needed.
@@ -78,7 +78,7 @@ a failed add puts `data.toml` and `data.lock` back as they were, or removes them
 
 a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: every plain file in a folder, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`. a plain word that names a folder here, such as `iris` beside an `iris` folder, is neither imported nor searched: `"iris" is a folder here, so fetchloom did not search for it` exits 2, and its help offers `fetchloom add ./iris` and `fetchloom search iris`. a word written as a path that names nothing here, such as `flowerz/` or `visits.csv`, is never searched either: it exits 2 with the near name, as [search](search.md#choosing-a-dataset) shows.
 
-the files are copied into the cache and hashed as they are copied, as many at once as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
+the files are copied into the cache and hashed as they are copied, as many at once as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../guides/clusters.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
 
 ```text
    Imported flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
@@ -129,7 +129,7 @@ error: flowers was imported from files, and this machine's cache does not hold t
   help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
 
-a [mirror](../mirrors.md) that `fetchloom push` filled gives them instead; when the mirrors asked lack them or hold damaged copies, the error says `neither this machine's cache nor a mirror holds them`, and whoever keeps the mirror can push them again. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
+a [mirror](../guides/mirrors.md) that `fetchloom push` filled gives them instead; when the mirrors asked lack them or hold damaged copies, the error says `neither this machine's cache nor a mirror holds them`, and whoever keeps the mirror can push them again. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.
 
 one error names every import the run cannot supply, each import's first file before any second one in the details, so a teammate supplies them all in one round. when other datasets of the run are there to place, its help ends with the sync of them alone, which places what this machine has meanwhile; stderr from a real run whose mirror held only `flowers`:
 
@@ -177,7 +177,7 @@ error: --as names one dataset, and 2 links add 2
 
 ## stopping an add
 
-ctrl-c leaves `data.toml` and `data.lock` as they were: `add` writes them only once every file is in the cache, and one stopped while it places files puts both back. the add ends with `Stopped, and nothing was added`, exit 130. what arrived stays in the cache, so the same add again continues where it stopped. a ctrl-c after the last byte arrived lets the add finish, as [interruptions](../concepts.md#interruptions) explains.
+ctrl-c leaves `data.toml` and `data.lock` as they were: `add` writes them only once every file is in the cache, and one stopped while it places files puts both back. the add ends with `Stopped, and nothing was added`, exit 130. what arrived stays in the cache, so the same add again continues where it stopped. a ctrl-c after the last byte arrived lets the add finish, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains.
 
 ## editing during an add
 
@@ -209,16 +209,3 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 ## exit codes
 
 0 means the add succeeded, also when sync kept local conflicts, which JSON lists in `result.placement.kept`. 1 means a question went unanswered or was answered no: a large download, or a project in the home folder or at a disk's root. 2 means invalid usage, a path that names no file or folder among it. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. the others are the [shared exit codes](../reference/exit-codes.md).
-
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| a pattern matches nothing | it targets a different source path | inspect listed paths and [pattern rules](../reference/data-toml.md#patterns) |
-| `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom drop`](drop.md) |
-| a shell expands a pattern | the glob was not quoted | use `--select "**/*.csv"` |
-| adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
-| a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
-| `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
-| `there is no file or folder "./flower.csv"`, `usage`, exit 2 | the path has a typo, or the file is somewhere else | when one name in that folder is a typo away, the help line gives the command with it, as ``did you mean `fetchloom add ./flowers.csv`?``, keeping your other options; only that folder is read, and nothing is searched for. otherwise the help says which folder a relative path is read from, as `check the path: fetchloom reads ./stuff from ~/my-project` |
-| `huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `hf:datasets/scikit-learn/irsi does not exist, or is not public` | a typo in a hugging face or kaggle id, or a private dataset: both sources answer the two alike | when the owner lists a public dataset a typo away, which `add` asks the source once, signed in or not, and never offline, the help gives your command with the name fixed, as ``did you mean `fetchloom add hf:datasets/scikit-learn/iris`?``, or for a link with a query, a fragment or a login, which may hold a secret, the dataset alone, as `did you mean hf:datasets/scikit-learn/iris?`; no sign-in is offered, and the error is `reference.unresolved`, exit 10. otherwise see [when a download is refused](auth.md#when-a-download-is-refused) |

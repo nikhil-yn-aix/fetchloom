@@ -22,7 +22,7 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 | `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi`, `openneuro`, `arxiv` or `s2`. repeat it or separate names with commas. without it, every site but `ena`, `dandi`, `arxiv` and `s2`, which are searched only when named. any other name is a usage error |
 | `--limit <n>` | keep up to n matches from each site, 1 to 20, and show them all. without it, each site gives up to 3 and at most 12 show, as [results](#results) says; any other value is a usage error, exit 2 |
 
-[global options](README.md#global-options) apply.
+[global options](global-options.md) apply.
 
 ## results
 
@@ -109,6 +109,6 @@ run it again with the reference you mean; `data.toml` records that reference, no
 
 ## offline and failures
 
-search needs the internet: `--offline` fails with `offline.missing`, exit 20, and help to search again online. knowing an id does not make a new dataset available offline; see [offline](../concepts.md#offline).
+search needs the internet: `--offline` fails with `offline.missing`, exit 20, and help to search again online. knowing an id does not make a new dataset available offline; see [offline](../concepts/offline-and-recovery.md#offline).
 
 [exit codes](../reference/exit-codes.md) covers failures of the search sites and the network.

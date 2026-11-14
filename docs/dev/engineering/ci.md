@@ -44,7 +44,7 @@ linux reruns the built tests on btrfs and xfs loop images. their mounted filesys
 
 a second `windows-2025` job builds and archives the test build once, including `recipe_step` and the libtest selection record, while the native job runs its suite. three jobs independently create ReFS, exFAT and FAT32 volumes, verify `Get-Volume` reports the requested filesystem, and point `TMP` and `TEMP` at that volume. each runs the entire disk selection, not one third. they depend only on the windows producer, not the slower linux/mac matrix. they check out into `source/` and use nextest's workspace remapping, exercising relocation of both executable and fixture paths. no Rust build is needed in these consumers. `finally` restores the environment and detaches the VHDX. the transfer archive is retained for one day.
 
-[building and testing](building-and-testing.md#xfs-loop-mount) gives local filesystem reproduction commands. warning assertions count their exact archive hint, and the name-collision check ignores only the known no-link copy warning; FAT/exFAT must still exercise the same cases. capability-sensitive assertions still follow the filesystem's available operations; this matrix is not a promise about every NAS or cloud-file-provider implementation.
+[building and testing](other-platforms.md#xfs-loop-mount) gives local filesystem reproduction commands. warning assertions count their exact archive hint, and the name-collision check ignores only the known no-link copy warning; FAT/exFAT must still exercise the same cases. capability-sensitive assertions still follow the filesystem's available operations; this matrix is not a promise about every NAS or cloud-file-provider implementation.
 
 ## quality
 

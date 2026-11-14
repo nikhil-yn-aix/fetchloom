@@ -51,64 +51,18 @@ an S3 bucket that keeps versions names each object's version, which the lock URL
 
 a cloud storage URL keeps the object's generation. a listing with a missing, empty or nonnumeric generation fails with `source.invalid`; fetchloom does not replace it with an unversioned URL. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| S3 bucket | `s3://<bucket>/<prefix>`, or `s3:https://<host>/<bucket>/<prefix>` at another service | the object's HTTPS URL on the endpoint that listed it, with `?versionId=<id>` when the bucket keeps versions |
+| cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
+
 ## private S3 buckets
 
-the `s3_buckets` setting lists the buckets fetchloom may sign for with your AWS keys, in the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_S3_BUCKETS`, separated by commas. an AWS bucket is `s3://<bucket>`, or the bare name; one at another service is `s3:https://<host>[:<port>]/<bucket>`. a bucket nobody listed never gets a key, so a cloned project cannot make fetchloom present your key to a bucket of its choosing.
-
-```toml
-s3_buckets = ["s3://lab-raw", "s3:https://minio.lab.example:9000/scans"]
-```
-
-each run asks a bucket without a key first, so a public bucket never sees your key. when S3 refuses a listed bucket, with 401 or 403, fetchloom asks once more with a signature and signs that bucket's later requests from the start. a link that carries its own signature, as a presigned link does, is never signed again, and a signature never follows a redirect; [network](../../dev/architecture/network.md#trust-boundaries) has the details.
-
-keys come from where the AWS tools keep them, in this order:
-
-1. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN` for temporary keys.
-2. the profile `AWS_PROFILE` names, else `default`, in `~/.aws/credentials` and `~/.aws/config`, or the files `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name. the first of these the profile has gives its keys, as the AWS tools take them:
-    1. a role or a sign-in: `role_arn`, `source_profile`, `web_identity_token_file` or any `sso_` setting, such as `sso_session`. fetchloom leaves these to the AWS CLI, version 2.9 or later, and runs `aws configure export-credentials --profile <name> --format process` for the keys.
-    2. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/credentials`.
-    3. `credential_process`, a program that prints the keys.
-    4. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/config`.
-
-a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
-
-the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`.
-
-keys reach another service only where your AWS settings send them: `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` sends the keys above to that endpoint, and so does a profile's `endpoint_url`, set in the profile or for `s3` in the `services` section it names. a bucket there takes the keys of the one profile whose endpoint names it, so `AWS_PROFILE` can stay on your AWS profile. keys sent to an endpoint are never sent to AWS. `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` turns endpoint settings off. a plain `http` service is signed only when your settings name its `http` link.
-
-the secret never leaves the machine: a request carries the key id and a signature made with the secret. messages show the key id by its last four characters, such as `…WXYZ`.
-
-### keys from a program
-
-a `credential_process`, or the AWS CLI for a sign-in or a role, runs only once a bucket `s3_buckets` lists has refused a request without a key, when its requests first need keys. nothing in data.toml or data.lock chooses a profile, a program or a command.
-
-- the setting is split into words as the AWS CLI splits it, by shell quoting on linux and macos and by the windows rules on windows. no shell runs it, so `$HOME`, `~`, pipes and `;` reach the program as written. the program is a full path, or a name found in a folder on PATH. a folder PATH names relatively, such as `.`, is never searched, since it would be whatever folder fetchloom runs in, and a program named by a relative path fails with `usage`, exit 2. the AWS CLI is found the same way.
-- the program prints the JSON AWS defines for `credential_process`: `Version` 1, `AccessKeyId`, `SecretAccessKey`, and `SessionToken` and `Expiration` for keys that expire. nothing it prints reaches a message, a log, `--json` output or a file, and the keys stay in memory for the run.
-- keys with an `Expiration` are asked for again before they run out, and keys S3 calls expired are asked for once more; written keys have nothing to give new ones, so their refusal is the answer at once. [sources](../../dev/architecture/sources.md#signing-private-s3-buckets) has how the program runs and when it runs again.
-- a program that fails, prints no keys fetchloom can read, gives keys that have expired or has given none within a minute fails the request with `auth.required`, exit 40, and every later request for that bucket fails the same way. no request goes without a key or with other keys instead. ctrl-c ends the program.
-
-a profile whose sign-in has expired, as the AWS CLI reports with exit code 255:
-
-```text
-error: `aws configure export-credentials --profile lab` exited with code 255
-  help: sign in again with `aws sso login --profile lab`, or run `aws configure export-credentials --profile lab` yourself to see what went wrong
-```
-
-fetchloom itself asks no instance or container metadata service for keys. a profile whose role names `credential_source = Ec2InstanceMetadata` gets its keys from the AWS CLI, which asks that service.
+see [private S3 buckets](../guides/private-cloud-storage.md#private-s3-buckets).
 
 ## private cloud storage buckets
 
-the `gcs_buckets` setting lists the cloud storage buckets fetchloom may send your google credentials for, in the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_GCS_BUCKETS`, separated by commas: `gs://<bucket>`, or the bare name. a bucket nobody listed never gets them, so a cloned project cannot make fetchloom sign in to a bucket of its choosing.
-
-```toml
-gcs_buckets = ["gs://lab-private"]
-```
-
-each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom gets an access token from google's token endpoint, `https://oauth2.googleapis.com/token`, asks once more with it and sends it with that bucket's later requests. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
-
-the credentials are google's [application default credentials](../reference/environment.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. a token that expires or is refused with 401 is replaced. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
-
-the same credentials read the [private google drive folders and files](google-drive.md#private-files-and-folders) that `drive_folders` lists, with a scope of their own.
+see [private cloud storage buckets](../guides/private-cloud-storage.md#private-cloud-storage-buckets).
 
 ## access and limits
 

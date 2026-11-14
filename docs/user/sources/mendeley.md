@@ -29,6 +29,10 @@ downloads check the SHA-256 mendeley states, then the lock records it with each 
 
 files keep the folders mendeley shows them in, below the dataset's folder. each folder is listed in parts until the listing holds as many files as mendeley counts for it; a listing that ends sooner, or names a file twice, is refused with `source.invalid` rather than shortened. a file mendeley gives no download link for is listed as one fetchloom cannot download, so `--exclude` can leave it out.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| mendeley data | `mendeley:<id>@<version>` | `https://data.mendeley.com/public-files/datasets/<id>/files/<file id>/file_downloaded` |
+
 ## access and limits
 
 fetchloom reads the public API mendeley's own site uses, which lists any published version to anyone, so it sends no mendeley key; [sources](../../dev/architecture/sources.md#source-listings) says why it leaves the documented API alone, and a [weekly live check](../../dev/engineering/ci.md#live-source-checks) notices when mendeley changes the public one.

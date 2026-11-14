@@ -32,13 +32,13 @@ fetchloom get [options] <link>...
 | `--web-page` | keep the web page a link answers with as the file; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
 | `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 
-[global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; several are one search, quoted or not, as in `fetchloom get fashion mnist`, when none is a link, an id, a DOI or a path. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
+[global options](global-options.md) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; several are one search, quoted or not, as in `fetchloom get fashion mnist`, when none is a link, an id, a DOI or a path. quote patterns too: they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
 
 ## what happens
 
 without `-o`:
 
-1. resolve the reference and filter its files. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../concepts.md#webdataset-shards) get a hint before anything downloads.
+1. resolve the reference and filter its files. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
 2. reuse cached bytes or download the rest. a plain link is checked with `ETag` or `Last-Modified`.
 3. unpack archives unless `--no-extract` says not to, then place the files in the output folder.
 4. print the absolute output folder on stdout. no project file is written.
@@ -64,7 +64,7 @@ for several files, the `Fetched` line is followed by the folder's top level, lar
             README.md              913 B
 ```
 
-a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts.md#interruptions) shows. while a slow disk keeps the file, a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. time spent waiting for your answer to a question, such as whether to download a large file, counts toward neither the time nor the speed.
+a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) shows. while a slow disk keeps the file, a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. time spent waiting for your answer to a question, such as whether to download a large file, counts toward neither the time nor the speed.
 
 a plain link whose server answers that the file is unchanged, with a 304, downloads nothing while the cache or the folder holds what it served last; without such validators, the bytes may download again. a later `get` takes changed bytes from the source, so use [add](add.md) and commit the pins, or check the bytes with `--sha256`, to keep them fixed.
 
@@ -159,7 +159,7 @@ error: 4 of 4 links could not be fetched
   help: fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run `fetchloom get -i links.txt` again
 ```
 
-an interruption, a refused question about the total size or a cache that cannot open stops the whole run. during placement, ctrl-c stops new files; completed files stay, and unfinished copies never take their final names. once the last file is placed, or once `-o` starts writing its file, a ctrl-c lets get finish, as [interruptions](../concepts.md#interruptions) explains.
+an interruption, a refused question about the total size or a cache that cannot open stops the whole run. during placement, ctrl-c stops new files; completed files stay, and unfinished copies never take their final names. once the last file is placed, or once `-o` starts writing its file, a ctrl-c lets get finish, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains.
 
 ## link lists
 
@@ -217,20 +217,6 @@ the folder `--dir` names for a single link may be a link to a folder elsewhere; 
 
 ## exit codes
 
-in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before any request, with `network.refused`, exit 20, since it fetches each link from its source.
+in [mirror-only mode](../guides/mirrors.md#mirror-only-mode) `get` is refused before any request, with `network.refused`, exit 20, since it fetches each link from its source.
 
 0 returns an output folder for every link, or with `-o` the file. missing approval exits 1; invalid usage exits 2; an occupied destination, including a file `-o` will not replace without `--force`, exits 50 with `local.not_empty`; a `--sha256` mismatch exits 30 with `integrity.mismatch`. source, download, access and integrity errors use the [shared exit codes](../reference/exit-codes.md). with several links, the first failed link decides the code, and `--json` keeps every link's result in [`result.items`](../reference/json-output.md#command-results).
-
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| offline get cannot resolve a repository | only a link that kept one file, fetched on this machine before, runs offline | run it once without `--offline`, or for several files follow [offline preparation](../concepts.md#offline) |
-| a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
-| the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
-| `"fashion" is not a link, a DOI or an id` | search words mixed with links, ids or DOIs, which read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
-| `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
-| `hf:datasets/scikit-learn/iris@main has no file iris.csv` | the link names a file its site lists under another name, often in other case | write the name the help gives in the link |
-| `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
-| `--force replaces only the file -o names, so it cannot go with --dir` | `--force` replaces the one file `-o` writes, and get never replaces the files of a `--dir` folder | leave out `--force` and give `--dir` an empty folder, or write one file with `-o <file> --force` |
-| `data.csv already exists, and its bytes are not the ones --sha256 names` | the hash or the file is not the one you meant | check the hash; if it is right, choose another name with `-o`, or add `--force` |

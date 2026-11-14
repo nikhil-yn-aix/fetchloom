@@ -29,6 +29,10 @@ downloads check the MD5 or SHA-256 dryad states before the lock records each fil
 
 a listing that holds fewer files than dryad counts for the version is refused with `source.invalid` rather than shortened.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| dryad | `dryad:<doi>@<version number>` | `https://datadryad.org/api/v2/files/<id>/download` |
+
 ## credentials and limits
 
 dryad lets anyone list a dataset, but downloads only for an [API account](https://github.com/datadryad/dryad-app/blob/main/documentation/apis/api_accounts.md):

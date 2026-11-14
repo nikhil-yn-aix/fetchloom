@@ -12,7 +12,7 @@ fetchloom completions zsh
 fetchloom completions [options] <shell>
 ```
 
-`<shell>` is `bash`, `zsh`, `fish`, `powershell` or `elvish`. [global options](README.md#global-options) are accepted, except that `--json` is a usage error: the script is text for the shell, not a document.
+`<shell>` is `bash`, `zsh`, `fish`, `powershell` or `elvish`. [global options](global-options.md) are accepted, except that `--json` is a usage error: the script is text for the shell, not a document.
 
 ## loading the script
 

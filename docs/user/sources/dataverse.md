@@ -24,6 +24,11 @@ a pasted link keeps its `version`. a draft, an empty value or text that is no ve
 
 each file downloads from `/api/access/datafile/<number>?format=original`. the MD5 or SHA-256 dataverse states is checked; under another algorithm, the SHA-256 comes from the download alone. a change of filters keeps the resolved version, unless the reference changes or `lock --upgrade` asks for a newer one.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
+| dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
+
 ## credentials and limits
 
 public files need no account. for restricted files you have access to, sign in for that installation:

@@ -37,6 +37,10 @@ Downloading rat/sub-RAT123/sub-RAT123.nwb · 18.4 KiB
 
 an asset's link is its blob on dandi's S3 bucket, `https://dandiarchive.s3.amazonaws.com/blobs/...`, which holds the same bytes for as long as it exists; dandi's own download link, which leads there, is used for an asset that names no blob link. a published version never changes. a draft can, so `dandi:<id>` of a dandiset never published warns that its draft is read, and the lock's SHA-256 names the bytes.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| DANDI | `dandi:<id>@<version>`, a published version or `draft` | the asset's blob on `https://dandiarchive.s3.amazonaws.com/blobs/`, else dandi's download link for it |
+
 ## listing
 
 the assets come from `api.dandiarchive.org`, page by page, as [sources](../../dev/architecture/sources.md#source-listings) describes; a version that lists more assets than `most_files` stops before its pages are read.

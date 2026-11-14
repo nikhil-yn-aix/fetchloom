@@ -14,7 +14,7 @@ fetchloom list --json
 fetchloom list [options] [name]
 ```
 
-`name` is a dataset in `data.toml`. an unknown name is a usage error, exit 2, that suggests the closest name. there are no command-specific options. [global options](README.md#global-options) apply.
+`name` is a dataset in `data.toml`. an unknown name is a usage error, exit 2, that suggests the closest name. there are no command-specific options. [global options](global-options.md) apply.
 
 ## what it reads
 
@@ -28,7 +28,7 @@ tiny                                  zenodo:1                    not locked yet
 
 a wider terminal shows each reference whole and `data/small/tiny`, the one folder that is not the usual one. a name too long to stand beside its size takes a line of its own, whole, with the size and the folder below it. a script reading `list` through a pipe, or a coding agent, always gets one line per dataset.
 
-a dataset without a lock entry says it is not locked yet. a [recipe](../recipes.md) shows what it is made from in place of a reference, and says it is not built yet until data.lock pins its result. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) shows `not placed` in place of its folder. counts and sizes are of the files a dataset puts in its folder: an archive counts as the files it unpacked to here, less those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and as itself until a sync unpacks it. a stale lock can still supply these values; [lock --check](lock.md) checks the lock and [status](status.md) the placed files.
+a dataset without a lock entry says it is not locked yet. a [recipe](../guides/recipes.md) shows what it is made from in place of a reference, and says it is not built yet until data.lock pins its result. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) shows `not placed` in place of its folder. counts and sizes are of the files a dataset puts in its folder: an archive counts as the files it unpacked to here, less those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and as itself until a sync unpacks it. a stale lock can still supply these values; [lock --check](lock.md) checks the lock and [status](status.md) the placed files.
 
 with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its reference, or what a recipe makes it from, its title, how many files and bytes it holds, and its license and DOI when the lock has them:
 

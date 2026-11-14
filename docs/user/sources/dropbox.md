@@ -21,7 +21,11 @@ quote a link with a query string, as above, so your shell passes it unchanged. f
 
 `resolved` and the file's link are the shared link with `dl=1`, and SHA-256 and size pin the downloaded bytes.
 
-a folder arrives as one zip, named by its `Content-Disposition`. the lock pins the zip, and unpacking also records its tree hash and caches its members; `--no-extract` keeps it packed. patterns match the zip, not the paths inside it, and [archives](../concepts.md#archives) says which folders remain once it is unpacked.
+a folder arrives as one zip, named by its `Content-Disposition`. the lock pins the zip, and unpacking also records its tree hash and caches its members; `--no-extract` keeps it packed. patterns match the zip, not the paths inside it, and [archives](../reference/archives.md) says which folders remain once it is unpacked.
+
+| source | `resolved` | file `url` |
+|---|---|---|
+| dropbox | the shared URL with `dl=1` | the same URL |
 
 ## access and limits
 

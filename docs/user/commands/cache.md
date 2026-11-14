@@ -17,7 +17,7 @@ fetchloom cache gc [options]
 fetchloom cache verify [options]
 ```
 
-`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --inputs` also frees raw data that only built recipes read, where a folder mirror holds a copy that hashes right, once you say yes, as [raw input a mirror holds](#raw-input-a-mirror-holds) describes. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](README.md#global-options) apply to all three forms.
+`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --inputs` also frees raw data that only built recipes read, where a folder mirror holds a copy that hashes right, once you say yes, as [raw input a mirror holds](#raw-input-a-mirror-holds) describes. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](global-options.md) apply to all three forms.
 
 ## inspect
 
@@ -34,7 +34,7 @@ it also says where the space goes. stderr from a test on a drive that makes hard
   hint: `fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now
 ```
 
-- `Needed` is what the registered projects' data.lock files need. a file placed as a hardlink is a second name for the cached file, so its bytes are on the disk once, and deleting the cache's copy would free nothing of them. the files of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../recipes.md) read are needed too, and the line says how much they are, as `Needed 465 B by 1 project · 265 B of it is read only by builds`; `cache gc --inputs` frees them where a folder mirror holds a copy.
+- `Needed` is what the registered projects' data.lock files need. a file placed as a hardlink is a second name for the cached file, so its bytes are on the disk once, and deleting the cache's copy would free nothing of them. the files of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../guides/recipes.md) read are needed too, and the line says how much they are, as `Needed 465 B by 1 project · 265 B of it is read only by builds`; `cache gc --inputs` frees them where a folder mirror holds a copy.
 - `Unneeded` is what no registered project needs, and when [gc](#gc) frees it: now, once it is a day old, or never while a folder outside the cache links it too, as one `get` made does. when nothing is unneeded, the report ends with `Ok every cached file is needed by a project`.
 - `Copies` is what the projects hold as files of their own beside the cached files: copies, clones, and hardlinks that lost their link, as [below](#copies-and-backups). a clone shares its blocks with the cache's copy until either changes, so it takes little room, and the line says how much of it is clones. an edited file is your own, so it does not count.
 
@@ -53,7 +53,7 @@ a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a 
   hint: to link those files to the cache again, delete their project's data folder, if it holds nothing else you need, and run `fetchloom sync` there
 ```
 
-deleting the copy's `data/` and running `fetchloom sync` there brought it from `6.3M` back to `3.3M` in `du -sh`. `rsync -aH` keeps the links; [backups and copies](../hpc.md#backups-and-copies) has more.
+deleting the copy's `data/` and running `fetchloom sync` there brought it from `6.3M` back to `3.3M` in `du -sh`. `rsync -aH` keeps the links; [backups and copies](../guides/clusters.md#backups-and-copies) has more.
 
 ### moving a project to another machine
 
@@ -71,7 +71,7 @@ with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count tho
 
 ## gc
 
-1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, each [recipe](../recipes.md)'s pinned result, every file of a dataset with `place = false`, which builds read, and the files of a [kept rebuild](build.md#a-rebuild-that-differs).
+1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, each [recipe](../guides/recipes.md)'s pinned result, every file of a dataset with `place = false`, which builds read, and the files of a [kept rebuild](build.md#a-rebuild-that-differs).
 2. remove unneeded files and records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
 3. clean unfinished downloads nobody came back for in a day, or with `--now` every one no running fetchloom holds, and old temporary files, then report what it deleted.
 4. report the unneeded files kept because they are less than a day old.
@@ -150,11 +150,11 @@ fetchloom cache gc --now --dry-run
 
 ### raw input a mirror holds
 
-gc keeps every file a project needs, including the raw data of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../recipes.md) read. `--inputs` frees that raw data as well, so a laptop short on disk keeps every result while the raw data waits on a lab disk or a usb drive. a file goes only when all of these hold:
+gc keeps every file a project needs, including the raw data of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../guides/recipes.md) read. `--inputs` frees that raw data as well, so a laptop short on disk keeps every result while the raw data waits on a lab disk or a usb drive. a file goes only when all of these hold:
 
 - every registered project that needs it reads it only as raw input: fetched or imported data with `place = false`, read by recipes each built as data.lock pins it. a recipe still to build, a dataset that places the same file, a recipe's result or a [kept rebuild](build.md#a-rebuild-that-differs) keeps it. a recipe's result that only builds read stays too, since the next build would put it back, from a mirror or by running its recipe.
 - no name outside the cache shares it, such as a hardlink in a project, since freeing it would free nothing.
-- a folder [mirror](../mirrors.md), from `--mirror`, `FETCHLOOM_MIRRORS` or the `mirrors` setting, holds a copy that gc reads whole and that hashes to its name in this run. a web mirror does not count, nor does a link or a file of another size in a copy's place, and a folder without its `fetchloom-mirror` file is warned about and skipped, as sync skips it. the folder `push_to` names counts only when it is one of those mirrors, since a build reads only mirrors.
+- a folder [mirror](../guides/mirrors.md), from `--mirror`, `FETCHLOOM_MIRRORS` or the `mirrors` setting, holds a copy that gc reads whole and that hashes to its name in this run. a web mirror does not count, nor does a link or a file of another size in a copy's place, and a folder without its `fetchloom-mirror` file is warned about and skipped, as sync skips it. the folder `push_to` names counts only when it is one of those mirrors, since a build reads only mirrors.
 
 [`fetchloom push --inputs <recipe>`](push.md) puts exactly that raw data on a folder mirror. gc reads each copy it relies on in full, so 200 GiB on the mirror means 200 GiB read, and a `Checked` line says how much and how long; then it says what it would free and keep and what freeing costs, and asks. stderr of a real run at a terminal on linux, paths shortened, for a project whose python recipe `clean` reads a 93.8 MiB table and the 5 files of a zip, both with `place = false`, after `fetchloom push --inputs clean --to /home/me/lab-mirror`:
 
@@ -174,7 +174,7 @@ free adult and covid, 99.5 MiB, from the cache? [y/N] y
     Cleaned the cache, keeping the rest of what 1 project needs
 ```
 
-`du -sh` of the cache went from `100M` to `136K`. the project still syncs, and `fetchloom build` finds clean up to date, since its result stays in the cache. a build that runs clean again, as after a change to clean.py or with `build --check`, copies the raw data back from a folder mirror, `--offline` too, as `Copied 6 files · 99.5 MiB from /home/me/lab-mirror`, or downloads it from its source. so keep the mirror where builds can read it: a [mirror is not an archive](../mirrors.md#a-mirror-is-not-an-archive), and once it and the source have lost a file, no build can make the result again. use `--inputs` for raw data you rarely rebuild from.
+`du -sh` of the cache went from `100M` to `136K`. the project still syncs, and `fetchloom build` finds clean up to date, since its result stays in the cache. a build that runs clean again, as after a change to clean.py or with `build --check`, copies the raw data back from a folder mirror, `--offline` too, as `Copied 6 files · 99.5 MiB from /home/me/lab-mirror`, or downloads it from its source. so keep the mirror where builds can read it: a [mirror is not an archive](../guides/mirrors.md#a-mirror-is-not-an-archive), and once it and the source have lost a file, no build can make the result again. use `--inputs` for raw data you rarely rebuild from.
 
 no keeps everything as it was. `--yes` answers yes. without a terminal, and with `--json`, gc stops before it changes anything, the usual gc included, with `unconfirmed`, exit 1, and says what a yes would free; the JSON `fix` is null, since only a person may agree:
 
@@ -230,10 +230,3 @@ verification does not check copies in `data/`. after it finds changed bytes, run
 | interrupted work | 130 |
 
 [exit codes](../reference/exit-codes.md) lists usage and other local failures.
-
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| `get` data is collected | one-off downloads do not register a project | use a project for inputs whose cache retention matters |
-| `gc --inputs` keeps raw data with `no_copy` or `no_mirror` | the mirror lacks it, or gc was not told of the mirror | run `fetchloom push --inputs <recipe> --to <folder>`, then name that folder with `--mirror` or the `mirrors` setting |

@@ -82,7 +82,7 @@ project-local lock and placement records live in [the project folder](project-fo
 
 ## sharing and retention
 
-[cache sharing](../concepts.md#cache) covers per-user caches and trusted group access.
+[cache sharing](../concepts/cache-and-placement.md#cache) covers per-user caches and trusted group access.
 
 a cache folder you may not write to fails a download with `local.io` (exit 50), and the message names the folder that refused, such as `<cache>/partial`. fix its permissions, or set `FETCHLOOM_CACHE` to a folder you may write to.
 

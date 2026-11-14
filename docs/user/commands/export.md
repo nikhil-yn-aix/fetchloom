@@ -25,11 +25,11 @@ fetchloom export [options] [name]...
 | `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists` |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
 
-[global options](README.md#global-options) also apply.
+[global options](global-options.md) also apply.
 
 ## what it writes
 
-`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../recipes.md)'s result is in the `sha256` form like any placed dataset, and in no list of links, since nothing downloads it. in a fresh clone its files are in the data folder only once `fetchloom build` placed them, or a sync from a cache or [mirror](../mirrors.md) that holds them, so before that `sha256sum -c` cannot open them:
+`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../guides/recipes.md)'s result is in the `sha256` form like any placed dataset, and in no list of links, since nothing downloads it. in a fresh clone its files are in the data folder only once `fetchloom build` placed them, or a sync from a cache or [mirror](../guides/mirrors.md) that holds them, so before that `sha256sum -c` cannot open them:
 
 ```text
 data/clean/clean.csv: FAILED open or read
@@ -85,15 +85,6 @@ aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
 
 `out=` puts each file in the folder its dataset is placed in, so `aria2c -i sources.aria2 -d data`, run in the project's folder, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
-aria2c writes a file already in its folder again under a new name, as `tips.1.csv` beside `tips.csv`, unless it runs into an empty folder or with `--check-integrity=true --auto-file-renaming=false`: it then keeps a file whose SHA-256 matches, downloads one changed at the same size again, and stops with exit 13 at a file of another size, which you delete before running it again. it cannot write the read-only files sync placed, so point it at a folder sync did not fill. a second run with both options, over the files the first wrote, then the check, from real runs of aria2c 1.37 for a project whose `iris` and `tips` have `path = "raw"`:
-
-```sh
-$ aria2c -q -i sources.aria2 -d data --check-integrity=true --auto-file-renaming=false
-$ sha256sum -c data.sha256
-data/raw/iris.csv: OK
-data/raw/tips.csv: OK
-```
-
 a dataset with `place = false` has no files in the data folder, so `sha256` leaves it out and [says so](#what-it-leaves-out), while `links` and `aria2` still list its files, since a recipe's rebuild reads them.
 
 `-o` writes the whole file under a hidden name beside it, then gives it its name without replacing anything. the file is UTF-8 with LF line ends on every system, while windows powershell 5.1's `>` would write UTF-16.
@@ -117,7 +108,7 @@ otherwise a text form is complete or not written: `export` stops before writing 
 | what is missing | text forms | JSON field |
 |---|---|---|
 | a dataset `data.lock` does not pin as `data.toml` asks | all forms stop with `lock.outdated`, exit 1: run `fetchloom lock` first | `unlocked` |
-| a [recipe](../recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
+| a [recipe](../guides/recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
 | a link that holds a space or a control character, which fetchloom never pins itself | `links` and `aria2` stop with `project.invalid`, exit 50. a link that holds a login or a secret stops every command sooner, as [`data.lock` is read](../reference/data-lock.md#encoding-and-validation) | `no_link` |
 

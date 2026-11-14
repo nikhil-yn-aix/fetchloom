@@ -18,10 +18,14 @@ a pasted link to a file, such as `https://huggingface.co/datasets/org/name/blob/
 
 a reference that names a commit keeps it under `lock --upgrade`.
 
-a repository may hold one large archive cut into parts, such as `train.tar.gz.aa` and `train.tar.gz.ab`. they unpack as that one archive when the dataset lists every part, so a folder link or a `--select` should take all of them; [split archives](../concepts.md#split-archives) explains the rules.
+a repository may hold one large archive cut into parts, such as `train.tar.gz.aa` and `train.tar.gz.ab`. they unpack as that one archive when the dataset lists every part, so a folder link or a `--select` should take all of them; [split archives](../reference/archives.md#split-archives) explains the rules.
 
 when every select pattern starts with a folder, as `sample/10BT/**` or `data/train/*.parquet` do, fetchloom lists only those folders, up to eight of them, so a repository of a million files costs a few requests and its rate limit lasts. `Resolved` then says what it listed, as `3 files in cola`. a pattern such as `*.csv` or `**/x.csv` can match anywhere, so the whole repository is listed. a folder the hub does not have, or one without files, is listed with everything else, so a pattern that matches nothing is told against all the repository holds.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
+
 ## credentials
 
-public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/environment.md#credentials). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
+public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/credentials.md). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.

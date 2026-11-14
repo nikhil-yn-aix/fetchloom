@@ -17,7 +17,7 @@ fetchloom remove [options] <name>...
 |---|---|
 | `-n`, `--dry-run` | plan removal without applying project or cache changes |
 
-[global options](README.md#global-options) also apply. each argument is a dataset name from `data.toml`, not a source reference; several remove together, as `sync` and `drop` take several, and every name is checked before anything changes.
+[global options](global-options.md) also apply. each argument is a dataset name from `data.toml`, not a source reference; several remove together, as `sync` and `drop` take several, and every name is checked before anything changes.
 
 ## what happens
 
@@ -35,7 +35,7 @@ error: precious was imported from files, and no source can give them back, so re
 
 the removal records the import's files in the cache, so [cache gc](cache.md#gc) asks again before `--now` frees them. a dry run asks nothing.
 
-a dataset a [recipe](../recipes.md) is made from is not removed while any recipe reads it, unless that recipe is removed with it: `remove` exits 2, naming every recipe that reads it, as `clean and count are made from iris`, and changes nothing. removing a recipe drops its pin from `data.lock` too.
+a dataset a [recipe](../guides/recipes.md) is made from is not removed while any recipe reads it, unless that recipe is removed with it: `remove` exits 2, naming every recipe that reads it, as `clean and count are made from iris`, and changes nothing. removing a recipe drops its pin from `data.lock` too.
 
 nothing is downloaded. a file sync [adopted](sync.md#already-in-place) counts as placed, so `remove` deletes it if unchanged, and warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`. removal compares the saved size and modification time, so touching a file keeps it even when its bytes still match the pin.
 

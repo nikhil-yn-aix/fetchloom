@@ -2,7 +2,7 @@
 
 the benchmark suite compares the time and resources needed to retrieve checked research files.
 
-[bench/](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md) implements the suite; [running benchmarks](../engineering/benchmarks.md) gives the contributor route.
+[bench/](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md) implements the suite; [running benchmarks](README.md#running-benchmarks) gives the contributor route.
 
 ## what it answers
 

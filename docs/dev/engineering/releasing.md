@@ -2,7 +2,7 @@
 
 the release workflow packages one executable for linux, windows and macos on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI and crates.io and rebuilds the apt repository on github pages.
 
-no release has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
+no release has been published yet. use [source installation](../../user/start/install.md) until the first release. the artifacts and installers below describe what a release will ship.
 
 ## workflow
 
@@ -90,7 +90,7 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 
 ## publish a version
 
-1. set the Cargo version and refresh `Cargo.lock` through cargo. in the same commit, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper). pypi and crates.io show README.md as each version's description as it was when that version was published, so a rewrite after the tag would leave those pages saying there is no release. commit on main and wait for [CI](ci.md) on that commit.
+1. set the Cargo version and refresh `Cargo.lock` through cargo. in the same commit, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/start/install.md), [macos](../../user/start/install.md#macos) and the [python helper](../../user/reference/python-helper.md). pypi and crates.io show README.md as each version's description as it was when that version was published, so a rewrite after the tag would leave those pages saying there is no release. commit on main and wait for [CI](ci.md) on that commit.
 2. create the matching tag and publish it. for version 0.1.0, the commands are `git tag v0.1.0` and `git push origin v0.1.0`.
 3. watch the workflow with `gh run watch`. if it fails, fix the cause before retrying. a failed prerequisite does not create a release. retag only an unpublished failed release; published version tags must remain stable.
 4. inspect the draft's archives, debian packages, wheels, installers and checksums. download and check provenance:
@@ -165,4 +165,4 @@ try {
 
 stop the local server with ctrl-c when finished and remove only the test folders you created. also test a deliberately wrong checksum and an archive whose executable cannot run: installation must fail before replacing the installed executable.
 
-contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). include [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions.md#apache-20) explains the license boundary.
+contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). include [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions/interface-and-maintenance.md#apache-20) explains the license boundary.

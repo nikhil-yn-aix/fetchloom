@@ -23,7 +23,11 @@ fetchloom get osf:3eunr
 
 a node is no fixed snapshot: resolving it again, also after a filter change, can pick newer file versions, so read the lock's diff before you commit it.
 
-a storage link OSF says has expired is asked for again. a pinned download that answers 404 or 410 can use [recovery](../concepts.md#recovery), checked against the pinned size and hashes.
+a storage link OSF says has expired is asked for again. a pinned download that answers 404 or 410 can use [recovery](../concepts/offline-and-recovery.md#recovery), checked against the pinned size and hashes.
+
+| source | `resolved` | file `url` |
+|---|---|---|
+| OSF | `osf:<node or file id>` | the download link with a file version |
 
 ## credentials and limits
 

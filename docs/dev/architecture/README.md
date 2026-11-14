@@ -99,4 +99,22 @@ sequenceDiagram
 
 relocking can download and unpack before it writes `data.lock`, because unknown hashes and archive trees are part of the pin. the new lock is planned before it is written; the [sync loop's traps](sync-loop.md#invariants-and-traps) say which clashes still leave `data.lock` as it was, and its [settled-sync shortcut](sync-loop.md#settled-sync-shortcut) which runs record incomplete state.
 
-related: [developer guide](../README.md), [engineering](../engineering/README.md), [user concepts](../../user/concepts.md).
+related: [developer guide](../README.md), [engineering](../engineering/README.md), [user concepts](../../user/concepts/README.md).
+
+## read the code in this order
+
+private types keep their contracts beside their code, so changing one adapter does not need the others.
+
+| read | to see |
+|---|---|
+| `src/main.rs`, `src/lib.rs` | the entire public entry point and the module list |
+| `src/cli/args.rs`, `src/cli.rs` | arguments becoming settings, cancellation and command dispatch |
+| `src/project/manifest.rs`, `src/project/lock.rs`, `src/project/state.rs` | requested data, pinned bytes, and what is known about local files |
+| `src/cli/project.rs`, then `src/cli/sync.rs` | `sync` from the project lock through scanning, resolution and placement |
+| `src/cli/sync/disk.rs`, `src/cli/sync/place.rs` | why an existing file is kept, adopted or replaced, before you change disk behavior |
+| `src/cli/search.rs`, `src/source/search.rs`, `src/output/picker.rs`, `src/cli/list.rs` | catalog discovery, the arrow-key choice, explicit selection and the project inventory, apart from downloads |
+| `src/source.rs`, then one adapter | a reference becoming a listing, with source policy kept out of the downloader |
+| `src/net/download.rs`, `src/cache/partial.rs`, `src/cache/partial/hashing.rs`, `src/cache/deferred.rs` | response bytes through the writer and hash worker into the cache, flushed as [batch durability](downloads.md#batch-durability) says |
+| `src/output.rs`, `src/output/style.rs` | how every line is styled and how `FETCHLOOM_COLORS` changes the tones; each command's file, such as `src/cli/list.rs`, builds its own tables |
+| `src/archive.rs`, `src/plan.rs`, `src/place.rs` | archive members becoming checked destinations and filesystem operations |
+| `tests/cli/support.rs`, then the matching scenario | reproducing behavior with local servers and isolated folders |

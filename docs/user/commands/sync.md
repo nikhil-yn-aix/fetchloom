@@ -28,18 +28,18 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 | `--strict` | fail with `data.not_ready`, exit 1, when the data asked for is not ready to use once the sync is done, naming each file or dataset with what makes it ready. the sync does the same work and keeps edits as without it, as [local changes](#local-changes) shows |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
-[global options](README.md#global-options) also apply.
+[global options](global-options.md) also apply.
 
 ## what happens
 
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, keeping unchanged entries. a dataset [renamed](../reference/data-toml.md#dataset-names) in data.toml keeps its pin under the new name, with no request, and says `Renamed iris to flowers in data.lock · its pin stays`. a dataset pinned for the first time gets a `Pinned` line with what it resolved to, its title, file count and size, so an id with a typo that pins an unrelated record stands out.
-3. reuse unchanged placed files and cached files, then take what the cache lacks from files [already in place](#already-in-place) in the data folder, then from the [mirrors](../mirrors.md) you named, and download the rest. in [mirror-only mode](../mirrors.md#mirror-only-mode), a file no mirror holds fails the run before any download.
+3. reuse unchanged placed files and cached files, then take what the cache lacks from files [already in place](#already-in-place) in the data folder, then from the [mirrors](../guides/mirrors.md) you named, and download the rest. in [mirror-only mode](../guides/mirrors.md#mirror-only-mode), a file no mirror holds fails the run before any download.
 4. check downloads against their pinned sizes and hashes, then place files and remove the unchanged files fetchloom placed that no dataset needs now.
 5. save the project's state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed.
 
-with `--json`, `result.datasets` names the datasets whose pins changed and `result.selected` the names the sync was given, or null; [JSON output](../reference/json-output.md) has the rest. [placement](../concepts.md#placement) says how files are placed and when they are writable.
+with `--json`, `result.datasets` names the datasets whose pins changed and `result.selected` the names the sync was given, or null; [JSON output](../reference/json-output.md) has the rest. [placement](../concepts/cache-and-placement.md#placement) says how files are placed and when they are writable.
 
 a locked 32-byte file that upstream replaced with a 15-byte file fails (stderr):
 
@@ -49,7 +49,7 @@ error: iris/iris.csv is not the file data.lock records
   help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`
 ```
 
-a [folder mirror](../mirrors.md) that holds the pinned bytes gives them back. upgrade only when you mean to change the input, since it pins what the source serves now. with `--json` the error's `fix` is null. [recovery](../concepts.md#recovery) covers expired download links and interrupted transfers.
+a [folder mirror](../guides/mirrors.md) that holds the pinned bytes gives them back. upgrade only when you mean to change the input, since it pins what the source serves now. with `--json` the error's `fix` is null. [recovery](../concepts/offline-and-recovery.md#recovery) covers expired download links and interrupted transfers.
 
 a failed sync reports the step it stopped in, not every problem. archives are fetched and unpacked before other files, so a missing archive stops the run before other files are asked for. files that did download wait in the cache, since nothing is placed while a file failed. to place the datasets you need now, [name them](#named-datasets), as `fetchloom sync tips`.
 
@@ -159,7 +159,7 @@ if registering with the cache fails, sync still succeeds, with a warning that `c
 
 ## recipe results
 
-sync places a [recipe](../recipes.md)'s pinned result from the cache, the data folder or a [mirror](../mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset, or an `add`, places the rest and leaves the result out with a warning naming the build that makes it. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run:
+sync places a [recipe](../guides/recipes.md)'s pinned result from the cache, the data folder or a [mirror](../guides/mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset, or an `add`, places the rest and leaves the result out with a warning naming the build that makes it. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run:
 
 ```text
 warning: clean's pinned result is not on this machine or a mirror, so it is left out
@@ -213,18 +213,8 @@ a checkout you may not write, such as a read-only mount in a job or a container,
 
 other failures use the [shared exit codes](../reference/exit-codes.md).
 
-## common mistakes
-
-| symptom | cause | fix |
-|---|---|---|
-| the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
-| `error: offline, and 2 files data.lock names are not in the cache`, though a web mirror holds them | offline asks no web mirror, and the help says so, as `offline asks no web mirror, so http://127.0.0.1:8000 was not asked` | go online, or use what needs no network: a cache that holds them in `FETCHLOOM_CACHE`, or a folder mirror that holds them with `--mirror <folder>` |
-| `error: flowers was imported from files, and this machine's cache does not hold them` offline, exit 20 with `offline.missing` | no link fetches an [imported](add.md#files-on-this-machine) file, so going online does not help, and the help offers no download | copy its files from the folder they came from into the dataset's folder by hand, then sync, or sync with `--mirror <folder>` naming a folder [mirror](../mirrors.md) that holds them; JSON's `fix` is null |
-| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | data.lock was edited by hand or damaged, as [data.lock](../reference/data-lock.md#encoding-and-validation) explains; `status`, `lock --check` and `push` stop the same way | restore data.lock from git, or set that size back by hand. `--force` does not help, and `fetchloom lock --upgrade` pins what the source serves now, which may be other bytes |
-| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them. sync warns when it lists the source again and the pattern matches none of those files | run the [`fetchloom drop`](drop.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
-
 ## stopping a sync
 
-ctrl-c while a sync resolves or downloads stops it before it places any file, with `Stopped while talking to zenodo.org, so nothing changed`, as [interruptions](../concepts.md#interruptions) explains. a sync that already wrote `data.lock`, which it does before it downloads, keeps the new `data.lock` and says `so the data folder is as it was` instead.
+ctrl-c while a sync resolves or downloads stops it before it places any file, with `Stopped while talking to zenodo.org, so nothing changed`, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains. a sync that already wrote `data.lock`, which it does before it downloads, keeps the new `data.lock` and says `so the data folder is as it was` instead.
 
 during placement, the first ctrl-c stops new placements and removals; those under way may finish, and unfinished copies never take their final names. run sync again to finish.

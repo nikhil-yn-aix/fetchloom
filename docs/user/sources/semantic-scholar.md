@@ -24,6 +24,11 @@ fetchloom add s2:papers
 
 a prefix is read in any case, `s2:doi:` as `s2:DOI:`, and a DOI is kept in lowercase. an arXiv id with its version, as a citation writes `1706.03762v7`, is refused with help that names `s2:ARXIV:1706.03762` and `arxiv:1706.03762@v7`, which pins that version. other pages of semantic scholar's site are refused with `reference.invalid`, and the help names a paper's page and an id. the release `2026-11-10` held `abstracts`, `authors`, `citations`, `embeddings-specter_v1`, `embeddings-specter_v2`, `paper-ids`, `papers`, `publication-venues`, `s2orc`, `s2orc_v2` and `tldrs`; a name the release does not hold is refused with that list.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| semantic scholar paper | `s2:<semantic scholar id>`, or the `arxiv:<id>@v<version>` of a paper whose pdf comes from arXiv | the open-access pdf's link semantic scholar gave |
+| semantic scholar dataset | `s2:<dataset>@<release>` | `https://api.semanticscholar.org/datasets/v1/release/<release>/dataset/<dataset>#<file>`, the API's listing of the dataset's links with the file's name after `#`, never a signed link: each download asks it for a fresh one |
+
 ## one paper
 
 a paper takes its title, DOI and pdf link from semantic scholar's API, and its license where semantic scholar states one. the dataset is named after the title, at most four words, and the pdf after the DOI, as publishers name their pdfs, or else after the corpus id. stderr from a real dry run:

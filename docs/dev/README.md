@@ -19,46 +19,16 @@ then work in the [engineering loop](engineering/README.md#the-fast-loop): a fail
 |---|---|
 | find the file that owns something | [code map](architecture/codemap.md) |
 | see how the parts fit | [architecture](architecture/README.md) |
-| choose the narrowest test | [select narrowly](engineering/building-and-testing.md#select-narrowly), then [common changes](#common-changes) |
+| choose the narrowest test | [select narrowly](engineering/building-and-testing.md#select-narrowly), then [common changes](engineering/common-changes.md) |
 | review or update snapshots | [update snapshots](engineering/building-and-testing.md#update-snapshots), with `cargo insta review` or `INSTA_UPDATE` |
 | run the python, ignored or live tests | [python and live tests](engineering/building-and-testing.md#python-and-live-tests) |
-| run the linux gate from windows | [WSL gate](engineering/building-and-testing.md#wsl-gate) |
+| run the linux gate from windows | [WSL gate](engineering/other-platforms.md#wsl-gate) |
 | reproduce a reported problem | [debugging evidence](engineering/profiling.md#reproduce-a-reported-problem): verbose version, timed debug logs, JSON counters and per-file traces |
-| measure a performance change | [running benchmarks](engineering/benchmarks.md), and past results in [performance](performance/README.md) |
-| know why a boundary exists | [decisions](decisions.md) |
+| measure a performance change | [running benchmarks](performance/README.md#running-benchmarks), and past results in [performance](performance/README.md) |
+| know why a boundary exists | [decisions](decisions/README.md) |
 | see pending work | [roadmap](roadmap.md) |
 | write prose, comments and commits | [style](style.md) |
-| learn what fetchloom does for a user | the user guide's [concepts](../user/concepts.md), [commands](../user/commands/README.md) and [sources](../user/sources/README.md) |
-
-## read the code in this order
-
-private types keep their contracts beside their code, so changing one adapter does not need the others.
-
-| read | to see |
-|---|---|
-| `src/main.rs`, `src/lib.rs` | the entire public entry point and the module list |
-| `src/cli/args.rs`, `src/cli.rs` | arguments becoming settings, cancellation and command dispatch |
-| `src/project/manifest.rs`, `src/project/lock.rs`, `src/project/state.rs` | requested data, pinned bytes, and what is known about local files |
-| `src/cli/project.rs`, then `src/cli/sync.rs` | `sync` from the project lock through scanning, resolution and placement |
-| `src/cli/sync/disk.rs`, `src/cli/sync/place.rs` | why an existing file is kept, adopted or replaced, before you change disk behavior |
-| `src/cli/search.rs`, `src/source/search.rs`, `src/output/picker.rs`, `src/cli/list.rs` | catalog discovery, the arrow-key choice, explicit selection and the project inventory, apart from downloads |
-| `src/source.rs`, then one adapter | a reference becoming a listing, with source policy kept out of the downloader |
-| `src/net/download.rs`, `src/cache/partial.rs`, `src/cache/partial/hashing.rs`, `src/cache/deferred.rs` | response bytes through the writer and hash worker into the cache, flushed as [batch durability](architecture/network.md#batch-durability) says |
-| `src/output.rs`, `src/output/style.rs` | how every line is styled and how `FETCHLOOM_COLORS` changes the tones; each command's file, such as `src/cli/list.rs`, builds its own tables |
-| `src/archive.rs`, `src/plan.rs`, `src/place.rs` | archive members becoming checked destinations and filesystem operations |
-| `tests/cli/support.rs`, then the matching scenario | reproducing behavior with local servers and isolated folders |
-
-## common changes
-
-start with one named test in the module, then widen to these filters, from the repository root.
-
-| change | read | tests to run |
-|---|---|---|
-| add a source | [sources](architecture/sources.md), `src/source.rs` | `cargo test --locked --lib source::`; `cargo test --locked --test cli get::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli project::` |
-| change output | [output](architecture/output.md), `src/output.rs` | `cargo test --locked --lib output::`; `cargo test --locked --test cli progress::`; `cargo test --locked --test cli hints::` |
-| fix a placement bug | [placing](architecture/placing.md), `src/cli/sync/place.rs` | `cargo test --locked --lib place::`; `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
-| change the network layer | [network](architecture/network.md), `src/net.rs` | `cargo test --locked --lib net::`; `cargo test --locked --test cli split::`; `cargo test --locked --test cli proxy::`; `cargo test --locked --test cli secrets::` |
-| add a CLI option | [CLI](architecture/cli.md), `src/cli/args.rs` | `cargo test --locked --lib cli::args::`; `cargo test --locked --test cli basics::`; `cargo test --locked --test cli caps::` |
+| learn what fetchloom does for a user | the user guide's [concepts](../user/concepts/README.md), [commands](../user/commands/README.md) and [sources](../user/sources/README.md) |
 
 ## repository map
 

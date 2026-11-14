@@ -39,6 +39,10 @@ select by folder, as `--select "matrix/*"`; some files are large, such as GPL96'
 
 GEO remakes a series' SOFT, MINiML and matrix files from time to time, as the dates in their folders show, so a file pinned once can stop matching. a sync that receives other bytes stops with `integrity.mismatch`, exit 30, and places nothing; [push](../commands/push.md) the pinned bytes to a mirror to keep them, or run [`lock --upgrade`](../commands/lock.md#upgrading) to take the new ones. `access` is `public`.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| GEO | `geo:<accession>` | the file's link on `https://ftp.ncbi.nlm.nih.gov/geo/` |
+
 ## limits
 
 requests to NCBI's hosts start a third of a second apart, as NCBI asks of a program without a key, so a large listing takes a while. [search](../commands/search.md) finds GEO's series through NCBI's E-utilities, and records GEO keeps private for reviewers are not listed.

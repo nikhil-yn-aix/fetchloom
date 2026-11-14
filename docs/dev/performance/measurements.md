@@ -415,7 +415,7 @@ max runs 32 requests at once, 16 to one host. against a server that waits 50 ms 
 
 the default level against fixed max, in the same rounds: the 50 ms server 3.565 [3.525, 3.575] on glibc and 3.545 [3.501, 3.565] on musl; the local server's peak memory 0.765 [0.749, 0.778] and 0.848 [0.835, 0.869].
 
-growing from the default's numbers loses max's win where it is the point: a debug log of one run showed the first doubling, measured on a round that still held requests begun before it, bringing data in only 1.34 times faster, and other runs went back a step there, which the wide interval shows. starting at max and narrowing keeps the far case, but the first round has already run 16 downloads at once, so the local case keeps about half of max's extra memory, 10% on glibc and 5% on musl, neither interval clearing a 10% bar for the code it adds. both were dropped; max stays a fixed 32 and 16, which [resources](../../user/resources.md#which-to-pick) already tells people to pick for far servers. a level that knew a server was near before its first round could do better; nothing read today says so.
+growing from the default's numbers loses max's win where it is the point: a debug log of one run showed the first doubling, measured on a round that still held requests begun before it, bringing data in only 1.34 times faster, and other runs went back a step there, which the wide interval shows. starting at max and narrowing keeps the far case, but the first round has already run 16 downloads at once, so the local case keeps about half of max's extra memory, 10% on glibc and 5% on musl, neither interval clearing a 10% bar for the code it adds. both were dropped; max stays a fixed 32 and 16, which [resources](../../user/guides/speed-and-memory.md#which-to-pick) already tells people to pick for far servers. a level that knew a server was near before its first round could do better; nothing read today says so.
 
 ## an indexed project state, 2026-11-12
 
@@ -608,7 +608,7 @@ one glibc release build of the [scans](#scans-inside-per-file-loops-2026-11-12) 
 
 ## resources levels against default, 2026-11-13
 
-what each [level](../../user/resources.md) trades, on the eight workloads of the perf audit's level pass, four of them on musl too. lean sets 2 requests at once, 2 to one host, a 128 MiB buffer budget and 2 local workers; max sets 32 and 16 requests and keeps default's workers and memory. every arm ran the same binary with only `FETCHLOOM_RESOURCES` changed. a ratio is level over default, the median of paired rounds with its 95% bootstrap interval.
+what each [level](../../user/guides/speed-and-memory.md) trades, on the eight workloads of the perf audit's level pass, four of them on musl too. lean sets 2 requests at once, 2 to one host, a 128 MiB buffer budget and 2 local workers; max sets 32 and 16 requests and keeps default's workers and memory. every arm ran the same binary with only `FETCHLOOM_RESOURCES` changed. a ratio is level over default, the median of paired rounds with its 95% bootstrap interval.
 
 | workload | libc | pairs | default | lean: time, peak memory | max: time, peak memory |
 |---|---|---:|---|---|---|
@@ -686,7 +686,7 @@ on xfs a reflink of a small file costs far more than a hardlink. read-only place
 
 a musl release build of df4d2a5b with the switch, interleaved rounds after a warmup under the measure lock on cores 12-23, xfs loop-mounted on the nvme disk and shared with other work, which flagged most rounds as loaded; the clean rounds alone give 0.767 [0.751, 0.781] in 9 pairs and 0.484 [0.409, 0.539] in 6.
 
-the speed is the isolation. a reflink shares blocks until either side writes, so an edit to a placed file, after a chmod or by a program that ignores the read-only bit, leaves the cache and every other project as they were. a hardlink is the cache's object, so the same edit changes the object and every project's link to it at once, and fetchloom can only find it on the next run, put the pinned bytes back and keep the changed copy beside them. ext4, which has no reflinks, already works this way, and xfs would join it. the [placement order](../decisions.md) puts reflinks first for that isolation, so a speed rule cannot trade it away: not adopted, a placement decision to make with these numbers.
+the speed is the isolation. a reflink shares blocks until either side writes, so an edit to a placed file, after a chmod or by a program that ignores the read-only bit, leaves the cache and every other project as they were. a hardlink is the cache's object, so the same edit changes the object and every project's link to it at once, and fetchloom can only find it on the next run, put the pinned bytes back and keep the changed copy beside them. ext4, which has no reflinks, already works this way, and xfs would join it. the [placement order](../decisions/README.md) puts reflinks first for that isolation, so a speed rule cannot trade it away: not adopted, a placement decision to make with these numbers.
 
 ## a json document in pieces, 2026-11-13
 
@@ -1028,7 +1028,7 @@ two fixed-input tests failed first: the old path did not spread two pending file
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
 
-use the [benchmark workflow](../engineering/benchmarks.md) for new comparisons with retained commands, run records and independent checking.
+use the [benchmark workflow](README.md#running-benchmarks) for new comparisons with retained commands, run records and independent checking.
 
 ## conditions
 

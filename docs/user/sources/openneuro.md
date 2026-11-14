@@ -36,6 +36,10 @@ Downloading 2 files · 6.0 MiB
 
 a file in git-annex comes from openneuro's S3 bucket at the object version the snapshot pins, as `https://s3.amazonaws.com/openneuro.org/ds000001/sub-01/anat/sub-01_T1w.nii.gz?versionId=…`, so a later snapshot cannot change its bytes. a file in git, or one openneuro gives no S3 link for, comes from openneuro by its git object or key, `https://openneuro.org/crn/datasets/ds000001/objects/…`.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| OpenNeuro | `openneuro:<accession>@<snapshot>` | a git-annex file's link on `https://s3.amazonaws.com/openneuro.org/` with the `versionId` the snapshot pins, else `https://openneuro.org/crn/datasets/<accession>/objects/<object or key>` |
+
 ## listing
 
 openneuro lists a snapshot one folder at a time, up to `most_files`, and `--select` patterns list only the folders they can reach, so a dataset of hundreds of subjects takes a few requests: `sub-*/anat/*` lists each subject's folder and the `anat` folder in it, never `func`, and `*.tsv` the top folder alone. `Resolved` then says what it listed, as `1 file in the top folder` or `2 files in sub-01/anat`. a pattern that starts with `**` can match anywhere, so the whole snapshot is listed, and a pattern that matches none of the files listed has the whole snapshot listed instead, so it is told against all the snapshot holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.

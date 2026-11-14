@@ -51,12 +51,6 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 
 fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data. a `version` that is no whole number names no format, so the error says what it holds instead; for `version = "1"` that is `data.lock cannot be read: version is text in quotes, not a whole number such as 1`.
 
-## a git merge conflict
-
-a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. its help, and the JSON `fix`, name `fetchloom lock`, which [merges both files](../commands/lock.md#after-a-git-merge) one dataset at a time without downloading; each side of `data.lock` must read on its own.
-
-the lists in `data.lock.d` are named by their contents, so a merge brings each branch's new parts in beside the others without a conflict. the merge reads only the parts of the pins it keeps, which may be all git left of a side, and removes the parts no pin names once `data.lock` is written.
-
 ## big datasets
 
 a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock, and says so: `data.lock names data.lock.d/photos.2e682d3ff7a4.tsv.zst, which is not there`, with help to get the commit that adds data.lock.d. a list is named by its content, so a new one is a new file, which `git commit -a` leaves out: in a git repository, `status` warns of each list data.lock names that git does not have, and a command that writes one ends with `git add data.lock.d`. `data.lock.d` must be a real folder, as `.fetchloom` must: when it is a link, a junction or a file, a command that changes the project, or reads a list there, stops with `project.invalid`, exit 50, before it reads, writes or removes a list, so a cloned project cannot point fetchloom at files outside it.
@@ -91,7 +85,7 @@ reading checks every part's name, line, order and count against `data.lock`, and
 
 ## recipe results
 
-a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, once every step of the build is done, after the result's files are in the cache; every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe, and `sync` places a result's files like a fetched dataset's. `locked` moves only when the key or the tree changes, so a build that makes the same files again leaves the table as it is. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
+a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../guides/recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, once every step of the build is done, after the result's files are in the cache; every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe, and `sync` places a result's files like a fetched dataset's. `locked` moves only when the key or the tree changes, so a build that makes the same files again leaves the table as it is. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
 
 from a real build:
 
@@ -120,16 +114,16 @@ files_sha256 = "sha256:48557b15b131a59c6aff11e5019b52425a87400b3ddadc974a5c04673
 |---|---|
 | `from` | the datasets it is made from, in `data.toml` order, each with its `name` and the `content` hash the key took, `sha256:` and 64 hex digits |
 | `run` | the command as `data.toml` writes it, with `{name}` and `{out}` not filled in |
-| `code` | the project files and folders whose bytes entered the key, sorted by path: a file with its `sha256`, 64 hex digits without a prefix, a folder with the `tree` of its files, `sha256:` and 64 hex digits; `[]` when there are none. [recipes](../recipes.md#what-fetchloom-keys) says how each is hashed |
+| `code` | the project files and folders whose bytes entered the key, sorted by path: a file with its `sha256`, 64 hex digits without a prefix, a folder with the `tree` of its files, `sha256:` and 64 hex digits; `[]` when there are none. [recipes](recipes.md#what-fetchloom-keys) says how each is hashed |
 | `env` | the variables set for the command, by name; omitted when there are none |
-| `key` | `sha256:` and the hash of everything the result was made from, as [recipes](../recipes.md#what-fetchloom-keys) lists it |
+| `key` | `sha256:` and the hash of everything the result was made from, as [recipes](recipes.md#what-fetchloom-keys) lists it |
 | `locked` | when the key or the tree last changed, in UTC |
 | `tree` | `sha256:` and the [tree hash](#the-tree-hash) of the files the result holds |
 | `files_in`, `file_count`, `file_bytes`, `files_sha256` | the result's list in `data.lock.d`, as for a [big dataset](#big-datasets) |
 
 a file's own hash has no prefix; a hash of something else, such as an input's content, a key, a tree or a list, starts with `sha256:`. a table that mixes these keys with those of a fetched dataset (`ref`, `spec`, `extract`, `resolved`, `title`, `license`, `doi`, `access` or `files`) is refused with `project.invalid`, as is one with no input, an input named twice or after the dataset itself, an empty program, a code path that leaves the project or comes twice, code with both or neither of `sha256` and `tree`, a variable whose name holds `=`, a NUL character in the command or a variable, or a list whose files do not hash to `tree`.
 
-each input's `content` is what the recipe read of it. for a fetched dataset it is the SHA-256 of one line a pinned file, sorted by path: `path`, `size` and `sha256` separated by tabs, then a tab and `sha256:` with the tree hash for an archive that unpacks, and a newline. a [split archive](#split-archives) is one line, at its first part, so the same files cut into other parts keep the content. for a recipe's result it is the result's `tree`.
+each input's `content` is what the recipe read of it. for a fetched dataset it is the SHA-256 of one line a pinned file, sorted by path: `path`, `size` and `sha256` separated by tabs, then a tab and `sha256:` with the tree hash for an archive that unpacks, and a newline. a [split archive](archives.md#split-archives) is one line, at its first part, so the same files cut into other parts keep the content. for a recipe's result it is the result's `tree`.
 
 ## the spec hash
 
@@ -145,7 +139,7 @@ the `ref=` line contains the manifest reference. when patterns are present, add 
 
 an unchanged spec and `extract` keep the existing lock entry unless an upgrade is requested. when only `extract` changed, the entry keeps every pinned file and learns again only what its archives unpack to: from this machine's record of an earlier unpacking, or from the cached archive, so the source is not listed again and a `--offline` run works while the archives are cached. an archive the cache lacks is downloaded by its pinned link. filter edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 
-sync drops an archive's own bytes once its files are in the cache, unless another project here keeps it packed, so turning `extract` off after unpacking downloads the archives again by their pinned links, and `--offline` names them as missing. for webdataset shards, choose before the first sync: the hint that [webdataset shards](../concepts.md#webdataset-shards) shows comes before anything downloads.
+sync drops an archive's own bytes once its files are in the cache, unless another project here keeps it packed, so turning `extract` off after unpacking downloads the archives again by their pinned links, and `--offline` names them as missing. for webdataset shards, choose before the first sync: the hint that [webdataset shards](archives.md#webdataset-shards) shows comes before anything downloads.
 
 `resolved` is not always immutable. plain URLs, drive links, dropbox links, OSF nodes and bucket prefixes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
 
@@ -153,32 +147,6 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 
 | source | `resolved` | file `url` |
 |---|---|---|
-| plain URL | the parsed URL | the same URL |
-| zenodo | `zenodo:<record id>` | `https://zenodo.org/api/records/<id>/files/<name>/content` |
-| figshare | `figshare:<id>@<version>` | the API's download URL |
-| dataverse dataset | `dataverse:<host>/<persistent id>@<major.minor>`; the id includes `doi:` or `hdl:` | `/api/access/datafile/<id>?format=original` on that host |
-| dataverse file | `dataverse:<host>/file:<numeric id>@<major.minor>`; a file PID resolves to its numeric id | `/api/access/datafile/<id>?format=original` on that host |
-| dryad | `dryad:<doi>@<version number>` | `https://datadryad.org/api/v2/files/<id>/download` |
-| mendeley data | `mendeley:<id>@<version>` | `https://data.mendeley.com/public-files/datasets/<id>/files/<file id>/file_downloaded` |
-| ENA | `ena:<accession>`, with `submitted/` or `sra/` before it for those files | the file's https link on ENA's file server |
-| GEO | `geo:<accession>` | the file's link on `https://ftp.ncbi.nlm.nih.gov/geo/` |
-| DANDI | `dandi:<id>@<version>`, a published version or `draft` | the asset's blob on `https://dandiarchive.s3.amazonaws.com/blobs/`, else dandi's download link for it |
-| arXiv paper | `arxiv:<id>@v<version>` | the mirror's `https://storage.googleapis.com/arxiv-dataset/arxiv/<archive>/pdf/<month>/<number>v<version>.pdf?generation=<generation>`, else `https://export.arxiv.org/pdf/<id>v<version>` |
-| arXiv month or category month | `arxiv:<month>` or `arxiv:<category>/<month>`, without a version | the same, for each paper's newest version |
-| semantic scholar paper | `s2:<semantic scholar id>`, or the `arxiv:<id>@v<version>` of a paper whose pdf comes from arXiv | the open-access pdf's link semantic scholar gave |
-| semantic scholar dataset | `s2:<dataset>@<release>` | `https://api.semanticscholar.org/datasets/v1/release/<release>/dataset/<dataset>#<file>`, the API's listing of the dataset's links with the file's name after `#`, never a signed link: each download asks it for a fresh one |
-| OpenNeuro | `openneuro:<accession>@<snapshot>` | a git-annex file's link on `https://s3.amazonaws.com/openneuro.org/` with the `versionId` the snapshot pins, else `https://openneuro.org/crn/datasets/<accession>/objects/<object or key>` |
-| OSF | `osf:<node or file id>` | the download link with a file version |
-| github release | `github:<owner>/<repo>@<tag>` | the file's download link on github.com, `/releases/download/<tag>/<name>` |
-| gitlab release | `gitlab:<project>@<tag>` | the address the link points to, on gitlab.com or another host |
-| drive file or folder | `drive:<id>` or `drive:folders/<id>`, with `?resourcekey=<key>` when supplied; `open?id=` resolves to one of these | `https://drive.google.com/uc?id=<id>`, with `resourcekey` when supplied |
-| dropbox | the shared URL with `dl=1` | the same URL |
-| hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
-| kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
-| kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
-| S3 bucket | `s3://<bucket>/<prefix>`, or `s3:https://<host>/<bucket>/<prefix>` at another service | the object's HTTPS URL on the endpoint that listed it, with `?versionId=<id>` when the bucket keeps versions |
-| cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
-| azure container | `azure:<account>/<container>/<prefix>` | `https://<account>.blob.core.windows.net/<container>/<name>` |
 | [imported files](data-toml.md#imported-files) | `local` | empty |
 
 an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.
@@ -193,19 +161,9 @@ when adding or resolving a link, project commands reject login details and recog
 
 project commands recognize names such as `token`, `signature`, `sig`, `auth`, `jwt`, `access_key`, `pw` and `session`, and `key` in a link to dataverse's api, which takes a person's api key there; they cannot identify a secret under an arbitrary name. masking does not need to: it shows a value only under a name known to be harmless, such as `dl`, `version`, `versionId` or `rlkey`, and `***` for any other.
 
-## split archives
-
-an archive cut into parts is pinned as its parts, each an ordinary file, with `unpacks_to` on the first part alone: the tree of the archive the parts make read in order. no field says which files are parts; their names do, so a reader or `export` finds them again:
-
-- parts share one dataset, one folder and the path before their counters, which names an archive fetchloom unpacks: `.zip`, `.7z`, `.tar` or a compressed tar. a file whose own name is such an archive is never a part.
-- between that path and the counter comes `.`, `.part`, `.part-`, `.part_` or `.part.`. a counter is digits or lowercase letters, at least two of them, though one digit may follow a `part`.
-- counters sort by length, then as text, and follow one numbering from the first part: zero-padded numbers from 0 or 1, growing past their width as 7-Zip's `.1000` follows `.999`; letters from all `a`s, of one width; or GNU split's own, two characters until the first would be the alphabet's last, which then stays as two more follow, so `9000` follows `89` and `zaaa` follows `yz`.
-
-with `extract = false`, or a part missing, no part carries `unpacks_to` and each is a plain file. rar volumes and zips spanned over `.z01` files are no cut of the bytes and stay packed. the cache keeps what a split archive unpacked to under a key its parts give together, so parts that changed, or one more part, never find the record of other parts, as [archives](../../dev/architecture/archives.md#split-archives) describes.
-
 ## the tree hash
 
-`unpacked/<archive sha256>`, or for a [split archive](#split-archives) the key its parts give, contains one UTF-8 line per file, sorted by path:
+`unpacked/<archive sha256>`, or for a [split archive](archives.md#split-archives) the key its parts give, contains one UTF-8 line per file, sorted by path:
 
 ```text
 <path>\t<size in bytes>\t<file sha256>\n

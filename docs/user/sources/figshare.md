@@ -25,8 +25,12 @@ a file figshare lists as a link to another site has no bytes on figshare. it is 
 
 a reference that names a version keeps it under `lock --upgrade`; to move to another, edit the reference, then lock and sync.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| figshare | `figshare:<id>@<version>` | the API's download URL |
+
 ## credentials and limits
 
-public articles need no account, and data.lock records them with `access = "public"`; [signing in](../signing-in.md) says how to give fetchloom a figshare key. an embargoed article, or one whose owner turned downloads off, is refused with `auth.required`, exit 40, and no filter gets around that; ask the owner for a copy you may download.
+public articles need no account, and data.lock records them with `access = "public"`; [signing in](../guides/sign-in.md) says how to give fetchloom a figshare key. an embargoed article, or one whose owner turned downloads off, is refused with `auth.required`, exit 40, and no filter gets around that; ask the owner for a copy you may download.
 
-follow [offline preparation](../concepts.md#offline) before disconnecting.
+follow [offline preparation](../concepts/offline-and-recovery.md#offline) before disconnecting.

@@ -37,32 +37,6 @@ some speedups depend on the system and fall back without failing:
 | reflinks, which share bytes until a file changes | btrfs, xfs, apfs, refs and dev drive | hardlinks |
 | hardlinks | ntfs, ext4, hfs+ and other filesystems that support them | copies when links are unavailable or disabled, including fat, exfat and recognized synced folders |
 
-## archives
-
-fetchloom unpacks zip, 7z and tar archives itself on every system. it leaves a `.rar` packed, and the warning's help names a program for the system it runs on and a command that unpacks the archive into a folder beside it, inside the data folder, which fetchloom's `.gitignore` keeps out of git. for `data/sample/sample.rar`, run from the project's folder:
-
-| system | program | the help |
-|---|---|---|
-| linux | unrar, rarlab's free reader, from the distribution's packages: `unrar` in ubuntu's multiverse, debian's non-free, rpm fusion and arch | `unrar x data/sample/sample.rar data/sample/sample-unpacked/` |
-| macos | unar, from homebrew | `brew install unar`, then `unar -D -o data/sample/sample-unpacked data/sample/sample.rar` |
-| windows | 7-Zip, from winget | `winget install 7zip.7zip`, then, in powershell, `& "C:\Program Files\7-Zip\7z.exe" x data\sample\sample.rar -odata\sample\sample-unpacked` |
-
-rar volumes, `clips.part1.rar` and on, take the same help for their first volume, from which unrar and 7-Zip read the others. a zip spanned over `.z01` files beside its `.zip` stays packed as well: on linux and macos its help joins the parts with Info-ZIP's `zip -s 0 data/scans/scans.zip --out data/scans/scans-joined.zip` and unpacks that with `unzip data/scans/scans-joined.zip -d data/scans/scans-unpacked`, and on windows it runs 7-Zip, which reads spanned zips since 16.02, as `x data\scans\scans.zip -odata\scans\scans-unpacked`.
-
-an archive that came inside another stays packed as well, since fetchloom unpacks no archive inside another, and its help uses what the system has. for `data/x/inner.zip`, `data/x/train.tar.gz` or `data/x/scans.7z`:
-
-| system | the help |
-|---|---|
-| linux | `unzip data/x/inner.zip -d data/x/inner-unpacked`; gnu tar for a tar, as `mkdir -p data/x/train-unpacked && tar -xf data/x/train.tar.gz -C data/x/train-unpacked`; bsdtar, from the distribution's packages, for a 7z, which gnu tar does not read |
-| macos | the unzip macos has for a zip, and its tar, a libarchive build, for the others |
-| windows | powershell's `Expand-Archive data\x\inner.zip -DestinationPath data\x\inner-unpacked` for a zip, and windows' `tar.exe` for the others |
-
-unzip 6.00, gnu tar 1.35 and bsdtar 3.7.2 unpacked zip, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2` and 7z samples this way on linux. a rar inside another archive gets the rar's help above.
-
-the unpacked files are yours to fetchloom, as notes you add would be: sync keeps them, `status` lists them as extra, and `git add .` leaves them out with the rest of the data folder. a `fetchloom get` folder is the exception: its help unpacks next to that folder, `sample-unpacked` beside `sample`, since a later `get` refuses a folder holding files it did not place.
-
-macos's own `tar` and windows' own `tar.exe` are libarchive builds, as is `bsdtar`, and libarchive 3.7.2 refused solid rar4 and rar2 archives, rar5 files with delta or x86 filters and rar5 volumes that unrar read, with `bsdtar: RAR solid archive support unavailable` or `Unsupported block header size`, so the help names programs that read them. unar 1.10.1, which ubuntu 24.04 packages, printed `Failed! (Attempted to read more data than was available)` for each file of a solid rar5 that unrar 7.00, unar 1.10.8 and 7-Zip 26.06 unpacked to the same bytes; use unrar there, unar 1.10.8 or later, or 7-Zip from [7-zip.org](https://www.7-zip.org/download.html), as `7zz x data/sample/sample.rar -odata/sample/sample-unpacked`. unrar makes `data/sample/sample-unpacked/` when the trailing `/` names a folder; unar's `-D` puts the files straight into it, as 7-Zip's `-o` does. [decisions](../../dev/decisions.md#storage-and-requests) links the sources.
-
 ## terminals
 
 any terminal works. colors, symbols and clickable links adapt to what the terminal says about itself:
@@ -122,4 +96,4 @@ google drive and dropbox are read through their shared links rather than an API,
 
 ## keys shared with other tools
 
-fetchloom reads and saves keys where each source's own tools keep them, so one sign-in serves both. [environment](environment.md#credentials) lists where it looks and in which order, and [auth](../commands/auth.md) where a sign-in saves.
+fetchloom reads and saves keys where each source's own tools keep them, so one sign-in serves both. [environment](credentials.md) lists where it looks and in which order, and [auth](../commands/auth.md) where a sign-in saves.

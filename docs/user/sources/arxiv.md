@@ -84,6 +84,11 @@ a file is named as arXiv names it, `1706.03762v7.pdf`, and an old id keeps its a
 
 the mirror's pdf of a version is not always arXiv's: arXiv builds a pdf again from time to time, and the mirror keeps the build it copied. both copies of 1706.03762v7 are 2,215,244 bytes, but the mirror's was made on 2023-08-03 and arxiv.org's on 2024-04-10, so their SHA-256 differ, in 145 bytes of dates. data.lock keeps the link each file's bytes came from, so a sync never asks the other place for them. a pin of the mirror's copy names its generation, which nobody changes; a pin from export.arxiv.org stops with `integrity.mismatch`, exit 30, if arXiv builds that pdf again later: [push](../commands/push.md) the pinned bytes to keep them, or run [`lock --upgrade`](../commands/lock.md#upgrading), which takes the mirror's copy once it holds the paper.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| arXiv paper | `arxiv:<id>@v<version>` | the mirror's `https://storage.googleapis.com/arxiv-dataset/arxiv/<archive>/pdf/<month>/<number>v<version>.pdf?generation=<generation>`, else `https://export.arxiv.org/pdf/<id>v<version>` |
+| arXiv month or category month | `arxiv:<month>` or `arxiv:<category>/<month>`, without a version | the same, for each paper's newest version |
+
 ## licenses
 
 each paper keeps the license its authors chose for it. most choose arXiv's own, http://arxiv.org/licenses/nonexclusive-distrib/1.0/, which "gives limited rights to arXiv to distribute the article, and also limits re-use of any type from other entities or individuals", as [arXiv's license page](https://info.arxiv.org/help/license/index.html) says. so a paper under it gets a warning, as `-NC` and `-ND` licenses do, and its `access` is left out of data.lock, so [push](../commands/push.md#data-you-may-not-share) asks before copying it into a mirror. a paper under a creative commons license records `access = "public"`. a month or a category's month records no license, since each paper has its own, and warns once. papers from before 2004 state none.
@@ -107,6 +112,6 @@ arxiv:2501.05730	Element-wise Attention Is All You Need
 
 [semantic scholar](semantic-scholar.md) finds a paper by its DOI or any other id it knows, and pins its open-access pdf: an arXiv paper's through this source.
 
-OpenReview's papers need an account and its own client, as [limits](../limits.md) says.
+OpenReview's papers need an account and its own client, as [limits](../reference/limits.md) says.
 
 OpenAlex's snapshot of every work it knows is in its public bucket, which [cloud buckets](buckets.md) lists like any other: `fetchloom add s3://openalex/data/jsonl/works/` lists 1,900 files, 629.1 GiB, in under a second.

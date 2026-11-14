@@ -34,6 +34,10 @@ a run without files of the kind asked for is left out with a warning, which name
 
 `resolved` is the reference itself, as `ena:PRJNA172563`: an accession has no versions, and a study can gain runs. [`lock --upgrade`](../commands/lock.md#upgrading) lists it again, with any new runs. each file's `url` is its https link on ENA's file server, as `https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR116/006/ERR1160846/ERR1160846.fastq.gz`; fetchloom downloads over https and needs no ftp, aspera or globus. downloads check the MD5 and size ENA states, then the lock records each file's SHA-256 and size; bytes that differ stop with `integrity.mismatch` and are never placed. `access` is `public`.
 
+| source | `resolved` | file `url` |
+|---|---|---|
+| ENA | `ena:<accession>`, with `submitted/` or `sra/` before it for those files | the file's https link on ENA's file server |
+
 ## limits
 
 a report that holds fewer runs than ENA counted for the accession is refused, and a study with more runs than [`most_files`](../reference/environment.md) allows is refused before its report is downloaded: add the runs you need by their own accessions. [sources](../../dev/architecture/sources.md#source-listings) has how ENA is asked.

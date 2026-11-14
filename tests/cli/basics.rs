@@ -330,12 +330,12 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     let scope = std::fs::read_to_string(
         crate::support::workspace()
             .join("docs")
-            .join("user/commands/README.md"),
+            .join("user/commands/global-options.md"),
     )?;
     let options = scope
         .lines()
         .find(|line| line.starts_with("every command takes"))
-        .ok_or("commands/README.md names no options")?;
+        .ok_or("commands/global-options.md names no options")?;
     let sandbox = Sandbox::new()?;
     for (commands, intro) in [
         (
@@ -381,7 +381,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 let flag = option.split(' ').next().unwrap_or(option);
                 assert!(
                     help.contains(&format!("{flag} ")) || help.contains(&format!("{flag},")),
-                    "commands/README.md says {} takes {flag}",
+                    "commands/global-options.md says {} takes {flag}",
                     command.join(" ")
                 );
             }

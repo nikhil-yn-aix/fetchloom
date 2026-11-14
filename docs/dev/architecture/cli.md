@@ -15,24 +15,6 @@
 - an error with a sign-in need, at a terminal that can answer, is held by `finish` in `Context::needed` rather than told, so `execute` offers to sign in first through `auth::offer`, whose first line names what was refused; a no is a cancel told in one line, and the command keeps the refusal's exit code. `-q` tells the error first, as before, and a refusal of the run after signing in is told as an error, with no second offer. `finish` first passes a refusal through `with_key_here`: with a key for its account on this machine, signing in is no remedy, so its help says how to check the key with `fetchloom auth`, and only a need for terms stays. the run after a sign-in whose key was kept out of files names that key through `with_key`.
 - a single failing source can stop dataset resolution. catalog search instead retains successful catalogs unless all fail. failed batches can carry partial results in their error report.
 
-## adding a command
-
-1. add the argument type and `Command` variant in `src/cli/args.rs`, including its `name()` match arm and its arm in `Command::harmless`, which decides whether a script may run it as the JSON `fix` a help names; that match has no `_` arm, so the command does not build until someone decides. a command that may write data.lock also needs its arm in `Command::writes_lock`, and one that moves data or changes what projects need its arm in `spends` or `reminds` in cli.rs, since their `_` arms leave a new command out without a word. put its copyable examples and on-disk effects in the `examples` constants and connect them with `after_help`; `help::examples_first` moves the examples up below the usage lines when the help prints.
-2. declare the handler module and add dispatch in `src/cli.rs`. pass shared settings through `Context`, render through `Output`, and return a serializable report through `finish` so errors and JSON keep the same envelope.
-3. check `fetchloom help <command>`, `fetchloom help --json` and unknown-topic suggestions. `src/cli/help.rs` discovers command topics and the JSON command list from clap; update its prose only when the concepts change.
-4. add argument tests and real-binary scenarios, declaring any new test module in `tests/cli/main.rs`. snapshot help and human output and check JSON, exit codes, offline behavior, cancellation and disk effects where applicable.
-5. extend the command list in `tests/cli/unattended.rs` so a pipe left open on stdin cannot make it wait for input. cover choices separately if the command is interactive.
-6. add its page under [docs/user/commands](../../user/commands/README.md), link it from that index, the [user guide](../../user/README.md) and the book's [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md), and update `llms.txt`. document its result and failure payloads in the [JSON reference](../../user/reference/json-output.md).
-7. run the owning tests, [review snapshots](../engineering/building-and-testing.md#update-snapshots), then run the full gate.
-
-every command has one name. a name people bring from other tools, such as `install` or `auth status`, is a usage error whose help names the command meant; `habit` in `src/cli/usage.rs` holds them.
-
-a guess at a mistyped command, option, dataset name, path or help topic goes through `meant` in `src/cli/typed.rs`, which repeats the person's own command line with only the mistyped words changed, so a flag such as `--dry-run` stays in what they paste. a line holding a link with a query, a fragment or a login is never repeated, since any of them may carry a secret under a name `mask_query` does not know, and the help then names the command alone. `may_hold_secret` looks for such a link in a whole word, an option's value after `=`, a link attached to a short option and a link pasted wholly percent-encoded. `command_meant` in usage.rs picks a mistyped command with `name::closest`, ignoring case, rather than taking clap's suggestion, which gave `cache` for `seach`, and turns `rm`, `ls` and `version`, which other tools use and no spelling reaches, into `remove`, `list` and `--version`.
-
-## adding an option
-
-put parsing and conflicts in `args.rs`, then pass the value through `Context` or the command's argument type to its owner. keep presentation in `Output`. update the affected [command reference](../../user/commands/README.md) and [environment reference](../../user/reference/environment.md) when behavior changes.
-
 ## tests
 
 | files | cargo filter |

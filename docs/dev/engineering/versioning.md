@@ -18,7 +18,7 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 | [data.toml](../../user/reference/data-toml.md) | UTF-8 TOML without a version field; unknown keys fail |
 | [data.lock](../../user/reference/data-lock.md) | `version = 1`; the reader accepts this version only. a higher value asks for a newer executable; other unsupported or broken locks require explicit recovery |
 | [exit codes](../../user/reference/exit-codes.md) | stable kind-to-exit mappings; scripts use kinds rather than prose |
-| [python helper](../../user/scripting.md#python-helper) | typed `path()`, `sync()` and `get()` functions around the executable's JSON interface |
+| [python helper](../../user/reference/python-helper.md) | typed `path()`, `sync()` and `get()` functions around the executable's JSON interface |
 
 ## internal formats
 

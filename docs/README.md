@@ -46,8 +46,8 @@ $ fetchloom sync
 
 <nav class="fl-routes" aria-label="Guides" markdown>
 
-- [Getting started](user/getting-started.md) Install it, try a first project and uninstall it
-- [Concepts](user/concepts.md) What data.toml, data.lock and the cache each hold
+- [Getting started](user/start/README.md) Install it, try a first project and uninstall it
+- [Concepts](user/concepts/README.md) What data.toml, data.lock and the cache each hold
 - [Commands](user/commands/README.md) Every command, with its options and examples
 - [Sources](user/sources/README.md) Zenodo, Hugging Face, Kaggle, S3 and the rest
 - [Developer guide](dev/README.md) How fetchloom is built, tested and measured
