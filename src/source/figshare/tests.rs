@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 use crate::digest::Md5;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Reference, Remote};
 
 const ARTICLE: &str = "https://api.figshare.com/v2/articles/34744689";
@@ -260,12 +260,12 @@ fn live_figshare() {
     eprintln!(
         "figshare: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 2);
     assert_eq!(listing.resolved.to_string(), "figshare:34744689@1");
-    assert_eq!(work.counts().requests, 1);
+    assert_eq!(asked(&work), 1);
 }
 #[test]
 fn file_pages_continue_until_the_last_page() {

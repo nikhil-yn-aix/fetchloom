@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 use crate::digest::{Md5, Sha256};
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference, Remote};
 
 const DATASET: &str = "https://datadryad.org/api/v2/datasets/doi:10.5061%2Fdryad.j1fd7";
@@ -450,11 +450,11 @@ fn live_dryad() {
     eprintln!(
         "dryad: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 3);
     assert_eq!(listing.resolved.to_string(), "dryad:10.5061/dryad.j1fd7@1");
     assert!(listing.files.iter().all(|file| file.md5.is_some()));
-    assert_eq!(work.counts().requests, 2);
+    assert_eq!(asked(&work), 2);
 }

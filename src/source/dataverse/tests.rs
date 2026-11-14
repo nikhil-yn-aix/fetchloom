@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 use crate::digest::{Md5, Sha256};
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Reference, Remote};
 
 const ID: &str = "dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP";
@@ -273,7 +273,7 @@ fn live_dataverse() {
     eprintln!(
         "dataverse: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 3);
@@ -281,7 +281,7 @@ fn live_dataverse() {
         listing.resolved.to_string(),
         "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0"
     );
-    assert_eq!(work.counts().requests, 1);
+    assert_eq!(asked(&work), 1);
 }
 
 #[test]

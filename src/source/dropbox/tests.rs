@@ -1,7 +1,7 @@
 use super::*;
 use crate::error::Kind;
 use crate::net::Api as _;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 #[test]
 fn shared_links_keep_their_keys_and_request_downloads() {
@@ -137,7 +137,7 @@ fn live_dropbox() {
         fetched.name,
         fetched.size,
         fetched.digest.short(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(fetched.name.as_deref(), Some("0569.pdf"));

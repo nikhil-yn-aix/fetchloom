@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::*;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference, Remote};
 
 const API: &str = "https://data.mendeley.com/public-api/datasets/rscbjbr9sj";
@@ -458,11 +458,11 @@ fn live_mendeley() {
     eprintln!(
         "mendeley: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 3);
     assert_eq!(listing.resolved.to_string(), "mendeley:rscbjbr9sj@2");
     assert!(listing.files.iter().all(|file| file.sha256.is_some()));
-    assert_eq!(work.counts().requests, 3);
+    assert_eq!(asked(&work), 3);
 }

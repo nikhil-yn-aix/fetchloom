@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference};
 
 const RELEASE: &str =
@@ -327,7 +327,7 @@ fn live_gitlab() {
     eprintln!(
         "gitlab: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 38);
@@ -335,5 +335,5 @@ fn live_gitlab() {
         listing.resolved.to_string(),
         "gitlab:gitlab-org/gitlab-runner@v19.3.6"
     );
-    assert_eq!(work.counts().requests, 1);
+    assert_eq!(asked(&work), 1);
 }

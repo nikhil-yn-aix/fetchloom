@@ -2,7 +2,7 @@ use super::*;
 use crate::error::Kind;
 use crate::net::{Authorized, Given, Sent};
 use crate::source::Reference;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const LISTING: &str =
     "https://azureopendatastorage.blob.core.windows.net/mnist?restype=container&comp=list";
@@ -232,7 +232,7 @@ fn live_azure() {
     eprintln!(
         "azure: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     let labels = listing
@@ -247,5 +247,5 @@ fn live_azure() {
             crate::digest::Md5::from_hex("ec29112dd5afa0611ce80d1b7f02629c")
         )
     );
-    assert_eq!(work.counts().requests, 1);
+    assert_eq!(asked(&work), 1);
 }

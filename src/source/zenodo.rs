@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use crate::digest::Md5;
     use crate::error::Kind;
-    use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+    use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
     use crate::source::{Reference, Remote};
 
     const IRIS: &str = "https://zenodo.org/api/records/3608990";
@@ -423,11 +423,11 @@ mod tests {
         eprintln!(
             "zenodo: {} files, {} requests, {:?}",
             listing.files.len(),
-            work.counts().requests,
+            asked(&work),
             start.elapsed()
         );
         assert_eq!(listing.files.len(), 1);
         assert_eq!(listing.resolved.to_string(), "zenodo:3608990");
-        assert_eq!(work.counts().requests, 1);
+        assert_eq!(asked(&work), 1);
     }
 }

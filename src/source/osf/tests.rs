@@ -4,7 +4,7 @@ use std::time::Instant;
 use super::*;
 use crate::digest::{Md5, Sha256};
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Reference, Remote};
 
 const NODE: &str =
@@ -243,12 +243,12 @@ fn live_osf() {
     eprintln!(
         "osf: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files, [expected_file()]);
     assert_eq!(listing.resolved.to_string(), "osf:ezcuj");
-    assert_eq!(work.counts().requests, 2);
+    assert_eq!(asked(&work), 2);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::*;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const SET: &str = "https://api.dandiarchive.org/api/dandisets/000027/";
 const VERSION: &str = "https://api.dandiarchive.org/api/dandisets/000027/versions/0.210831.2033";
@@ -306,7 +306,7 @@ fn live_dandi() {
         listing.title.as_deref().unwrap_or_default(),
         listing.resolved,
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 1);
@@ -314,5 +314,5 @@ fn live_dandi() {
         listing.files[0].sha256,
         Sha256::from_hex("1a765509384ea96b7b12136353d9c5b94f23d764ad0431e049197f7875eb352c")
     );
-    assert_eq!(work.counts().requests, 3);
+    assert_eq!(asked(&work), 3);
 }

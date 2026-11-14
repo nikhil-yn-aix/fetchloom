@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference};
 
 const SERIES: &str = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/";
@@ -321,7 +321,7 @@ fn live_geo() {
     eprintln!(
         "geo: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert!(
@@ -330,5 +330,5 @@ fn live_geo() {
             .iter()
             .any(|file| file.path == "matrix/GSE1000_series_matrix.txt.gz")
     );
-    assert_eq!(work.counts().requests, 5);
+    assert_eq!(asked(&work), 5);
 }

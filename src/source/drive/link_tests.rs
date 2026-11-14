@@ -1,5 +1,5 @@
 use super::*;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const FILE: &str = "1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb";
 const FOLDER: &str = "1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL";
@@ -236,7 +236,7 @@ fn live_drive_file() {
         fetched.name,
         fetched.size,
         fetched.digest.short(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(fetched.name.as_deref(), Some("gdown.pptx"));

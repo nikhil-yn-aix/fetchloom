@@ -5,7 +5,7 @@ use std::time::Instant;
 use super::*;
 use crate::digest::Md5;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Reference, Remote};
 
 const OPENNEURO: &str =
@@ -1259,7 +1259,7 @@ fn live_buckets() {
         folder.files.len(),
         states.files.len(),
         west.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::net::DriveAnswered;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const ROOT: &str = "1LabRawFolderOfTheTestAbCdEfGhIjK";
 const SUB: &str = "1ScansSubfolderOfTheTestAbCdEfGhI";
@@ -399,6 +399,6 @@ fn live_private_drive() {
         listing.unavailable.len(),
         remote.path,
         fetched.digest.short(),
-        work.counts().requests
+        asked(&work)
     );
 }

@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::*;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const SUB: &str = "db72baeb3665a309db35d6ef649e117eb45a8a87";
 const ANAT: &str = "26d2ff4f763308d462f151c53e3e06f6b7d2aaaa";
@@ -394,7 +394,7 @@ fn live_openneuro() {
     eprintln!(
         "openneuro: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     let scan = listing

@@ -4,7 +4,7 @@ use super::*;
 use crate::digest::Md5;
 use crate::error::Kind;
 use crate::source::Remote;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 const DOI: &str = "10.5281/zenodo.3608990";
 const HANDLE: &str = "https://doi.org/api/handles/10.5281%2Fzenodo.3608990";
@@ -274,11 +274,11 @@ fn live_doi() {
         ),
         ("10.17605/OSF.IO/EZCUJ", "osf:ezcuj", 3),
     ] {
-        let before = work.counts().requests;
+        let before = asked(&work);
         let start = Instant::now();
         let reference = Reference::parse(doi).unwrap().reference;
         let listing = block_on(reference.resolve(&net)).unwrap();
-        let used = work.counts().requests - before;
+        let used = asked(&work) - before;
         eprintln!(
             "doi {doi}: {} files, {used} requests, {:?}",
             listing.files.len(),

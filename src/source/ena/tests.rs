@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference};
 
 const TITLE: &str = "CGCI: Non-Hodgkin Lymphoma (NHL)";
@@ -409,7 +409,7 @@ fn live_ena() {
     eprintln!(
         "ena: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 1);
@@ -418,5 +418,5 @@ fn live_ena() {
         listing.files[0].md5,
         Md5::from_hex("5924f20ef547ebdfed7cad795bbab6e6")
     );
-    assert_eq!(work.counts().requests, 2);
+    assert_eq!(asked(&work), 2);
 }

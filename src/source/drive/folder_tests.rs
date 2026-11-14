@@ -1,5 +1,5 @@
 use super::*;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
 /// gdown's test folder `deep_folder`, with `folder_1/folder_1_1` and `folder_2` inside.
 const DEEP: &str = "1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL";
@@ -326,7 +326,7 @@ fn live_drive_folder() {
         (spam.size, spam.sha256, spam.md5, spam.named_by_server),
         (None, None, None, false)
     );
-    let pages = work.counts().requests;
+    let pages = asked(&work);
     let cache_folder = tempfile::tempdir().unwrap();
     let cache = crate::cache::Cache::open(cache_folder.path().join("cache")).unwrap();
     let fetch = crate::net::Fetch {

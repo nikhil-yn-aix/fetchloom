@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::error::Kind;
-use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 use crate::source::{Access, Reference};
 
 const RELEASE: &str = "https://api.github.com/repos/jqlang/jq/releases/tags/jq-1.8.2";
@@ -316,11 +316,11 @@ fn live_github() {
     eprintln!(
         "github: {} files, {} requests, {:?}",
         listing.files.len(),
-        work.counts().requests,
+        asked(&work),
         start.elapsed()
     );
     assert_eq!(listing.files.len(), 29);
     assert_eq!(listing.resolved.to_string(), "github:jqlang/jq@jq-1.8.2");
     assert!(listing.files.iter().all(|file| file.sha256.is_some()));
-    assert_eq!(work.counts().requests, 1);
+    assert_eq!(asked(&work), 1);
 }

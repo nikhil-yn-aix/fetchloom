@@ -261,7 +261,7 @@ impl Dataset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+    use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
     const API: &str = "https://api.kaggle.com/v1/datasets";
 
@@ -604,6 +604,6 @@ mod tests {
                 .iter()
                 .any(|file| file.path == "Iris.csv" && file.size == Some(5107))
         );
-        assert_eq!(work.counts().requests, 2);
+        assert_eq!(asked(&work), 2);
     }
 }

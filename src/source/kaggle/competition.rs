@@ -315,7 +315,7 @@ impl fmt::Display for Competition {
 mod tests {
     use super::*;
     use crate::glob::Glob;
-    use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+    use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
 
     const API: &str = "https://api.kaggle.com/v1/competitions";
 
@@ -648,7 +648,7 @@ mod tests {
         }
         // about, the file list, and one small download, since titanic reports the account as
         // not entered though it needs no entry
-        assert_eq!(work.counts().requests, 3);
+        assert_eq!(asked(&work), 3);
         let train = listing
             .files
             .iter()

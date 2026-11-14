@@ -96,7 +96,7 @@ mod tests {
     use crate::digest::Sha256;
     use crate::error::Kind;
     use crate::source::hf::revision::is_commit;
-    use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+    use crate::source::recorded::{Recorded, asked, block_on, fixture_bytes};
     use crate::source::{Access, Remote};
 
     const IMDB: &str = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
@@ -479,7 +479,7 @@ mod tests {
                 .iter()
                 .any(|file| file.path.ends_with(".parquet") && file.sha256.is_some())
         );
-        assert_eq!(work.counts().requests, 2);
+        assert_eq!(asked(&work), 2);
     }
 
     #[test]

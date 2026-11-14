@@ -229,3 +229,9 @@ pub(crate) fn live(
     .with_rules(super::rules());
     (net, work)
 }
+
+/// a live service may stall and the network retries, so a test pins the listing's own requests.
+pub(crate) fn asked(work: &crate::work::Work) -> u64 {
+    let counts = work.counts();
+    counts.requests - counts.retries
+}
