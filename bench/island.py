@@ -150,51 +150,70 @@ def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=
     for key in cases:
         if key not in reference:
             raise ValueError(f"the noise file has no a/a result for {key}")
-        old = reference[key]["metrics"]["wall"]
-        sigma = old["log_ratio_robust_sd"]
-        if sigma is None or sigma < 0 or not math.isfinite(sigma):
-            raise ValueError(f"quiet noise has no usable paired wall spread for {key}")
-        limit = max(sigma * noise_multiple, math.log1p(.01))
-        reasons = []
-        arms = []
-        for name, records in zip(("quiet", "loaded"), campaigns):
-            result = records[key]
-            wall = result["metrics"]["wall"]
-            arms.append(wall)
-            bounds = wall["bootstrap_95_median_ratio"]
-            if (any(result["failed"].values()) or any(result["unmatched"].values())
-                    or wall["n_log_pairs"] < rounds or wall["missing_metric_pairs"] or wall["nonpositive_pairs"]):
-                reasons.append(f"{name}: failed, missing or insufficient paired observations")
-            if bounds is None or not 1 - effect <= bounds[0] <= bounds[1] <= 1 + effect:
-                reasons.append(f"{name}: A/A interval is outside the chosen equivalence band")
-            spread = wall["log_ratio_robust_sd"]
-            if spread is None or spread > limit:
-                reasons.append(f"{name}: paired noise exceeds the phase-2-based limit")
-        before, after = arms
-        ratio = after["plain_median"] / before["plain_median"] if before["plain_median"] and after["plain_median"] else None
-        if ratio is None or abs(ratio - 1) > effect:
-            reasons.append("loaded versus quiet-island central wall time changed beyond the chosen band")
-        widths = [wall["bootstrap_95_median_ratio"][1] - wall["bootstrap_95_median_ratio"][0]
-                  if wall["bootstrap_95_median_ratio"] is not None else None for wall in arms]
-        old_bounds = old.get("bootstrap_95_median_ratio")
-        old_width = old_bounds[1] - old_bounds[0] if old_bounds is not None else None
-        width_limit = max(noise_multiple * max(widths[0] or 0, old_width or 0), effect / 3)
-        if widths[1] is None or widths[1] > width_limit:
-            reasons.append("loaded A/A interval width exceeds the quiet/historical limit")
-        biases = [wall["median_ratio"] - 1 if wall.get("median_ratio") is not None else None for wall in arms]
-        if None in biases or abs(biases[1] - biases[0]) > effect / 3:
-            reasons.append("loaded A/A bias shifted by more than one third of the effect margin")
-        historical = old["plain_median"]
-        results.append(dict(case=key, passed=not reasons, reasons=reasons,
-                            quiet_interval_width=widths[0], loaded_interval_width=widths[1],
-                            phase2_interval_width=old_width, allowed_interval_width=width_limit,
-                            quiet_aa_bias=biases[0], loaded_aa_bias=biases[1],
-                            phase2_aa_bias=old["median_ratio"] - 1 if old.get("median_ratio") is not None else None,
-                            phase2_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
-                            phase2_plain_median=historical, quiet_island=before, loaded_island=after,
-                            loaded_over_quiet_island=ratio,
-                            loaded_over_phase2=after["plain_median"] / historical if historical and after["plain_median"] else None))
+        results.append(judge(key, reference[key]["metrics"]["wall"], [records[key] for records in campaigns],
+                             effect=effect, noise_multiple=noise_multiple, rounds=rounds))
     return results
+
+
+def judge(key, old, arms, *, effect, noise_multiple, rounds):
+    """one case's verdict: its quiet and loaded a/a results against the wall noise the noise file
+    recorded, with every reason it fails and the figures behind them."""
+    sigma = old["log_ratio_robust_sd"]
+    if sigma is None or sigma < 0 or not math.isfinite(sigma):
+        raise ValueError(f"quiet noise has no usable paired wall spread for {key}")
+    limit = max(sigma * noise_multiple, math.log1p(.01))
+    reasons = [reason for name, result in zip(("quiet", "loaded"), arms)
+               for reason in arm_reasons(name, result, effect=effect, limit=limit, rounds=rounds)]
+    before, after = (result["metrics"]["wall"] for result in arms)
+    ratio = after["plain_median"] / before["plain_median"] if before["plain_median"] and after["plain_median"] else None
+    if ratio is None or abs(ratio - 1) > effect:
+        reasons.append("loaded versus quiet-island central wall time changed beyond the chosen band")
+    widths = [width(before), width(after)]
+    old_width = width(old)
+    width_limit = max(noise_multiple * max(widths[0] or 0, old_width or 0), effect / 3)
+    if widths[1] is None or widths[1] > width_limit:
+        reasons.append("loaded A/A interval width exceeds the quiet/historical limit")
+    biases = [bias(before), bias(after)]
+    if None in biases or abs(biases[1] - biases[0]) > effect / 3:
+        reasons.append("loaded A/A bias shifted by more than one third of the effect margin")
+    historical = old["plain_median"]
+    return dict(case=key, passed=not reasons, reasons=reasons,
+                quiet_interval_width=widths[0], loaded_interval_width=widths[1],
+                phase2_interval_width=old_width, allowed_interval_width=width_limit,
+                quiet_aa_bias=biases[0], loaded_aa_bias=biases[1],
+                phase2_aa_bias=bias(old),
+                phase2_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
+                phase2_plain_median=historical, quiet_island=before, loaded_island=after,
+                loaded_over_quiet_island=ratio,
+                loaded_over_phase2=after["plain_median"] / historical if historical and after["plain_median"] else None)
+
+
+def arm_reasons(name, result, *, effect, limit, rounds):
+    """why one arm's a/a result fails: failed, unmatched or too few pairs, an interval outside the
+    equivalence band, or paired noise past the limit."""
+    wall = result["metrics"]["wall"]
+    bounds = wall["bootstrap_95_median_ratio"]
+    reasons = []
+    if (any(result["failed"].values()) or any(result["unmatched"].values())
+            or wall["n_log_pairs"] < rounds or wall["missing_metric_pairs"] or wall["nonpositive_pairs"]):
+        reasons.append(f"{name}: failed, missing or insufficient paired observations")
+    if bounds is None or not 1 - effect <= bounds[0] <= bounds[1] <= 1 + effect:
+        reasons.append(f"{name}: A/A interval is outside the chosen equivalence band")
+    spread = wall["log_ratio_robust_sd"]
+    if spread is None or spread > limit:
+        reasons.append(f"{name}: paired noise exceeds the phase-2-based limit")
+    return reasons
+
+
+def width(wall):
+    """the width of a wall result's 95% interval, or None without one."""
+    bounds = wall.get("bootstrap_95_median_ratio")
+    return bounds[1] - bounds[0] if bounds is not None else None
+
+
+def bias(wall):
+    """how far a wall result's median ratio sits from 1, or None without one."""
+    return wall["median_ratio"] - 1 if wall.get("median_ratio") is not None else None
 
 
 def check(args):
