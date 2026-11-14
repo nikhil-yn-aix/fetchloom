@@ -14,6 +14,25 @@ use std::time::Duration;
 const LARGEST: u64 = 256 << 20;
 /// how long git may take to answer.
 const PATIENCE: Duration = Duration::from_secs(10);
+/// the variables that tie git to one repository, as `git rev-parse --local-env-vars` lists them. a
+/// hook or `git rebase --exec` hands them down, and they would point git away from `root`'s.
+const REPOSITORY_VARIABLES: [&str; 15] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
 
 /// git, as the first absolute folder on `path` that holds it, unless that git is inside
 /// `project`, which a cloned repository could have put there.
@@ -174,7 +193,11 @@ fn read_objects(git: &Path, root: &Path, arguments: &[&str]) -> Option<Vec<u8>> 
 /// what git prints for `arguments` in `root`, when it succeeds within the bounds, else its exit
 /// code, none when it did not finish by itself.
 fn run(git: &Path, root: &Path, arguments: &[&str]) -> Result<Vec<u8>, Option<i32>> {
-    let mut child = Command::new(git)
+    let mut command = Command::new(git);
+    for name in REPOSITORY_VARIABLES {
+        command.env_remove(name);
+    }
+    let mut child = command
         .args(["-c", "core.fsmonitor=false", "-C"])
         .arg(root)
         .args(arguments)
@@ -225,15 +248,23 @@ mod tests {
         found
     }
 
-    /// runs git in `folder` with a fixed name and no settings of the machine's.
-    fn git_in(git: &Path, folder: &Path, arguments: &[&str]) {
+    /// git with none of the machine's settings: no GIT_* variable, global or system config, and
+    /// `home` as its home.
+    fn plain(git: &Path, home: &Path) -> Command {
         let mut command = Command::new(git);
         for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
+            let upper = name.to_string_lossy().to_ascii_uppercase();
+            if upper.starts_with("GIT_") || upper == "XDG_CONFIG_HOME" {
                 command.env_remove(name);
             }
         }
-        let status = command
+        command.env("HOME", home).env("GIT_CONFIG_NOSYSTEM", "1");
+        command
+    }
+
+    /// runs git in `folder` with a fixed name and none of the machine's settings.
+    fn git_in(git: &Path, folder: &Path, arguments: &[&str]) {
+        let status = plain(git, folder)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.org"])
             .args([
                 "-c",
@@ -245,8 +276,6 @@ mod tests {
             ])
             .args(arguments)
             .current_dir(folder)
-            .env("HOME", folder)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -258,17 +287,10 @@ mod tests {
         );
     }
 
-    /// whether git, with the settings of the machine running the tests, works in `folder`. it
-    /// refuses a repository on a disk that records no owner, as FAT does, unless told to trust it.
+    /// whether git, as fetchloom runs it, works in `folder`. it refuses a repository on a disk
+    /// that records no owner, as FAT does, unless the machine's settings trust it.
     fn trusted(git: &Path, folder: &Path) -> bool {
-        Command::new(git)
-            .arg("-C")
-            .arg(folder)
-            .args(["rev-parse", "--git-dir"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+        run(git, folder, &["rev-parse", "--git-dir"]).is_ok()
     }
 
     #[test]
@@ -413,6 +435,36 @@ mod tests {
         );
     }
 
+    /// a hook or `git rebase --exec` hands its own repository down in `GIT_DIR` and its kin; the
+    /// sides still come from the project's repository, and the other one is left alone.
+    #[test]
+    fn a_stray_git_dir_changes_nothing() {
+        let Some(git) = git() else {
+            return;
+        };
+        let elsewhere = tempfile::tempdir().unwrap();
+        git_in(&git, elsewhere.path(), &["init", "-q"]);
+        let dot = elsewhere.path().join(".git");
+        let config = std::fs::read(dot.join("config")).unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "project::git::tests::the_sides_come_whole_from_the_index_and_the_base_is_empty_when_both_added_the_file",
+                "project::git::tests::the_sides_of_a_file_git_merged_come_from_the_commits",
+            ])
+            .env("GIT_DIR", &dot)
+            .env("GIT_WORK_TREE", elsewhere.path())
+            .env("GIT_INDEX_FILE", dot.join("index"))
+            .output()
+            .unwrap();
+        let printed = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child.status.success() && printed.contains("2 passed"),
+            "{printed}"
+        );
+        assert_eq!(std::fs::read(dot.join("config")).unwrap(), config);
+    }
+
     /// a partial clone without a blob: reading it fails and fetches nothing, whatever git does
     /// with `--no-lazy-fetch`, while git without fetchloom's limits fetches it from the origin.
     #[test]
@@ -454,18 +506,10 @@ mod tests {
             read_objects(&git, &clone, &["cat-file", "blob", "HEAD:./data.toml"]),
             None
         );
-        let mut plain = Command::new(&git);
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
-                plain.env_remove(name);
-            }
-        }
-        let fetched = plain
+        let fetched = plain(&git, folder.path())
             .args(["-c", "safe.directory=*", "-C"])
             .arg(&clone)
             .args(["cat-file", "blob", "HEAD:./data.toml"])
-            .env("HOME", folder.path())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .unwrap();
         assert!(
