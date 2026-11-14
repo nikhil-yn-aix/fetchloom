@@ -813,13 +813,18 @@ fn cookies_from_firefox_are_shown_and_saved_only_with_a_yes() -> Result {
     let asked = sandbox.run(&["auth", "login", &host, "--browser", "firefox"])?;
     let stderr = text(&asked.stderr)?;
     assert_eq!(asked.status.code(), Some(1), "{stderr}");
-    let profile = std::path::Path::new("~").join(if cfg!(windows) {
-        "Mozilla/Firefox/Profiles/q1w2e3r4.default-release"
+    let folder: &[&str] = if cfg!(windows) {
+        &["Mozilla", "Firefox"]
     } else if cfg!(target_os = "macos") {
-        "Library/Application Support/Firefox/Profiles/q1w2e3r4.default-release"
+        &["Library", "Application Support", "Firefox"]
     } else {
-        ".mozilla/firefox/Profiles/q1w2e3r4.default-release"
-    });
+        &[".mozilla", "firefox"]
+    };
+    let profile: std::path::PathBuf = ["~"]
+        .iter()
+        .chain(folder)
+        .chain(&["Profiles", "q1w2e3r4.default-release"])
+        .collect();
     for told in [
         format!(
             "Found 1 cookie for {host} in firefox's profile {}\n",
