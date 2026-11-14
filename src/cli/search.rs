@@ -95,14 +95,22 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     if local::is_path(text) {
         return Err(local::refused(text));
     }
-    let word = text.trim();
+    let Ok(here) = std::env::current_dir() else {
+        return Ok(());
+    };
+    let typed = text.trim();
+    // quotes a shell passed on, as `'"flowers"'` does, are no part of a name here
+    let unquoted = typed.trim_matches(['"', '\'']);
+    let word =
+        if unquoted != typed && !unquoted.is_empty() && local::here(unquoted, &here).is_some() {
+            unquoted
+        } else {
+            typed
+        };
     let written_as_path = local::reads_as_path(word);
     if !written_as_path && !search::is_search(word) {
         return Ok(());
     }
-    let Ok(here) = std::env::current_dir() else {
-        return Ok(());
-    };
     let Some(what) = local::here(word, &here) else {
         if written_as_path {
             return Err(no_such_path(word, &here, pins));
@@ -135,7 +143,7 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
 fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
     let search = format!(
         "run `fetchloom search {}` to search for these words",
-        super::shell_word(word)
+        super::shell_word(word.trim_end_matches('\\'))
     );
     let guess = pins
         .then(|| super::import::near(word, &here.join(word)))

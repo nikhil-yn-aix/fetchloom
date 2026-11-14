@@ -921,6 +921,47 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
     Ok(())
 }
 
+/// a name of a folder here never goes out as search words in the quotes a shell kept, and, where `\`
+/// is no separator, a windows-style path to it gets the near name with `/`.
+#[test]
+fn a_folder_here_in_quotes_or_backslashes_never_reaches_a_catalog() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    std::fs::create_dir_all(sandbox.work().join("flowers"))?;
+    let mut cases = vec![(
+        "\"flowers\"",
+        "\"flowers\" is a folder here, so fetchloom did not search for it",
+        "run `fetchloom add ./flowers` to pin it, or `fetchloom search flowers` to search",
+    )];
+    if cfg!(not(windows)) {
+        cases.extend([
+            (
+                ".\\flowers",
+                "there is no file or folder \".\\flowers\"",
+                "did you mean `fetchloom --json add ./flowers`?",
+            ),
+            (
+                "flowers\\",
+                "there is no file or folder \"flowers\\\" here",
+                "did you mean `fetchloom --json add ./flowers`? or run `fetchloom search flowers` to search for these words",
+            ),
+        ]);
+    }
+    for (typed, message, help) in cases {
+        let output = catalogs
+            .command(&sandbox, &["--json", "add", typed])
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{typed}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["message"], message, "{typed}");
+        assert_eq!(error["help"], help, "{typed}");
+        assert_eq!(document["work"]["requests"], 0, "{typed}");
+    }
+    assert_eq!(catalogs.hf.requests(), Vec::<String>::new());
+    Ok(())
+}
+
 /// a word written as a path that names nothing here, such as a typo of a folder, is refused on
 /// this machine with the near name, and `search` stays the way to look such words up on purpose.
 #[test]

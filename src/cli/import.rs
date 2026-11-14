@@ -729,6 +729,16 @@ pub(super) fn near(typed: &str, path: &Path) -> Option<String> {
     {
         return None;
     }
+    // a `\` where it is no separator, as in `.\flowers` typed on linux, is likelier a `/`
+    if cfg!(not(windows))
+        && typed.contains('\\')
+        && let (Some(folder), Some(last)) = (path.parent(), path.file_name())
+        && folder
+            .join(last.to_string_lossy().replace('\\', "/"))
+            .exists()
+    {
+        return Some(typed.replace('\\', "/"));
+    }
     let kept = typed.trim_end_matches(['/', '\\']);
     let (folder, last) = kept.split_at(kept.rfind(['/', '\\']).map_or(0, |at| at + 1));
     if matches!(last, "" | "." | "..") {
