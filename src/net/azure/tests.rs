@@ -607,3 +607,58 @@ fn a_managed_identity_that_cannot_be_had_says_why() {
     );
     assert_eq!(lines(&asked).len(), 2);
 }
+
+/// azure refusing a key or a token says which went and what lets it in.
+#[test]
+fn azure_refusing_a_key_or_a_token_names_which() {
+    let url = Url::parse("https://lab.blob.core.windows.net/raw/scan.tif").unwrap();
+    let container = "azure:lab/raw";
+    let key = Sent::Key {
+        container: container.to_owned(),
+        account: "lab".to_owned(),
+    }
+    .refusal(&url);
+    assert_eq!(key.kind, Kind::AuthRequired);
+    assert_eq!(
+        key.message,
+        "azure refused the key in AZURE_STORAGE_KEY for https://lab.blob.core.windows.net/raw/scan.tif"
+    );
+    assert_eq!(
+        key.help.as_deref(),
+        Some(
+            "the key must be one of the access keys of the account lab, as the azure portal shows them, and the account must let keys in. otherwise ask the owner of azure:lab/raw for a SAS"
+        )
+    );
+    for (by, who, ask) in [
+        (
+            SignedIn::Cli,
+            "the az cli's login",
+            "ask the container's owner for one, or sign in as another account with `az login`",
+        ),
+        (
+            SignedIn::Managed,
+            "this machine's managed identity",
+            "ask the container's owner to give one to this machine's identity",
+        ),
+    ] {
+        let token = Sent::Token {
+            container: container.to_owned(),
+            by,
+        }
+        .listing_refusal("azure:lab/raw/scans/");
+        assert_eq!(token.kind, Kind::AuthRequired);
+        assert_eq!(
+            token.message,
+            format!("azure refused {who} for azure:lab/raw/scans/")
+        );
+        assert_eq!(
+            token.help.as_deref(),
+            Some(
+                format!(
+                    "it needs a role that reads blobs, such as Storage Blob Data Reader, on azure:lab/raw: {ask}"
+                )
+                .as_str()
+            )
+        );
+    }
+}
