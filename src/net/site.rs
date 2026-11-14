@@ -484,8 +484,8 @@ impl Net {
         headers
     }
 
-    /// marks `response`, the answer to `hop`, with what a website's saved credential sent: on this
-    /// hop, or kept in `carried` from an earlier one.
+    /// marks `response`, the answer to `hop`, with what a website's saved credential or `.netrc`
+    /// login sent: on this hop, or kept in `carried` from an earlier one.
     pub(super) fn mark_site(
         &self,
         response: &mut reqwest::Response,
@@ -493,19 +493,22 @@ impl Net {
         first_origin: bool,
         carried: &mut Option<Sent>,
     ) {
-        let here = self.site(hop, first_origin).and_then(|site| {
-            let now = SystemTime::now();
-            let sent = !site.headers.is_empty()
-                || site.cookies.iter().any(|cookie| cookie.applies(hop, now));
-            let expired = !sent && site.cookies.iter().any(|cookie| cookie.on_path(hop));
-            (sent || expired).then(|| Sent {
-                host: site.named(),
-                what: site.what.clone(),
-                again: site.again.clone(),
-                answered: true,
-                expired,
+        let here = self
+            .site(hop, first_origin)
+            .and_then(|site| {
+                let now = SystemTime::now();
+                let sent = !site.headers.is_empty()
+                    || site.cookies.iter().any(|cookie| cookie.applies(hop, now));
+                let expired = !sent && site.cookies.iter().any(|cookie| cookie.on_path(hop));
+                (sent || expired).then(|| Sent {
+                    host: site.named(),
+                    what: site.what.clone(),
+                    again: site.again.clone(),
+                    answered: true,
+                    expired,
+                })
             })
-        });
+            .or_else(|| self.login_sent(hop));
         let marked = here.or_else(|| {
             carried.clone().map(|earlier| Sent {
                 answered: false,
@@ -516,6 +519,35 @@ impl Net {
             response.extensions_mut().insert(sent.clone());
             *carried = Some(sent);
         }
+    }
+
+    /// what a `.netrc` login for the host and port of `hop` sent with it, as [`Net::request`]
+    /// sends one on every hop that reaches its host. a website's own credential for the same
+    /// header goes in its place, and [`Net::mark_site`] names that first.
+    fn login_sent(&self, hop: &Url) -> Option<Sent> {
+        let host = hop.host_str()?;
+        let port = hop.port_or_known_default()?;
+        if !self.carries(hop) {
+            return None;
+        }
+        let key = self.credentials.iter().find(|key| {
+            key.every_hop && key.port == port && host.eq_ignore_ascii_case(&key.host)
+        })?;
+        let named = if port == 443 {
+            key.host.clone()
+        } else {
+            format!("{}:{port}", key.host)
+        };
+        Some(Sent {
+            again: format!(
+                "sign in again with `{}`",
+                Account::Login(named.clone()).command()
+            ),
+            host: named,
+            what: "the login".to_owned(),
+            answered: true,
+            expired: false,
+        })
     }
 
     /// the refusal of a 401 or 403 from `url`, a website no source speaks for, when a request for

@@ -292,6 +292,102 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
     Ok(())
 }
 
+/// a saved `.netrc` login counts as a token does: a sign-in page where a file was expected, a page
+/// a redirect led off the link's path and a refusal each name the command that saves a new login.
+#[test]
+fn a_sign_in_page_after_a_saved_login_names_the_command_that_saves_a_new_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<html><form action=/login>sign in</form></html>";
+    let length = page.len().to_string();
+    let html = || {
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html"), ("Content-Length", &length)],
+            page,
+        )
+    };
+    let moved = |location: &str| {
+        reply(
+            "302 Found",
+            &[("Location", location), ("Content-Length", "0")],
+            b"",
+        )
+    };
+    let site = Routes::start(vec![
+        ("/login".to_owned(), html()),
+        ("/data.csv".to_owned(), moved("/login")),
+        ("/page.html".to_owned(), html()),
+        ("/redir/page.html".to_owned(), moved("/page.html")),
+        (
+            "/locked.csv".to_owned(),
+            reply(
+                "401 Unauthorized",
+                &[
+                    ("WWW-Authenticate", "Basic realm=\"lab\""),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            ),
+        ),
+    ])?;
+    let host = host_of(&site);
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", &host, "--with-token"]),
+        "ada:pw-old\n",
+    )?;
+    assert!(login.status.success(), "{}", text(&login.stderr)?);
+    let link = format!("{}/data.csv", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "auth.required");
+    assert_eq!(
+        error["message"],
+        format!(
+            "{host} sent a web page, such as its sign-in page, where a file was expected, so the login saved for it may have expired"
+        )
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "sign in again with `fetchloom auth login {host}`, then run `fetchloom --json get {link}` again. if that page itself is the data, ask for it by the link it is at, {}/login, with --web-page",
+            site.url
+        )
+    );
+    assert!(!sandbox.work().join("data.csv").exists());
+    let off_path = format!("{}/redir/page.html", site.url);
+    let asked = sandbox.run(&["get", &off_path, "--web-page"])?;
+    assert_eq!(asked.status.code(), Some(40), "{}", text(&asked.stderr)?);
+    assert!(!sandbox.work().join("page.html").exists());
+    let locked = format!("{}/locked.csv", site.url);
+    let refused = sandbox.run(&["--json", "get", &locked])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(40),
+        "{}",
+        text(&refused.stderr)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        format!("{host} refused the login saved for it (401); it may have expired")
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "sign in again with `fetchloom auth login {host}`, then run `fetchloom --json get {locked}` again"
+        )
+    );
+    assert!(
+        heard(&site, "authorization")
+            .iter()
+            .all(|sent| sent.as_deref() == Some("basic ywrhonb3lw9sza==")),
+        "{:?}",
+        heard(&site, "authorization")
+    );
+    Ok(())
+}
+
 /// a website that refuses a link and names no way in is offered each way to sign in: in its
 /// help, and at a terminal as a choice that saves the key and runs the command again.
 /// a page the site moved the link to, below the link's own path, as a release's notes moved to
