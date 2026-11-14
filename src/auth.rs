@@ -8,6 +8,7 @@ pub(crate) mod google;
 pub(crate) mod kaggle;
 pub(crate) mod lease;
 pub(crate) mod netrc;
+pub(crate) mod oauth;
 pub(crate) mod process;
 pub(crate) mod site;
 pub(crate) mod store;

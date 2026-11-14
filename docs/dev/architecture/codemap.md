@@ -182,6 +182,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/auth/azure.rs` | azure storage's SAS and account key, where the az cli reads them, kept to one account, or the sign-in `AZURE_TOKEN_CREDENTIALS` chooses: the az cli's token or this machine's managed identity; what `fetchloom auth` lists of them | `find` | `Storage`, `AccountKey`, `SignIn`, `Token`, `cli_token`, `describe` |
 | `src/auth/azure/container.rs` | azure storage's names as the settings write them: accounts, containers and the SAS an entry of `azure_containers` may carry, which never shows | `AzureContainer`, `Sas` | `is_account`, `is_container`, `account_of` |
 | `src/auth/google.rs` | google's application default credentials, where google's own libraries look, the grant a token request sends, and the token in the answer | `find` | `Credentials`, `Token`, `grant`, `answer` |
+| `src/auth/oauth.rs` | a token endpoint's answer, as google's and azure's metadata service give it: a bearer token a header can carry and how long it lives, or what the endpoint said when it gave none | `bearer`, `said` |  |
 | `src/auth/process.rs` | a program that prints a credential: no shell, stdout read up to 64 KiB, stderr never | `printed` | `Ran`, `said` |
 | `src/auth/lease.rs` | a credential that expires, such as a google token or a program's AWS keys, held until shortly before it does, or for the run when it never does, with one fetch for every caller that needs a new one at once | `Lease` | `get`, `forget` |
 

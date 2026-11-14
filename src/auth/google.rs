@@ -9,6 +9,7 @@ use ring::signature::RsaKeyPair;
 use rustls::pki_types::pem::PemObject as _;
 use serde::Deserialize;
 
+use super::oauth;
 use crate::error::{Error, Kind};
 use crate::machine::Var;
 
@@ -170,25 +171,12 @@ impl Credentials {
     /// `auth.required` with what google said when it refused the grant, such as a revoked login,
     /// and `source.invalid` for an answer without a bearer token.
     pub(crate) fn answer(&self, status: u16, body: &[u8]) -> Result<Token, Error> {
-        let answer: Option<Answer> = serde_json::from_slice(body).ok();
         if status != 200 {
-            let said = answer
-                .and_then(|answer| {
-                    let code = answer.error?;
-                    Some(match answer.error_description {
-                        Some(description) => format!("{code}: {description}"),
-                        None => code,
-                    })
-                })
-                .map_or_else(
-                    || format!("google's token endpoint answered {status}"),
-                    |said| format!("google said {}", plain(&said)),
-                );
             return Err(Error::new(
                 Kind::AuthRequired,
                 format!("google refused {}", self.shown()),
             )
-            .detail(said)
+            .detail(oauth::said("google's token endpoint", "google", status, body))
             .help(match &self.identity {
                 Identity::Service { email, .. } => format!(
                     "the key may be deleted or disabled: make a new key for {email}, or set GOOGLE_APPLICATION_CREDENTIALS to another one"
@@ -201,46 +189,12 @@ impl Credentials {
                 }
             }));
         }
-        let unusable = |what: &str| {
-            Error::new(
-                Kind::SourceInvalid,
-                format!("google's token endpoint sent {what}"),
-            )
-            .help(crate::error::report_answer())
-        };
-        let answer = answer.ok_or_else(|| unusable("an answer fetchloom could not read"))?;
-        if answer
-            .token_type
-            .as_deref()
-            .is_some_and(|kind| !kind.eq_ignore_ascii_case("bearer"))
-        {
-            return Err(unusable("a token of another kind than bearer"));
-        }
-        // a token goes in a header, so one a header cannot carry is no token
-        let value = answer
-            .access_token
-            .filter(|token| !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_graphic()))
-            .ok_or_else(|| unusable("no token a request can carry"))?;
-        let seconds = match answer.expires_in {
-            Some(serde_json::Value::Number(number)) => number.as_u64(),
-            Some(serde_json::Value::String(text)) => text.trim().parse().ok(),
-            _ => None,
-        };
+        let (value, seconds) = oauth::bearer("google's token endpoint", body)?;
         Ok(Token {
             value,
             lifetime: Duration::from_secs(seconds.unwrap_or(LIFETIME)),
         })
     }
-}
-
-/// what the token endpoint answers: a token, or why it gave none.
-#[derive(Deserialize)]
-struct Answer {
-    access_token: Option<String>,
-    expires_in: Option<serde_json::Value>,
-    token_type: Option<String>,
-    error: Option<String>,
-    error_description: Option<String>,
 }
 
 /// `said` with control characters escaped and at most 300 characters kept, so a server's words

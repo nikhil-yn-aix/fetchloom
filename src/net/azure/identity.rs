@@ -6,13 +6,13 @@ use std::time::{Duration, SystemTime};
 
 use reqwest::StatusCode;
 use reqwest::header::HeaderValue;
-use serde::Deserialize;
 use url::Url;
 
 use super::super::failure::{self, Failure, Retry};
 use super::super::{Net, host};
 use crate::auth::azure::STORAGE;
-use crate::error::{Error, Kind, report_answer};
+use crate::auth::oauth;
+use crate::error::{Error, Kind};
 use crate::work::Work;
 
 /// where every virtual machine's instance metadata service gives its identity's tokens.
@@ -24,16 +24,6 @@ const CONNECT: Duration = Duration::from_secs(5);
 const LARGEST_ANSWER: usize = 64 << 10;
 /// how long a token lives when the answer does not say: azure's tokens live an hour or more.
 const LIFETIME: Duration = Duration::from_hours(1);
-
-/// what the service answers: a token, or why it gave none.
-#[derive(Deserialize)]
-struct Answer {
-    access_token: Option<String>,
-    expires_in: Option<serde_json::Value>,
-    token_type: Option<String>,
-    error: Option<String>,
-    error_description: Option<String>,
-}
 
 impl Net {
     /// a token that reads azure storage, of this machine's managed identity or the user-assigned
@@ -167,20 +157,8 @@ fn unanswered() -> Error {
 /// `auth.required` with the service's words when it gave no token, as for a machine with no
 /// identity or none with `client_id`, and `source.invalid` for an answer without a bearer token.
 fn token(status: u16, body: &[u8], client_id: Option<&str>) -> Result<(String, Duration), Error> {
-    let answer: Option<Answer> = serde_json::from_slice(body).ok();
     if status != 200 {
-        let said = answer
-            .and_then(|answer| {
-                let code = answer.error?;
-                Some(match answer.error_description {
-                    Some(description) => format!("{code}: {description}"),
-                    None => code,
-                })
-            })
-            .map_or_else(
-                || format!("azure's metadata service answered {status}"),
-                |said| format!("azure said {}", crate::auth::google::plain(&said)),
-            );
+        let said = oauth::said("azure's metadata service", "azure", status, body);
         let (message, help) = match client_id {
             Some(client_id) => (
                 format!(
@@ -197,30 +175,6 @@ fn token(status: u16, body: &[u8], client_id: Option<&str>) -> Result<(String, D
             .detail(said)
             .help(help));
     }
-    let unusable = |what: &str| {
-        Error::new(
-            Kind::SourceInvalid,
-            format!("azure's metadata service sent {what}"),
-        )
-        .help(report_answer())
-    };
-    let answer = answer.ok_or_else(|| unusable("an answer fetchloom could not read"))?;
-    if answer
-        .token_type
-        .as_deref()
-        .is_some_and(|kind| !kind.eq_ignore_ascii_case("bearer"))
-    {
-        return Err(unusable("a token of another kind than bearer"));
-    }
-    // a token goes in a header, so one a header cannot carry is no token
-    let value = answer
-        .access_token
-        .filter(|token| !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_graphic()))
-        .ok_or_else(|| unusable("no token a request can carry"))?;
-    let seconds = match answer.expires_in {
-        Some(serde_json::Value::Number(number)) => number.as_u64(),
-        Some(serde_json::Value::String(text)) => text.trim().parse().ok(),
-        _ => None,
-    };
+    let (value, seconds) = oauth::bearer("azure's metadata service", body)?;
     Ok((value, seconds.map_or(LIFETIME, Duration::from_secs)))
 }
