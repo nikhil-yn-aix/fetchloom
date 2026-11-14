@@ -335,7 +335,11 @@ async fn find(
     for warning in result.warnings {
         context.output.warn(Warning::SearchPartial, &warning);
     }
-    if result.candidates.is_empty() {
+    let mut candidates = result.candidates;
+    for candidate in &mut candidates {
+        candidate.time = expected(context, candidate);
+    }
+    if candidates.is_empty() {
         return Err(Error::new(
             Kind::ReferenceUnresolved,
             format!("found no {} matching \"{words}\"", unmatched(&asked)),
@@ -344,9 +348,32 @@ async fn find(
         .with_result(serde_json::json!({"candidates": []})));
     }
     Ok(Report {
-        candidates: result.candidates,
+        candidates,
         left_out: result.left_out,
     })
+}
+
+/// about how long `candidate` takes to download, as one download of its listed size from the
+/// first host its source names that this machine remembers a speed for, paced as that source
+/// asks. none without a size or a remembered host.
+fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::estimate::Time> {
+    use crate::net::estimate;
+    let size = candidate.size?;
+    let hosts = candidate.reference.download_hosts();
+    let name = crate::source::paced_as(hosts.first()?);
+    let speed = hosts
+        .iter()
+        .find_map(|host| context.speeds.speed(&crate::source::paced_as(host)))?;
+    let host = estimate::Host {
+        files: 1,
+        bytes: size,
+        largest: size,
+        speed: Some(speed),
+        spacing: crate::source::spacing(&name),
+        most: crate::source::most_at_once(&name),
+        ..estimate::Host::default()
+    };
+    estimate::time(&[host], super::fetch::limits(context))
 }
 
 /// one candidate for a script reading stdout: its reference first, then its title and, when
@@ -389,11 +416,11 @@ const TITLE_LEAST: usize = 12;
 const TITLE_MOST: usize = 52;
 
 /// each candidate as what to type, its title and its facts, in columns every row shares: title,
-/// size, downloads, note, a missing cell blank and an empty column left out. hugging face titles
-/// stay blank, as the reference names the repository. in `width` columns after `lead`, downloads
-/// give way first, then a dataset's title, while a paper's author line gives way before its title;
-/// size and note go under the reference when they do not fit, and a paper's title goes under it
-/// when even the title alone has no room beside it.
+/// size, download time, downloads, note, a missing cell blank and an empty column left out.
+/// hugging face titles stay blank, as the reference names the repository. in `width` columns
+/// after `lead`, downloads give way first, then a dataset's title, while a paper's author line
+/// gives way before its title; size, time and note go under the reference when they do not fit,
+/// and a paper's title goes under it when even the title alone has no room beside it.
 fn parts(
     output: &Output,
     candidates: &[Candidate],
@@ -501,9 +528,9 @@ fn parts(
         .collect()
 }
 
-/// each row's size, downloads and note, with a paper's author line before its note where
-/// `bylines` keeps it.
-fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 3]> {
+/// each row's size, download time, downloads and note, with a paper's author line before its
+/// note where `bylines` keeps it.
+fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 4]> {
     candidates
         .iter()
         .map(|candidate| {
@@ -514,6 +541,10 @@ fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 3]> {
             };
             [
                 candidate.size.map(units::size).unwrap_or_default(),
+                candidate
+                    .time
+                    .map(crate::net::estimate::Time::words)
+                    .unwrap_or_default(),
                 candidate
                     .downloads
                     .map(worded_downloads)
@@ -559,10 +590,10 @@ fn paper_row(
     }
 }
 
-/// each row's facts in their columns: size, then downloads where `downloads` keeps them, then
-/// the access note, numbers to the right.
-fn facts(cells: &[[String; 3]], downloads: bool) -> Vec<String> {
-    let widths: Vec<usize> = (0..3)
+/// each row's facts in their columns: size, download time, then downloads where `downloads`
+/// keeps them, then the access note, numbers to the right.
+fn facts(cells: &[[String; 4]], downloads: bool) -> Vec<String> {
+    let widths: Vec<usize> = (0..4)
         .map(|column| widest(cells.iter().map(|row| row[column].as_str())))
         .collect();
     cells
@@ -571,8 +602,8 @@ fn facts(cells: &[[String; 3]], downloads: bool) -> Vec<String> {
             row.iter()
                 .zip(&widths)
                 .enumerate()
-                .filter(|(column, (_, width))| **width > 0 && (downloads || *column != 1))
-                .map(|(column, (cell, width))| pad(cell, *width, column < 2))
+                .filter(|(column, (_, width))| **width > 0 && (downloads || *column != 2))
+                .map(|(column, (cell, width))| pad(cell, *width, column == 0 || column == 2))
                 .collect::<Vec<_>>()
                 .join("  ")
         })
@@ -649,6 +680,7 @@ mod tests {
                     downloads: None,
                     byline: None,
                     note: None,
+                    time: None,
                 })
                 .collect();
             counted(&candidates)
@@ -678,6 +710,7 @@ mod tests {
             downloads: None,
             byline: None,
             note: None,
+            time: None,
         };
         assert_eq!(
             line(&candidate),
@@ -718,6 +751,7 @@ mod tests {
                 downloads: Some(12_000),
                 byline: None,
                 note: None,
+                time: None,
             },
             Candidate {
                 reference: Reference::parse("zenodo:1").unwrap().reference,
@@ -727,6 +761,7 @@ mod tests {
                 downloads: None,
                 byline: None,
                 note: Some("needs access".to_owned()),
+                time: None,
             },
             Candidate {
                 reference: Reference::parse("hf:datasets/a/b").unwrap().reference,
@@ -736,6 +771,7 @@ mod tests {
                 downloads: Some(950),
                 byline: None,
                 note: None,
+                time: None,
             },
             Candidate {
                 reference: Reference::parse("hf:datasets/c/d").unwrap().reference,
@@ -745,6 +781,7 @@ mod tests {
                 downloads: Some(1),
                 byline: None,
                 note: None,
+                time: None,
             },
         ];
         let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));
@@ -763,6 +800,57 @@ mod tests {
         );
         assert_eq!(rows[0].len(), rows[2].len(), "downloads end in one column");
         assert_eq!(rows[0].len(), rows[3].len(), "downloads end in one column");
+    }
+
+    /// the download time stands right after the size, blank without grounds. narrower, downloads
+    /// give way, then titles shorten, while every size and time stays.
+    #[test]
+    fn a_download_time_follows_the_size_and_titles_give_way_first() {
+        use crate::net::estimate::{Bound, Time};
+        let output = quiet_output();
+        let candidate = |reference: &str, title: &str, size, time| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "zenodo",
+            size: Some(size),
+            downloads: Some(12_000),
+            byline: None,
+            note: None,
+            time,
+        };
+        let long = "a title long enough that it gives way on a terminal eighty columns wide";
+        let about = Time {
+            bound: Bound::About,
+            seconds: 180,
+        };
+        let candidates = vec![
+            candidate("zenodo:1", long, 3 << 30, Some(about)),
+            candidate("zenodo:22", "Iris", 3687, None),
+        ];
+        let lead = picker_lead(candidates.len());
+        let wide = rows(&output, &candidates, None, lead);
+        assert!(
+            wide[0].ends_with("3.0 GiB  about 3 min  12k downloads"),
+            "{wide:?}"
+        );
+        let blank = format!("3.6 KiB{}12k downloads", " ".repeat(15));
+        assert!(wide[1].ends_with(&blank), "{wide:?}");
+        for width in [80, 60] {
+            let narrow = rows(&output, &candidates, Some(width), lead);
+            for row in &narrow {
+                assert!(
+                    console::measure_text_width(row) + lead <= width,
+                    "{width}: {row}"
+                );
+            }
+            assert!(!narrow[0].contains(long), "{width}: {narrow:?}");
+            assert!(
+                narrow[0].contains("3.0 GiB  about 3 min"),
+                "{width}: {narrow:?}"
+            );
+            assert!(narrow[1].contains("3.6 KiB"), "{width}: {narrow:?}");
+            assert_eq!(narrow[0].contains("downloads"), width == 80, "{narrow:?}");
+        }
     }
 
     fn quiet_output() -> Output {
@@ -793,6 +881,7 @@ mod tests {
             downloads: Some(downloads),
             byline: None,
             note: gated.then(|| "needs access".to_owned()),
+            time: None,
         };
         let candidates = vec![
             candidate(
@@ -882,6 +971,7 @@ mod tests {
             downloads: None,
             byline: Some(byline.to_owned()),
             note: closed.then(|| "no open-access pdf".to_owned()),
+            time: None,
         };
         let candidates = vec![
             paper(
@@ -964,6 +1054,7 @@ mod tests {
             downloads: Some(2400),
             byline: None,
             note: None,
+            time: None,
         };
         let candidates = vec![
             candidate("kaggle:uciml/iris", "Iris Species"),
@@ -999,6 +1090,7 @@ mod tests {
             downloads: Some(downloads),
             byline: None,
             note: None,
+            time: None,
         };
         let candidates = vec![
             candidate(
@@ -1081,6 +1173,7 @@ mod tests {
                 downloads: None,
                 byline: None,
                 note: None,
+                time: None,
             },
             Candidate {
                 reference: Reference::parse(&long).unwrap().reference,
@@ -1090,6 +1183,7 @@ mod tests {
                 downloads: None,
                 byline: None,
                 note: None,
+                time: None,
             },
         ];
         let rows = rows(&output, &candidates, None, picker_lead(candidates.len()));

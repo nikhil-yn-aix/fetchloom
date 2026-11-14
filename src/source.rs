@@ -697,6 +697,28 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
 }
 
+impl Reference {
+    /// the hosts a search match's files download from, as its source knows before listing them,
+    /// the usual one first; none where they vary by file, as a paper's pdf from semantic scholar,
+    /// or for a source search does not ask.
+    pub(crate) fn download_hosts(&self) -> &'static [&'static str] {
+        match self {
+            Reference::HuggingFace(_) => &["huggingface.co"],
+            Reference::Kaggle(_) | Reference::KaggleCompetition(_) => &["api.kaggle.com"],
+            Reference::Zenodo(_) => &["zenodo.org"],
+            Reference::Ena(_) => &["ftp.sra.ebi.ac.uk", "ftp.ebi.ac.uk"],
+            Reference::Geo(_) => &["ftp.ncbi.nlm.nih.gov"],
+            Reference::Dandi(_) => &["dandiarchive.s3.amazonaws.com"],
+            Reference::OpenNeuro(_) => &["s3.amazonaws.com"],
+            // arXiv's bucket holds most papers; the rest come from arXiv itself
+            Reference::Arxiv(_) | Reference::ArxivMonth(_) => {
+                &["storage.googleapis.com", "arxiv.org"]
+            }
+            _ => &[],
+        }
+    }
+}
+
 /// the name requests to `host` are paced and counted under: the host, or for hosts whose source
 /// limits them together, as arXiv's terms do its hosts, the name they share.
 pub(crate) fn paced_as(host: &str) -> String {

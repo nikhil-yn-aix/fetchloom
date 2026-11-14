@@ -26,6 +26,9 @@ pub(crate) struct Candidate {
     pub(crate) byline: Option<String>,
     /// what to know before adding it, as `needs access`.
     pub(crate) note: Option<String>,
+    /// about how long its listed size takes to download here, from what this machine remembers
+    /// of its source's hosts; none without grounds.
+    pub(crate) time: Option<crate::net::estimate::Time>,
 }
 
 impl Candidate {
@@ -42,13 +45,14 @@ impl Candidate {
 impl Serialize for Candidate {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let mut record = serializer.serialize_struct("Candidate", 6)?;
+        let mut record = serializer.serialize_struct("Candidate", 7)?;
         record.serialize_field("reference", &self.reference.to_string())?;
         record.serialize_field("title", &self.title)?;
         record.serialize_field("source", self.source)?;
         record.serialize_field("size", &self.size)?;
         record.serialize_field("downloads", &self.downloads)?;
         record.serialize_field("note", &self.told())?;
+        record.serialize_field("time", &self.time)?;
         record.end()
     }
 }
@@ -461,6 +465,7 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
                 downloads: item.downloads,
                 byline: None,
                 note: gated.then(|| "needs access".to_owned()),
+                time: None,
             })
         })
         .collect()
@@ -498,6 +503,7 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                 downloads: item.download_count.filter(|_| !unserved),
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()
@@ -644,6 +650,7 @@ async fn arxiv(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
             downloads: None,
             byline: found.byline,
             note: found.note,
+            time: None,
         })
         .collect())
 }
@@ -662,6 +669,7 @@ async fn s2(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>,
             downloads: None,
             byline: found.byline,
             note: found.note,
+            time: None,
         })
         .collect())
 }
@@ -688,6 +696,7 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                 downloads: item.stats.and_then(|stats| stats.unique_downloads),
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()
@@ -773,6 +782,7 @@ async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 downloads: None,
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()
@@ -856,6 +866,7 @@ async fn geo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>
                 downloads: None,
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()
@@ -919,6 +930,7 @@ async fn dandi(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
                 downloads: None,
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()
@@ -1042,6 +1054,7 @@ async fn openneuro(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Cand
                 downloads: analytics.and_then(|analytics| analytics.downloads),
                 byline: None,
                 note: None,
+                time: None,
             })
         })
         .collect()

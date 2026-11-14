@@ -656,6 +656,7 @@ fn json_keeps_the_reference_as_text_and_unknown_fields_as_null() {
         serde_json::json!({
             "reference": "hf:datasets/scikit-learn/iris", "title": "scikit-learn/iris",
             "source": "hugging face", "size": null, "downloads": 11912, "note": null,
+            "time": null,
         })
     );
 }

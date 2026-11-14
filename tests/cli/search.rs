@@ -445,7 +445,7 @@ fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
         candidates[0],
         serde_json::json!({
             "reference": "ena:SRP455996", "title": "Iris germanica Assembly", "source": "ENA",
-            "size": null, "downloads": null, "note": null,
+            "size": null, "downloads": null, "note": null, "time": null,
         })
     );
     assert_eq!(candidates[1]["source"], "GEO");
@@ -455,6 +455,7 @@ fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
             "reference": "dandi:000623",
             "title": "Data for: Multimodal single-neuron, intracranial EEG, and fMRI brain responses during movie watching in human patients",
             "source": "dandi", "size": 27_744_749_325_u64, "downloads": null, "note": null,
+            "time": null,
         })
     );
     assert_eq!(
@@ -462,6 +463,7 @@ fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
         serde_json::json!({
             "reference": "openneuro:ds001037", "title": "The brain of Chris",
             "source": "openneuro", "size": 8_600_815, "downloads": 42, "note": null,
+            "time": null,
         })
     );
     for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo] {
@@ -542,7 +544,7 @@ fn search_json_carries_metadata_and_joins_words() -> Result {
         document["result"]["candidates"][1],
         serde_json::json!({
             "reference":"kaggle:uciml/iris", "title":"Iris Species", "source":"kaggle",
-            "size":3687, "downloads":958_555, "note":null,
+            "size":3687, "downloads":958_555, "note":null, "time":null,
         })
     );
     assert!(catalogs.hf.requests()[0].contains("search=fashion+mnist"));
@@ -926,5 +928,66 @@ fn a_mistyped_path_never_reaches_a_catalog() -> Result {
         text(&searched.stdout)?
     );
     assert_eq!(catalogs.hf.requests().len(), 1);
+    Ok(())
+}
+
+/// on a fresh machine no match has a time. once this machine remembers hugging face's host, its
+/// matches with a size say about how long they take, at a terminal and in `--json`, while every
+/// other site's stay blank; the rows still fit 80 columns.
+#[test]
+fn a_remembered_host_times_its_sites_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let searched = |args: &[&str]| -> Result<Vec<serde_json::Value>> {
+        let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+        let document = json(&catalogs.command(&sandbox, args).output()?)?;
+        Ok(document["result"]["candidates"]
+            .as_array()
+            .ok_or("no candidates")?
+            .clone())
+    };
+    let fresh = searched(&["--json", "search", "iris"])?;
+    assert!(
+        fresh.iter().all(|found| found["time"].is_null()),
+        "{fresh:?}"
+    );
+    let speeds = sandbox.speeds();
+    std::fs::create_dir_all(speeds.parent().ok_or("no folder")?)?;
+    std::fs::write(
+        &speeds,
+        r#"{"hosts":{"huggingface.co":{"rate":100.0,"overhead":0.5,"heard":1}}}"#,
+    )?;
+    let known = searched(&["--json", "search", "iris"])?;
+    let timed: Vec<&serde_json::Value> = known
+        .iter()
+        .filter(|found| !found["time"].is_null())
+        .collect();
+    assert!(!timed.is_empty(), "{known:?}");
+    for found in &timed {
+        assert_eq!(found["source"], "hugging face", "{found}");
+        assert_eq!(found["time"]["bound"], "about", "{found}");
+        assert!(found["time"]["seconds"].is_u64(), "{found}");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+        let command = catalogs.command(&sandbox, &["search", "iris"]);
+        let Some((_, screen)) =
+            crate::support::typed(&sandbox.work(), &command, "rows 40 cols 80", "", "")?
+        else {
+            return Ok(());
+        };
+        let rows: Vec<&str> = screen
+            .lines()
+            .map(|line| line.trim_matches('\r'))
+            .filter(|line| line.trim_start().starts_with("hf:"))
+            .collect();
+        assert!(!rows.is_empty(), "{screen}");
+        assert!(rows.iter().all(|row| row.chars().count() <= 80), "{screen}");
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(" about ") || row.contains(" a few seconds")),
+            "{screen}"
+        );
+    }
     Ok(())
 }
