@@ -179,16 +179,19 @@ impl Account {
                 if let Some(cloud) = cloud_sign_in(&lowered) {
                     return Err(cloud);
                 }
-                return Err(Error::new(
+                let error = Error::new(
                     Kind::Usage,
                     format!(
                         "fetchloom does not know an account called \"{}\"",
-                        crate::net::mask_query(name).escape_debug()
+                        masked(name).escape_debug()
                     ),
-                )
-                .help(format!(
-                    "use one of {NAMES}, as in `fetchloom auth login hf`"
-                )));
+                );
+                return Err(match meant_account(name) {
+                    Some(meant) => error.help(format!("did you mean `{}`?", meant.command())),
+                    None => error.help(format!(
+                        "use one of {NAMES}, as in `fetchloom auth login hf`"
+                    )),
+                });
             }
         };
         if host.is_some() && !matches!(account, Account::Dataverse(_)) {
@@ -715,6 +718,48 @@ pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
 /// whether a host is one word, since .netrc and the key index split on spaces and line breaks.
 fn one_word(host: &str) -> bool {
     !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c.is_control() || c == '"')
+}
+
+/// the names a person types for each account, which [`meant_account`] holds a typo up to. hosts
+/// are left out, since a typo of one may be another host, and so is nasa, a typo away from `nas`.
+const TYPED_NAMES: [&str; 14] = [
+    "hf",
+    "huggingface",
+    "kaggle",
+    "zenodo",
+    "figshare",
+    "osf",
+    "dryad",
+    "github",
+    "gitlab",
+    "s2",
+    "semanticscholar",
+    "dataverse",
+    "earthdata",
+    "physionet",
+];
+
+/// the account whose name `typed` is a typo of, as `hff` is of hf. a word shorter than three
+/// letters is too short to tell a typo by, and one with a dot or a port names a host.
+pub(crate) fn meant_account(typed: &str) -> Option<Account> {
+    let lowered = typed.trim().to_ascii_lowercase();
+    if lowered.chars().count() < 3 || lowered.contains(['.', ':']) {
+        return None;
+    }
+    let name = crate::name::sole_closest(&lowered, TYPED_NAMES)?;
+    Account::parse(name, None).ok()
+}
+
+/// `typed` as a refusal shows it: a link's login and query values masked, as
+/// [`crate::net::mask_query`] masks them, and so is whatever comes before an `@` without a link
+/// around it, as the password in `ada:pw@data.example.org`.
+fn masked(typed: &str) -> String {
+    let masked = crate::net::mask_query(typed);
+    let start = masked.find("://").map_or(0, |at| at + 3);
+    match masked[start..].rfind('@') {
+        Some(at) => format!("{}***{}", &masked[..start], &masked[start + at..]),
+        None => masked.into_owned(),
+    }
 }
 
 /// a dataverse installation as its account names it, from what a person typed: the host, with

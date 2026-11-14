@@ -57,7 +57,7 @@ impl Asked {
 
 /// the host `typed` names for a website's credential: a host name with its port when that is
 /// not 443, or what a login's name stands for, as earthdata does. an account that takes a key of
-/// its own, such as hf, has none.
+/// its own, such as hf, has none, and neither has a typo of one's name, as `hff`.
 fn site_host(typed: &str) -> Result<String, Error> {
     match Account::parse(typed, None) {
         Ok(Account::Login(host)) => Ok(host),
@@ -69,6 +69,7 @@ fn site_host(typed: &str) -> Result<String, Error> {
             "run `{}`. --token, --header, --cookies and --browser are for websites fetchloom has no account for",
             account.command()
         ))),
+        Err(error) if crate::auth::meant_account(typed).is_some() => Err(error),
         Err(error) => site::host(typed).ok_or(error),
     }
 }
@@ -686,4 +687,33 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
         account: format!("site:{host}"),
         removed_from,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// a typo of an account's name never becomes a website's host, which a token would then go
+    /// to, while a host a person names stays one.
+    #[test]
+    fn a_typo_of_an_account_is_no_website() {
+        for typed in ["hff", "s2x", "kagle"] {
+            let error = site_host(typed).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{typed}");
+            assert!(
+                error
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.starts_with("did you mean `fetchloom auth login")),
+                "{typed}: {error:?}"
+            );
+        }
+        for (typed, host) in [
+            ("data.example.org", "data.example.org"),
+            ("localhost:8080", "localhost:8080"),
+            ("nas", "nas"),
+        ] {
+            assert_eq!(site_host(typed).unwrap(), host, "{typed}");
+        }
+    }
 }

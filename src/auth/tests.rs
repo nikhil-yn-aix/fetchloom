@@ -562,6 +562,7 @@ fn account_hosts_cannot_carry_url_components() {
         "example.org?token=mask_canary",
         "example.org#client_secret=mask_canary",
         "https%3A%2F%2Freader%3Amask_canary%40example.org",
+        "reader:mask_canary@example.org",
     ] {
         let error = Account::parse(name, None).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
@@ -570,6 +571,40 @@ fn account_hosts_cannot_carry_url_components() {
     assert_eq!(
         Account::parse("DATA.example.org", None).unwrap(),
         Account::Login("data.example.org".to_owned())
+    );
+}
+
+/// a word a typo away from an account's name gets that account's command; any other word, or one
+/// too short to tell a typo by, gets the list of names.
+#[test]
+fn a_typo_of_an_account_name_suggests_the_account() {
+    for (typed, meant) in [
+        ("hff", "hf"),
+        ("s2x", "s2"),
+        ("Hugginface", "hf"),
+        ("kagle", "kaggle"),
+        ("zenodoo", "zenodo"),
+    ] {
+        let error = Account::parse(typed, None).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(format!("did you mean `fetchloom auth login {meant}`?").as_str()),
+            "{typed}"
+        );
+        assert_eq!(
+            meant_account(typed),
+            Some(Account::parse(meant, None).unwrap())
+        );
+    }
+    for typed in ["bitbucket", "s3", "nas", "data.example.org", "hf"] {
+        assert_eq!(meant_account(typed), None, "{typed}");
+    }
+    assert!(
+        Account::parse("bitbucket", None)
+            .unwrap_err()
+            .help
+            .is_some_and(|help| help.starts_with("use one of hf, kaggle")),
     );
 }
 
