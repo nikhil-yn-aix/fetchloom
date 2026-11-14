@@ -1048,24 +1048,13 @@ async fn preview_lock(
             size: job.fetch.expect.size,
         })
         .collect();
-    for download in &download {
-        let size = download
-            .size
-            .map_or_else(|| "size unknown".to_owned(), units::size);
-        output.step("Would fetch", &format!("{} · {size}", download.path));
-    }
     let to_download = super::fetch::planned(
         context,
         dry.jobs
             .iter()
             .map(|job| (super::fetch::host_of(job), job.fetch.expect.size)),
     );
-    let labels = download.iter().map(|download| download.path.as_str());
-    super::fetch::tell_would(
-        output,
-        &super::fetch::called(labels, to_download.files),
-        &to_download,
-    );
+    super::fetch::tell_would_fetch(output, &download, &to_download);
     for archive in &dry.unpack {
         output.step("Would open", archive);
     }
@@ -1552,19 +1541,8 @@ pub(super) async fn preview_all(
         );
     }
     let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged, &guessed)?;
-    for download in &preview.changes.download {
-        let size = download
-            .size
-            .map_or_else(|| "size unknown".to_owned(), units::size);
-        output.step("Would fetch", &format!("{} · {size}", download.path));
-    }
     if let Some(total) = &preview.changes.to_download {
-        let labels = preview
-            .changes
-            .download
-            .iter()
-            .map(|download| download.path.as_str());
-        super::fetch::tell_would(output, &super::fetch::called(labels, total.files), total);
+        super::fetch::tell_would_fetch(output, &preview.changes.download, total);
     }
     for archive in &preview.changes.unpack {
         output.step("Would open", archive);

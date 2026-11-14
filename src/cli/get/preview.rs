@@ -214,15 +214,8 @@ fn fetching(
 /// would unpack, then where each link's files would land.
 fn tell(context: &Context, plans: &[Planned], total: &crate::net::estimate::Total) {
     let output = &context.output;
-    let downloads = || plans.iter().flat_map(|planned| &planned.download);
-    for download in downloads() {
-        let size = download
-            .size
-            .map_or_else(|| "size unknown".to_owned(), units::size);
-        output.step("Would fetch", &format!("{} · {size}", download.path));
-    }
-    let labels = downloads().map(|download| download.path.as_str());
-    fetch::tell_would(output, &fetch::called(labels, total.files), total);
+    let downloads: Vec<&Download> = plans.iter().flat_map(|planned| &planned.download).collect();
+    fetch::tell_would_fetch(output, &downloads, total);
     for name in plans.iter().flat_map(|planned| &planned.check) {
         output.step(
             "Would check",

@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::put::Tally;
 use super::{
-    Blocker, ChangedCopy, Entry, LeftBehind, Placement, Preview, Reason, Scope, Undroppable,
+    Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope,
+    Undroppable,
 };
 use crate::output::{Output, Warning};
 use crate::place::{Because, Placer, Unlinked};
@@ -44,10 +45,12 @@ pub(super) fn tell(
     let mut folders: Vec<(String, Tally)> = Vec::new();
     let mut at_folder: HashMap<String, usize> = HashMap::new();
     let told = told.filter(|_| !output.shows_details());
+    let mut datasets: u64 = 0;
     for (dataset, tally) in tallies
         .iter()
         .filter(|(dataset, _)| !told.is_some_and(|told| told.contains(**dataset)))
     {
+        datasets += 1;
         let folder = plan::folder(manifest, dataset);
         #[cfg(test)]
         tests::looking();
@@ -60,25 +63,7 @@ pub(super) fn tell(
         sum.links += tally.links;
         sum.copied += tally.copied;
     }
-    for (folder, tally) in &folders {
-        let how = match (tally.links, tally.files - tally.links) {
-            (_, 0) => "linked to the cache".to_owned(),
-            (0, _) => format!("copied, {}", units::size(tally.copied)),
-            (_, _) => format!("partly copied, {}", units::size(tally.copied)),
-        };
-        let fresh = if placement.refilled.contains(folder) {
-            " · the folder was missing"
-        } else {
-            ""
-        };
-        output.step(
-            "Placed",
-            &format!(
-                "{folder} · {} {how}{fresh}",
-                units::count(tally.files, "file", "files")
-            ),
-        );
-    }
+    tell_placed(output, placement, &folders, datasets);
     for (folder, paths) in by_folder(manifest, &placement.adopted) {
         let (linked, kept): (Vec<&String>, Vec<&String>) = paths
             .into_iter()
@@ -414,28 +399,41 @@ pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
 /// the lines a dry run of `scope` prints for a placement it only planned. `-v` names each file.
 pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, preview: &Preview) {
     // sizes stay out: a file whose pin only a download can learn has no size yet
-    let tell_files = |verb: &str, dataset: &str, files: &[String]| {
-        if files.is_empty() {
+    let tell_files = |verb: &str, files_of: fn(&Planned) -> &Vec<String>| {
+        let datasets: Vec<(&String, &Vec<String>)> = preview
+            .by_dataset
+            .iter()
+            .map(|(dataset, planned)| (dataset, files_of(planned)))
+            .filter(|(_, files)| !files.is_empty())
+            .collect();
+        if !crate::cli::fetch::one_by_one(output, datasets.len()) {
+            let files = datasets.iter().map(|(_, files)| files.len() as u64).sum();
+            output.step(
+                verb,
+                &format!(
+                    "{} · {} · `-v` lists them",
+                    units::count(datasets.len() as u64, "dataset", "datasets"),
+                    units::count(files, "file", "files")
+                ),
+            );
             return;
         }
-        output.step(
-            verb,
-            &format!(
-                "{} · {}",
-                plan::folder(manifest, dataset),
-                units::count(files.len() as u64, "file", "files"),
-            ),
-        );
-        for path in files {
-            output.detail(path);
+        for (dataset, files) in datasets {
+            output.step(
+                verb,
+                &format!(
+                    "{} · {}",
+                    plan::folder(manifest, dataset),
+                    units::count(files.len() as u64, "file", "files"),
+                ),
+            );
+            for path in files {
+                output.detail(path);
+            }
         }
     };
-    for (dataset, planned) in &preview.by_dataset {
-        tell_files("Would place", dataset, &planned.place);
-    }
-    for (dataset, planned) in &preview.by_dataset {
-        tell_files("Would renew", dataset, &planned.replace);
-    }
+    tell_files("Would place", |planned| &planned.place);
+    tell_files("Would renew", |planned| &planned.replace);
     for (dataset, planned) in &preview.by_dataset {
         tell_checks(output, manifest, dataset, &planned.check);
     }
@@ -489,6 +487,56 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
             });
         }
     }
+}
+
+/// a line for each folder `folders` placed, or past a few dozen one line for the `datasets` in
+/// them, which `-v` lists.
+fn tell_placed(output: &Output, placement: &Placement, folders: &[(String, Tally)], datasets: u64) {
+    if crate::cli::fetch::one_by_one(output, folders.len()) {
+        for (folder, tally) in folders {
+            let fresh = if placement.refilled.contains(folder) {
+                " · the folder was missing"
+            } else {
+                ""
+            };
+            output.step("Placed", &format!("{folder} · {}{fresh}", placed(tally)));
+        }
+    } else {
+        let mut sum = Tally::default();
+        for (_, tally) in folders {
+            sum.files += tally.files;
+            sum.links += tally.links;
+            sum.copied += tally.copied;
+        }
+        let missing = folders
+            .iter()
+            .filter(|(folder, _)| placement.refilled.contains(folder))
+            .count();
+        let fresh = match missing {
+            0 => String::new(),
+            1 => " · 1 folder was missing".to_owned(),
+            _ => format!(" · {} folders were missing", units::grouped(missing as u64)),
+        };
+        output.step(
+            "Placed",
+            &format!(
+                "{} · {}{fresh} · `-v` lists them",
+                units::count(datasets, "dataset", "datasets"),
+                placed(&sum)
+            ),
+        );
+    }
+}
+
+/// how many files `tally` placed, and how: `3 files linked to the cache` or `2 files copied,
+/// 1.2 KiB`.
+fn placed(tally: &Tally) -> String {
+    let how = match (tally.links, tally.files - tally.links) {
+        (_, 0) => "linked to the cache".to_owned(),
+        (0, _) => format!("copied, {}", units::size(tally.copied)),
+        (_, _) => format!("partly copied, {}", units::size(tally.copied)),
+    };
+    format!("{} {how}", units::count(tally.files, "file", "files"))
 }
 
 /// the lines for files a placement removed or would: `verbs[0]` per dataset with `place = false`,
@@ -974,7 +1022,7 @@ mod tests {
                 links: false,
                 accessible: false,
             },
-            Level::Normal,
+            Level::Verbose,
             false,
             false,
         );
@@ -1009,6 +1057,125 @@ mod tests {
             said[2001],
             "     Placed data/d1999 - 1 file linked to the cache"
         );
+    }
+
+    /// a few dozen folders get a line each; past that one line counts them, and `-v` names each.
+    #[test]
+    fn many_folders_placed_are_counted_on_one_line() {
+        use std::fmt::Write as _;
+
+        for (datasets, level, lines) in [
+            (40, Level::Normal, 40),
+            (41, Level::Normal, 1),
+            (41, Level::Verbose, 41),
+        ] {
+            let mut text = String::new();
+            for number in 0..datasets {
+                let _ = write!(text, "\n[datasets.d{number:02}]\nref = \"x\"\n");
+            }
+            let manifest = Manifest::parse(&text).unwrap();
+            let tallies: BTreeMap<&str, Tally> = manifest
+                .datasets
+                .keys()
+                .map(|name| {
+                    let tally = Tally {
+                        files: 2,
+                        links: 2,
+                        ..Tally::default()
+                    };
+                    (name.as_str(), tally)
+                })
+                .collect();
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                level,
+                false,
+                false,
+            );
+            let placement = Placement {
+                refilled: ["data/d03".to_owned()].into(),
+                ..Placement::default()
+            };
+            let placer = Placer::new(std::path::Path::new("data"));
+            tell(
+                &output,
+                &manifest,
+                &placer,
+                &tallies,
+                &placement,
+                None,
+                &Scope::All,
+            );
+            let said = output.said();
+            assert_eq!(said.len(), lines, "{datasets}: {said:?}");
+            if lines == 1 {
+                assert_eq!(
+                    said[0],
+                    "     Placed 41 datasets - 82 files linked to the cache - 1 folder was missing - `-v` lists them"
+                );
+            } else {
+                assert_eq!(
+                    said[3],
+                    "     Placed data/d03 - 2 files linked to the cache - the folder was missing"
+                );
+            }
+        }
+    }
+
+    /// a dry run names the folder of each of a few dozen datasets it would place; past that one
+    /// line counts them, and `-v` names each with its files.
+    #[test]
+    fn many_datasets_a_dry_run_would_place_are_counted_on_one_line() {
+        for (datasets, level, lines) in [
+            (40, Level::Normal, 40),
+            (41, Level::Normal, 1),
+            (41, Level::Verbose, 82),
+        ] {
+            let manifest = Manifest::parse("").unwrap();
+            let preview = Preview {
+                by_dataset: (0..datasets)
+                    .map(|number| {
+                        let planned = Planned {
+                            place: vec![format!("data/d{number:02}/a.csv")],
+                            ..Planned::default()
+                        };
+                        (format!("d{number:02}"), planned)
+                    })
+                    .collect(),
+                ..Preview::default()
+            };
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                level,
+                false,
+                false,
+            );
+            tell_preview(&output, &manifest, &Scope::All, &preview);
+            let said = output.said();
+            assert_eq!(said.len(), lines, "{datasets}: {said:?}");
+            if lines == 1 {
+                assert_eq!(
+                    said[0],
+                    "      Would place 41 datasets - 41 files - `-v` lists them"
+                );
+            } else {
+                assert_eq!(said[0], "      Would place data/d00 - 1 file");
+            }
+        }
     }
 
     /// the help gives drop with the first file it can leave out, quoted for a shell, else a

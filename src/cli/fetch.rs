@@ -782,11 +782,46 @@ pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
     }
 }
 
+/// what a dry run would download: a line for each of `downloads` while there are few, then
+/// their `total`, which says how to list them when there were too many.
+pub(super) fn tell_would_fetch<D: std::borrow::Borrow<super::sync::place::Download>>(
+    output: &Output,
+    downloads: &[D],
+    total: &estimate::Total,
+) {
+    let labels = downloads
+        .iter()
+        .map(|download| download.borrow().path.as_str());
+    let what = called(labels, total.files);
+    if !one_by_one(output, downloads.len()) {
+        output.step(
+            "Would download",
+            &format!("{what} · {} · `-v` lists them", total.facts(false)),
+        );
+        return;
+    }
+    for download in downloads.iter().map(std::borrow::Borrow::borrow) {
+        let size = download
+            .size
+            .map_or_else(|| "size unknown".to_owned(), units::size);
+        output.step("Would fetch", &format!("{} · {size}", download.path));
+    }
+    tell_would(output, &what, total);
+}
+
 /// `live` says a bar will show the time once the downloads start.
 fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total, live: bool) {
     if total.files > 0 && total.is_sized() {
         output.step(verb, &format!("{what} · {}", total.facts(live)));
     }
+}
+
+/// the most downloads, or datasets, a run tells on a line each; past it one line counts them.
+const LISTED: usize = 40;
+
+/// whether a run tells each of `count` things on a line of its own: a few, or any number at `-v`.
+pub(super) fn one_by_one(output: &Output, count: usize) -> bool {
+    count <= LISTED || output.shows_details()
 }
 
 /// what `files` downloads are called before they start: the one file's name, or a count.
@@ -1406,6 +1441,54 @@ mod tests {
             },
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),
+        }
+    }
+
+    /// a dry run names each of a few dozen downloads, then their total; past that the total alone
+    /// says how many, and `-v` names each.
+    #[test]
+    fn a_dry_run_of_many_downloads_counts_them_on_one_line() {
+        for (files, level, lines) in [
+            (40, Level::Normal, 41),
+            (41, Level::Normal, 1),
+            (41, Level::Verbose, 42),
+        ] {
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                level,
+                false,
+                false,
+            );
+            let downloads: Vec<super::super::sync::place::Download> = (0..files)
+                .map(|number| super::super::sync::place::Download {
+                    path: format!("set/{number:02}.csv"),
+                    size: Some(10),
+                })
+                .collect();
+            let total = estimate::Total {
+                files,
+                bytes: files * 10,
+                sizes_unknown: 0,
+                time: None,
+            };
+            tell_would_fetch(&output, &downloads, &total);
+            let said = output.said();
+            assert_eq!(said.len(), lines, "{files}: {said:?}");
+            if lines == 1 {
+                assert_eq!(
+                    said[0],
+                    "      Would download 41 files - 410 B - `-v` lists them"
+                );
+            } else {
+                assert_eq!(said[0], "      Would fetch set/00.csv - 10 B");
+            }
         }
     }
 
