@@ -686,7 +686,7 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     let run = |arguments: &[&str]| {
         sandbox
             .command(arguments)
-            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
             .output()
     };
     ok(&run(&["add", "s3://openneuro.org/ds000001/"])?)?;

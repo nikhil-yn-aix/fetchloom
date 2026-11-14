@@ -1909,7 +1909,7 @@ fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {
         let output = sandbox
             .command_in(folder, args)
             .env("FETCHLOOM_TEST_HF_API", &hub.url)
-            .env("FETCHLOOM_TEST_SOURCES", &files.url)
+            .env("FETCHLOOM_TEST_HOSTS", &files.url)
             .env("FETCHLOOM_CACHE", cache)
             .output()?;
         let stderr = text(&output.stderr)?;

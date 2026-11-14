@@ -83,7 +83,7 @@ pub(crate) fn md5(body: &[u8]) -> String {
 fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEEXAMPLE")
         .env("AWS_SECRET_ACCESS_KEY", "do-not-send")
         .env("AWS_SESSION_TOKEN", "do-not-send")
@@ -581,7 +581,7 @@ fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
 fn keyed_command(sandbox: &Sandbox, routes: &str, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
-        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("FETCHLOOM_TEST_HOSTS", routes)
         .env("AWS_ACCESS_KEY_ID", "akiaenvironmentkey")
         .env("AWS_SECRET_ACCESS_KEY", SECRET)
         .env("AWS_SESSION_TOKEN", SESSION);
@@ -637,7 +637,7 @@ fn teammate_sync(sandbox: &Sandbox, routes: &str) -> Result<(std::path::PathBuf,
     )?;
     let output = sandbox
         .command_in(&clone, &["--json", "sync", "--locked"])
-        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("FETCHLOOM_TEST_HOSTS", routes)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .env("FETCHLOOM_S3_BUCKETS", "private-lab")
         .env("AWS_PROFILE", "lab")
@@ -756,7 +756,7 @@ fn a_listed_bucket_without_keys_says_which_keys_to_set() -> Result {
     )])?;
     let output = sandbox
         .command(&["--json", "add", "s3://private-lab/"])
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_S3_BUCKETS", "private-lab")
         .output()?;
     assert_eq!(output.status.code(), Some(40));
@@ -939,7 +939,7 @@ fn profile_command(
 ) -> Fetchloom {
     let mut command = sandbox.command(args);
     command
-        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("FETCHLOOM_TEST_HOSTS", routes)
         .env("FETCHLOOM_S3_BUCKETS", "private-lab")
         .env("AWS_CONFIG_FILE", config)
         .env("AWS_PROFILE", "lab");

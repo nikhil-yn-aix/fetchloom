@@ -1123,7 +1123,7 @@ mod shards {
     fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
         Ok(sandbox
             .command(args)
-            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
             .output()?)
     }
 
@@ -1632,7 +1632,7 @@ mod split {
         fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
             Ok(sandbox
                 .command(args)
-                .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+                .env("FETCHLOOM_TEST_HOSTS", &routes.url)
                 .output()?)
         }
 
@@ -1654,7 +1654,7 @@ mod split {
             let before = routes.requests().len();
             let synced = sandbox
                 .command_in(&clone, &["sync"])
-                .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+                .env("FETCHLOOM_TEST_HOSTS", &routes.url)
                 .env("FETCHLOOM_CACHE", &cold)
                 .output()?;
             ok(&synced)?;

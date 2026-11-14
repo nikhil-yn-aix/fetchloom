@@ -836,6 +836,10 @@ impl Net {
             .check(&next)
             .map_err(|reason| Failure::Final(failure::refused(&next, &reason)))?;
         tracing::debug!(from = host(hop), to = host(&next), "redirect");
+        #[cfg(debug_assertions)]
+        let next = api::stand_in(&next)
+            .inspect(|local| self.typed(local))
+            .unwrap_or(next);
         Ok(Some(next))
     }
 

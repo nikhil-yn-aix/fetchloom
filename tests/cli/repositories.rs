@@ -16,7 +16,7 @@ const NOTES: &[u8] = b"collected in 2020\n";
 /// a command whose requests to the repositories' hosts go to `routes`.
 fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command(args);
-    command.env("FETCHLOOM_TEST_SOURCES", &routes.url);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
 }
 
@@ -117,7 +117,7 @@ fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["--json", "sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -358,7 +358,7 @@ fn a_mendeley_version_is_pinned_and_synced_from_the_lock() -> Result {
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -471,7 +471,7 @@ fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -621,7 +621,7 @@ fn get_downloads_a_gitlab_release_link_at_its_path() -> Result {
             "runner",
         ],
     )
-    .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+    .env("FETCHLOOM_TEST_HOSTS", &routes.url)
     .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let folder = sandbox.work().join("runner");
@@ -716,7 +716,7 @@ fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -916,7 +916,7 @@ fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -972,7 +972,7 @@ fn bytes_geo_remade_under_the_same_name_are_refused_by_the_lock() -> Result {
     }
     let synced = sandbox
         .command_in(&teammate, &["--json", "sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
@@ -1044,7 +1044,7 @@ fn dandi(embargo: &str, assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
 /// a command whose requests to dandi's API and its S3 bucket go to `routes`.
 fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = command(sandbox, routes, args);
-    command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
 }
 
@@ -1076,8 +1076,7 @@ fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result 
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;
@@ -1222,7 +1221,7 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
 /// a command whose requests to openneuro's API and its S3 bucket go to `routes`.
 fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     let mut command = command(sandbox, routes, args);
-    command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
 }
 
@@ -1276,8 +1275,7 @@ fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() 
     let listed = routes.targets().len();
     let synced = sandbox
         .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .output()?;
     ok(&synced)?;

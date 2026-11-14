@@ -134,7 +134,7 @@ fn a_clash_the_listings_show_stops_sync_before_any_download() -> Result {
 
     let output = sandbox
         .command(&["sync"])
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .output()?;
 
     let stderr = text(&output.stderr)?;

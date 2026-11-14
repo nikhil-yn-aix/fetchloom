@@ -328,7 +328,7 @@ fn command(
     args: &[&str],
 ) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
-    command.env("FETCHLOOM_TEST_BUCKETS", &standin.url).env(
+    command.env("FETCHLOOM_TEST_HOSTS", &standin.url).env(
         "FETCHLOOM_TEST_GOOGLE_TOKEN",
         format!("{}/token", standin.url),
     );

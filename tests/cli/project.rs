@@ -2798,7 +2798,7 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
         let output = sandbox
             .command(args)
-            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
             .output()?;
         let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
         Ok((output.status.code(), said))

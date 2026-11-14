@@ -525,7 +525,7 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
         let output = sandbox
             .command_in(folder, &words)
             .env("FETCHLOOM_TEST_HF_API", &hub.url)
-            .env("FETCHLOOM_TEST_SOURCES", &files.url)
+            .env("FETCHLOOM_TEST_HOSTS", &files.url)
             .env("FETCHLOOM_CACHE", cache)
             .output()?;
         let stderr = text(&output.stderr)?;

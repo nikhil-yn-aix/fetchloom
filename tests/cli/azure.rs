@@ -101,7 +101,7 @@ fn bytes(body: &[u8]) -> Vec<Part> {
 /// a command that sends every azure blob request to `routes`.
 fn command(sandbox: &Sandbox, routes: &Routes, folder: &Path, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
-    command.env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
 }
 
@@ -319,7 +319,7 @@ fn a_listed_private_container_is_read_with_its_account_key() -> Result {
     )?;
     let output = sandbox
         .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
-        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env("FETCHLOOM_TEST_HOSTS", &server.url)
         .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
         .env("AZURE_STORAGE_KEY", KEY)
         .env("AZURE_STORAGE_ACCOUNT", "lab")
@@ -367,7 +367,7 @@ fn a_listed_private_container_is_read_with_the_az_clis_login() -> Result {
     )?;
     let output = sandbox
         .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
-        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env("FETCHLOOM_TEST_HOSTS", &server.url)
         .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
         .env("PATH", &bin)
         .output()?;
@@ -416,7 +416,7 @@ fn a_listed_private_container_is_read_with_the_machines_identity() -> Result {
     )?;
     let output = sandbox
         .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
-        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env("FETCHLOOM_TEST_HOSTS", &server.url)
         .env(
             "FETCHLOOM_TEST_AZURE_IDENTITY",
             format!("{}/metadata/identity/oauth2/token", identity.url),

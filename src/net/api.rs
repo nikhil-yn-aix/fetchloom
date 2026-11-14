@@ -493,76 +493,26 @@ fn test_endpoint(url: &Url) -> Option<Url> {
     Some(local)
 }
 
-/// the test server a CLI test stands in with for `url`'s host, a bucket's or a repository's, if
-/// it set one.
+/// the server `FETCHLOOM_TEST_HOSTS` names, which stands in for every host but this machine's
+/// own, so a docs example can run against recorded answers: `https://<host>/<path>` goes to
+/// `/<host>/<path>` there, with `:<port>` after the host when the link names a port.
 #[cfg(debug_assertions)]
 pub(super) fn stand_in(url: &Url) -> Option<Url> {
-    test_bucket(url)
-        .or_else(|| test_source(url))
-        .or_else(|| test_drive(url))
-}
-
-/// local object storage for CLI tests: a request to an S3, cloud storage or azure blob host goes
-/// to `/<host><path>` on the test server instead.
-#[cfg(debug_assertions)]
-fn test_bucket(url: &Url) -> Option<Url> {
-    let host = url.host_str()?;
-    let storage = host.ends_with(".amazonaws.com")
-        || host == "storage.googleapis.com"
-        || host.ends_with(".storage.googleapis.com")
-        || host.ends_with(".blob.core.windows.net");
-    if !storage {
+    let here = match url.host()? {
+        url::Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+    };
+    if here {
         return None;
     }
-    let mut local = local_test_server("FETCHLOOM_TEST_BUCKETS")?;
-    local.set_path(&format!("/{host}{}", url.path()));
-    local.set_query(url.query());
-    local.set_fragment(None);
-    Some(local)
-}
-
-/// a stand-in at `/<host><path>` on the test server for repositories whose CLI tests download.
-#[cfg(debug_assertions)]
-fn test_source(url: &Url) -> Option<Url> {
+    let mut local = local_test_server("FETCHLOOM_TEST_HOSTS")?;
     let host = url.host_str()?;
-    if !matches!(
-        host,
-        "datadryad.org"
-            | "data.mendeley.com"
-            | "huggingface.co"
-            | "api.github.com"
-            | "github.com"
-            | "gitlab.com"
-            | "www.ebi.ac.uk"
-            | "ftp.sra.ebi.ac.uk"
-            | "ftp.ncbi.nlm.nih.gov"
-            | "api.dandiarchive.org"
-            | "openneuro.org"
-            | "export.arxiv.org"
-            | "oaipmh.arxiv.org"
-            | "api.semanticscholar.org"
-    ) {
-        return None;
-    }
-    let mut local = local_test_server("FETCHLOOM_TEST_SOURCES")?;
-    local.set_path(&format!("/{host}{}", url.path()));
-    local.set_query(url.query());
-    local.set_fragment(None);
-    Some(local)
-}
-
-/// a stand-in at `/<host><path>` on the test server for google drive's folder pages, download
-/// host and api.
-#[cfg(debug_assertions)]
-fn test_drive(url: &Url) -> Option<Url> {
-    let host = url.host_str()?;
-    let drive = matches!(host, "drive.google.com" | "drive.usercontent.google.com")
-        || (host == "www.googleapis.com" && url.path().starts_with("/drive/"));
-    if !drive {
-        return None;
-    }
-    let mut local = local_test_server("FETCHLOOM_TEST_DRIVE")?;
-    local.set_path(&format!("/{host}{}", url.path()));
+    let named = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    local.set_path(&format!("/{named}{}", url.path()));
     local.set_query(url.query());
     local.set_fragment(None);
     Some(local)

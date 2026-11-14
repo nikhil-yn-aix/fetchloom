@@ -24,9 +24,7 @@ const FIELDS: &str = "fields=items%28name%2Csize%2Cmd5Hash%2Cgeneration%29%2Cnex
 /// a command whose requests to arXiv's hosts and to the mirror go to `routes`.
 fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> crate::support::Fetchloom {
     let mut command = sandbox.command(args);
-    command
-        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
-        .env("FETCHLOOM_TEST_BUCKETS", &routes.url);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
 }
 
