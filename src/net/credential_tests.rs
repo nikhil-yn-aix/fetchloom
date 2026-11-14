@@ -609,7 +609,7 @@ fn signing_net(
 ) -> Net {
     let listed = listed
         .iter()
-        .map(|text| crate::source::Bucket::parse(text).unwrap())
+        .map(|text| crate::net::s3::Bucket::parse(text).unwrap())
         .collect();
     Net::new(
         Options {
@@ -622,7 +622,7 @@ fn signing_net(
         Arc::default(),
         Arc::new(|_| {}),
     )
-    .with_signing(crate::source::Signing::new(listed, Arc::new(var)))
+    .with_signing(crate::net::s3::Signing::new(listed, Arc::new(var)))
 }
 
 /// checks a request head's signature as S3 does: the canonical request rebuilt from what
@@ -703,8 +703,8 @@ fn a_listed_bucket_refused_without_a_key_is_asked_again_once_signed() {
     assert_eq!(response.status, 200);
     assert_eq!(
         response.keyed,
-        Some(crate::source::Keyed::Signed {
-            bucket: crate::source::Bucket::parse(&format!("s3:{origin}/lab-raw")).unwrap(),
+        Some(crate::net::s3::Keyed::Signed {
+            bucket: crate::net::s3::Bucket::parse(&format!("s3:{origin}/lab-raw")).unwrap(),
             key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
             region: "eu-west-1".to_owned(),
         })
@@ -757,12 +757,12 @@ fn only_a_listed_buckets_requests_are_signed_and_never_a_presigned_link() {
         };
         assert_eq!(answer.status(), 403, "{start}");
         assert_eq!(sent(&asked, "authorization"), [None], "{start}");
-        let keyed = answer.extensions().get::<crate::source::Keyed>();
+        let keyed = answer.extensions().get::<crate::net::s3::Keyed>();
         if start.host_str() == Some("other-lab.s3.amazonaws.com") {
             assert_eq!(
                 keyed,
-                Some(&crate::source::Keyed::Unsigned {
-                    bucket: crate::source::Bucket::parse("s3://other-lab").unwrap(),
+                Some(&crate::net::s3::Keyed::Unsigned {
+                    bucket: crate::net::s3::Bucket::parse("s3://other-lab").unwrap(),
                     listed: false,
                 })
             );

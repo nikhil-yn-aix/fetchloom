@@ -319,11 +319,11 @@ fn refused_then_signed_listings_are_never_reused_as_anonymous_or_other_keys() {
         reply("200 OK", &[], b"second account"),
     ]);
     let url = base.join("private-bucket/?list-type=2").unwrap();
-    let bucket = crate::source::Bucket::parse(&format!("s3:{base}private-bucket")).unwrap();
+    let bucket = crate::net::s3::Bucket::parse(&format!("s3:{base}private-bucket")).unwrap();
     let endpoint = base.origin().ascii_serialization();
     let signing = |access: &'static str| {
         let endpoint = endpoint.clone();
-        crate::source::Signing::new(
+        crate::net::s3::Signing::new(
             vec![bucket.clone()],
             Arc::new(move |name: &str| match name {
                 "AWS_ACCESS_KEY_ID" => Some(access.into()),
@@ -339,7 +339,7 @@ fn refused_then_signed_listings_are_never_reused_as_anonymous_or_other_keys() {
     assert_eq!(first.text(), "first account");
     assert!(matches!(
         first.keyed,
-        Some(crate::source::Keyed::Signed { .. })
+        Some(crate::net::s3::Keyed::Signed { .. })
     ));
     assert!(matches!(
         net.metadata.find(anonymous),

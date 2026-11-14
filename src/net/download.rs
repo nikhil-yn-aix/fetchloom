@@ -544,7 +544,7 @@ impl Net {
         let versioned = fetch
             .expect
             .sha256
-            .and_then(|_| crate::source::unversioned(&fetch.from));
+            .and_then(|_| super::s3::unversioned(&fetch.from));
         let Some((current, version)) = versioned else {
             return self.drive_download(fetch, cache, known, on).await;
         };
@@ -560,7 +560,7 @@ impl Net {
             mirror: fetch.mirror,
             page: fetch.page,
         };
-        let bucket = crate::source::Bucket::holding(&fetch.from);
+        let bucket = super::s3::Bucket::holding(&fetch.from);
         if bucket
             .as_ref()
             .is_some_and(|bucket| self.refuses_versions(bucket))
@@ -599,7 +599,7 @@ impl Net {
     }
 
     /// whether `bucket` refused this run an old version whose object as it is now matched.
-    fn refuses_versions(&self, bucket: &crate::source::Bucket) -> bool {
+    fn refuses_versions(&self, bucket: &super::s3::Bucket) -> bool {
         self.refuse_versions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1015,7 +1015,7 @@ impl Net {
     ) -> Result<Result<reqwest::Response, Instead>, Failure> {
         let status = response.status();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-            && let Some(keyed) = response.extensions().get::<crate::source::Keyed>()
+            && let Some(keyed) = response.extensions().get::<super::s3::Keyed>()
         {
             return Err(Failure::Final(keyed.refusal(from)));
         }

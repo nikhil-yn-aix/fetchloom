@@ -78,7 +78,7 @@ impl Draft {
             let link = Url::parse(&file.url)
                 .ok()
                 .filter(|_| versions)
-                .and_then(|url| source::unversioned(&url))
+                .and_then(|url| crate::net::s3::unversioned(&url))
                 .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
             by_url.entry(link).or_default().push(file);
         }
@@ -536,7 +536,7 @@ impl Draft {
             .filter_map(|file| {
                 let (sha256, size) = file.known?;
                 let url = match file.version.as_deref().filter(|_| versions) {
-                    Some(version) => source::with_version(&file.remote.url, version),
+                    Some(version) => crate::net::s3::with_version(&file.remote.url, version),
                     None => file.remote.url,
                 };
                 Some(LockedFile {

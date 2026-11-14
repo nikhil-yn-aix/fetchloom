@@ -37,9 +37,6 @@ use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode
 use tracing::Instrument as _;
 use url::Url;
 
-pub(crate) use crate::auth::azure::AzureContainer;
-pub(crate) use crate::net::s3::{Bucket, Keyed, Signing, unversioned, with_version};
-
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;

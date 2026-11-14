@@ -216,7 +216,7 @@ impl Context {
             credentials,
             split: self.split,
         };
-        let signing = crate::source::Signing::new(
+        let signing = net::s3::Signing::new(
             self.settings.s3_buckets.value.clone(),
             Arc::new(crate::machine::env),
         );

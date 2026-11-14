@@ -276,7 +276,7 @@ fn google_credentials(output: &crate::output::Output, missing: &mut Vec<String>)
 fn azure_credentials(
     output: &crate::output::Output,
     missing: &mut Vec<String>,
-    listed: &[crate::source::AzureContainer],
+    listed: &[crate::auth::azure::AzureContainer],
 ) -> Vec<State> {
     use crate::auth::azure::{Kept, Rest};
     let described = match auth::azure::describe(&crate::machine::env, listed) {

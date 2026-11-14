@@ -17,8 +17,8 @@ use crate::error::{Error, Kind};
 use crate::machine::{LEAST_MEMORY, Machine, Var, switched};
 use crate::mirror::Location;
 use crate::net::google::{DriveId, GcsBucket};
+use crate::net::s3::Bucket;
 use crate::net::{HOST_JOBS, TIMEOUT};
-use crate::source::Bucket;
 use crate::units;
 
 /// downloads running at once, across all hosts. downloads wait on the network, not the
