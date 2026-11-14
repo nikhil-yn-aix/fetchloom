@@ -28,13 +28,12 @@ const LONGEST_KEY: usize = 1024;
 /// the page tokens a listing followed, as [`super::Pages`] guards them.
 struct Pages(super::Pages<String>);
 
-impl Default for Pages {
-    fn default() -> Pages {
-        Pages(super::Pages::after_first())
-    }
-}
-
 impl Pages {
+    /// the pages of a listing of at most `most` objects.
+    fn new(most: usize) -> Pages {
+        Pages(super::Pages::after_first(most))
+    }
+
     /// follows `token`, the listing holding `objects` so far.
     fn follow(&mut self, prefix: &Prefix, token: &str, objects: usize) -> Result<(), Error> {
         self.0
@@ -324,10 +323,11 @@ impl Prefix {
         .help("name a prefix, ending in /, for a folder that leaves it out"))
     }
 
-    /// the error for a listing that counted more objects than one dataset may hold.
-    fn too_many(&self) -> Error {
+    /// the error for a listing that counted more than the `most` objects one dataset may hold.
+    fn too_many(&self, most: usize) -> Error {
         super::too_many(
             self,
+            most,
             "name a narrower prefix, ending in /, for the folder you need",
         )
     }

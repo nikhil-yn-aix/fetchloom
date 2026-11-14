@@ -8,7 +8,7 @@ use url::Url;
 use super::{Item, ItemKind, file_url, html, trust};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many_of};
+use crate::source::{Access, Listing, Reference, Remote, Unavailable, too_many};
 
 /// a drive id, with the resource key drive asks for along with items shared before 2021.
 #[derive(Debug, PartialEq, Eq)]
@@ -44,7 +44,7 @@ struct Walk {
 
 /// lists every file in the folder and in its subfolders, each at its path inside the folder.
 pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> {
-    list_at_most(item, api, most_files()).await
+    list_at_most(item, api, api.most_files()).await
 }
 
 /// [`list`] of a folder that may hold at most `most` files and `most` folders.
@@ -110,7 +110,7 @@ impl Walk {
                         ));
                     }
                     if self.seen.len() > self.most {
-                        return Err(too_many_of(
+                        return Err(too_many(
                             link(&item.id),
                             self.most,
                             "pass the link of each subfolder you need to `fetchloom add`",
@@ -129,7 +129,7 @@ impl Walk {
                 }),
             }
             if self.files.len() + self.unavailable.len() > self.most {
-                return Err(too_many_of(
+                return Err(too_many(
                     link(&item.id),
                     self.most,
                     "pass the link of each subfolder you need to `fetchloom add`",

@@ -33,7 +33,7 @@ use url::Url;
 
 pub(crate) use crate::shown::{Shown, depends_on_path, mask_query, secret};
 pub(crate) use address::Allowed;
-pub(crate) use api::{Api, Response};
+pub(crate) use api::{Api, MOST_FILES, Response};
 #[cfg(test)]
 pub(crate) use azure::Given;
 #[cfg(debug_assertions)]
@@ -277,6 +277,8 @@ pub(crate) struct Net {
     /// how much further a try must take its file to count toward no limit, which tests set
     /// smaller than a real download moves.
     moving: u64,
+    /// the most files one dataset may list, which every listing asks through [`Api`].
+    most_files: usize,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
@@ -485,6 +487,7 @@ impl Net {
             retries: RETRIES,
             first_wait: failure::FIRST_WAIT,
             moving: failure::MOVING,
+            most_files: MOST_FILES,
             split: download::starting(options.split),
             work,
             stop,

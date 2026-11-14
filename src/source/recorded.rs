@@ -17,9 +17,17 @@ pub(crate) struct Recorded {
     asked: Mutex<Vec<String>>,
     /// what the network says of a drive item drive refused without a token.
     private: Option<crate::net::Private>,
+    /// the most files one dataset may list, when the test sets fewer than a run's least.
+    most: Option<usize>,
 }
 
 impl Recorded {
+    /// lets each dataset list at most `most` files.
+    pub(crate) fn most(mut self, most: usize) -> Recorded {
+        self.most = Some(most);
+        self
+    }
+
     /// answers `url` with `status` and `body`.
     pub(crate) fn on(mut self, url: &str, status: u16, body: impl Into<Vec<u8>>) -> Recorded {
         let parsed = Url::parse(url).unwrap();
@@ -133,6 +141,10 @@ impl Recorded {
 }
 
 impl Api for Recorded {
+    fn most_files(&self) -> usize {
+        self.most.unwrap_or(crate::net::MOST_FILES)
+    }
+
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
         self.asked.lock().unwrap().push(url.to_string());
         let answer = self

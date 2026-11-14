@@ -8,7 +8,7 @@ use super::listing::hub;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Remote, most_files, too_many};
+use crate::source::{Remote, too_many};
 
 /// one entry of a tree listing: a file or a folder.
 #[derive(Deserialize)]
@@ -74,7 +74,7 @@ impl Repo {
     ) -> Result<bool, Error> {
         first.query_pairs_mut().append_pair("recursive", "true");
         let mut next = Some(first);
-        let mut pages = crate::source::Pages::new();
+        let mut pages = crate::source::Pages::most(api.most_files());
         let mut first = true;
         let mut listed = 0;
         while let Some(url) = next {
@@ -95,8 +95,12 @@ impl Repo {
             for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
                 files.push(self.remote(commit, entry)?);
             }
-            if files.len() > most_files() {
-                return Err(too_many(self, "select the folders you need with --select"));
+            if files.len() > api.most_files() {
+                return Err(too_many(
+                    self,
+                    api.most_files(),
+                    "select the folders you need with --select",
+                ));
             }
             next = response.next;
         }

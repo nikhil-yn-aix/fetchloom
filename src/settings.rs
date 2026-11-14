@@ -575,8 +575,8 @@ fn derived<T>(value: Option<T>, level: Level, fallback: Set<T>) -> Set<T> {
 /// the most files a dataset may list within `memory`, never fewer than fetchloom's own default.
 fn most_files(memory: Set<u64>) -> Set<usize> {
     let sized = usize::try_from(memory.value / crate::source::PER_FILE).unwrap_or(usize::MAX);
-    if sized <= crate::source::MOST_FILES {
-        return Set::default(crate::source::MOST_FILES);
+    if sized <= crate::net::MOST_FILES {
+        return Set::default(crate::net::MOST_FILES);
     }
     Set {
         value: sized,

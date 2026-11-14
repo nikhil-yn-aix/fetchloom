@@ -12,7 +12,7 @@ use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::google::{DriveId, is_id, unsigned};
 use crate::net::{Api, Private, Response};
-use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many_of};
+use crate::source::{Access, Listing, Reference, Remote, Unavailable};
 
 /// where drive's api reads files and lists folders.
 const FILES: &str = "https://www.googleapis.com/drive/v3/files";
@@ -158,7 +158,7 @@ pub(crate) async fn file(api: &impl Api, id: &str) -> Result<About, Error> {
 /// every file in private folder `item` and its subfolders, at its path inside the folder, as
 /// drive's api lists them.
 pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> {
-    list_at_most(item, api, most_files()).await
+    list_at_most(item, api, api.most_files()).await
 }
 
 /// [`list`] of a folder that may hold at most `most` files and `most` folders.
@@ -312,7 +312,7 @@ fn read<T: DeserializeOwned>(response: &Response) -> Result<T, Error> {
 }
 
 fn too_many(item: &Item, most: usize) -> Error {
-    too_many_of(
+    crate::source::too_many(
         folder::link(&item.id),
         most,
         "pass the link of each subfolder you need to `fetchloom add`",

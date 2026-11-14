@@ -180,8 +180,8 @@ impl Dataset {
                 return Err(self.invalid("a folder lies in itself"));
             }
             trees.insert(path.clone(), tree.clone());
-            if trees.len() + found.files.len() > super::most_files() {
-                return Err(self.too_many());
+            if trees.len() + found.files.len() > api.most_files() {
+                return Err(self.too_many(api.most_files()));
             }
             let folder: Folder = self
                 .ask(
@@ -295,9 +295,10 @@ impl Dataset {
         }
     }
 
-    fn too_many(&self) -> Error {
+    fn too_many(&self, most: usize) -> Error {
         super::too_many(
             self,
+            most,
             &format!("download the folders you need from {}", self.page()),
         )
     }

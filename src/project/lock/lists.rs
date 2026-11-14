@@ -275,7 +275,7 @@ pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<V
         )));
     }
     let count = usize::try_from(listed.count).unwrap_or(usize::MAX);
-    let most = crate::source::most_files();
+    let most = super::most_files();
     if count > most {
         return Err(Error::new(
             Kind::ProjectInvalid,

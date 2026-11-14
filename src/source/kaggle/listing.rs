@@ -112,7 +112,7 @@ impl Dataset {
     async fn files(&self, api: &impl Api, version: u32, newest: u32) -> Result<Vec<Remote>, Error> {
         let version = version.to_string();
         let mut files = Vec::new();
-        let mut pages = crate::source::Pages::after_first();
+        let mut pages = crate::source::Pages::after_first(api.most_files());
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&version, &token)?).await?;
@@ -143,9 +143,10 @@ impl Dataset {
             for file in page.dataset_files {
                 files.push(self.remote(&version, file)?);
             }
-            if files.len() > crate::source::most_files() {
+            if files.len() > api.most_files() {
                 return Err(crate::source::too_many(
                     self,
+                    api.most_files(),
                     "select the files you need with --select",
                 ));
             }

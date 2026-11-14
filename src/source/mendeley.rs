@@ -115,8 +115,8 @@ impl Dataset {
     async fn folders(&self, api: &impl Api, version: u64) -> Result<Vec<(String, String)>, Error> {
         let url = self.url(&["folders", &version.to_string()])?;
         let folders: Vec<Folder> = self.answer(&api.get(&url).await?)?;
-        if folders.len() > super::most_files() {
-            return Err(self.too_many());
+        if folders.len() > api.most_files() {
+            return Err(self.too_many(api.most_files()));
         }
         let by_id: HashMap<&str, &Folder> = folders
             .iter()
@@ -157,7 +157,7 @@ impl Dataset {
         let mut url = self.url(&["files"])?;
         let mut seen: u64 = 0;
         let mut ids = HashSet::new();
-        let mut pages = super::Pages::new();
+        let mut pages = super::Pages::most(api.most_files());
         loop {
             let held = usize::try_from(seen).unwrap_or(usize::MAX);
             pages
@@ -180,8 +180,8 @@ impl Dataset {
             }
             seen += listed.len() as u64;
             for file in listed {
-                if found.files.len() + found.unavailable.len() >= super::most_files() {
-                    return Err(self.too_many());
+                if found.files.len() + found.unavailable.len() >= api.most_files() {
+                    return Err(self.too_many(api.most_files()));
                 }
                 if !ids.insert(file.id.clone()) {
                     return Err(self.invalid("the listing of a folder repeats a file"));
@@ -249,9 +249,10 @@ impl Dataset {
         ))
     }
 
-    fn too_many(&self) -> Error {
+    fn too_many(&self, most: usize) -> Error {
         super::too_many(
             self,
+            most,
             &format!("download the files you need from {}", self.page()),
         )
     }

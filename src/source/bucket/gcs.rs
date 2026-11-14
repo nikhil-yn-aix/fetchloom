@@ -45,7 +45,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
     ))
     .map_err(|_| bad())?;
     let mut token: Option<String> = None;
-    let mut pages = super::Pages::default();
+    let mut pages = super::Pages::new(api.most_files());
     let mut objects = Vec::new();
     let mut credentials = false;
     loop {
@@ -65,8 +65,8 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
         credentials |= super::with_credentials(&response);
         for item in page.items {
             objects.push(object(prefix, &objects_at, item)?);
-            if objects.len() > crate::source::most_files() {
-                return Err(prefix.too_many());
+            if objects.len() > api.most_files() {
+                return Err(prefix.too_many(api.most_files()));
             }
         }
         match page.next_page_token.filter(|next| !next.is_empty()) {

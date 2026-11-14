@@ -156,7 +156,7 @@ impl Article {
             .push("files");
         let mut files = Vec::new();
         let mut seen = HashSet::new();
-        let mut pages = super::Pages::new();
+        let mut pages = super::Pages::most(api.most_files());
         let mut page = 1_u32;
         loop {
             pages
@@ -173,9 +173,10 @@ impl Article {
                 return Err(self.invalid("the files endpoint repeated a file"));
             }
             files.extend(entries);
-            if files.len() > super::most_files() {
+            if files.len() > api.most_files() {
                 return Err(super::too_many(
                     self,
+                    api.most_files(),
                     "select the files you need with --select",
                 ));
             }

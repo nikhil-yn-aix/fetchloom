@@ -95,16 +95,21 @@ struct Walk {
     files: Vec<Remote>,
     folders: VecDeque<Folder>,
     seen: HashSet<String>,
+    /// the most files and folders the walk may find.
+    most: usize,
 }
 
 /// follows each folder and server-supplied page once.
 pub(super) async fn files(node: &Node, api: &impl Api, root: Url) -> Result<Vec<Remote>, Error> {
-    let mut walk = Walk::default();
+    let mut walk = Walk {
+        most: api.most_files(),
+        ..Walk::default()
+    };
     walk.folders.push_back(Folder {
         url: root,
         path: String::new(),
     });
-    let mut pages = crate::source::Pages::new();
+    let mut pages = crate::source::Pages::most(api.most_files());
     while let Some(folder) = walk.folders.pop_front() {
         let mut url = folder.url;
         pages.begin();
@@ -132,9 +137,10 @@ impl Walk {
         if entry.id.is_empty() || !self.seen.insert(entry.id.clone()) {
             return Err(node.invalid("the files API repeated a file or folder id"));
         }
-        if self.seen.len() > crate::source::most_files() {
+        if self.seen.len() > self.most {
             return Err(crate::source::too_many(
                 node,
+                self.most,
                 "select the folders you need with --select",
             ));
         }

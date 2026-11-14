@@ -145,9 +145,10 @@ impl Accession {
                     named_by_server: false,
                     etag: None,
                 });
-                if files.len() > super::most_files() {
+                if files.len() > api.most_files() {
                     return Err(super::too_many(
                         self,
+                        api.most_files(),
                         &format!("download the files you need from {top} one at a time"),
                     ));
                 }

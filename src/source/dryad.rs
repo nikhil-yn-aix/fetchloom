@@ -128,7 +128,7 @@ impl Dataset {
     async fn numbered(&self, api: &impl Api, number: u64) -> Result<Version, Error> {
         let mut url = self.url(&["versions"])?;
         let mut seen = 0;
-        for page in 1..=super::most_files().div_ceil(PAGE) {
+        for page in 1..=api.most_files().div_ceil(PAGE) {
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
             let response = api.get(&url).await?;
             let answer: Page<Versions> = super::json(self, &response)?;
@@ -172,7 +172,7 @@ impl Dataset {
             .map_err(|_| self.invalid("the files URL is invalid"))?;
         let mut files = Vec::new();
         let (mut seen, mut total) = (0, 0);
-        let mut pages = super::Pages::new();
+        let mut pages = super::Pages::most(api.most_files());
         for page in 1.. {
             pages
                 .next(page, seen)
@@ -180,9 +180,10 @@ impl Dataset {
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
             let response = api.get(&url).await?;
             let answer: Page<Files> = super::json(self, &response)?;
-            if answer.total > super::most_files() {
+            if answer.total > api.most_files() {
                 return Err(super::too_many(
                     self,
+                    api.most_files(),
                     "download the files you need from https://datadryad.org one at a time",
                 ));
             }

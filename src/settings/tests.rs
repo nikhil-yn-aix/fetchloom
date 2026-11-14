@@ -291,7 +291,7 @@ fn the_most_files_a_dataset_lists_follow_the_memory_budget() {
     // a small pod never lists fewer than fetchloom always allowed
     assert_eq!(
         most(Some(100 << 20), &[]),
-        Set::default(crate::source::MOST_FILES)
+        Set::default(crate::net::MOST_FILES)
     );
     assert_eq!(most(None, &[]).value, 131_072);
     assert_eq!(most(None, &[("FETCHLOOM_MEMORY", "32G")]).value, 16_777_216);

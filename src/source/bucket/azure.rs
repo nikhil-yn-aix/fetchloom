@@ -28,7 +28,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
     let mut listing = blobs_at.clone();
     listing.set_path(blobs_at.path().trim_end_matches('/'));
     let mut marker: Option<String> = None;
-    let mut pages = super::Pages::default();
+    let mut pages = super::Pages::new(api.most_files());
     let mut objects = Vec::new();
     let mut credentials = false;
     loop {
@@ -55,8 +55,8 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
             .flat_map(|blobs| blobs.children("Blob"))
         {
             objects.push(object(prefix, &blobs_at, blob)?);
-            if objects.len() > crate::source::most_files() {
-                return Err(prefix.too_many());
+            if objects.len() > api.most_files() {
+                return Err(prefix.too_many(api.most_files()));
             }
         }
         match page.text_of("NextMarker").filter(|next| !next.is_empty()) {

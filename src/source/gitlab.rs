@@ -112,9 +112,10 @@ impl Release {
                 crate::units::count(assets.count as u64, "asset", "assets")
             )));
         }
-        if assets.links.len() > super::most_files() {
+        if assets.links.len() > api.most_files() {
             return Err(super::too_many(
                 self,
+                api.most_files(),
                 "download the files you need from the release's page one at a time",
             ));
         }

@@ -580,7 +580,13 @@ fn walk_import(
         })
         .map(str::to_owned);
     let source = import_entry(manifest, supplied.as_deref(), args)?;
-    let walked = walk(start, shown, &source, &context.stop)?;
+    let walked = walk(
+        start,
+        shown,
+        &source,
+        context.settings.most_files.value,
+        &context.stop,
+    )?;
     let output = &context.output;
     tell_skipped(output, shown, &walked.skipped);
     tell_system(output, shown, &walked.system);
@@ -906,12 +912,13 @@ impl Walked {
 }
 
 /// the plain files at `start`, a folder or one file with no link in its path, that `source`'s
-/// patterns keep, each checked by name. repository metadata is left out unseen, and links and
-/// special files are never followed but named in [`Walked::skipped`].
+/// patterns keep, each checked by name, at most `most` of them. repository metadata is left out
+/// unseen, and links and special files are never followed but named in [`Walked::skipped`].
 pub(super) fn walk(
     start: &Path,
     shown: &str,
     source: &Source,
+    most: usize,
     stop: &Stop,
 ) -> Result<Walked, Error> {
     let found = std::fs::metadata(start)
@@ -976,9 +983,10 @@ pub(super) fn walk(
                 }
             }
             // a folder of more files than a dataset may list is refused before it is all read
-            if walked.files.len() > source::most_files() {
+            if walked.files.len() > most {
                 return Err(source::too_many(
                     shown,
+                    most,
                     "import a smaller folder, or leave files out with --exclude",
                 ));
             }
@@ -1531,7 +1539,14 @@ mod tests {
         std::fs::write(root.join("petals/notes.txt"), b"notes\n").unwrap();
         std::fs::write(root.join(".git/HEAD"), b"ref\n").unwrap();
         std::fs::write(root.join(".gitignore"), b"*.tmp\n").unwrap();
-        let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(
             paths(&walked),
             [
@@ -1546,6 +1561,7 @@ mod tests {
             &root,
             "./flowers",
             &entry(&["**/*.csv"], &["sepals.csv"]),
+            crate::net::MOST_FILES,
             &Stop::default(),
         )
         .unwrap();
@@ -1554,6 +1570,7 @@ mod tests {
             &root,
             "./flowers",
             &entry(&["*.parquet"], &[]),
+            crate::net::MOST_FILES,
             &Stop::default(),
         )
         .unwrap_err();
@@ -1566,6 +1583,7 @@ mod tests {
             &root.join("sepals.csv"),
             "./sepals.csv",
             &entry(&[], &[]),
+            crate::net::MOST_FILES,
             &Stop::default(),
         )
         .unwrap();
@@ -1590,7 +1608,14 @@ mod tests {
             .status()
             .unwrap();
         assert!(made.success());
-        let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(paths(&walked), ["iris.csv"]);
         assert_eq!(walked.skipped, ["more", "queue", "secret.txt"]);
     }
@@ -1613,7 +1638,14 @@ mod tests {
         ] {
             std::fs::write(root.join(path), bytes).unwrap();
         }
-        let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(paths(&walked), ["iris.csv", "sub/petals.csv"]);
         assert_eq!(
             walked.system,
@@ -1659,7 +1691,14 @@ mod tests {
         let before = files.each_ref().map(|file| look(file));
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let context = crate::cli::project::tests::offline_context();
-        let walked = walk(&root, "./flowers", &entry(&[], &[]), &context.stop).unwrap();
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &context.stop,
+        )
+        .unwrap();
         let copied = into_cache(&context, &cache, &walked).unwrap();
         let pins: Vec<(&str, u64, crate::digest::Sha256, &str)> = copied
             .files

@@ -236,6 +236,7 @@ impl Context {
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .hearing(Arc::clone(&self.speeds.run))
             .with_memory(self.settings.memory.value)
+            .with_most_files(self.settings.most_files.value)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
             .with_rules(crate::source::rules())
@@ -648,7 +649,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
 
 /// hands the settings that work deep inside a run reads to it, once a run has read them.
 fn share(settings: &Settings) {
-    crate::source::set_most_files(settings.most_files.value);
+    crate::project::lock::set_most_files(settings.most_files.value);
     crate::project::lock::set_room(settings.machine.container_room());
     sync::disk::set_level(settings.resources.value);
 }

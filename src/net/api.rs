@@ -19,6 +19,10 @@ use crate::work::Work;
 /// the largest answer read whole, so a hostile server cannot fill the memory.
 const LARGEST: usize = 64 * 1024 * 1024;
 
+/// the most files one dataset lists when a run says nothing else, and the least it ever allows.
+/// a run sizes its own from its memory, which its network carries to every listing.
+pub(crate) const MOST_FILES: usize = 100_000;
+
 /// the network as a source sees it: one GET at a time. the network layer retries while a server
 /// says to try again, and every other answer comes back for the source to read.
 pub(crate) trait Api: Sync {
@@ -40,6 +44,11 @@ pub(crate) trait Api: Sync {
     /// rate limit would get past fails at once instead.
     fn get_once(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
         self.get(url)
+    }
+
+    /// the most files one dataset may list in this run, so memory stays bounded.
+    fn most_files(&self) -> usize {
+        MOST_FILES
     }
 
     /// tells the network that drive refused item `id` without a token, and asks whether drive's
@@ -105,6 +114,10 @@ impl Response {
 }
 
 impl Api for Net {
+    fn most_files(&self) -> usize {
+        self.most_files
+    }
+
     async fn get(&self, url: &Url) -> Result<Response, Error> {
         Box::pin(self.get_for(url, false, &[])).await
     }
@@ -159,6 +172,12 @@ impl Net {
         self.get_unmemoized(&url, true, false, &[])
             .await
             .map(|(response, _)| response)
+    }
+
+    /// lets each dataset list at most `most` files, the run's own share of its memory.
+    pub(crate) fn with_most_files(mut self, most: usize) -> Self {
+        self.most_files = most.max(1);
+        self
     }
 
     pub(crate) fn with_memory(mut self, bytes: u64) -> Self {

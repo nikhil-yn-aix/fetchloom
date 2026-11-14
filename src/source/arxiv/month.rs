@@ -184,7 +184,7 @@ impl Month {
         );
         let first = format!("{year}-{number:02}");
         let mut papers: Vec<(Id, u32)> = Vec::new();
-        let mut pages = Pages::new();
+        let mut pages = Pages::most(api.most_files());
         let mut start = 0_usize;
         loop {
             pages

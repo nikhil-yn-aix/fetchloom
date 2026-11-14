@@ -138,7 +138,7 @@ impl Dandiset {
         ))?;
         let pages_at = self.url("assets/")?;
         let mut next = Some(first);
-        let mut pages = super::Pages::new();
+        let mut pages = super::Pages::most(api.most_files());
         let mut files = Vec::new();
         let mut unavailable = Vec::new();
         while let Some(url) = next.take() {
@@ -148,9 +148,9 @@ impl Dandiset {
             let page: Page = self.answer(&api.get(&url).await?)?;
             if page
                 .count
-                .is_some_and(|count| count > super::most_files() as u64)
+                .is_some_and(|count| count > api.most_files() as u64)
             {
-                return Err(self.too_many());
+                return Err(self.too_many(api.most_files()));
             }
             if page.results.is_empty() && page.next.is_some() {
                 return Err(self.invalid("an empty page names a next one"));
@@ -160,8 +160,8 @@ impl Dandiset {
                     Ok(file) => files.push(file),
                     Err(entry) => unavailable.push(entry),
                 }
-                if files.len() + unavailable.len() > super::most_files() {
-                    return Err(self.too_many());
+                if files.len() + unavailable.len() > api.most_files() {
+                    return Err(self.too_many(api.most_files()));
                 }
             }
             next = match page.next {
@@ -294,9 +294,10 @@ impl Dandiset {
         ))
     }
 
-    fn too_many(&self) -> Error {
+    fn too_many(&self, most: usize) -> Error {
         super::too_many(
             self,
+            most,
             &format!(
                 "select the folders you need with --select, as {} shows them",
                 self.page()

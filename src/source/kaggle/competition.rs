@@ -150,7 +150,7 @@ impl Competition {
     /// every data file, following the pages kaggle sends.
     async fn files(&self, api: &impl Api) -> Result<Vec<Remote>, Error> {
         let mut files = Vec::new();
-        let mut pages = crate::source::Pages::after_first();
+        let mut pages = crate::source::Pages::after_first(api.most_files());
         let mut token = String::new();
         loop {
             let response = api.get(&self.list(&token)?).await?;
@@ -170,9 +170,10 @@ impl Competition {
             for file in page.files {
                 files.push(self.remote(file)?);
             }
-            if files.len() > crate::source::most_files() {
+            if files.len() > api.most_files() {
                 return Err(crate::source::too_many(
                     self,
+                    api.most_files(),
                     &format!(
                         "download the competition with the kaggle CLI, kaggle competitions download -c {}",
                         self.slug

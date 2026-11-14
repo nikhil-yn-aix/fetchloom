@@ -92,9 +92,10 @@ impl Release {
         if self.tag.as_ref().is_some_and(|tag| *tag != answer.tag_name) {
             return Err(self.invalid("the answer names another tag"));
         }
-        if answer.assets.len() > super::most_files() {
+        if answer.assets.len() > api.most_files() {
             return Err(super::too_many(
                 self,
+                api.most_files(),
                 "download the files you need from the release's page one at a time",
             ));
         }

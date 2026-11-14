@@ -55,7 +55,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
     // whether the endpoint names the bucket's region, which a signed request must name too
     let mut regional = false;
     let mut token: Option<String> = None;
-    let mut pages = super::Pages::default();
+    let mut pages = super::Pages::new(api.most_files());
     let mut objects = Vec::new();
     let mut credentials = false;
     loop {
@@ -119,8 +119,8 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
                 escaped,
                 signed.is_some(),
             )?);
-            if objects.len() > crate::source::most_files() {
-                return Err(prefix.too_many());
+            if objects.len() > api.most_files() {
+                return Err(prefix.too_many(api.most_files()));
             }
         }
         match page.text_of("IsTruncated") {

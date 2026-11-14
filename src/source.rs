@@ -42,39 +42,9 @@ use crate::glob::Glob;
 use crate::name;
 use crate::net::{self, Api, Fetch, Response};
 
-/// the most files one dataset lists when a run says nothing else, and the least it ever allows.
-/// a run sizes its own from its memory with [`set_most_files`].
-pub(crate) const MOST_FILES: usize = 100_000;
-
 /// about the memory one listed file takes while a run works, from its listing to its placing,
-/// which sizes [`most_files`] from the memory a run may use.
+/// which sizes the most files a dataset may list from the memory a run may use.
 pub(crate) const PER_FILE: u64 = 2 << 10;
-
-/// the most files one dataset may list in this run. it is the process's own: a share of the
-/// memory the whole process may use, which every listing of the run draws on, set once at start.
-/// unset, as in tests, it is [`MOST_FILES`].
-static MOST: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-
-/// sets the most files one dataset may list, for every later listing in the run. set once at
-/// start; a second set is a bug, which debug builds stop at.
-pub(crate) fn set_most_files(most: usize) {
-    let first = MOST.set(most.max(1)).is_ok();
-    debug_assert!(
-        first,
-        "the most files a dataset may list is set once, at start"
-    );
-}
-
-/// the most files one dataset may list in this run, so memory stays bounded.
-pub(crate) fn most_files() -> usize {
-    MOST.get().copied().unwrap_or(MOST_FILES)
-}
-
-/// the error for `subject`, a dataset that lists more than [`most_files`] files, with `instead`
-/// saying how to need fewer.
-pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
-    too_many_of(subject, most_files(), instead)
-}
 
 /// the pages of one listing, named by a token, a link or a number. a page named again, more pages
 /// than its most files need, or a long run of pages that bring nothing new is refused, in one
@@ -93,11 +63,6 @@ pub(crate) struct Pages<K> {
 const MOST_IDLE: usize = 100;
 
 impl<K: Eq + std::hash::Hash> Pages<K> {
-    /// the pages of a listing of at most [`most_files`] files.
-    pub(crate) fn new() -> Pages<K> {
-        Pages::most(most_files())
-    }
-
     /// the pages of a listing of at most `most` files.
     pub(crate) fn most(most: usize) -> Pages<K> {
         Pages {
@@ -108,12 +73,12 @@ impl<K: Eq + std::hash::Hash> Pages<K> {
         }
     }
 
-    /// the pages of a listing that follows each page's token, whose first page, which no token
-    /// names, is asked for before the guard hears of the next.
-    pub(crate) fn after_first() -> Pages<K> {
+    /// the pages of a listing of at most `most` files that follows each page's token, whose first
+    /// page, which no token names, is asked for before the guard hears of the next.
+    pub(crate) fn after_first(most: usize) -> Pages<K> {
         Pages {
             held: Some(0),
-            ..Pages::new()
+            ..Pages::most(most)
         }
     }
 
@@ -150,8 +115,9 @@ impl<K: Eq + std::hash::Hash> Pages<K> {
     }
 }
 
-/// [`too_many`] for a listing that allows `most` files.
-pub(crate) fn too_many_of(subject: impl fmt::Display, most: usize, instead: &str) -> Error {
+/// the error for `subject`, a dataset that lists more than the `most` files a run allows, with
+/// `instead` saying how to need fewer.
+pub(crate) fn too_many(subject: impl fmt::Display, most: usize, instead: &str) -> Error {
     Error::new(
         Kind::SourceInvalid,
         format!(
@@ -561,7 +527,7 @@ impl Reference {
                 error
             }
         })?;
-        check(self, listing)
+        check(self, listing, api.most_files())
     }
 
     async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
@@ -1026,9 +992,10 @@ fn single(url: &Url) -> Listing {
     }
 }
 
-/// a listing is hostile input: every path must stay inside the dataset and appear once. a dataset
-/// of only its readme and git files is told, since its data has usually moved elsewhere.
-fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> {
+/// a listing is hostile input: every path must stay inside the dataset and appear once, and it
+/// holds at most `most` files. one of only its readme and git files is told, since its data has
+/// usually moved elsewhere.
+fn check(reference: &Reference, mut listing: Listing, most: usize) -> Result<Listing, Error> {
     let only_about = !matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
         && !listing.files.is_empty()
         && listing.files.iter().all(|file| is_about(&file.path));
@@ -1045,9 +1012,10 @@ fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> 
         ));
     }
     let count = listing.files.len() + listing.unavailable.len();
-    if count > most_files() {
+    if count > most {
         return Err(too_many(
             reference,
+            most,
             "select the folders you need with --select",
         ));
     }
@@ -1162,6 +1130,23 @@ fn malformed(text: &str, expected: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a listing holds at most the files its run's network allows, here a test's few.
+    #[test]
+    fn a_listing_holds_at_most_the_files_its_network_allows() {
+        let url = "https://zenodo.org/api/records/7793716";
+        let many = || recorded::Recorded::default().fixture(url, "zenodo/many.json");
+        let reference = Reference::parse("zenodo:7793716").unwrap().reference;
+        let listed = recorded::block_on(reference.resolve(&many().most(1123))).unwrap();
+        assert_eq!(listed.files.len(), 1123);
+        let error = recorded::block_on(reference.resolve(&many().most(1122))).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(
+            error.message.contains("lists more than 1,122 files"),
+            "{}",
+            error.message
+        );
+    }
 
     /// an author's name a server gave leaves its control characters out of the byline, so a
     /// surname cannot steer the terminal that shows a search.
@@ -1799,7 +1784,7 @@ mod tests {
             assert!(reference.to_string().contains("token=abc"));
             let mut listing = single(&Url::parse(text).unwrap());
             listing.files[0].path = "../outside".to_owned();
-            let error = check(&reference, listing).unwrap_err();
+            let error = check(&reference, listing, crate::net::MOST_FILES).unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
             assert!(
                 error.message.contains("token=***"),
@@ -1892,7 +1877,7 @@ mod tests {
             } else {
                 listing.files[0].path = path;
             }
-            let result = check(&reference, listing);
+            let result = check(&reference, listing, crate::net::MOST_FILES);
             assert!(result.is_err(), "accepted bidi listed path");
             let error = result.unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
@@ -1929,7 +1914,14 @@ mod tests {
             ..single(&url)
         };
         let reference = Reference::Url(url.clone());
-        assert!(check(&reference, listing(&["a/b.csv", "c.csv"])).is_ok());
+        assert!(
+            check(
+                &reference,
+                listing(&["a/b.csv", "c.csv"]),
+                crate::net::MOST_FILES
+            )
+            .is_ok()
+        );
         for bad in [
             &["../x"][..],
             &["/etc/passwd"],
@@ -1939,7 +1931,9 @@ mod tests {
             &["x", "x"],
         ] {
             assert_eq!(
-                check(&reference, listing(bad)).unwrap_err().kind,
+                check(&reference, listing(bad), crate::net::MOST_FILES)
+                    .unwrap_err()
+                    .kind,
                 Kind::SourceInvalid,
                 "{bad:?}"
             );
@@ -1962,7 +1956,12 @@ mod tests {
             ..single(&url)
         };
         let repository = parse("hf:datasets/mozilla-foundation/common_voice_17_0").reference;
-        let checked = check(&repository, listing(&[".gitattributes", "README.md"])).unwrap();
+        let checked = check(
+            &repository,
+            listing(&[".gitattributes", "README.md"]),
+            crate::net::MOST_FILES,
+        )
+        .unwrap();
         assert_eq!(
             checked.warnings,
             [
@@ -1974,7 +1973,7 @@ mod tests {
             &["docs/README.md", "LICENSE"],
         ] {
             assert!(
-                check(&repository, listing(fine))
+                check(&repository, listing(fine), crate::net::MOST_FILES)
                     .unwrap()
                     .warnings
                     .is_empty(),
@@ -1983,7 +1982,7 @@ mod tests {
         }
         let one_file = Reference::Url(Url::parse("https://example.org/README.md").unwrap());
         assert!(
-            check(&one_file, listing(&["README.md"]))
+            check(&one_file, listing(&["README.md"]), crate::net::MOST_FILES)
                 .unwrap()
                 .warnings
                 .is_empty(),

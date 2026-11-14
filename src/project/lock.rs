@@ -45,6 +45,25 @@ const BASE: u64 = if cfg!(target_env = "musl") {
 /// as in tests, means no limit.
 static ROOM: OnceLock<u64> = OnceLock::new();
 
+/// the most files one dataset may list in this run, which a lock's list may hold no more of. it
+/// is the process's own, set once at start; unset, as in tests, it is [`crate::net::MOST_FILES`].
+static MOST: OnceLock<usize> = OnceLock::new();
+
+/// sets [`MOST`] for every later read of a lock. set once at start; a second set is a bug, which
+/// debug builds stop at.
+pub(crate) fn set_most_files(most: usize) {
+    let first = MOST.set(most.max(1)).is_ok();
+    debug_assert!(
+        first,
+        "the most files a dataset may list is set once, at start"
+    );
+}
+
+/// the most files a lock's list of one dataset may hold in this run.
+pub(super) fn most_files() -> usize {
+    MOST.get().copied().unwrap_or(crate::net::MOST_FILES)
+}
+
 /// sets [`ROOM`] for every later read of a lock; none means no container limit. set once at
 /// start; a second set is a bug, which debug builds stop at.
 pub(crate) fn set_room(room: Option<u64>) {

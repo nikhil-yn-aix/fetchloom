@@ -123,8 +123,8 @@ impl Accession {
             )
             .help(format!("check the accession at {}", self.page())));
         }
-        if count > super::most_files() {
-            return Err(self.too_many());
+        if count > api.most_files() {
+            return Err(self.too_many(api.most_files()));
         }
         let mut rows = self.report(api, count).await?;
         if rows.len() < count {
@@ -138,8 +138,8 @@ impl Accession {
         let mut found = Found::default();
         for row in &rows {
             found.add(self, row)?;
-            if found.files.len() > super::most_files() {
-                return Err(self.too_many());
+            if found.files.len() > api.most_files() {
+                return Err(self.too_many(api.most_files()));
             }
         }
         if found.files.is_empty() {
@@ -242,8 +242,12 @@ impl Accession {
         }
     }
 
-    fn too_many(&self) -> Error {
-        super::too_many(self, "add the runs you need by their own run accessions")
+    fn too_many(&self, most: usize) -> Error {
+        super::too_many(
+            self,
+            most,
+            "add the runs you need by their own run accessions",
+        )
     }
 
     fn invalid(&self, reason: &str) -> Error {
