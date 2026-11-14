@@ -414,6 +414,67 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
     Failure::Final(error)
 }
 
+/// the refusal of `answered`, on another host or port than `link`, which a redirect led to: it
+/// names where the refusal came from, and offers the sign-in for that host with its own link to
+/// ask for, since a website's key goes only with a request that starts at its host. `carried`
+/// says a key saved for the link's host went with the request before the redirect.
+pub(super) fn moved_refusal(
+    link: &Url,
+    answered: &Url,
+    status: StatusCode,
+    headers: &HeaderMap,
+    carried: bool,
+) -> Error {
+    let named = |url: &Url| {
+        let host = host(url).to_ascii_lowercase();
+        match url.port_or_known_default() {
+            Some(443) | None => host,
+            Some(port) => format!("{host}:{port}"),
+        }
+    };
+    let (first, refusing) = (named(link), named(answered));
+    let error = Error::new(
+        Kind::AuthRequired,
+        format!(
+            "{refusing} refused access to {} ({}) after {first} sent the request there",
+            Shown(answered),
+            status.as_u16()
+        ),
+    )
+    .detail(format!("the link was {}", Shown(link)));
+    let kept = if carried {
+        format!(
+            "the key saved for {first} went to it alone, since a website's key never follows a redirect to another host or port"
+        )
+    } else {
+        "a website's key goes only with a request that starts at its host".to_owned()
+    };
+    let bearer = headers
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_whitespace().next())
+        .is_some_and(|scheme| scheme.trim_end_matches(',').eq_ignore_ascii_case("bearer"));
+    let command = crate::account::Account::Login(refusing.clone()).command();
+    let sign_in = if let Some(account) =
+        crate::account::Account::from_host(&host(answered).to_ascii_lowercase())
+    {
+        format!(
+            "if it needs an account, sign in with `{}`",
+            account.command()
+        )
+    } else if bearer {
+        format!("if {refusing} needs a token, save it with `{command} --token`")
+    } else {
+        format!(
+            "if {refusing} needs a sign-in, save it with `{command}` and --browser <name>, --cookies <file>, --token or --header <name>"
+        )
+    };
+    error.help(format!(
+        "{kept}. {sign_in}, then ask for {} itself",
+        Shown(answered)
+    ))
+}
+
 /// a proxy on the way to `url` asked for a login, which no other try would give it. any `scheme`
 /// but basic, or none, as a tunnel's refusal gives, most likely wants a windows sign-in.
 fn proxy_login(url: &Url, scheme: Option<&str>) -> Error {

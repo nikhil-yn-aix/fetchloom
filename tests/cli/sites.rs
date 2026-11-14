@@ -651,6 +651,61 @@ fn a_netrc_line_without_a_port_answers_every_port_while_one_with_a_port_keeps_to
     Ok(())
 }
 
+/// a refusal from a host a redirect led to names that host and its link, not the link asked
+/// for, says the key saved for the first host stayed there, and gives the sign-in for the host
+/// that refused with the link to ask for, since a website's key never follows a redirect.
+#[test]
+fn a_refusal_after_a_redirect_names_the_host_that_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let other = Routes::start(vec![(
+        "/data.csv".to_owned(),
+        reply(
+            "401 Unauthorized",
+            &[("WWW-Authenticate", "Bearer"), ("Content-Length", "0")],
+            b"",
+        ),
+    )])?;
+    let site = Routes::start(vec![(
+        "/away".to_owned(),
+        reply(
+            "302 Found",
+            &[
+                ("Location", &format!("{}/data.csv", other.url)),
+                ("Content-Length", "0"),
+            ],
+            b"",
+        ),
+    )])?;
+    sandbox.allow(&other.url);
+    let (host, refusing) = (host_of(&site), host_of(&other));
+    sign_in_with_token(&sandbox, &host, "t-first")?;
+    let link = format!("{}/away", site.url);
+    let output = sandbox.run(&["--json", "get", &link])?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "auth.required");
+    assert_eq!(
+        error["message"],
+        format!(
+            "{refusing} refused access to {}/data.csv (401) after {host} sent the request there",
+            other.url
+        )
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!([format!("the link was {link}")])
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "the key saved for {host} went to it alone, since a website's key never follows a redirect to another host or port. if {refusing} needs a token, save it with `fetchloom auth login {refusing} --token`, then ask for {}/data.csv itself",
+            other.url
+        )
+    );
+    assert_eq!(heard(&other, "authorization"), [None]);
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;

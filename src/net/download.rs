@@ -1073,6 +1073,21 @@ impl Net {
         {
             return Err(Failure::Final(error));
         }
+        // a source's link keeps its source's own refusal, whatever host refused it
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && response.url().origin() != from.origin()
+            && crate::source::refused_download(from, status.as_u16()).is_none()
+            && crate::account::Account::from_host(&host(from).to_ascii_lowercase()).is_none()
+        {
+            let carried = response.extensions().get::<super::site::Sent>().is_some();
+            return Err(Failure::Final(failure::moved_refusal(
+                from,
+                response.url(),
+                status,
+                response.headers(),
+                carried,
+            )));
+        }
         Ok(Ok(response))
     }
 
