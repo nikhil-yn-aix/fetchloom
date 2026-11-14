@@ -608,6 +608,59 @@ fn a_managed_identity_that_cannot_be_had_says_why() {
     assert_eq!(lines(&asked).len(), 2);
 }
 
+/// the metadata service's answer cut off partway is asked for again, one of 64 KiB is read whole
+/// and one past it ends the request; none of it counts as the run's bytes down. with no retries,
+/// the cut one ends it.
+#[test]
+fn a_metadata_answer_is_read_whole_up_to_64_kib() {
+    let (identity, identity_asked) = server(|_, count| {
+        let mut body =
+            br#"{"access_token":"identity-token","expires_in":"86399","token_type":"Bearer"}"#
+                .to_vec();
+        body.resize(if count == 2 { (64 << 10) + 1 } else { 64 << 10 }, b' ');
+        let mut answer = reply("200 OK", &[("Content-Type", "application/json")], &body);
+        if count == 0 || count == 3 {
+            // the head promises a body that never comes
+            answer.truncate(answer.len() - body.len());
+        }
+        answer
+    });
+    let (local, _) = server(|head, _| {
+        if head.contains("authorization: bearer identity-token\r\n") {
+            reply("200 OK", &[], b"blob")
+        } else {
+            reply("401 Unauthorized", &[], b"")
+        }
+    });
+    let endpoint = identity.join("metadata/identity/oauth2/token").unwrap();
+    let net = |retries| {
+        let mut net = azure_net_at(
+            &["azure:lab/raw"],
+            &[("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential")],
+            Some(endpoint.clone()),
+        )
+        .with_retries(retries);
+        net.first_wait = Duration::ZERO;
+        net
+    };
+    let link = "https://lab.blob.core.windows.net/raw/a.csv";
+    let read = net(3);
+    assert_eq!(through(&read, &local, link).unwrap().status(), 200);
+    assert_eq!(read.work.counts().bytes_down, 0);
+    let long = through(&net(3), &local, link).unwrap_err();
+    assert_eq!(long.kind, Kind::SourceInvalid);
+    assert_eq!(
+        long.message,
+        "azure's metadata service sent more than 64 KiB where a token was expected"
+    );
+    let cut = through(&net(0), &local, link).unwrap_err();
+    assert_eq!(
+        cut.message,
+        "gave up on 127.0.0.1 after 1 try: azure's metadata service broke off its answer"
+    );
+    assert_eq!(identity_asked.lock().unwrap().len(), 4);
+}
+
 /// azure refusing a key or a token says which went and what lets it in.
 #[test]
 fn azure_refusing_a_key_or_a_token_names_which() {

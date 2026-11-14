@@ -503,3 +503,58 @@ fn a_refused_login_stops_requests_with_what_google_said() {
     assert_eq!(authorizations(&asked), [None]);
     assert_eq!(asked_for_tokens.lock().unwrap().len(), 1);
 }
+
+/// a token answer cut off partway is asked for again, one of 64 KiB is read whole and one past it
+/// ends the request, each byte counted as the run's. with no retries, the cut one ends it.
+#[test]
+fn a_token_answer_is_read_whole_up_to_64_kib() {
+    let (endpoint, asked_for_tokens) = server(|_, count| {
+        let mut body = format!(
+            r#"{{"access_token":"token-{count}","expires_in":3600,"token_type":"Bearer"}}"#
+        )
+        .into_bytes();
+        body.resize(if count == 2 { (64 << 10) + 1 } else { 64 << 10 }, b' ');
+        let mut answer = reply("200 OK", &[("Content-Type", "application/json")], &body);
+        if count == 0 || count == 3 {
+            // the head promises a body that never comes
+            answer.truncate(answer.len() - body.len());
+        }
+        answer
+    });
+    let (local, _) = server(|request, _| match request.authorization() {
+        Some("bearer token-1") => reply("200 OK", &[], b"object"),
+        _ => reply("401 Unauthorized", &[], b""),
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let credentials = login(folder.path());
+    let net = |retries| {
+        let mut net =
+            google_net(&["lab-private"], Some(&credentials), &endpoint).with_retries(retries);
+        net.first_wait = Duration::ZERO;
+        net
+    };
+    let client = transport();
+    let link = "https://storage.googleapis.com/lab-private/a.csv";
+    let read = net(3);
+    let answer = block_on(through(&read, &client, &local, link));
+    assert_eq!(answer.status(), 200);
+    assert_eq!(read.work.counts().bytes_down, 64 << 10);
+    let long = net(3);
+    let Err(Failure::Final(error)) = block_on(sent(&long, &client, &local, link)) else {
+        panic!("a token answer past 64 KiB was read");
+    };
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "127.0.0.1 sent more than 64 KiB where a token was expected"
+    );
+    assert_eq!(long.work.counts().bytes_down, (64 << 10) + 1);
+    let Err(Failure::Final(error)) = block_on(sent(&net(0), &client, &local, link)) else {
+        panic!("a cut-off token answer was read");
+    };
+    assert_eq!(
+        error.message,
+        "gave up on 127.0.0.1 after 1 try: the connection to 127.0.0.1 broke partway through the answer"
+    );
+    assert_eq!(asked_for_tokens.lock().unwrap().len(), 4);
+}
