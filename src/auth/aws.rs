@@ -13,7 +13,7 @@ use std::time::{Instant, SystemTime};
 use self::program::Program;
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
-use crate::machine::Var;
+use crate::machine::{Var, set};
 use crate::stop::Stop;
 
 /// an AWS access key: its id, its secret and, for temporary keys, the session they belong to.
@@ -397,14 +397,6 @@ fn keys_in(
 /// the region the environment sets.
 fn region(var: Var<'_>) -> Option<String> {
     set(var, "AWS_REGION").or_else(|| set(var, "AWS_DEFAULT_REGION"))
-}
-
-/// a variable's text, when it is set and not empty.
-fn set(var: Var<'_>, name: &str) -> Option<String> {
-    var(name)
-        .and_then(|value| value.into_string().ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 /// the shared credentials and config files.

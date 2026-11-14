@@ -285,6 +285,14 @@ pub(crate) fn env(name: &str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
+/// a variable's text, when it is set and not empty.
+pub(crate) fn set(var: Var<'_>, name: &str) -> Option<String> {
+    var(name)
+        .and_then(|value| value.into_string().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// the home folder `var` names: `USERPROFILE`, else `HOME`, on windows; `HOME` elsewhere.
 pub(crate) fn home(var: Var<'_>) -> Option<PathBuf> {
     let set = |name: &str| {

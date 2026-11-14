@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::oauth;
 use crate::error::{Error, Kind};
-use crate::machine::Var;
+use crate::machine::{Var, set};
 
 /// the scope of a token that reads cloud storage.
 pub(crate) const STORAGE_READ: &str = "https://www.googleapis.com/auth/devstorage.read_only";
@@ -367,14 +367,6 @@ fn url_base64(bytes: &[u8]) -> String {
         .trim_end_matches('=')
         .replace('+', "-")
         .replace('/', "_")
-}
-
-/// a variable's text, when it is set and not empty.
-fn set(var: Var<'_>, name: &str) -> Option<String> {
-    var(name)
-        .and_then(|value| value.into_string().ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

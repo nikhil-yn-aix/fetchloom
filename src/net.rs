@@ -343,15 +343,7 @@ fn keys(credentials: Vec<Credential>) -> Vec<Key> {
 /// the host and port a credential's host names: lowercase, with port 443 unless it names
 /// another. none when it is no plain host.
 fn key_origin(host: &str) -> Option<(String, u16)> {
-    let url = Url::parse(&format!("https://{host}/")).ok()?;
-    let plain = url.username().is_empty()
-        && url.password().is_none()
-        && url.path() == "/"
-        && url.query().is_none()
-        && url.fragment().is_none();
-    if !plain {
-        return None;
-    }
+    let url = crate::auth::plain_host(&format!("https://{host}/"))?;
     Some((url.host_str()?.to_owned(), url.port_or_known_default()?))
 }
 

@@ -545,15 +545,11 @@ impl Account {
     /// [`Account::find`], with `saved` the index of keys saved through fetchloom, read already.
     fn find_in(&self, var: Var<'_>, saved: &BTreeMap<String, store::Place>) -> Option<Found> {
         let set = |name: &'static str| {
-            var(name)
-                .and_then(|value| value.into_string().ok())
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .map(|secret| Found {
-                    origin: Origin::Variable(name),
-                    secret,
-                    login: None,
-                })
+            crate::machine::set(var, name).map(|secret| Found {
+                origin: Origin::Variable(name),
+                secret,
+                login: None,
+            })
         };
         let file = |path: PathBuf| {
             let secret = std::fs::read_to_string(&path).ok()?.trim().to_owned();
@@ -799,16 +795,19 @@ pub(crate) fn dataverse_host(typed: &str) -> Option<String> {
         .strip_prefix("https://")
         .or_else(|| typed.strip_prefix("http://"))
         .unwrap_or(typed);
-    let url = Url::parse(&format!("https://{bare}")).ok()?;
+    installation(&plain_host(&format!("https://{bare}"))?)
+}
+
+/// `url` parsed, when it names a host, with its port, and nothing else: no login, path, query
+/// or fragment.
+pub(crate) fn plain_host(url: &str) -> Option<Url> {
+    let url = Url::parse(url).ok()?;
     let plain = url.username().is_empty()
         && url.password().is_none()
         && url.path() == "/"
         && url.query().is_none()
         && url.fragment().is_none();
-    if !plain {
-        return None;
-    }
-    installation(&url)
+    plain.then_some(url)
 }
 
 /// the installation a dataverse URL is on: its host, with its port when that is not 443. none

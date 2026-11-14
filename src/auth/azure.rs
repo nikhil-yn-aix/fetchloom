@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::auth::process::{self, PATIENCE};
 use crate::error::{Error, Kind};
-use crate::machine::Var;
+use crate::machine::{Var, set};
 use crate::stop::Stop;
 
 mod container;
@@ -188,20 +188,14 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
 /// principal's secret or a federated token, which azure's libraries would sign in with first, a
 /// client id that is none, or a credential fetchloom does not read.
 fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
-    let set = |name: &str| {
-        var(name)
-            .and_then(|value| value.into_string().ok())
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-    };
-    let written = set("AZURE_TOKEN_CREDENTIALS");
+    let written = set(var, "AZURE_TOKEN_CREDENTIALS");
     let asked = written.as_deref().map(str::to_ascii_lowercase);
     let cli = var("PATH").and_then(|path| {
         let file = if cfg!(windows) { "az.cmd" } else { "az" };
         crate::machine::installed(&path, file)
     });
     let managed = || {
-        let client_id = set("AZURE_CLIENT_ID")
+        let client_id = set(var, "AZURE_CLIENT_ID")
             .map(|id| {
                 let plain = id.len() <= 64
                     && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
@@ -229,7 +223,7 @@ fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
         Some("prod") => {
             let first = ["AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH", "AZURE_FEDERATED_TOKEN_FILE"]
                 .into_iter()
-                .find(|name| set(name).is_some());
+                .find(|name| set(var, name).is_some());
             match first {
                 None => managed(),
                 Some(name) => Err(Error::new(
