@@ -70,6 +70,38 @@ fn a_git_lfs_pointer_is_refused_rather_than_pinned() -> Result {
     Ok(())
 }
 
+/// a raw github link that answers with a git-lfs pointer is told the link github serves the
+/// file itself from, which github's rules give the network.
+#[test]
+fn a_git_lfs_pointer_on_github_names_githubs_own_link_to_the_file() -> Result {
+    let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+    let sandbox = Sandbox::new()?;
+    let path = "/lab/scans/main/data/model.bin";
+    let routes = Routes::start(vec![(
+        format!("/raw.githubusercontent.com{path}"),
+        file(pointer, "\"p1\""),
+    )])?;
+    let output = sandbox
+        .command(&[
+            "--json",
+            "add",
+            &format!("https://raw.githubusercontent.com{path}"),
+        ])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = json(&output)?["errors"][0].clone();
+    assert_eq!(error["kind"], "source.invalid", "{error}");
+    assert_eq!(
+        error["help"],
+        format!(
+            "git-lfs keeps that file apart from the repository: use https://media.githubusercontent.com/media{path} instead"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
     let sandbox = Sandbox::new()?;
