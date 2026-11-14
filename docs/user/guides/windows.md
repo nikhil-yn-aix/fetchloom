@@ -4,7 +4,7 @@ windows supports the same fetchloom commands, with placement affected by the dri
 
 ## defender and new files
 
-many small files give Microsoft Defender many new files to scan. the [historical defender observations](../../dev/performance/windows-defender.md#recorded-workload) describe one laptop; costs depend on the machine and its protection settings.
+many small files give Microsoft Defender many new files to scan. the [historical defender observations](../../dev/performance/measurements/historical.md#recorded-workload) describe one laptop; costs depend on the machine and its protection settings.
 
 a dev drive with Defender's performance mode defers scans until after file open completes. [Microsoft's performance mode comparison](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-endpoint-antivirus-performance-mode#performance-mode-compared-to-real-time-protection) states the trade-off:
 

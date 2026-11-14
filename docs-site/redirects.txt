@@ -31,10 +31,11 @@ dev/engineering/versioning.html            dev/engineering/versioning.md
 dev/performance/README.html                dev/performance/README.md
 dev/performance/benchmark-design.html      dev/performance/benchmark-design.md
 dev/performance/budgets.html               dev/performance/budgets.md
-dev/performance/measurements.html          dev/performance/measurements.md
+dev/performance/measurements.html          dev/performance/measurements/README.md
 dev/performance/native-checks.html         dev/performance/native-checks.md
 dev/performance/native.html                dev/performance/native.md
-dev/performance/windows-defender.html      dev/performance/windows-defender.md
+dev/performance/windows-defender.html      dev/performance/measurements/historical.md
+dev/performance/windows-defender/index.html dev/performance/measurements/historical.md
 dev/roadmap.html                           dev/roadmap.md
 dev/style.html                             dev/style.md
 print.html                                 README.md

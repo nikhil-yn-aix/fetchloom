@@ -130,4 +130,4 @@ the shared runner returns results in file order and joins every worker before re
 
 ## related
 
-[sync loop](sync-loop.md), [cache](cache.md), [archives](archives.md), [filesystem CI](../engineering/ci.md), [copy measurements](../performance/measurements.md#storage-and-memory).
+[sync loop](sync-loop.md), [cache](cache.md), [archives](archives.md), [filesystem CI](../engineering/ci.md), [copy measurements](../performance/measurements/historical.md#storage-and-memory).

@@ -111,4 +111,4 @@ before preparing downloads, `Loop::ask_room` sums what placing lacks, the archiv
 
 ## related
 
-[project](project.md), [placing](placing.md), [cache](cache.md), [archives](archives.md), [settled-sync measurements](../performance/measurements.md#placement-and-settled-sync).
+[project](project.md), [placing](placing.md), [cache](cache.md), [archives](archives.md), [settled-sync measurements](../performance/measurements/historical.md#placement-and-settled-sync).

@@ -115,4 +115,4 @@ a dataset's `members` tables in data.toml choose which members a project places,
 
 ## related
 
-[cache](cache.md), [placing](placing.md), [primitives](primitives.md#worker-budgets), [measurements](../performance/measurements.md#storage-and-memory), [data.lock](../../user/reference/data-lock.md).
+[cache](cache.md), [placing](placing.md), [primitives](primitives.md#worker-budgets), [measurements](../performance/measurements/historical.md#storage-and-memory), [data.lock](../../user/reference/data-lock.md).

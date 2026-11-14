@@ -30,7 +30,7 @@ idle and byte-rate tests use fixed virtual-clock steps and in-memory response ch
 
 ordinary `Api::get` and `Api::get_with` calls reuse successful metadata within one `Net` run and share identical in-flight requests. `get_with` adds its static headers, as the `apollo-require-preflight` openneuro's GraphQL API asks of a query sent by GET, both to the key and to the request that goes out, so a query is reused only for the same link and headers, never for another query or a plain GET of its link. bodies are shared through `Arc`, not copied. the key follows the outgoing URL and headers, including credential values, plus the signing or token scope; credential refresh and access checks happen before reuse. only 2xx answers are retained. each page keeps its next link and total item count. hints through `get_once` and mirror reads bypass the memo; offline and mirror-only rules still apply.
 
-the allowance is one sixteenth of the memory setting, capped at 64 MiB, with at most 4,096 entries. retained bodies and metadata count against it; old ready entries are evicted and oversized listings are not retained. a dead origin download clears discovery before source recovery, and a request invalidated while in flight cannot repopulate the memo. nothing is persisted. the [measurement](../performance/measurements.md#a-per-run-metadata-memo-2026-11-12) records the speed and memory tradeoff.
+the allowance is one sixteenth of the memory setting, capped at 64 MiB, with at most 4,096 entries. retained bodies and metadata count against it; old ready entries are evicted and oversized listings are not retained. a dead origin download clears discovery before source recovery, and a request invalidated while in flight cannot repopulate the memo. nothing is persisted. the [measurement](../performance/measurements/network.md#a-per-run-metadata-memo-2026-11-12) records the speed and memory tradeoff.
 
 ### request policy
 
@@ -87,4 +87,4 @@ shown URLs and account arguments share `mask_query`: it masks userinfo and each 
 
 ## related
 
-[cache](cache.md), [sources](sources.md), [measurements](../performance/measurements.md), [environment](../../user/reference/environment.md).
+[cache](cache.md), [sources](sources.md), [measurements](../performance/measurements/README.md), [environment](../../user/reference/environment.md).

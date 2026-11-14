@@ -141,4 +141,4 @@ each run writes `meta.json` and `runs.jsonl` under `$FL_BENCH_ROOT/results/` (de
 | [hyperfine](https://github.com/sharkdp/hyperfine) | warmup rounds, prepare steps before each run, recorded commands |
 | [dvc-bench](https://github.com/iterative/dvc-bench) | dataset sizes as a parameter |
 
-related: [measurements](measurements.md), [budgets](budgets.md), [windows defender](windows-defender.md).
+related: [measurements](measurements/README.md), [budgets](budgets.md), [windows defender](measurements/historical.md#windows-defender).

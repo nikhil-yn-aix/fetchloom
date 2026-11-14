@@ -12,13 +12,13 @@ deferred until a need shows: a data root on another disk, a link mode for build 
 
 both were measured and left out of 0.1.0 for a reason other than speed.
 
-1. hardlinks before reflinks, as a choice a person makes on a filesystem that clones, for the slow unpack on xfs [issue 35](https://github.com/nikhil-yn-aix/fetchloom/issues/35) reports. on xfs it took a sync of a zip of 10,000 small files to 0.776 of the time and placing 10,000 cached files to 0.358, but a hardlink is the cache's object, so an edit to a placed file reaches the cache and every project; the [placement order](decisions/storage-and-requests.md) keeps reflinks first for that isolation ([measurements](performance/measurements.md#hardlinks-before-reflinks-on-xfs-2026-11-13)).
-2. a committed profile for profile-guided optimization. it made manifest-heavy commands 5 to 10% faster and the musl binary 2.5 MiB smaller, short of the 10% bar, and a profile trained in the release job would keep a rebuild from giving the same bytes, so it needs a profile committed for each of the six release targets and trained again as the code moves ([measurements](performance/measurements.md#profile-guided-optimization-2026-11-13)).
+1. hardlinks before reflinks, as a choice a person makes on a filesystem that clones, for the slow unpack on xfs [issue 35](https://github.com/nikhil-yn-aix/fetchloom/issues/35) reports. on xfs it took a sync of a zip of 10,000 small files to 0.776 of the time and placing 10,000 cached files to 0.358, but a hardlink is the cache's object, so an edit to a placed file reaches the cache and every project; the [placement order](decisions/storage-and-requests.md) keeps reflinks first for that isolation ([measurements](performance/measurements/placement.md#hardlinks-before-reflinks-on-xfs-2026-11-13)).
+2. a committed profile for profile-guided optimization. it made manifest-heavy commands 5 to 10% faster and the musl binary 2.5 MiB smaller, short of the 10% bar, and a profile trained in the release job would keep a rebuild from giving the same bytes, so it needs a profile committed for each of the six release targets and trained again as the code moves ([measurements](performance/measurements/process.md#profile-guided-optimization-2026-11-13)).
 
 ## measurement work
 
 1. remeasure the historical windows warm-cache [budget miss](performance/budgets.md) on native filesystems before choosing another optimization. the [native checks](performance/native-checks.md) cover placement, durability and resource use; linux results do not establish native latency.
-2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). use the [recorded experiments](performance/measurements.md) and [defender study](performance/windows-defender.md) to avoid repeating discarded changes without new evidence.
+2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). use the [recorded experiments](performance/measurements/README.md) and [defender study](performance/measurements/historical.md#windows-defender) to avoid repeating discarded changes without new evidence.
 3. run the implemented [benchmark suite](performance/benchmark-design.md) in full, retain its raw records and publish the generated results.
 
 ## publishing

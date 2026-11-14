@@ -72,12 +72,12 @@ on linux, first record peak RSS without allocation instrumentation:
 heaptrack -o heaptrack-sync target/release/fetchloom sync
 ```
 
-pass the recording path printed by heaptrack to `heaptrack_print`. inspect retained allocations, then repeat the workload without heaptrack. its wall time includes instrumentation overhead. [memory measurements](../performance/measurements.md#storage-and-memory) distinguish heap size from RSS and allocator retention.
+pass the recording path printed by heaptrack to `heaptrack_print`. inspect retained allocations, then repeat the workload without heaptrack. its wall time includes instrumentation overhead. [memory measurements](../performance/measurements/historical.md#storage-and-memory) distinguish heap size from RSS and allocator retention.
 
 ## compare builds
 
 interleave configurations in both orders, a then b and b then a. start each cold-download run with an empty cache; for warm placement, populate the cache once and use a fresh project per run. keep build profile, bytes, filesystem and worker settings constant.
 
-report run count, median and observed range for each side, including regressions and failed attempts. use the [benchmark workflow](../performance/README.md#running-benchmarks) for checked comparisons. do not infer missing statistics from old ranges. [measurements](../performance/measurements.md) records rejected experiments so you can avoid repeating them without new evidence.
+report run count, median and observed range for each side, including regressions and failed attempts. use the [benchmark workflow](../performance/README.md#running-benchmarks) for checked comparisons. do not infer missing statistics from old ranges. [measurements](../performance/measurements/README.md) records rejected experiments so you can avoid repeating them without new evidence.
 
-related: [performance](../performance/README.md), [windows defender](../performance/windows-defender.md), [output](../architecture/output.md), [building and testing](building-and-testing.md).
+related: [performance](../performance/README.md), [windows defender](../performance/measurements/historical.md#windows-defender), [output](../architecture/output.md), [building and testing](building-and-testing.md).
