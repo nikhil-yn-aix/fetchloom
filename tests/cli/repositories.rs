@@ -20,6 +20,25 @@ fn command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
     command
 }
 
+/// a teammate's clone of this project: data.toml and data.lock copied to a folder of its own,
+/// then `args` run there against `routes`, with a cache of its own. the folder, and what ran.
+fn teammate_sync(
+    sandbox: &Sandbox,
+    routes: &Routes,
+    args: &[&str],
+) -> Result<(std::path::PathBuf, std::process::Output)> {
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&teammate, args)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    Ok((teammate, synced))
+}
+
 fn fixture(name: &str) -> Result<serde_json::Value> {
     let path = crate::support::workspace()
         .join("tests/fixtures/sources")
@@ -110,16 +129,8 @@ fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result
     assert_eq!(fs::read(work.join("data/archiving/rows.csv"))?, ROWS);
     assert_eq!(fs::read(work.join("data/archiving/notes.txt"))?, NOTES);
 
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["--json", "sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(json(&synced)?["errors"], serde_json::json!([]));
     assert_eq!(fs::read(teammate.join("data/archiving/rows.csv"))?, ROWS);
@@ -351,16 +362,8 @@ fn a_mendeley_version_is_pinned_and_synced_from_the_lock() -> Result {
     }
     assert_eq!(fs::read(work.join("data/oct/rows.csv"))?, ROWS);
 
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(fs::read(teammate.join("data/oct/notes.txt"))?, NOTES);
     assert!(
@@ -464,16 +467,8 @@ fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
     );
     assert_eq!(fs::read(work.join("data/jq/rows.csv"))?, ROWS);
 
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(fs::read(teammate.join("data/jq/notes.txt"))?, NOTES);
     assert!(
@@ -709,16 +704,8 @@ fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
     );
     assert_eq!(fs::read(work.join("data/blank/ERR1160846.fastq.gz"))?, ROWS);
 
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(
         fs::read(teammate.join("data/blank/ERR1160846.fastq.gz"))?,
@@ -909,16 +896,8 @@ fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
         NOTES
     );
 
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(
         fs::read(teammate.join("data/gse1000/matrix/GSE1000_series_matrix.txt.gz"))?,
@@ -966,15 +945,7 @@ fn bytes_geo_remade_under_the_same_name_are_refused_by_the_lock() -> Result {
         format!("{GEO_SERIES}/matrix/GSE1000_series_matrix.txt.gz"),
         file(NOTES, "\"v2\""),
     )]);
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(sandbox.work().join(name), teammate.join(name))?;
-    }
-    let synced = sandbox
-        .command_in(&teammate, &["--json", "sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync", "--locked"])?;
     assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
     assert_eq!(json(&synced)?["errors"][0]["kind"], "integrity.mismatch");
     assert!(
@@ -1069,16 +1040,8 @@ fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result 
         fs::read(work.join("data/rat/sub-RAT123/sub-RAT123.nwb"))?,
         ROWS
     );
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (_, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     assert_eq!(
         routes.targets()[listed..],
@@ -1268,16 +1231,8 @@ fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() 
             .contains("apollo-require-preflight: true")),
         "{queries:?}"
     );
-    let teammate = sandbox.folder("teammate")?;
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(work.join(name), teammate.join(name))?;
-    }
     let listed = routes.targets().len();
-    let synced = sandbox
-        .command_in(&teammate, &["sync", "--locked"])
-        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
-        .output()?;
+    let (_, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
     ok(&synced)?;
     let mut fetched = routes.targets()[listed..].to_vec();
     fetched.sort();

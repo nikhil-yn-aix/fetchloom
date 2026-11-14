@@ -1458,6 +1458,23 @@ mod tests {
             const { std::cell::RefCell::new(None) };
     }
 
+    /// a context whose output says nothing but its `--json` document, when `json`.
+    fn quiet(json: bool) -> Context {
+        Context::new(Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            json,
+            false,
+        ))
+    }
+
     /// a stop asked before the command marks its work finished ends it as stopped.
     #[test]
     fn a_stop_after_a_command_finished_its_work_leaves_it_finished() {
@@ -1466,29 +1483,14 @@ mod tests {
             .build()
             .unwrap();
         let _entered = runtime.enter();
-        let quiet = || {
-            Context::new(Output::new(
-                crate::output::Style {
-                    color: false,
-                    unicode: false,
-                    interactive: false,
-                    watched: false,
-                    links: false,
-                    accessible: false,
-                },
-                Level::Quiet,
-                false,
-                false,
-            ))
-        };
-        let finished = quiet();
+        let finished = quiet(false);
         let outcome = block_on(&finished, async {
             finished.stop.finish();
             finished.stop.ask();
             Ok(())
         });
         assert!(outcome.is_ok());
-        let unfinished = quiet();
+        let unfinished = quiet(false);
         let outcome = block_on(&unfinished, async {
             unfinished.stop.ask();
             Ok(())
@@ -1606,19 +1608,7 @@ mod tests {
             .build()
             .unwrap();
         for (effect, waits) in [(Effect::Reads, false), (Effect::Writes, true)] {
-            let context = Arc::new(Context::new(Output::new(
-                Style {
-                    color: false,
-                    unicode: false,
-                    interactive: false,
-                    watched: false,
-                    links: false,
-                    accessible: false,
-                },
-                Level::Quiet,
-                false,
-                false,
-            )));
+            let context = Arc::new(quiet(false));
             context.stop.ask();
             let (release, released) = std::sync::mpsc::channel::<()>();
             let removed = Arc::new(AtomicBool::new(false));
@@ -1671,19 +1661,7 @@ mod tests {
 
     #[test]
     fn a_key_no_header_can_carry_is_told_once_per_run() {
-        let context = Context::new(Output::new(
-            crate::output::Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-                accessible: false,
-            },
-            Level::Quiet,
-            true,
-            false,
-        ));
+        let context = quiet(true);
         context
             .unsaved
             .lock()
@@ -1709,19 +1687,7 @@ mod tests {
     /// keys are looked for when a request first needs one, so a settled sync reads no key files.
     #[test]
     fn a_network_that_sends_nothing_looks_for_no_keys() {
-        let context = Context::new(Output::new(
-            crate::output::Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-                accessible: false,
-            },
-            Level::Quiet,
-            true,
-            false,
-        ));
+        let context = quiet(true);
         context
             .unsaved
             .lock()
@@ -1857,19 +1823,7 @@ mod tests {
 
     #[test]
     fn a_key_kept_out_of_files_still_serves_the_command() {
-        let context = Context::new(Output::new(
-            crate::output::Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-                accessible: false,
-            },
-            Level::Quiet,
-            false,
-            false,
-        ));
+        let context = quiet(false);
         context
             .unsaved
             .lock()
@@ -2021,19 +1975,7 @@ mod tests {
         const CHILD: &str = "FETCHLOOM_TEST_CLI_STOPPED_LIST";
         if let Some(root) = std::env::var_os(CHILD) {
             std::env::set_current_dir(root).unwrap();
-            let context = Arc::new(Context::new(Output::new(
-                Style {
-                    color: false,
-                    unicode: false,
-                    interactive: false,
-                    watched: false,
-                    links: false,
-                    accessible: false,
-                },
-                Level::Quiet,
-                true,
-                false,
-            )));
+            let context = Arc::new(quiet(true));
             let runtime = command_runtime(&context).unwrap();
             let entered = runtime.enter();
             context.stop.ask();
