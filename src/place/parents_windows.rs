@@ -137,7 +137,7 @@ impl Location {
 
     /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
-        rename_new_path(&self.path, &target.path)
+        crate::volume::rename_new(&self.path, &target.path)
     }
 
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
@@ -255,30 +255,6 @@ impl Staged {
         fs::rename(&*temporary, &self.location.path)?;
         temporary.disable_cleanup(true);
         self.location.metadata().map(Some)
-    }
-}
-
-/// renames `from` to `to`, refusing a taken name with `AlreadyExists`: by a second link and the
-/// old name's removal, since std's rename replaces, or on fat and exfat, which make no links, by
-/// tempfile's rename, which clears attributes, so a read-only file is made read-only again.
-pub(super) fn rename_new_path(from: &Path, to: &Path) -> io::Result<()> {
-    match fs::hard_link(from, to) {
-        Ok(()) => fs::remove_file(from).inspect_err(|_| {
-            let _ = fs::remove_file(to);
-        }),
-        Err(error) if crate::volume::refuses_links(&error) => {
-            let read_only = fs::symlink_metadata(from)?.permissions().readonly();
-            let mut named = tempfile::TempPath::try_from_path(from)?;
-            // the file is someone's, so a failed rename must not delete it
-            named.disable_cleanup(true);
-            let renamed = named.persist_noclobber(to).map_err(|error| error.error);
-            if read_only {
-                let now = if renamed.is_ok() { to } else { from };
-                let _ = crate::volume::set_read_only(now, true);
-            }
-            renamed
-        }
-        Err(error) => Err(error),
     }
 }
 

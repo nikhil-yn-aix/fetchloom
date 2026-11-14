@@ -37,7 +37,7 @@ impl Volume {
             scratch,
             hard_link: |original, link| fs::hard_link(original, link),
             rename: |from, to| fs::rename(from, to),
-            rename_new: |from, to| crate::place::rename_new(from, to),
+            rename_new: |from, to| rename_new(from, to),
             remove_file: |path| fs::remove_file(path),
             links: OnceLock::new(),
             pretended: None,
@@ -504,6 +504,86 @@ pub(crate) fn syncfs_reports_errors(release: &str) -> bool {
     }
 }
 
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`. a disk that can neither
+/// link nor rename that way fails with its refusal of the link.
+#[cfg(unix)]
+pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    rename_new_at(rustix::fs::CWD, from, rustix::fs::CWD, to, false)
+}
+
+/// renames `from` in `from_parent` to `to` in `to_parent` without replacing anything: by the
+/// rename linux and macos have that refuses a taken name, else, or with `fallback`, by a link to
+/// the new name and the old name's removal.
+#[cfg(unix)]
+pub(crate) fn rename_new_at<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
+    from_parent: std::os::fd::BorrowedFd<'_>,
+    from: P,
+    to_parent: std::os::fd::BorrowedFd<'_>,
+    to: Q,
+    fallback: bool,
+) -> io::Result<()> {
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = fallback;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if !fallback {
+        match rustix::fs::renameat_with(
+            from_parent,
+            from,
+            to_parent,
+            to,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) if !lacks_rename_new(error) => return Err(error.into()),
+            Err(_) => {}
+        }
+    }
+    rustix::fs::linkat(
+        from_parent,
+        from,
+        to_parent,
+        to,
+        rustix::fs::AtFlags::empty(),
+    )?;
+    rustix::fs::unlinkat(from_parent, from, rustix::fs::AtFlags::empty()).map_err(Into::into)
+}
+
+/// whether `error`, from a rename asked never to replace, says the system or the filesystem has
+/// no such rename.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn lacks_rename_new(error: rustix::io::Errno) -> bool {
+    use rustix::io::Errno;
+    matches!(
+        error,
+        Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR
+    )
+}
+
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`: by a second link and the
+/// old name's removal, since std's rename replaces, or on fat and exfat, which make no links, by
+/// tempfile's rename, which clears attributes, so a read-only file is made read-only again.
+#[cfg(windows)]
+pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::hard_link(from, to) {
+        Ok(()) => fs::remove_file(from).inspect_err(|_| {
+            let _ = fs::remove_file(to);
+        }),
+        Err(error) if refuses_links(&error) => {
+            let read_only = fs::symlink_metadata(from)?.permissions().readonly();
+            let mut named = tempfile::TempPath::try_from_path(from)?;
+            // the file is someone's, so a failed rename must not delete it
+            named.disable_cleanup(true);
+            let renamed = named.persist_noclobber(to).map_err(|error| error.error);
+            if read_only {
+                let now = if renamed.is_ok() { to } else { from };
+                let _ = set_read_only(now, true);
+            }
+            renamed
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// `permissions` that let the file's owner write it.
 fn writable(mut permissions: Permissions) -> Permissions {
     #[cfg(unix)]
@@ -541,7 +621,7 @@ impl Volume {
                 }
                 fs::rename(from, to)
             },
-            rename_new: |from, to| crate::place::rename_new(from, to),
+            rename_new: |from, to| rename_new(from, to),
             remove_file: |path| {
                 if fs::symlink_metadata(path)?.permissions().readonly() {
                     return Err(io::ErrorKind::PermissionDenied.into());
@@ -564,7 +644,7 @@ impl Volume {
             },
             rename_new: |from, to| {
                 publish_first(from, to)?;
-                crate::place::rename_new(from, to)
+                rename_new(from, to)
             },
             ..self
         }
