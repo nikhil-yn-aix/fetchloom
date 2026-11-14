@@ -319,6 +319,22 @@ fn a_page_of_4_mib_is_read_and_one_byte_more_is_refused() {
     }
 }
 
+/// a page whose connection breaks before its end says the page broke, on the last of its tries.
+#[test]
+fn a_page_cut_short_names_the_page() {
+    let mut short = reply("200 OK", &[HTML], b"file and more");
+    short.truncate(short.len() - 5);
+    let (url, _) = serve(vec![short; 8]);
+    let error = download(&url.join("start").unwrap(), follow).unwrap_err();
+    assert!(
+        error
+            .message
+            .ends_with("the connection to 127.0.0.1 broke partway through the page"),
+        "{}",
+        error.message
+    );
+}
+
 /// pages, such as confirmation forms, that point on and on never become a download. both runs ask
 /// for the same four links; only what the fourth answers differs.
 #[test]

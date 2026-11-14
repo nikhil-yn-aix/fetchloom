@@ -123,6 +123,7 @@ impl Net {
             .read_body(
                 url,
                 &mut response,
+                "the answer",
                 LARGEST_ANSWER,
                 || {
                     "azure's metadata service sent more than 64 KiB where a token was expected"

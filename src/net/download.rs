@@ -1288,43 +1288,22 @@ impl Net {
     }
 
     /// reads a page a server sent instead of the file, stopping when ctrl-c is pressed.
-    async fn page(&self, url: &Url, response: reqwest::Response) -> Result<String, Failure> {
-        tokio::select! {
-            page = self.read_page(url, response) => page,
-            () = self.stop.asked() => Err(Failure::Final(failure::interrupted(url))),
-        }
-    }
-
-    async fn read_page(
-        &self,
-        url: &Url,
-        mut response: reqwest::Response,
-    ) -> Result<String, Failure> {
-        let mut page = Vec::new();
-        loop {
-            match tokio::time::timeout(self.idle, response.chunk()).await {
-                Err(_) => {
-                    return Err(failure::transient(format!(
-                        "{} sent nothing for {} s",
-                        host(url),
-                        self.idle.as_secs()
-                    )));
-                }
-                Ok(Err(err)) => return Err(failure::broke(url, "the page", &err)),
-                Ok(Ok(None)) => return Ok(String::from_utf8_lossy(&page).into_owned()),
-                Ok(Ok(Some(chunk))) => {
-                    self.throttle(url, chunk.len()).await?;
-                    Work::add(&self.work.bytes_down, chunk.len() as u64);
-                    page.extend_from_slice(&chunk);
-                    if page.len() > LARGEST_PAGE {
-                        return Err(Failure::Final(Error::new(
-                            Kind::SourceInvalid,
-                            format!("{} sent a page where the file was expected", host(url)),
-                        )));
-                    }
-                }
-            }
-        }
+    async fn page(&self, url: &Url, mut response: reqwest::Response) -> Result<String, Failure> {
+        let page = self
+            .read_body(
+                url,
+                &mut response,
+                "the page",
+                LARGEST_PAGE,
+                || format!("{} sent a page where the file was expected", host(url)),
+                |bytes| async move {
+                    self.throttle(url, bytes).await?;
+                    Work::add(&self.work.bytes_down, bytes as u64);
+                    Ok(())
+                },
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&page).into_owned())
     }
 
     /// counts a finished download, and records what it proved for later runs.

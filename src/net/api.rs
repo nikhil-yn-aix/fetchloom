@@ -431,6 +431,7 @@ impl Net {
             .read_body(
                 url,
                 &mut response,
+                "the answer",
                 LARGEST,
                 || {
                     format!(
@@ -466,11 +467,13 @@ impl Net {
 
     /// the body of `response` from `url`, of at most `most` bytes, past which it fails as
     /// `too_large` words it. each piece goes through `each` as it comes and must come within the
-    /// idle time, and the run's stop ends the read.
+    /// idle time, and the run's stop ends the read. a connection that breaks partway through
+    /// names the body `what`, such as "the answer".
     pub(super) async fn read_body<Each: Future<Output = Result<(), Failure>>>(
         &self,
         url: &Url,
         response: &mut reqwest::Response,
+        what: &str,
         most: usize,
         too_large: impl FnOnce() -> String,
         each: impl Fn(usize) -> Each,
@@ -489,7 +492,7 @@ impl Net {
                         self.idle.as_secs()
                     )));
                 }
-                Ok(Err(err)) => return Err(failure::broke(url, "the answer", &err)),
+                Ok(Err(err)) => return Err(failure::broke(url, what, &err)),
                 Ok(Ok(None)) => return Ok(body),
                 Ok(Ok(Some(chunk))) => {
                     each(chunk.len()).await?;
