@@ -239,6 +239,7 @@ fn columns_are_read_from_the_statement_that_made_the_table() {
          name TEXT, \"value\" TEXT, [host] TEXT, expiry INTEGER DEFAULT (1 + 2), \
          CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes))",
     )
+    .unwrap()
     .into_iter()
     .map(|column| (column.name, column.rowid, column.default))
     .collect();
@@ -335,7 +336,11 @@ fn a_row_older_than_a_column_reads_its_default() {
 #[test]
 fn a_broken_statement_or_row_is_refused_without_a_panic() {
     for sql in [")(", "CREATE TABLE t ) (", ")x(a TEXT", "CREATE TABLE t(a"] {
-        let read: Vec<String> = columns(sql).into_iter().map(|column| column.name).collect();
+        let read: Vec<String> = columns(sql)
+            .unwrap()
+            .into_iter()
+            .map(|column| column.name)
+            .collect();
         let expected: &[&str] = if sql.ends_with("(a") || sql.ends_with("TEXT") {
             &["a"]
         } else {
@@ -359,11 +364,51 @@ fn a_default_in_parentheses_of_any_depth_reads_without_running_out_of_stack() {
         "( ".repeat(deep),
         ") ".repeat(deep)
     );
-    let read = columns(&nested);
+    let read = columns(&nested).unwrap();
     assert_eq!(read.len(), 2);
     assert_eq!(read[0].default, Some(Value::Integer(7)));
     let unclosed = format!("CREATE TABLE t(a INTEGER DEFAULT {}7)", "(".repeat(deep));
-    assert_eq!(columns(&unclosed)[0].default, None);
+    assert_eq!(columns(&unclosed).unwrap()[0].default, None);
+}
+
+/// a table's statement of more than 1 MiB, or of more columns than SQLite lets a table have,
+/// 32,767 at its highest setting, is refused before it is taken apart: one of 128 MiB would
+/// make some 64 million columns of 6 GB.
+#[test]
+fn a_statement_of_more_bytes_or_columns_than_a_table_takes_is_refused() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("cookies.sqlite");
+    let db = written(&path, 4096, "DELETE");
+    insert(&db, 0..3);
+    let read = |sql: &str| {
+        db.execute_batch("PRAGMA writable_schema = ON").unwrap();
+        db.execute(
+            "UPDATE sqlite_master SET sql = ?1 WHERE name = 'cookies'",
+            [sql],
+        )
+        .unwrap();
+        Database::open(&path)
+            .unwrap()
+            .rows("cookies", &["name"])
+            .map(|rows| rows.len())
+    };
+    let refused = |read: Result<usize, Broken>, why: &str| {
+        assert!(
+            read.as_ref().is_err_and(|Broken(said)| said.contains(why)),
+            "{why}: {read:?}"
+        );
+    };
+    let made = "CREATE TABLE cookies (id INTEGER PRIMARY KEY, name TEXT, value TEXT, raw BLOB, \
+                number INTEGER, ratio REAL";
+    let padded = |length: usize| format!("{made}{})", " ".repeat(length - made.len() - 1));
+    assert_eq!(read(&padded(1 << 20)), Ok(3));
+    refused(read(&padded((1 << 20) + 1)), "longer");
+    let more = |count: usize| {
+        let added: Vec<String> = (0..count).map(|at| format!("c{at}")).collect();
+        format!("{made}, {})", added.join(", "))
+    };
+    assert_eq!(read(&more(32_767 - 6)), Ok(3));
+    refused(read(&more(32_768 - 6)), "columns");
 }
 
 /// SQLite's variable-length integer for `value`, as `varint` reads it.

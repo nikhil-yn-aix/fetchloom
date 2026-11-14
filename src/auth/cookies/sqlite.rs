@@ -11,6 +11,11 @@ use std::path::Path;
 const LARGEST: u64 = 256 << 20;
 /// the deepest a table's tree may go: a cookie table of millions of rows is five pages deep.
 const DEEPEST: usize = 32;
+/// the longest statement a table is read by: a browser makes its cookie table with one of a few
+/// hundred bytes, which each column it adds later lengthens by a few dozen.
+const LONGEST: usize = 1 << 20;
+/// the most columns a table may have: SQLite's own limit at its highest setting.
+const WIDEST: usize = 32_767;
 /// what a read builds for each value: a record's header holds at least a byte for each.
 const VALUE: u64 = size_of::<Value>() as u64;
 /// what a read builds for each row it hands back, beyond its values.
@@ -279,7 +284,7 @@ impl Database {
             Ok(())
         })?;
         let (root, sql) = found.ok_or_else(|| broken(format!("it has no table {table}")))?;
-        let columns = columns(&sql);
+        let columns = columns(&sql)?;
         if sql.to_ascii_lowercase().contains("without rowid") {
             return Err(broken(format!("the table {table} has no rowid")));
         }
@@ -803,14 +808,30 @@ fn find_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
 }
 
 /// the columns a `CREATE TABLE` statement names, in order.
-fn columns(sql: &str) -> Vec<Column> {
+///
+/// # Errors
+///
+/// when the statement is longer than [`LONGEST`] or names more than [`WIDEST`] columns, as no
+/// table SQLite makes does, so a crafted one costs no more than a real one to take apart.
+fn columns(sql: &str) -> Result<Vec<Column>, Broken> {
+    if sql.len() > LONGEST {
+        return Err(broken("its table's statement is longer than any browser's"));
+    }
     let Some(open) = sql.find('(') else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     // the last `)` after the first `(`, which a broken statement may hold before it
     let close = sql[open..].rfind(')').map_or(sql.len(), |at| open + at);
     let body = &sql[open + 1..close];
-    let mut parts = Vec::new();
+    let mut columns = Vec::new();
+    let mut take = |part: &str| {
+        columns.extend(column(part));
+        if columns.len() > WIDEST {
+            Err(broken("its table has more columns than SQLite allows"))
+        } else {
+            Ok(())
+        }
+    };
     let (mut depth, mut quote, mut start) = (0_usize, None, 0);
     for (at, c) in body.char_indices() {
         match (quote, c) {
@@ -820,15 +841,15 @@ fn columns(sql: &str) -> Vec<Column> {
             (None, '(') => depth += 1,
             (None, ')') => depth = depth.saturating_sub(1),
             (None, ',') if depth == 0 => {
-                parts.push(&body[start..at]);
+                take(&body[start..at])?;
                 start = at + 1;
             }
             // inside quotes, or a character that changes nothing
             _ => {}
         }
     }
-    parts.push(&body[start..]);
-    parts.into_iter().filter_map(column).collect()
+    take(&body[start..])?;
+    Ok(columns)
 }
 
 /// SQLite's running checksum of a log, over `bytes` as 32-bit words in the log's byte order.

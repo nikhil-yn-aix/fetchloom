@@ -15,9 +15,9 @@ const MOST: usize = 128 << 10;
 /// the most row bytes the reader takes for one input: past any planned table, and far short of
 /// what pages shared by many parents would make it take.
 const BUDGET: u64 = 4 << 20;
-/// the longest a planned table's statement grows to, its edits included: a crafted one nests a
-/// default a hundred thousand parentheses deep.
-const LONGEST: usize = 256 << 10;
+/// the longest a planned table's statement grows to, its edits included: a little past the
+/// longest the reader takes, so a fuzzer reaches its refusal.
+const LONGEST: usize = super::super::LONGEST + (64 << 10);
 /// the moment the browsers' readers judge expiry at.
 const NOW: u64 = 1_700_000_000;
 /// the hosts a planned cookie belongs to, the one the readers ask for among them.
