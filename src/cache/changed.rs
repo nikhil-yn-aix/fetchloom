@@ -12,7 +12,7 @@ use super::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
 use crate::place::{FolderUse, found_folder, real_folder};
-use crate::project::state::nanos;
+use crate::units::nanos;
 use crate::volume::is_plain;
 
 /// an object in doubt that could not be hashed, sealed or marked for repair.

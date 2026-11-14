@@ -396,6 +396,14 @@ pub(crate) fn timestamp(now: SystemTime) -> String {
     )
 }
 
+/// `time` as the project state and the cache record times: nanoseconds since 1970, zero before
+/// then, and capped at the largest unsigned 64-bit integer.
+pub(crate) fn nanos(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,10 +17,11 @@ use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::Project;
-use crate::project::state::{Look, State, nanos};
+use crate::project::state::{Look, State};
 use crate::settings::Level;
 use crate::stop::Stop;
 use crate::threads::Threads;
+use crate::units::nanos;
 use crate::{name, units};
 
 /// the data folder as fetchloom recorded placing it and as it is now.

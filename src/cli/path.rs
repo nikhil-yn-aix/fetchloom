@@ -470,7 +470,7 @@ mod tests {
                 method: crate::place::Method::Copy,
                 look: Look {
                     size: 4,
-                    modified: crate::project::state::nanos(stamp),
+                    modified: crate::units::nanos(stamp),
                 },
                 writable: true,
                 checked: 1,

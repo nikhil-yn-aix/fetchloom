@@ -348,7 +348,8 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style};
     use crate::project::lock::{Locked, LockedFile};
-    use crate::project::state::{Placed, State, nanos};
+    use crate::project::state::{Placed, State};
+    use crate::units::nanos;
 
     const PINNED: &[u8] = b"station,temperature\nlerwick,9.1\n";
     /// [`PINNED`] with one byte changed, as an edit that keeps the size leaves it.

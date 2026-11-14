@@ -10,7 +10,6 @@ use std::fs::Metadata;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -699,17 +698,9 @@ impl Look {
     pub(crate) fn of(metadata: &Metadata) -> Look {
         Look {
             size: metadata.len(),
-            modified: metadata.modified().map_or(0, nanos),
+            modified: metadata.modified().map_or(0, crate::units::nanos),
         }
     }
-}
-
-/// `time` as the state records times: nanoseconds since 1970, zero before then, and capped at the
-/// largest unsigned 64-bit integer.
-pub(crate) fn nanos(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
-        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-    })
 }
 
 #[cfg(test)]
