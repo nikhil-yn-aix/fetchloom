@@ -311,6 +311,25 @@ fn a_cookie_a_signed_in_site_sets_stays_with_the_site() {
     );
 }
 
+/// the run's shared jar sends a cookie only where a saved credential may go: over https, and
+/// never over plain http to a host off this machine that `allowed_origins` does not list.
+#[test]
+fn the_shared_jar_sends_nothing_over_plain_http_off_this_machine() {
+    use reqwest::cookie::CookieStore as _;
+
+    let net = net(Vec::new());
+    let cookies = &net.wire().unwrap().cookies;
+    let value = HeaderValue::from_static("sid=s-1; Path=/");
+    let url = |text: &str| Url::parse(text).unwrap();
+    cookies.set_cookies(&mut std::iter::once(&value), &url("http://mirror.lab/x"));
+    assert_eq!(cookies.cookies(&url("http://mirror.lab/y")), None);
+    assert_eq!(cookies.snapshot(&url("http://mirror.lab/y")).0, None);
+    assert_eq!(
+        cookies.cookies(&url("https://mirror.lab/y")),
+        Some(HeaderValue::from_static("sid=s-1"))
+    );
+}
+
 #[test]
 fn saved_cookies_never_follow_a_redirect_off_their_first_origin() {
     let session = Site::new(

@@ -9,6 +9,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use url::{Host, Url};
 
+use super::address::{Proxies, Typed};
 use super::{Net, Shown};
 use crate::auth::Account;
 use crate::error::{Error, Kind};
@@ -320,6 +321,23 @@ fn bare_host(url: &Url) -> String {
     }
 }
 
+/// whether a saved credential, or a cookie the run's shared jar keeps, may go with a request for
+/// `url`: over https, or over plain http to this machine or to an origin `allowed_origins` lists,
+/// a network a person vouched for, when none of `proxies` carries it. anywhere else plain http
+/// would show it to everyone on the way, and a proxy reads a plain http request whole.
+pub(super) fn carried(typed: &Typed, proxies: &Proxies, url: &Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => vouched(typed, url) && proxies.carrier(url).is_none(),
+        _ => false,
+    }
+}
+
+/// whether `url` is on this machine or an origin `allowed_origins` lists.
+fn vouched(typed: &Typed, url: &Url) -> bool {
+    is_loopback(url) || typed.allows(url)
+}
+
 /// whether `url` names this machine: a loopback address, or `localhost`.
 fn is_loopback(url: &Url) -> bool {
     match url.host() {
@@ -381,26 +399,17 @@ impl Net {
         self
     }
 
-    /// whether a saved credential may go with a request for `url`: over https, or over plain
-    /// http to this machine or to an origin `allowed_origins` lists, a network a person vouched
-    /// for, when no proxy carries it. anywhere else plain http would show the credential to
-    /// everyone on the way, and a proxy reads a plain http request whole.
+    /// whether a saved credential may go with a request for `url`, as [`carried`] judges.
     pub(super) fn carries(&self, url: &Url) -> bool {
-        match url.scheme() {
-            "https" => true,
-            "http" => {
-                self.vouched(url)
-                    && self
-                        .wire()
-                        .is_ok_and(|wire| wire.proxies.carrier(url).is_none())
-            }
-            _ => false,
-        }
+        url.scheme() == "https"
+            || self
+                .wire()
+                .is_ok_and(|wire| carried(&self.typed, &wire.proxies, url))
     }
 
     /// whether `url` is on this machine or an origin `allowed_origins` lists.
     fn vouched(&self, url: &Url) -> bool {
-        is_loopback(url) || self.typed.allows(url)
+        vouched(&self.typed, url)
     }
 
     /// the saved credential for the host and port of `url`, when one may go with a request on

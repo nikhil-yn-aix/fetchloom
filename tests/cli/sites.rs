@@ -779,6 +779,56 @@ fn a_signed_in_sites_cookies_go_back_to_it_after_a_redirect_elsewhere() -> Resul
     Ok(())
 }
 
+/// a cookie the run's shared jar keeps, as a session a host with a `.netrc` login sets, goes
+/// back only where a saved key may go: straight to this machine, but not through a proxy, which
+/// reads a plain http request whole.
+#[test]
+fn the_shared_jar_sends_nothing_where_no_key_may_go() -> Result {
+    let sandbox = Sandbox::new()?;
+    let proxy = Proxy::start()?;
+    let lab = Routes::start(vec![
+        (
+            "/first".to_owned(),
+            reply(
+                "302 Found",
+                &[
+                    ("Location", "/data.csv"),
+                    ("Set-Cookie", "sid=s-lab; Path=/"),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            ),
+        ),
+        ("/data.csv".to_owned(), file(b"a,b\n", "\"v1\"")),
+    ])?;
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", &host_of(&lab), "--with-token"]),
+        "ada:pw-lab\n",
+    )?;
+    assert!(login.status.success(), "{}", text(&login.stderr)?);
+    let link = format!("{}/first", lab.url);
+    let straight = sandbox.run(&["get", &link, "--dir", "straight"])?;
+    assert!(straight.status.success(), "{}", text(&straight.stderr)?);
+    let proxied = sandbox
+        .command(&["get", &link, "--dir", "proxied"])
+        .env("HTTP_PROXY", &proxy.url)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .output()?;
+    assert!(proxied.status.success(), "{}", text(&proxied.stderr)?);
+    assert_eq!(proxy.asked().len(), 2);
+    assert_eq!(
+        cookies_by_target(&lab),
+        [
+            ("/first".to_owned(), None),
+            ("/data.csv".to_owned(), Some("sid=s-lab".to_owned())),
+            ("/first".to_owned(), None),
+            ("/data.csv".to_owned(), None)
+        ]
+    );
+    Ok(())
+}
+
 #[test]
 fn expired_cookies_are_named_with_the_command_that_takes_them_again() -> Result {
     let sandbox = Sandbox::new()?;

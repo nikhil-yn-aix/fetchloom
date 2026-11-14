@@ -338,7 +338,7 @@ struct Wire {
     typed: address::Typed,
     offline: bool,
     connect: Duration,
-    proxies: address::Proxies,
+    proxies: Arc<address::Proxies>,
 }
 
 /// which client sends a request.
@@ -359,9 +359,11 @@ impl Wire {
         connect: Duration,
         cookies: cookies::Cookies,
     ) -> Result<Wire, Error> {
-        let proxies = address::Proxies::read(&|name| std::env::var_os(name))?;
+        let proxies = Arc::new(address::Proxies::read(&|name| std::env::var_os(name))?);
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let (by, through) = (typed.clone(), Arc::clone(&proxies));
+        let cookies = cookies.carrying(move |url| site::carried(&by, &through, url));
         Ok(Wire {
             clients: std::array::from_fn(|_| OnceLock::new()),
             cookies: Arc::new(cookies),

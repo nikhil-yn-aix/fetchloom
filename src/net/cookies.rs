@@ -8,13 +8,20 @@ use url::Url;
 /// names the site a link is on, by its host and port, when a person saved a credential for it.
 type SiteOf = Box<dyn Fn(&Url) -> Option<String> + Send + Sync>;
 
-/// the cookies this run's answers set: one jar any request draws on by cookie rules, and one of
-/// its own for each site a person saved a credential for, whose cookies, a renewed session among
-/// them, go only where that credential may, through `Net::site_headers`.
+/// whether a request for a link may carry a cookie, as `site::carried` judges.
+type Carries = Box<dyn Fn(&Url) -> bool + Send + Sync>;
+
+/// the cookies this run's answers set: one jar a request draws on by cookie rules where a saved
+/// credential may go, and one of its own for each site a person saved a credential for, whose
+/// cookies, a renewed session among them, go only where that credential may, through
+/// `Net::site_headers`.
 #[derive(Default)]
 pub(super) struct Cookies {
     state: Mutex<State>,
     site: Option<SiteOf>,
+    /// where the shared jar's cookies may go: where a saved credential may, so a session a host
+    /// with a `.netrc` login set never crosses plain http off this machine or a proxy.
+    carries: Option<Carries>,
 }
 
 #[derive(Default)]
@@ -33,12 +40,32 @@ impl Cookies {
         Cookies {
             state: Mutex::default(),
             site: Some(Box::new(site)),
+            carries: None,
         }
     }
 
+    /// the store, its shared jar sending a cookie only with a request `carries` allows.
+    pub(super) fn carrying(
+        self,
+        carries: impl Fn(&Url) -> bool + Send + Sync + 'static,
+    ) -> Cookies {
+        Cookies {
+            carries: Some(Box::new(carries)),
+            ..self
+        }
+    }
+
+    /// the shared jar's cookies for a request for `url`, when it may carry them, and how many
+    /// times the jar has changed.
     pub(super) fn snapshot(&self, url: &Url) -> (Option<HeaderValue>, u64) {
+        let carried = self.carries.as_ref().is_none_or(|carries| carries(url));
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        (state.jar.cookies(url), state.generation)
+        let cookies = if carried {
+            state.jar.cookies(url)
+        } else {
+            None
+        };
+        (cookies, state.generation)
     }
 
     /// the cookies the site named `site` set this run that go with a request for `url`.
