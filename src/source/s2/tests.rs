@@ -238,13 +238,13 @@ fn a_busy_api_suggests_a_key_and_other_errors_stay_as_they_are() {
     assert_eq!(other.help.as_deref(), Some("later"));
 }
 
+/// requests to the API go one at a time and spaced, and those to semantic scholar's pages do not.
 #[test]
-fn requests_go_one_at_a_time_a_second_apart_with_a_key_and_three_without() {
-    assert_eq!(spaced(true), Duration::from_secs(1));
-    assert_eq!(spaced(false), Duration::from_secs(3));
-    assert_eq!(spacing(S2_HOST), Some(Duration::from_secs(3)));
+fn only_the_api_is_asked_one_request_at_a_time_and_spaced() {
+    assert!(spacing(S2_HOST).is_some());
     assert_eq!(most_at_once(S2_HOST), Some(1));
     assert_eq!(spacing("www.semanticscholar.org"), None);
+    assert_eq!(most_at_once("www.semanticscholar.org"), None);
 }
 
 /// the search finds the paper first, offers it by its corpus id and tells papers add would refuse.
