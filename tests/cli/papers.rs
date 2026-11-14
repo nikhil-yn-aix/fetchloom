@@ -736,6 +736,53 @@ fn expired_links_are_asked_for_again(count: usize, jobs: &str) -> Result {
     Ok(())
 }
 
+/// a fresh link that S3 calls expired, given again once the listing is asked anew, ends the
+/// download rather than asking for ever, and says to check the clock.
+#[test]
+fn an_expired_link_given_again_fails_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let names = s2_names(1)?;
+    let (links, targets) = s2_links(&names, "PLACEHOLDER", 4_102_444_800);
+    let routes = Routes::start(vec![
+        (S2_RELEASE_AT.to_owned(), s2_json(S2_RELEASE)),
+        (S2_LINKS_AT.to_owned(), s2_json(&links)),
+        (
+            targets[0].clone(),
+            reply(
+                "403 Forbidden",
+                &[("Content-Type", "application/xml")],
+                S3_EXPIRED,
+            ),
+        ),
+    ])?;
+    let output = command(&sandbox, &routes, &["--json", "add", "s2:tldrs"])
+        .env("S2_API_KEY", S2_KEY)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.status", "{error}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "semantic scholar gave an expired link to {} of s2:tldrs@2026-11-10 again",
+            names[0]
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        "check this machine's clock, then run `fetchloom --json add s2:tldrs` again later",
+        "{error}"
+    );
+    assert_eq!(
+        asked(&routes, S2_LINKS_AT),
+        2,
+        "the listing, then once more"
+    );
+    assert_eq!(asked(&routes, &targets[0]), 1);
+    Ok(())
+}
+
 #[test]
 fn a_semantic_scholar_link_s3_calls_expired_is_asked_for_again() -> Result {
     expired_links_are_asked_for_again(1, "1")
