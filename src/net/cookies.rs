@@ -135,3 +135,33 @@ fn host_only(cookie: &HeaderValue) -> Option<HeaderValue> {
     let kept: Vec<&str> = std::iter::once(pair).chain(attributes).collect();
     HeaderValue::from_bytes(kept.join(";").as_bytes()).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// a cookie a site with a saved credential sets stays in that site's own jar, out of the
+    /// shared one, while another host's cookie goes to the shared jar for that host alone.
+    #[test]
+    fn a_saved_sites_cookies_stay_in_its_own_jar() {
+        let saved = "data.example.org";
+        let cookies =
+            Cookies::by_site(move |url| (url.host_str() == Some(saved)).then(|| saved.to_owned()));
+        let link = |text: &str| Url::parse(text).unwrap();
+        let set = |cookie: &str, url: &Url| {
+            let cookie = HeaderValue::from_str(cookie).unwrap();
+            cookies.set_cookies(&mut std::iter::once(&cookie), url);
+        };
+        let (site, other) = (
+            link("https://data.example.org/files"),
+            link("https://other.example.org/files"),
+        );
+        set("session=one; Domain=example.org; Path=/", &site);
+        set("visit=two; Domain=example.org; Path=/", &other);
+        assert_eq!(cookies.kept(saved, &site).unwrap(), "session=one");
+        assert_eq!(cookies.snapshot(&site).0, None);
+        assert_eq!(cookies.snapshot(&other).0.unwrap(), "visit=two");
+        assert_eq!(cookies.snapshot(&link("https://www.example.org/")).0, None);
+        assert_eq!(cookies.generation(), 2);
+    }
+}
