@@ -7,12 +7,12 @@ use std::fs;
 use std::process::Output;
 
 use hmac::{Hmac, KeyInit, Mac};
-use md5::Digest as _;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, percent_encode};
 use sha2::Sha256;
 
 use crate::support::{
-    Fetchloom, Part, Result, Routes, Sandbox, Server, delete, file, json, reply, text,
+    Fetchloom, Part, Result, Routes, Sandbox, Server, delete, file, hex, json, md5_hex, reply,
+    sha256_hex, text,
 };
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
@@ -35,7 +35,7 @@ pub(crate) fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> Strin
 pub(crate) fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
     let stated: Vec<(&str, String, u64)> = objects
         .iter()
-        .map(|(key, body)| (*key, md5(body), body.len() as u64))
+        .map(|(key, body)| (*key, md5_hex(body), body.len() as u64))
         .collect();
     s3_stated(&stated, next)
 }
@@ -67,15 +67,6 @@ fn s3_stated(objects: &[(&str, String, u64)], next: Option<&str>) -> Vec<Part> {
         &[("Content-Type", "application/xml")],
         xml.as_bytes(),
     )
-}
-
-pub(crate) fn md5(body: &[u8]) -> String {
-    md5::Md5::digest(body)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
 }
 
 /// a command that sends every S3 and cloud storage request to `routes`, with AWS and google
@@ -125,15 +116,15 @@ fn openneuro() -> Result<Routes> {
         ),
         (
             format!("{base}ds000001/README"),
-            file(README, &format!("\"{}\"", md5(README))),
+            file(README, &format!("\"{}\"", md5_hex(README))),
         ),
         (
             format!("{base}ds000001/participants.tsv"),
-            file(PARTICIPANTS, &format!("\"{}\"", md5(PARTICIPANTS))),
+            file(PARTICIPANTS, &format!("\"{}\"", md5_hex(PARTICIPANTS))),
         ),
         (
             format!("{base}ds000001/sub-01/func%20events.tsv"),
-            file(SCAN, &format!("\"{}\"", md5(SCAN))),
+            file(SCAN, &format!("\"{}\"", md5_hex(SCAN))),
         ),
     ])
 }
@@ -194,7 +185,7 @@ fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
     assert!(
         lock.contains(&format!(
             "md5 = \"{}\", url = \"https://s3.amazonaws.com/openneuro.org/ds000001/participants.tsv\"",
-            md5(PARTICIPANTS)
+            md5_hex(PARTICIPANTS)
         )),
         "{lock}"
     );
@@ -282,7 +273,7 @@ fn a_bucket_in_another_region_is_followed_there() -> Result {
         ),
         (
             "/sentinel-cogs.s3.us-west-2.amazonaws.com/tiles/a.tif".to_owned(),
-            file(SCAN, &format!("\"{}\"", md5(SCAN))),
+            file(SCAN, &format!("\"{}\"", md5_hex(SCAN))),
         ),
     ])?;
     let output = command(&sandbox, &routes, &["add", "s3://sentinel-cogs/tiles/"]).output()?;
@@ -364,7 +355,7 @@ fn nonempty_folder_objects_are_not_ignored() -> Result {
         ),
         (
             format!("{base}data/keep.csv"),
-            file(PARTICIPANTS, &format!("\"{}\"", md5(PARTICIPANTS))),
+            file(PARTICIPANTS, &format!("\"{}\"", md5_hex(PARTICIPANTS))),
         ),
     ])?;
     let output = command(
@@ -399,7 +390,10 @@ fn soap_objects_download_through_path_style_urls() -> Result {
     let object = "/s3.amazonaws.com/soap-bucket/soap".to_owned();
     let routes = Routes::start(vec![
         (listing.clone(), s3_page(&[("soap", SCAN)], None)),
-        (object.clone(), file(SCAN, &format!("\"{}\"", md5(SCAN)))),
+        (
+            object.clone(),
+            file(SCAN, &format!("\"{}\"", md5_hex(SCAN))),
+        ),
     ])?;
     let output = command(
         &sandbox,
@@ -490,13 +484,6 @@ fn escaped(text: &str) -> String {
     percent_encode(&bytes, UNRESERVED).to_string()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut hex, byte| {
-        let _ = write!(hex, "{byte:02x}");
-        hex
-    })
-}
-
 fn mac(key: &[u8], text: &str) -> Result<Vec<u8>> {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).map_err(|_| "no key")?;
     mac.update(text.as_bytes());
@@ -564,7 +551,7 @@ fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
     let to_sign = format!(
         "AWS4-HMAC-SHA256\n{date}\n{}\n{}",
         scope,
-        hex(&Sha256::digest(canonical.as_bytes()))
+        sha256_hex(canonical.as_bytes())
     );
     let mut signing = format!("AWS4{secret}").into_bytes();
     for part in &parts {
@@ -1327,7 +1314,7 @@ fn a_credential_process_runs_only_for_a_listed_bucket_that_refused() -> Result {
         ),
         (
             "/private-lab.s3.amazonaws.com/raw/a.csv".to_owned(),
-            file(PARTICIPANTS, &format!("\"{}\"", md5(PARTICIPANTS))),
+            file(PARTICIPANTS, &format!("\"{}\"", md5_hex(PARTICIPANTS))),
         ),
     ])?;
     let listed = profile_command(
@@ -1364,7 +1351,7 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
         ),
         (
             format!("{base}data/a.bin"),
-            file(SCAN, &format!("\"{}\"", md5(SCAN))),
+            file(SCAN, &format!("\"{}\"", md5_hex(SCAN))),
         ),
     ])?;
     let primed = command(
@@ -1374,7 +1361,7 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
     )
     .output()?;
     assert_eq!(primed.status.code(), Some(0), "{}", text(&primed.stderr)?);
-    let large = stated_bucket(base, &[("data/a.bin", md5(SCAN), (1 << 30) + 1)])?;
+    let large = stated_bucket(base, &[("data/a.bin", md5_hex(SCAN), (1 << 30) + 1)])?;
     fs::write(
         sandbox.work().join("data.toml"),
         "[datasets.data]\nref = \"s3://audit-bucket/data/\"\n",
@@ -1397,8 +1384,8 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     let routes = stated_bucket(
         base,
         &[
-            ("data/a.bin", md5(b"a"), huge),
-            ("data/b.bin", md5(b"b"), huge),
+            ("data/a.bin", md5_hex(b"a"), huge),
+            ("data/b.bin", md5_hex(b"b"), huge),
         ],
     )?;
     let listing = s3_listing(base, "data/", None);
@@ -1555,7 +1542,10 @@ fn switching_extract_needs_no_listing() -> Result {
             listing.clone(),
             s3_page(&[("shards/train.zip", &zip)], None),
         ),
-        (object.clone(), file(&zip, &format!("\"{}\"", md5(&zip)))),
+        (
+            object.clone(),
+            file(&zip, &format!("\"{}\"", md5_hex(&zip))),
+        ),
     ])?;
     let run = |args: &[&str]| command(&sandbox, &routes, args).output();
     let added = run(&[
@@ -1660,12 +1650,7 @@ fn get_output_of_a_listed_link_with_its_sha256_needs_nothing_offline() -> Result
     let sandbox = Sandbox::new()?;
     let routes = openneuro()?;
     fs::write(sandbox.work().join("p.tsv"), PARTICIPANTS)?;
-    let sha256 = Sha256::digest(PARTICIPANTS)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        });
+    let sha256 = sha256_hex(PARTICIPANTS);
     let get = [
         &["--offline", "get"][..],
         &LISTED,
@@ -1761,7 +1746,7 @@ fn speech_shards(count: usize) -> Result<Vec<(String, Vec<u8>, String)>> {
                 &format!("sample-{number}.txt"),
                 format!("sample {number}").as_bytes(),
             )?;
-            let etag = md5(&body);
+            let etag = md5_hex(&body);
             Ok((format!("shards/shard-{number:06}.tar"), body, etag))
         })
         .collect()
@@ -1839,7 +1824,7 @@ fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {
     let mut shards = speech_shards(3)?;
     let routes = speech_project(&sandbox, &shards)?;
     let changed = tar_of("sample-0.txt", b"sample 0 again")?;
-    shards[0].2 = md5(&changed);
+    shards[0].2 = md5_hex(&changed);
     shards[0].1 = changed;
     // a service that keeps the ETag of bytes whose size changed still lists the new size
     shards[1].1 = tar_of("sample-1.txt", &[b'x'; 600])?;

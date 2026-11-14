@@ -93,15 +93,7 @@ fn shared_folder_removal_keeps_the_other_dataset_and_extras() -> Result {
 /// an S3 listing of one object at `key`, with the MD5 and size of `body` as S3 states them.
 #[cfg(debug_assertions)]
 fn listing(key: &str, body: &[u8]) -> Vec<crate::support::Part> {
-    use std::fmt::Write as _;
-
-    use md5::Digest as _;
-    let md5 = md5::Md5::digest(body)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        });
+    let md5 = crate::support::md5_hex(body);
     let xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>lab</Name><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>{}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>&quot;{md5}&quot;</ETag><Size>{}</Size></Contents></ListBucketResult>",
         key.replace('/', "%2F"),

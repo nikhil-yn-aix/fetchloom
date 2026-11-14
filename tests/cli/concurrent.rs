@@ -329,8 +329,8 @@ fn of_two_first_adds_only_the_one_that_starts_the_project_says_so() -> Result {
 #[cfg(debug_assertions)]
 #[test]
 fn a_run_names_its_finished_downloads_while_its_largest_still_downloads() -> Result {
-    use crate::buckets::{md5, s3_listing, s3_page};
-    use crate::support::{Routes, wait_until};
+    use crate::buckets::{s3_listing, s3_page};
+    use crate::support::{Routes, md5_hex, wait_until};
 
     let sandbox = Sandbox::new()?;
     let keys: Vec<String> = (0..70).map(|index| format!("s/f{index:02}.bin")).collect();
@@ -344,7 +344,7 @@ fn a_run_names_its_finished_downloads_while_its_largest_still_downloads() -> Res
     for (key, body) in keys.iter().zip(&bodies) {
         routes.push((
             format!("/lab/{key}"),
-            file(body, &format!("\"{}\"", md5(body))),
+            file(body, &format!("\"{}\"", md5_hex(body))),
         ));
     }
     let small = Routes::start(routes)?;

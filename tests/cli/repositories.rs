@@ -5,7 +5,7 @@
 use std::fs;
 
 use crate::auth::with_stdin;
-use crate::buckets::md5;
+use crate::support::md5_hex;
 use crate::support::{
     Fetchloom, Part, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text,
 };
@@ -86,7 +86,7 @@ fn dryad(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
 #[test]
 fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
-    let (rows, notes) = (md5(ROWS), md5(NOTES));
+    let (rows, notes) = (md5_hex(ROWS), md5_hex(NOTES));
     let routes = dryad(&[("rows.csv", ROWS, &rows), ("notes.txt", NOTES, &notes)])?;
     let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
     let output = command(&sandbox, &routes, &["add", page, "--as", "archiving"]).output()?;
@@ -140,7 +140,7 @@ fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result
 #[test]
 fn get_downloads_a_dryad_version_into_a_folder() -> Result {
     let sandbox = Sandbox::new()?;
-    let rows = md5(ROWS);
+    let rows = md5_hex(ROWS);
     let routes = dryad(&[("rows.csv", ROWS, &rows)])?;
     let output = command(
         &sandbox,
@@ -160,7 +160,7 @@ fn get_downloads_a_dryad_version_into_a_folder() -> Result {
 #[test]
 fn bytes_that_differ_from_dryads_md5_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
-    let stated = md5(NOTES);
+    let stated = md5_hex(NOTES);
     let routes = dryad(&[("rows.csv", ROWS, &stated)])?;
     let output = command(
         &sandbox,
@@ -189,7 +189,7 @@ fn bytes_that_differ_from_dryads_md5_are_refused() -> Result {
 #[test]
 fn a_dryad_download_refused_without_a_key_says_how_to_get_one() -> Result {
     let sandbox = Sandbox::new()?;
-    let rows = md5(ROWS);
+    let rows = md5_hex(ROWS);
     let routes = dryad(&[("rows.csv", ROWS, &rows)])?;
     routes.change(vec![(
         format!("{DRYAD}/files/101/download"),
@@ -686,7 +686,7 @@ fn ena(accession: &str, runs: &[(&str, &[Served])]) -> Result<Routes> {
 #[test]
 fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
-    let reads = md5(ROWS);
+    let reads = md5_hex(ROWS);
     let routes = ena(
         "ERR1160846",
         &[("ERR1160846", &[("ERR1160846.fastq.gz", ROWS, &reads)])],
@@ -737,7 +737,7 @@ fn an_ena_run_is_pinned_with_enas_md5_and_synced_from_the_lock() -> Result {
 #[test]
 fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
-    let (one, two) = (md5(ROWS), md5(NOTES));
+    let (one, two) = (md5_hex(ROWS), md5_hex(NOTES));
     let routes = ena(
         "PRJNA172563",
         &[
@@ -773,7 +773,7 @@ fn an_ena_study_leaves_out_runs_under_controlled_access_and_says_so() -> Result 
 #[test]
 fn get_selects_one_run_of_an_ena_experiment_by_its_accession() -> Result {
     let sandbox = Sandbox::new()?;
-    let (one, two) = (md5(ROWS), md5(NOTES));
+    let (one, two) = (md5_hex(ROWS), md5_hex(NOTES));
     let routes = ena(
         "SRX079566",
         &[
@@ -808,7 +808,7 @@ fn get_selects_one_run_of_an_ena_experiment_by_its_accession() -> Result {
 #[test]
 fn bytes_that_differ_from_enas_md5_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
-    let stated = md5(NOTES);
+    let stated = md5_hex(NOTES);
     let routes = ena(
         "ERR1160846",
         &[("ERR1160846", &[("ERR1160846.fastq.gz", ROWS, &stated)])],
@@ -1031,7 +1031,7 @@ fn dandi(embargo: &str, assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
         }));
         routes.push((
             format!("/dandiarchive.s3.amazonaws.com/{blob}"),
-            file(body, &format!("\"{}\"", md5(body))),
+            file(body, &format!("\"{}\"", md5_hex(body))),
         ));
     }
     routes.push((
@@ -1213,7 +1213,7 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
         ),
         (
             OPENNEURO_SCAN.to_owned(),
-            file(scan, &format!("\"{}\"", md5(scan))),
+            file(scan, &format!("\"{}\"", md5_hex(scan))),
         ),
     ])
 }
@@ -1325,7 +1325,7 @@ fn an_upgrade_to_the_snapshot_data_lock_pins_fetches_no_file() -> Result {
 #[test]
 fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
-    let key = format!("MD5E-s{}--{}.nii.gz", ROWS.len(), md5(NOTES));
+    let key = format!("MD5E-s{}--{}.nii.gz", ROWS.len(), md5_hex(NOTES));
     let routes = openneuro(&key, ROWS)?;
     let output = openneuro_command(
         &sandbox,

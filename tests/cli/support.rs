@@ -455,12 +455,22 @@ pub(crate) fn ok(output: &Output) -> Result {
 /// the SHA-256 of `bytes` in hex, as data.lock and export write it.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
+    hex(&Sha256::digest(bytes))
+}
+
+/// the MD5 of `bytes` in hex, as an S3 `ETag` or a repository's listing states it.
+pub(crate) fn md5_hex(bytes: &[u8]) -> String {
+    use md5::Digest as _;
+    hex(&md5::Md5::digest(bytes))
+}
+
+/// `bytes` in lowercase hex.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut text = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
+    bytes.iter().fold(String::new(), |mut text, byte| {
         let _ = write!(text, "{byte:02x}");
-    }
-    text
+        text
+    })
 }
 
 /// a zip of `entries`, each a path and its bytes, with the options most tools write.

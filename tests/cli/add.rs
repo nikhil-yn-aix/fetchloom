@@ -799,25 +799,28 @@ const SEARCHED: [(&str, &[u8]); 7] = [
     ),
 ];
 
+/// one server for each catalog `add iris` searches, set on `command`, each answering `answers`
+/// times with its body; they serve as long as what this returns lives.
+#[cfg(debug_assertions)]
+fn searched(command: &mut crate::support::Fetchloom, answers: usize) -> Result<Vec<Server>> {
+    SEARCHED
+        .iter()
+        .map(|(variable, body)| {
+            let json = || reply("200 OK", &[("Content-Type", "application/json")], body);
+            let catalog = Server::start("/", (0..answers).map(|_| json()).collect())?;
+            command.env(variable, &catalog.url);
+            Ok(catalog)
+        })
+        .collect()
+}
+
 /// the search ends with nobody here to choose one, or with a ctrl-c.
 #[cfg(debug_assertions)]
 #[test]
 fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
     let sandbox = Sandbox::new()?;
-    let mut catalogs = Vec::new();
     let mut command = sandbox.command(&["add", "iris"]);
-    for (variable, body) in SEARCHED {
-        let catalog = Server::start(
-            "/",
-            vec![reply(
-                "200 OK",
-                &[("Content-Type", "application/json")],
-                body,
-            )],
-        )?;
-        command.env(variable, &catalog.url);
-        catalogs.push(catalog);
-    }
+    let _catalogs = searched(&mut command, 1)?;
     let output = command.output()?;
     assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
@@ -981,20 +984,8 @@ fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Res
 #[test]
 fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     let sandbox = Sandbox::new()?;
-    let mut catalogs = Vec::new();
     let mut command = sandbox.command(&["add", "iris"]);
-    for (variable, body) in SEARCHED {
-        let catalog = Server::start(
-            "/",
-            vec![reply(
-                "200 OK",
-                &[("Content-Type", "application/json")],
-                body,
-            )],
-        )?;
-        command.env(variable, &catalog.url);
-        catalogs.push(catalog);
-    }
+    let _catalogs = searched(&mut command, 1)?;
     let Some((code, screen)) = crate::support::typed(&sandbox.work(), &command, "", "", "q")?
     else {
         return Ok(());
@@ -1021,19 +1012,8 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
 #[test]
 fn a_cancel_at_a_question_is_no_error() -> Result {
     let sandbox = Sandbox::new()?;
-    let mut catalogs = Vec::new();
     let mut command = sandbox.command(&["add", "iris"]);
-    for (variable, body) in SEARCHED {
-        let catalog = Server::start(
-            "/",
-            vec![
-                reply("200 OK", &[("Content-Type", "application/json")], body),
-                reply("200 OK", &[("Content-Type", "application/json")], body),
-            ],
-        )?;
-        command.env(variable, &catalog.url);
-        catalogs.push(catalog);
-    }
+    let _catalogs = searched(&mut command, 2)?;
     for (keys, code) in [("q", 2), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the list as the key it reads, whenever it is typed
         let Some((exit, screen)) =
@@ -1081,14 +1061,8 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
 #[test]
 fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
     let sandbox = Sandbox::new()?;
-    let mut catalogs = Vec::new();
     let mut command = sandbox.command(&["add", "iris", "--dry-run"]);
-    for (variable, body) in SEARCHED {
-        let json = || reply("200 OK", &[("Content-Type", "application/json")], body);
-        let catalog = Server::start("/", (0..4).map(|_| json()).collect())?;
-        command.env(variable, &catalog.url);
-        catalogs.push(catalog);
-    }
+    let _catalogs = searched(&mut command, 4)?;
     command.env("FETCHLOOM_ACCESSIBLE", "1");
     let asked = "or q to cancel: ";
     let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", asked, "12\r2\r")?

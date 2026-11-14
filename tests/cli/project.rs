@@ -2778,8 +2778,9 @@ fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Res
 #[cfg(debug_assertions)]
 #[test]
 fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> Result {
-    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::buckets::{s3_listing, s3_page};
     use crate::support::Routes;
+    use crate::support::md5_hex;
 
     let sandbox = Sandbox::new()?;
     let zipped = zip_of(&[("train.csv", b"id,y\n1,0\n")])?;
@@ -2791,7 +2792,7 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     let base = "/kag-bucket.s3.amazonaws.com/";
     let mut routes = vec![(s3_listing(base, "kag/", None), s3_page(&objects, None))];
     for (key, body) in objects {
-        let etag = format!("\"{}\"", md5(body));
+        let etag = format!("\"{}\"", md5_hex(body));
         routes.push((format!("{base}{key}"), file(body, &etag)));
     }
     let routes = Routes::start(routes)?;

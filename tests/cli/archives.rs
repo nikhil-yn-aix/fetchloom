@@ -1040,8 +1040,9 @@ fn a_folder_of_shards_hints_keeping_them_packed() -> Result {
 #[cfg(debug_assertions)]
 mod shards {
     use super::{Output, Result, Sandbox, file, files_in, fs, ok, text};
-    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::buckets::{s3_listing, s3_page};
     use crate::support::Routes;
+    use crate::support::md5_hex;
 
     const LINK: &str = "s3://shard-bucket/shards/";
 
@@ -1114,7 +1115,7 @@ mod shards {
         for (key, body) in objects {
             routes.push((
                 format!("{base}{key}"),
-                file(body, &format!("\"{}\"", md5(body))),
+                file(body, &format!("\"{}\"", md5_hex(body))),
             ));
         }
         Routes::start(routes)
@@ -1601,7 +1602,8 @@ mod split {
     mod bucket {
         use super::super::{Output, ok, text};
         use super::{SCANS, Sandbox, cut, files_in, fs, scans_zip};
-        use crate::buckets::{md5, s3_listing, s3_page};
+        use crate::buckets::{s3_listing, s3_page};
+        use crate::support::md5_hex;
         use crate::support::{Result, Routes, file};
 
         const LINK: &str = "s3://split-bucket/scans/";
@@ -1622,7 +1624,7 @@ mod split {
                 for _ in 0..2 {
                     routes.push((
                         format!("{base}{key}"),
-                        file(half, &format!("\"{}\"", md5(half))),
+                        file(half, &format!("\"{}\"", md5_hex(half))),
                     ));
                 }
             }

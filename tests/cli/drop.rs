@@ -666,7 +666,8 @@ fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
 #[cfg(debug_assertions)]
 #[test]
 fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
-    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::buckets::{s3_listing, s3_page};
+    use crate::support::md5_hex;
     let sandbox = Sandbox::new()?;
     let base = "/s3.amazonaws.com/openneuro.org/";
     let objects: [(&str, &[u8]); 4] = [
@@ -679,7 +680,7 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     for (key, body) in objects {
         routes.push((
             format!("{base}{key}"),
-            file(body, &format!("\"{}\"", md5(body))),
+            file(body, &format!("\"{}\"", md5_hex(body))),
         ));
     }
     let routes = crate::support::Routes::start(routes)?;
