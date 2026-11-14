@@ -371,16 +371,6 @@ body {
 .md-nav__item--section > .md-nav__link--active {
   font-weight: 600;
 }
-.md-path {
-  font-size: var(--fl-s-1);
-  color: var(--fl-muted);
-}
-.md-path__link {
-  color: var(--fl-muted);
-}
-.md-path__link:hover {
-  color: var(--fl-accent);
-}
 
 /* the text: a serif for reading, about 66 characters a line, ragged and unhyphenated */
 .md-typeset {
@@ -510,7 +500,7 @@ body {
   background: none;
 }
 /* what a person types: commands in the accent, as fetchloom's help shows its examples */
-.md-typeset :is(.language-sh, .language-bash, .language-shell, .language-powershell) code {
+.md-typeset :is(.language-sh, .language-powershell) code {
   color: var(--fl-accent);
 }
 .md-typeset .language-console code .gp {
