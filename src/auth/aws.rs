@@ -523,7 +523,7 @@ fn endpoint(text: &str, named: &str) -> Result<url::Origin, Error> {
                 Kind::Usage,
                 format!(
                     "{named} sets the endpoint \"{}\", which is not a link such as https://minio.lab.example:9000",
-                    crate::net::mask_query(text)
+                    crate::shown::mask_query(text)
                 ),
             )
             .help("give the endpoint as a link, or unset the setting to send S3 requests to AWS")

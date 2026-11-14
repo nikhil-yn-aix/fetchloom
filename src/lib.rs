@@ -21,6 +21,7 @@ mod plan;
 mod project;
 mod recipe;
 mod settings;
+mod shown;
 mod source;
 mod space;
 mod stop;

@@ -15,7 +15,6 @@ mod rate;
 mod relink;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod roots;
-mod shown;
 pub(crate) mod sign;
 pub(crate) mod site;
 pub(crate) mod speeds;
@@ -30,6 +29,7 @@ use reqwest::header::{self, HeaderName, HeaderValue};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
+pub(crate) use crate::shown::{Shown, depends_on_path, mask_query, secret};
 pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
 #[cfg(test)]
@@ -43,7 +43,6 @@ pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_m
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, DriveAnswered, Google, Private};
 pub(crate) use rate::Rate;
-pub(crate) use shown::{Shown, depends_on_path, mask_query, secret};
 
 use self::failure::Failure;
 use crate::error::{Error, Kind};

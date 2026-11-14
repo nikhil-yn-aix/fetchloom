@@ -793,7 +793,7 @@ fn secret_link_surfaces(suffix: &str, mode: &[&str]) -> Result<Vec<(String, Vec<
     Ok(surfaces)
 }
 
-/// `net::shown::tests` holds every spelling of a secret's name; a token, a signature and a name
+/// `shown::tests` holds every spelling of a secret's name; a token, a signature and a name
 /// no list knows, as dataverse's `key`, stand for them here.
 #[test]
 fn query_secrets_stay_out_of_each_output_surface() -> Result {
