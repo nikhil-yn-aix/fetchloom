@@ -4,6 +4,7 @@ import base64
 from datetime import datetime
 import hashlib
 import html
+import math
 from pathlib import Path
 import re
 import shutil
@@ -24,9 +25,10 @@ BLOB = "https://github.com/nikhil-yn-aix/fetchloom/blob/main/"
 # loads it from unpkg on any page with a diagram unless the page brings it first
 MERMAID = ("https://registry.npmjs.org/@mermaid-js/tiny/-/tiny-12.3.0.tgz",
            "sha512-90BO2kQvmQWj9YjBX2IsLHCw61rN69dPTn5wFfDu+b9aT7qtzfzTA3wpKWeaRAKK85refSo9How5EOeY39DWfA==")
-# the pin of src/output.rs: a line each for its head, its shaft and its point, as a terminal draws
-# them, each beside its ascii
+# the pin of src/output.rs: a cell each for its head, its shaft and its point, as a terminal lays
+# them along one line, each beside its ascii
 PIN = re.compile(r"const PIN: \[\(&str, &str\); \d+\] = \[(.*?)\];", re.S)
+HEAD, SHAFT, POINT = "\u25cf", "\u2500", "\u2574"
 # a real run the home page shows: each command's transcript, the data.lock the add wrote, and the
 # hub's answers, which tests/cli/docs.rs replays to hold the transcripts to what fetchloom prints
 RECORDED = "docs-site/home"
@@ -104,42 +106,55 @@ def add_mermaid(site, cache):
 
 
 def pin(root):
-    """the lines of the pin fetchloom draws as its mark, from src/output.rs: its head, its shaft and
-    its point. ValueError when it has none, or a line the site has no shape for."""
+    """the cells of the pin fetchloom draws as its mark, from src/output.rs: its head, its shaft and
+    its point. ValueError when it has none, or a cell the site has no shape for."""
     found = PIN.search((root / "src/output.rs").read_text(encoding="utf-8"))
-    lines = re.findall(r'\("([^"]+)", "[^"]*"\)', found[1]) if found else []
-    if not lines or lines[0] != "\u25cf" or any(line not in ("\u25cf", "\u2502", "\u2575") for line in lines):
+    cells = re.findall(r'\("([^"]+)", "[^"]*"\)', found[1]) if found else []
+    if len(cells) < 3 or cells[0] != HEAD or cells[-1] != POINT or set(cells[1:-1]) != {SHAFT}:
         raise ValueError("src/output.rs has no PIN")
-    return lines
+    return cells
 
 
 def number(value):
     """``value`` as an svg writes it, with no more digits than it needs."""
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
 
 
-def drawn(lines, head, shaft, square=False, inside=""):
-    """an svg of the pin a terminal draws as ``lines``, a cell 10 units wide and 20 tall: a head
-    ``head`` units across, on a shaft ``shaft`` wide that ends in a point. ``square`` centers it in
-    a square, as a favicon."""
-    radius, half = number(head / 2), shaft / 2
-    left, width = number(5 - half), number(shaft)
-    parts = []
-    for row, line in enumerate(lines):
-        top, middle = 20 * row, 20 * row + 10
-        if line == "\u25cf":
-            # drawn clockwise, as the shaft is, so where they cross is filled rather than cut out
-            parts.append(f"M{number(5 - head / 2)} {middle}a{radius} {radius} 0 1 1 {number(head)} 0"
-                         f"a{radius} {radius} 0 1 1 {number(-head)} 0z")
-            parts.append(f"M{left} {middle}h{width}v10h-{width}z")
-        elif line == "\u2502":
-            parts.append(f"M{left} {top}h{width}v20h-{width}z")
-        else:
-            parts.append(f"M{left} {top}h{width}L5 {middle}z")
-    top = 10 - head / 2
-    height = 20 * len(lines) - 10 - top
-    across = height if square else max(head, 10)
-    box = " ".join(number(value) for value in (5 - across / 2, top, across, height))
+def drawn(cells, head, shaft, square=False, inside=""):
+    """an svg of the pin a terminal lays out as ``cells``, each 10 units long, stood up at 45 degrees
+    with its head up and to the right: a head ``head`` units across, with a crescent of light on it,
+    on a shaft ``shaft`` wide that narrows over the last half cell to its point. ``square`` sets it
+    in a square for a favicon, without the crescent, which a few pixels cannot hold: the head 7 of
+    16 pixels across and a pixel in from the top and right, so its edges meet whole pixels at 16 and
+    32 pixels."""
+    radius, length = head / 2, 10 * (len(cells) - 1)
+    along, across = (-math.sqrt(0.5), math.sqrt(0.5)), (math.sqrt(0.5), math.sqrt(0.5))
+
+    def at(distance, side):
+        return (along[0] * distance + across[0] * side, along[1] * distance + across[1] * side)
+
+    half = shaft / 2
+    # clockwise, as the head is, so where they overlap is filled rather than cut out
+    outline = [at(0, half), at(length - 5, half), at(length, 0), at(length - 5, -half), at(0, -half)]
+    parts = ["M" + "L".join(f"{number(x)} {number(y)}" for x, y in outline) + "z",
+             f"M{number(-radius)} 0a{number(radius)} {number(radius)} 0 1 1 {number(head)} 0"
+             f"a{number(radius)} {number(radius)} 0 1 1 {number(-head)} 0z"]
+    if not square:
+        # counterclockwise, so it cuts the crescent out of the head: a band on its upper left
+        outer, inner = radius * 0.72, radius * 0.52
+        ends = [(math.cos(math.radians(turn)), math.sin(math.radians(turn))) for turn in (200, 260)]
+        parts.append(f"M{number(outer * ends[1][0])} {number(outer * ends[1][1])}"
+                     f"A{number(outer)} {number(outer)} 0 0 0 {number(outer * ends[0][0])} {number(outer * ends[0][1])}"
+                     f"L{number(inner * ends[0][0])} {number(inner * ends[0][1])}"
+                     f"A{number(inner)} {number(inner)} 0 0 1 {number(inner * ends[1][0])} {number(inner * ends[1][1])}z")
+    left, top = at(length, 0)[0], -radius
+    width = radius - left
+    height = at(length, 0)[1] + radius
+    if square:
+        width = height = max(head * 16 / 7, width * 16 / 15, height * 16 / 15)
+        left, top = radius + width / 16 - width, -radius - width / 16
+    box = " ".join(number(value) for value in (left, top, width, height))
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{box}">{inside}'
             f'<path d="{"".join(parts)}"/></svg>')
 
@@ -155,16 +170,17 @@ def accents(root):
 
 
 def add_pin(root, site):
-    """the pin src/output.rs hangs beside the welcome's title, drawn from the same lines for the site:
-    pin.svg, which the stylesheet sets beside the name, and the favicon, drawn heavier, as a small
-    size of a typeface is, in the accent of the reader's colors."""
-    lines = pin(root)
+    """the pin src/output.rs lays beside the welcome's title, drawn from the same cells for the site
+    and stood up: pin.svg, which pins the home page's label, and the favicon, drawn heavier, as a
+    small size of a typeface is, in the accent of the reader's colors, which the stylesheet also
+    sets beside the site's name."""
+    cells = pin(root)
     light, dark = accents(root)
     colors = f"<style>path{{fill:{light}}}@media (prefers-color-scheme:dark){{path{{fill:{dark}}}}}</style>"
     images = site / "assets/images"
     images.mkdir(parents=True, exist_ok=True)
-    (images / "pin.svg").write_text(drawn(lines, 9, 1.6) + "\n", encoding="utf-8")
-    (images / "favicon.svg").write_text(drawn(lines, 18, 4.4, square=True, inside=colors) + "\n", encoding="utf-8")
+    (images / "pin.svg").write_text(drawn(cells, 18, 2.2) + "\n", encoding="utf-8")
+    (images / "favicon.svg").write_text(drawn(cells, 18, 3, square=True, inside=colors) + "\n", encoding="utf-8")
 
 
 def label(recorded, path):

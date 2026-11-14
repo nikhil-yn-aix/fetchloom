@@ -119,37 +119,46 @@ class Mermaid(Folder):
 
 
 class Pin(Folder):
-    def source(self, lines='("\u25cf", "o"), ("\u2502", "|"), ("\u2575", "\'")'):
-        """a repository whose src/output.rs draws a pin of ``lines``, with the site's two accents."""
+    CELLS = '("\u25cf", "o"), ("\u2500", "-"), ("\u2500", "-"), ("\u2500", "-"), ("\u2574", "-")'
+    HEAD = "M-9 0a9 9 0 1 1 18 0a9 9 0 1 1 -18 0z"
+
+    def source(self, cells=CELLS):
+        """a repository whose src/output.rs lays out a pin of ``cells``, with the site's two accents."""
         root = self.folder()
-        self.write(root / "src/output.rs", f"const PIN: [(&str, &str); 3] = [{lines}];\n")
+        self.write(root / "src/output.rs", f"const PIN: [(&str, &str); {cells.count('(')}] = [{cells}];\n")
         self.write(root / "docs-site/theme/assets/stylesheets/fetchloom.css",
-                   '[data-md-color-scheme="default"] {\n  --fl-accent: #1b6a54;\n}\n'
+                   '[data-md-color-scheme="default"] {\n  --fl-accent: #065f46;\n}\n'
                    '[data-md-color-scheme="slate"] {\n  --fl-accent: #79c9ae;\n}\n')
         return root
 
     def test_the_site_and_its_favicon_draw_the_pin_the_cli_draws(self):
         root, site = self.source(), self.folder()
         add_pin(root, site)
-        shaft = "M4.2 10h1.6v10h-1.6zM4.2 20h1.6v20h-1.6zM4.2 40h1.6L5 50z"
+        # the head's middle at the origin, the point four cells, 40 units, from it, down and to the
+        # left: 28.28 units across and down. the favicon's box is 18 * 16 / 7 units, so the head is
+        # 7 of its 16 pixels, with a pixel, 2.57 units, above and to the right of it
         self.assertEqual((site / "assets/images/pin.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 5.5 10 44.5">'
-                         f'<path d="M0.5 10a4.5 4.5 0 1 1 9 0a4.5 4.5 0 1 1 -9 0z{shaft}"/></svg>\n')
+                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-28.28 -9 37.28 37.28">'
+                         '<path d="M0.78 0.78L-23.97 25.53L-28.28 28.28L-25.53 23.97L-0.78 -0.78z'
+                         f'{self.HEAD}M-1.13 -6.38A6.48 6.48 0 0 0 -6.09 -2.22L-4.4 -1.6A4.68 4.68 0 0 1 -0.81 -4.61z"/>'
+                         '</svg>\n')
         self.assertEqual((site / "assets/images/favicon.svg").read_text(encoding="utf-8"),
-                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-19.5 1 49 49">'
-                         '<style>path{fill:#1b6a54}@media (prefers-color-scheme:dark){path{fill:#79c9ae}}</style>'
-                         '<path d="M-4 10a9 9 0 1 1 18 0a9 9 0 1 1 -18 0zM2.8 10h4.4v10h-4.4z'
-                         'M2.8 20h4.4v20h-4.4zM2.8 40h4.4L5 50z"/></svg>\n')
+                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-29.57 -11.57 41.14 41.14">'
+                         '<style>path{fill:#065f46}@media (prefers-color-scheme:dark){path{fill:#79c9ae}}</style>'
+                         f'<path d="M1.06 1.06L-23.69 25.81L-28.28 28.28L-25.81 23.69L-1.06 -1.06z{self.HEAD}"/></svg>\n')
 
     def test_a_longer_shaft_in_the_terminal_is_a_longer_pin_on_the_site(self):
-        root, site = self.source('("\u25cf", "o"), ("\u2502", "|"), ("\u2502", "|"), ("\u2575", "\'")'), self.folder()
+        root, site = self.source(self.CELLS.replace('("\u2574"', '("\u2500", "-"), ("\u2574"')), self.folder()
         add_pin(root, site)
-        self.assertIn('viewBox="0 5.5 10 64.5"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
+        self.assertIn('viewBox="-35.36 -9 44.36 44.36"', (site / "assets/images/pin.svg").read_text(encoding="utf-8"))
 
     def test_a_source_without_a_pin_is_refused(self):
-        for lines in ('("\u2502", "|"), ("\u25cf", "o")', '("\u25cf", "o"), ("#", "#")'):
-            with self.subTest(lines=lines), self.assertRaisesRegex(ValueError, "src/output.rs has no PIN"):
-                add_pin(self.source(lines), self.folder())
+        for cells in ('("\u2500", "-"), ("\u25cf", "o"), ("\u2574", "-")',
+                      '("\u25cf", "o"), ("#", "#"), ("\u2574", "-")',
+                      '("\u25cf", "o"), ("\u2500", "-"), ("\u2500", "-")',
+                      '("\u25cf", "o"), ("\u2502", "|"), ("\u2575", "\'")'):
+            with self.subTest(cells=cells), self.assertRaisesRegex(ValueError, "src/output.rs has no PIN"):
+                add_pin(self.source(cells), self.folder())
 
     def test_the_repository_draws_a_pin_the_site_can_draw(self):
         self.assertEqual(build_site.pin(build_site.ROOT)[0], "\u25cf")

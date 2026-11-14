@@ -828,24 +828,27 @@ fn hashes_on_a_line_read_apart_however_late_they_differ() {
     }
 }
 
+/// the pin lies on the name's line, with the purpose under the name, where both lines fit.
 #[test]
-fn the_pin_hangs_beside_the_name_only_where_it_fits() {
+fn the_pin_lies_beside_the_name_only_where_it_fits() {
     let purpose = "exact research data for every project";
     let title = |width, color| super::pinned_title("0.1.0", purpose, width, color, true);
-    assert_eq!(title(42, false), "");
+    assert_eq!(title(45, false), "");
     assert_eq!(
-        title(43, false),
-        format!(" \u{25cf}   fetchloom 0.1.0\n \u{2502}   {purpose}\n \u{2575}\n\n")
+        title(46, false),
+        format!(
+            " \u{25cf}\u{2500}\u{2500}\u{2500}\u{2574}  fetchloom 0.1.0\n        {purpose}\n\n"
+        )
     );
-    assert!(title(43, true).contains('\u{1b}'));
+    assert!(title(46, true).contains('\u{1b}'));
 }
 
-/// a terminal that shows only ascii gets the pin in ascii.
+/// a terminal that shows only ascii gets the pin in ascii, as wide.
 #[test]
 fn the_pin_falls_back_to_ascii() {
     assert_eq!(
         super::pinned_title("0.1.0", "exact data", 80, false, false),
-        " o   fetchloom 0.1.0\n |   exact data\n '\n\n"
+        " o----  fetchloom 0.1.0\n        exact data\n\n"
     );
 }
 

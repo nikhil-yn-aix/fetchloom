@@ -883,17 +883,18 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
     Ok(())
 }
 
-/// the pin hangs beside the name only where its lines fit and the whole welcome still fits below
+/// the pin lies beside the name only where its lines fit and the whole welcome still fits below
 /// it, and a narrow terminal gets the welcome wrapped between words.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
-    let pin = " \u{25cf}   fetchloom ";
+    let drawn = "\u{25cf}\u{2500}\u{2500}\u{2500}\u{2574}";
+    let pin = format!(" {drawn}  fetchloom ");
     let sandbox = Sandbox::new()?;
     let piped = text(&sandbox.run(&[])?.stdout)?;
     let words = |text: &str| -> Vec<String> {
         text.split_whitespace()
-            .filter(|word| !["\u{25cf}", "\u{2502}", "\u{2575}"].contains(word))
+            .filter(|word| *word != drawn)
             .map(str::to_owned)
             .collect()
     };
@@ -903,10 +904,10 @@ fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
         return Ok(());
     };
     assert_eq!(code, Some(0), "{wide}");
-    assert!(wide.contains(pin), "{wide}");
+    assert!(wide.contains(&pin), "{wide}");
     assert_eq!(words(&wide), words(&piped), "{wide}");
     let (_, narrow) = at("rows 40 cols 60")?.unwrap_or_default();
-    assert!(!narrow.contains(pin), "{narrow}");
+    assert!(!narrow.contains(&pin), "{narrow}");
     assert!(
         narrow.lines().all(|line| line.chars().count() <= 60),
         "{narrow}"
@@ -916,10 +917,10 @@ fn the_welcome_wraps_between_words_and_the_pin_shows_where_it_fits() -> Result {
         words(&piped),
         "no word is split or lost\n{narrow}"
     );
-    let (_, short) = at("rows 19 cols 120")?.unwrap_or_default();
-    assert!(!short.contains(pin), "{short}");
-    let (_, tall) = at("rows 20 cols 120")?.unwrap_or_default();
-    assert!(tall.contains(pin), "{tall}");
+    let (_, short) = at("rows 18 cols 120")?.unwrap_or_default();
+    assert!(!short.contains(&pin), "{short}");
+    let (_, tall) = at("rows 19 cols 120")?.unwrap_or_default();
+    assert!(tall.contains(&pin), "{tall}");
     Ok(())
 }
 

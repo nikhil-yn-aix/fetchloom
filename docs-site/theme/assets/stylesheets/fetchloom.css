@@ -199,17 +199,18 @@ body {
   font-weight: 600;
   letter-spacing: 0;
 }
-/* the pin the cli hangs beside its welcome, which python/build_site.py draws from src/output.rs */
+/* the pin the cli lays beside its welcome, stood up: the favicon's drawing, made for small sizes,
+   which python/build_site.py draws from src/output.rs */
 .md-header__topic:first-child .md-ellipsis::before {
   content: "";
   display: inline-block;
-  width: .5em;
-  height: 1.15em;
-  margin-right: .5em;
-  vertical-align: -.22em;
+  width: 1.2em;
+  height: 1.2em;
+  margin-right: .4em;
+  vertical-align: -.3em;
   background-color: var(--fl-accent);
-  -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
-  mask: url("../images/pin.svg") center / contain no-repeat;
+  -webkit-mask: url("../images/favicon.svg") center / contain no-repeat;
+  mask: url("../images/favicon.svg") center / contain no-repeat;
 }
 .md-header__button.md-logo,
 .md-nav__title .md-nav__button.md-logo {
@@ -680,15 +681,15 @@ body {
   content: "";
   position: absolute;
   top: calc(-1.5 * var(--fl-u));
-  left: calc(2.5 * var(--fl-u));
-  width: calc(.9 * var(--fl-u));
-  height: calc(4 * var(--fl-u));
+  left: calc(1.25 * var(--fl-u));
+  width: calc(3 * var(--fl-u));
+  height: calc(3 * var(--fl-u));
   background-color: var(--fl-accent);
   -webkit-mask: url("../images/pin.svg") center / contain no-repeat;
   mask: url("../images/pin.svg") center / contain no-repeat;
 }
 .md-typeset .fl-label-file {
-  margin: 0 0 0 calc(1.5 * var(--fl-u));
+  margin: 0;
   font-size: var(--fl-s-1);
   color: var(--fl-muted);
 }
@@ -811,9 +812,6 @@ body {
   }
   .md-typeset figure.fl-label {
     padding: calc(2 * var(--fl-u)) calc(1.25 * var(--fl-u)) calc(1.5 * var(--fl-u));
-  }
-  .md-typeset figure.fl-label::before {
-    left: calc(1.25 * var(--fl-u));
   }
   /* a phone scrolls a transcript sideways, as a terminal does, rather than stack its lines */
   .md-typeset .fl-run .fl-line {
