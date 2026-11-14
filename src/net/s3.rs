@@ -433,9 +433,9 @@ impl Bucket {
     pub(crate) fn shown(text: &str) -> String {
         match text.split_once(':') {
             Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
-                format!("{scheme}:{}", crate::shown::mask_query(rest))
+                format!("{scheme}:{}", crate::shown::mask_typed(rest))
             }
-            _ => crate::shown::mask_query(text).into_owned(),
+            _ => crate::shown::mask_typed(text),
         }
     }
 }

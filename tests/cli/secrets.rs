@@ -221,32 +221,66 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
     Ok(())
 }
 
-/// a login written into `allowed_origins` shows masked in the refusal of that entry, on stderr
-/// and in `--json`, as one in a mirror does.
+/// a login written into `allowed_origins`, after `http://`, before a host with no scheme or after
+/// `//` alone, shows masked in the refusal of that entry, from the variable or the settings file,
+/// on stderr and in `--json`, as one in a mirror does.
 #[test]
 fn a_login_written_into_allowed_origins_never_shows() -> Result {
     let sandbox = Sandbox::new()?;
-    let entry = "http://ada:CNRYoriginlogin@127.0.0.11:18081";
-    let refused = "FETCHLOOM_ALLOWED_ORIGINS holds \"http://***@127.0.0.11:18081\", which is not an origin such as http://lab.local:8080";
-    for json_asked in [false, true] {
-        let mut args = vec!["status"];
-        if json_asked {
-            args.insert(0, "--json");
-        }
-        let output = sandbox
-            .command(&args)
-            .env("FETCHLOOM_ALLOWED_ORIGINS", entry)
-            .output()?;
-        let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
-        assert_eq!(output.status.code(), Some(2), "{stderr}");
-        assert!(
-            !stdout.contains("CNRY") && !stderr.contains("CNRY"),
-            "{stdout}{stderr}"
-        );
-        if json_asked {
-            assert_eq!(json(&output)?["errors"][0]["message"], refused);
-        } else {
-            assert!(stderr.contains(refused), "{stderr}");
+    let document = json(&sandbox.run(&["--json", "settings"])?)?;
+    let file = document["result"]["file"]["path"]
+        .as_str()
+        .ok_or("settings names no file")?
+        .to_owned();
+    let entries = [
+        (
+            "http://ada:CNRYoriginlogin@127.0.0.11:18081",
+            "http://***@127.0.0.11:18081",
+        ),
+        (
+            "ada:CNRYoriginlogin@127.0.0.11:18081",
+            "***@127.0.0.11:18081",
+        ),
+        (
+            "//ada:CNRYoriginlogin@127.0.0.11:18081",
+            "***@127.0.0.11:18081",
+        ),
+    ];
+    for in_file in [false, true] {
+        for (entry, said) in entries {
+            let command = |json_asked: bool| {
+                let mut command = sandbox.command(if json_asked {
+                    &["--json", "status"][..]
+                } else {
+                    &["status"][..]
+                });
+                if !in_file {
+                    command.env("FETCHLOOM_ALLOWED_ORIGINS", entry);
+                }
+                command
+            };
+            if in_file {
+                fs::create_dir_all(std::path::Path::new(&file).parent().ok_or("no folder")?)?;
+                fs::write(&file, format!("allowed_origins = [\"{entry}\"]\n"))?;
+            }
+            for json_asked in [false, true] {
+                let output = command(json_asked).output()?;
+                let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+                assert_eq!(output.status.code(), Some(2), "{entry}: {stderr}");
+                assert!(
+                    !stdout.contains("CNRY") && !stderr.contains("CNRY"),
+                    "{stdout}{stderr}"
+                );
+                let message = if json_asked {
+                    json(&output)?["errors"][0]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                } else {
+                    stderr
+                };
+                assert!(message.contains(&format!("holds \"{said}\"")), "{message}");
+            }
         }
     }
     Ok(())

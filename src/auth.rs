@@ -199,7 +199,7 @@ impl Account {
                     Kind::Usage,
                     format!(
                         "fetchloom does not know an account called \"{}\"",
-                        masked(name).escape_debug()
+                        crate::shown::mask_typed(name).escape_debug()
                     ),
                 );
                 return Err(match meant_account(name) {
@@ -784,18 +784,6 @@ pub(crate) fn meant_account(typed: &str) -> Option<Account> {
     }
     let name = crate::name::sole_closest(&lowered, TYPED_NAMES)?;
     Account::parse(name, None).ok()
-}
-
-/// `typed` as a refusal shows it: a link's login and query values masked, as
-/// [`crate::shown::mask_query`] masks them, and so is whatever comes before an `@` without a link
-/// around it, as the password in `ada:pw@data.example.org`.
-fn masked(typed: &str) -> String {
-    let masked = crate::shown::mask_query(typed);
-    let start = masked.find("://").map_or(0, |at| at + 3);
-    match masked[start..].rfind('@') {
-        Some(at) => format!("{}***{}", &masked[..start], &masked[start + at..]),
-        None => masked.into_owned(),
-    }
 }
 
 /// a dataverse installation as its account names it, from what a person typed: the host, with

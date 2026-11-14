@@ -140,6 +140,18 @@ pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
     Cow::Borrowed(text)
 }
 
+/// `typed`, a link or a word a person typed, as a refusal shows it: a link's login and query values
+/// masked, as [`mask_query`] masks them, and so is whatever comes before an `@` without a link
+/// around it, as the password in `ada:pw@data.example.org` or `//ada:pw@lab.local`.
+pub(crate) fn mask_typed(typed: &str) -> String {
+    let masked = mask_query(typed);
+    let start = masked.find("://").map_or(0, |at| at + 3);
+    match masked[start..].rfind('@') {
+        Some(at) => format!("{}***{}", &masked[..start], &masked[start + at..]),
+        None => masked.into_owned(),
+    }
+}
+
 fn mask_normalized(text: &str) -> Option<String> {
     // URL parsing removes these characters, even from the scheme or authority
     let normalized = if text.contains(['\t', '\r', '\n']) {

@@ -1067,3 +1067,64 @@ fn push_to_a_web_address_is_a_usage_error() {
         Some("write the folder path itself, or remove push_to from the settings file")
     );
 }
+
+/// a login written before a host with no scheme, as `u:pw@host` or `//u:pw@host`, shows masked in
+/// each refusal of an entry, from the variable or the settings file, as one after `http://` does.
+#[test]
+fn a_login_without_a_scheme_shows_masked_in_every_refusal() {
+    let login = |text: &str| format!("ada:CNRYsecret@{text}");
+    let mut shown = Vec::new();
+    for (key, variable, entry) in [
+        (
+            "allowed_origins",
+            "FETCHLOOM_ALLOWED_ORIGINS",
+            login("127.0.0.11:18081"),
+        ),
+        (
+            "allowed_origins",
+            "FETCHLOOM_ALLOWED_ORIGINS",
+            format!("//{}", login("127.0.0.11:18081")),
+        ),
+        (
+            "s3_buckets",
+            "FETCHLOOM_S3_BUCKETS",
+            format!("s3:{}", login("minio.lab/scans")),
+        ),
+        ("gcs_buckets", "FETCHLOOM_GCS_BUCKETS", login("lab-raw")),
+        (
+            "azure_containers",
+            "FETCHLOOM_AZURE_CONTAINERS",
+            login("lab/raw"),
+        ),
+        ("drive_folders", "FETCHLOOM_DRIVE_FOLDERS", login("folder")),
+        (
+            "mirrors",
+            "FETCHLOOM_MIRRORS",
+            format!("sftp://{}", login("lab.example/fetchloom")),
+        ),
+        (
+            "push_to",
+            "FETCHLOOM_PUSH_TO",
+            format!("sftp://{}", login("lab.example/fetchloom")),
+        ),
+    ] {
+        let listed = if key == "mirrors" || key.ends_with('s') {
+            format!("{key} = [\"{entry}\"]\n")
+        } else {
+            format!("{key} = \"{entry}\"\n")
+        };
+        let refusals = [
+            read(&[(variable, entry.as_str())], None),
+            Settings::read(&env(&[]), file(&listed).unwrap(), machine(None)),
+        ];
+        for refused in refusals {
+            let Err(error) = refused else {
+                panic!("{key} took {entry}");
+            };
+            if error.message.contains("CNRY") || !error.message.contains("***@") {
+                shown.push(error.message);
+            }
+        }
+    }
+    assert!(shown.is_empty(), "{shown:#?}");
+}
