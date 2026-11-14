@@ -861,7 +861,8 @@ impl Net {
         if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
             return Ok(Answer::NotModified);
         }
-        let Some(offset) = starting_offset(from, status, &head, earlier.as_ref(), &validators)?
+        let Some(offset) =
+            self.starting_offset(from, status, &head, earlier.as_ref(), &validators)?
         else {
             return Ok(Answer::StartOver);
         };
@@ -1070,7 +1071,7 @@ impl Net {
                     host(from)
                 )));
             }
-            return Err(failure::refusal(from, status, &head));
+            return Err(self.status_refusal(from, status, &head));
         }
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && let Some(error) = self.refused(from, response.url(), status, response.headers())
@@ -1080,7 +1081,7 @@ impl Net {
         // a source's link keeps its source's own refusal, whatever host refused it
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && response.url().origin() != from.origin()
-            && crate::source::refused_download(from, status.as_u16()).is_none()
+            && (self.rules.refused_download)(from, status.as_u16()).is_none()
             && crate::account::Account::from_host(&host(from).to_ascii_lowercase()).is_none()
         {
             let carried = response.extensions().get::<super::site::Sent>().is_some();
@@ -1432,37 +1433,40 @@ fn answered(
     validators
 }
 
-/// accepts a full body or a range that continues the same representation at the saved offset.
-fn starting_offset(
-    from: &Url,
-    status: StatusCode,
-    head: &header::HeaderMap,
-    earlier: Option<&(u64, Validators)>,
-    validators: &Validators,
-) -> Result<Option<u64>, Failure> {
-    match status {
-        StatusCode::OK => Ok(Some(0)),
-        // a server that ignores If-Range sends the rest of whatever version it holds now
-        StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
-            (Some((received, recorded)), Some(start))
-                if start == *received && !headers::changed(recorded, validators) =>
-            {
-                Ok(Some(*received))
-            }
-            (Some(_), _) => Ok(None),
-            // a range nobody asked for is the file only when it runs from the first byte to the
-            // stated last; anything else would be asked for again and again, or kept short
-            (None, Some(0))
-                if headers::total_length(head, status)
-                    .zip(headers::range_end(head))
-                    .is_some_and(|(total, end)| end.checked_add(1) == Some(total)) =>
-            {
-                Ok(Some(0))
-            }
-            (None, _) => Err(failure::refusal(from, status, head)),
-        },
-        StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),
-        status => Err(failure::refusal(from, status, head)),
+impl Net {
+    /// accepts a full body or a range that continues the same representation at the saved offset.
+    fn starting_offset(
+        &self,
+        from: &Url,
+        status: StatusCode,
+        head: &header::HeaderMap,
+        earlier: Option<&(u64, Validators)>,
+        validators: &Validators,
+    ) -> Result<Option<u64>, Failure> {
+        match status {
+            StatusCode::OK => Ok(Some(0)),
+            // a server that ignores If-Range sends the rest of whatever version it holds now
+            StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
+                (Some((received, recorded)), Some(start))
+                    if start == *received && !headers::changed(recorded, validators) =>
+                {
+                    Ok(Some(*received))
+                }
+                (Some(_), _) => Ok(None),
+                // a range nobody asked for is the file only when it runs from the first byte to the
+                // stated last; anything else would be asked for again and again, or kept short
+                (None, Some(0))
+                    if headers::total_length(head, status)
+                        .zip(headers::range_end(head))
+                        .is_some_and(|(total, end)| end.checked_add(1) == Some(total)) =>
+                {
+                    Ok(Some(0))
+                }
+                (None, _) => Err(self.status_refusal(from, status, head)),
+            },
+            StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),
+            status => Err(self.status_refusal(from, status, head)),
+        }
     }
 }
 

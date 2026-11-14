@@ -601,7 +601,7 @@ impl Net {
             StatusCode::OK if changed => Err(Ended::Changed),
             StatusCode::RANGE_NOT_SATISFIABLE => Err(Ended::Changed),
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => Err(Ended::NoRanges),
-            status => Err(Ended::Failed(failure::refusal(job.from, status, head))),
+            status => Err(Ended::Failed(self.status_refusal(job.from, status, head))),
         }
     }
 

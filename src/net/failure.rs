@@ -271,6 +271,21 @@ impl<'a> Retry<'a> {
 }
 
 impl Net {
+    /// [`refusal`], in the source's own words for a download it refused.
+    pub(super) fn status_refusal(
+        &self,
+        url: &Url,
+        status: StatusCode,
+        headers: &HeaderMap,
+    ) -> Failure {
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && let Some(error) = (self.rules.refused_download)(url, status.as_u16())
+        {
+            return Failure::Final(error);
+        }
+        refusal(url, status, headers)
+    }
+
     /// how often a request that stops making progress is tried again, as `FETCHLOOM_RETRIES`
     /// sets it.
     pub(crate) fn with_retries(mut self, retries: u32) -> Net {
@@ -368,11 +383,6 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             retry_after: retry_after(headers),
             unreachable: false,
         };
-    }
-    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-        && let Some(error) = crate::source::refused_download(url, code)
-    {
-        return Failure::Final(error);
     }
     let error = match status {
         StatusCode::NOT_FOUND | StatusCode::GONE => Error::new(
