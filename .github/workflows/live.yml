@@ -5,8 +5,7 @@ on:
     - cron: '17 4 * * 1'
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: live
@@ -22,6 +21,8 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +42,10 @@ jobs:
           shared-key: test
           save-if: false
       - name: live Rust source checks
+        env:
+          # the workflow's own token: github answers it 1,000 requests an hour, where a runner's
+          # shared address gets 60 without one
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p target/live
           cargo test --locked -- --ignored --nocapture 2>&1 | tee target/live/rust.log
