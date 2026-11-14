@@ -10,6 +10,7 @@ use super::Context;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::Error;
+use crate::output::plain;
 use crate::plan;
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::{Lock, Locked};
@@ -507,11 +508,11 @@ fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
 /// where the row fits, else on an indented line of its own. a name too wide to stand beside the
 /// contents takes a line of its own, whole, with the rest below it.
 fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
-    let rows: Vec<(&str, String, String)> = datasets
+    let rows: Vec<(Cow<'_, str>, String, String)> = datasets
         .iter()
         .map(|dataset| {
             (
-                dataset.name.as_str(),
+                plain(&dataset.name),
                 contents(dataset, marks),
                 folder(dataset, Folders::Unusual),
             )
@@ -546,7 +547,7 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
                 lines.extend([head, format!("  {folder}")]);
             }
         } else {
-            lines.push((*name).to_owned());
+            lines.push(name.clone().into_owned());
             let rest = format!("  {contents}  {folder}");
             if folder.is_empty() {
                 lines.push(format!("  {contents}"));
@@ -579,7 +580,7 @@ fn folder(dataset: &Listed, folders: Folders) -> String {
     if !dataset.placed {
         "not placed".to_owned()
     } else if folders == Folders::All || (folders == Folders::Unusual && !dataset.usual_folder) {
-        dataset.folder.clone()
+        plain(&dataset.folder).into_owned()
     } else {
         String::new()
     }
@@ -587,11 +588,12 @@ fn folder(dataset: &Listed, folders: Folders) -> String {
 
 /// where a dataset comes from: its reference, what a recipe makes it from, or nothing.
 fn source(dataset: &Listed) -> String {
-    match (&dataset.reference, &dataset.from) {
+    let source = match (&dataset.reference, &dataset.from) {
         (Some(reference), _) => reference.clone(),
         (None, Some(from)) => format!("made from {}", from.join(", ")),
         (None, None) => String::new(),
-    }
+    };
+    plain(&source).into_owned()
 }
 
 /// the rows, aligned: the source cut in the middle to `source` columns, or left out with none,
@@ -606,14 +608,18 @@ fn columns(
     let mut rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
-            let mut row = vec![dataset.name.clone()];
+            let mut row = vec![plain(&dataset.name).into_owned()];
             if let Some(most) = source {
                 row.push(units::clip_middle(&self::source(dataset), most, marks.more));
             }
             row.extend([contents(dataset, marks), folder(dataset, folders)]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
-                row.push(units::clip(&license_shown(license), LICENSE, marks.more));
+                row.push(units::clip(
+                    &plain(&license_shown(license)),
+                    LICENSE,
+                    marks.more,
+                ));
             }
             row
         })
@@ -951,6 +957,43 @@ mod tests {
             value["license"],
             "http://creativecommons.org/licenses/by-nc-nd/4.0/"
         );
+    }
+
+    /// a license a cloned data.lock or a server gives cannot steer the terminal: every cell from
+    /// the project shows its control characters as escapes, in the table and the folded one.
+    #[test]
+    fn every_cell_shows_its_control_characters_escaped() {
+        let dataset = Listed {
+            name: "iris".to_owned(),
+            reference: Some("https://lab.example/x\u{1b}[2J".to_owned()),
+            from: None,
+            resolved: None,
+            files: Some(1),
+            bytes: Some(4551),
+            folder: "data/ir\u{9b}is".to_owned(),
+            placed: true,
+            usual_folder: false,
+            title: None,
+            license: Some("\u{1b}]0;TITLE\u{7}\u{9b}31m".to_owned()),
+            doi: None,
+            access: Some(Access::Public),
+            locked_files: None,
+            held: None,
+        };
+        let full = table(std::slice::from_ref(&dataset), None, UNICODE);
+        assert!(
+            full.ends_with("  \\u{1b}]0;TITLE\\u{7}\\u{9b}31m"),
+            "{full:?}"
+        );
+        for width in [None, Some(60), Some(24)] {
+            let shown = table(std::slice::from_ref(&dataset), width, UNICODE);
+            assert!(
+                shown
+                    .lines()
+                    .all(|line| !line.contains(crate::name::is_control)),
+                "{shown:?}"
+            );
+        }
     }
 
     /// a row still wider than the terminal once the source and the license gave way puts its

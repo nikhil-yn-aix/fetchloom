@@ -390,6 +390,23 @@ pub(crate) fn is_control(character: char) -> bool {
     character.is_control() || is_bidi_control(character)
 }
 
+/// `text` with control characters, bidi controls among them, written as escapes, so text from a
+/// server or a cloned project cannot move the cursor, recolor the terminal or reorder its words.
+pub(crate) fn escaped(text: &str) -> Cow<'_, str> {
+    if !text.contains(is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut shown = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if is_control(c) {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
+    Cow::Owned(shown)
+}
+
 /// whether a character changes the reading direction of the surrounding text.
 pub(crate) fn is_bidi_control(character: char) -> bool {
     matches!(

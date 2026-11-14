@@ -608,7 +608,7 @@ fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
 fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Error> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let read = |comments| canonical::read_only(text, comments, keep);
-    let parsed = match read(false).or_else(|| read(true)) {
+    let mut parsed = match read(false).or_else(|| read(true)) {
         Some(parsed) => parsed,
         None => parse_toml(text)?,
     };
@@ -622,7 +622,35 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
             entry.name()
         )));
     }
+    for entry in &mut parsed {
+        if let Parsed::Source(locked, _) = entry {
+            for words in [&mut locked.title, &mut locked.license, &mut locked.doi]
+                .into_iter()
+                .flatten()
+            {
+                escape_controls(words);
+            }
+        }
+    }
     Ok(parsed)
+}
+
+/// writes each control character in `words`, a title, license or doi, as its escape, but a tab
+/// or a line break, so a cloned lock's words cannot steer the terminal that shows them.
+fn escape_controls(words: &mut String) {
+    let steers = |c: char| crate::name::is_control(c) && !matches!(c, '\t' | '\n');
+    if !words.contains(steers) {
+        return;
+    }
+    let mut escaped = String::with_capacity(words.len() + 8);
+    for c in words.chars() {
+        if steers(c) {
+            escaped.extend(c.escape_default());
+        } else {
+            escaped.push(c);
+        }
+    }
+    *words = escaped;
 }
 
 /// the datasets any TOML of the lock's format gives, sorted by name, a source's files by path.
@@ -1588,6 +1616,28 @@ mod tests {
             Lock::parse(&general),
             Lock::read(&listed, root.path()),
         ]
+    }
+
+    /// a title, license or doi a cloned lock gives cannot steer the terminal that shows it: every
+    /// reader takes each control character in them, but a tab or a line break, as its escape.
+    #[test]
+    fn a_control_character_in_a_title_license_or_doi_is_read_as_its_escape() {
+        let mut lock = sample();
+        let iris = lock
+            .datasets
+            .iter_mut()
+            .find(|dataset| dataset.name == "iris")
+            .unwrap();
+        iris.title = Some("Iris\tset\n\u{1b}]0;x\u{7}".to_owned());
+        iris.license = Some("\u{9b}31mCC-BY-4.0".to_owned());
+        iris.doi = Some("10.5281/\u{202e}zenodo".to_owned());
+        for read in every_form(&lock) {
+            let read = read.unwrap();
+            let iris = read.get("iris").unwrap();
+            assert_eq!(iris.title.as_deref(), Some("Iris\tset\n\\u{1b}]0;x\\u{7}"));
+            assert_eq!(iris.license.as_deref(), Some("\\u{9b}31mCC-BY-4.0"));
+            assert_eq!(iris.doi.as_deref(), Some("10.5281/\\u{202e}zenodo"));
+        }
     }
 
     /// each reader's refusal names the key and never its value.

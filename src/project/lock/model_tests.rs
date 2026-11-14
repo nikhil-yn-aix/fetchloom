@@ -82,7 +82,11 @@ fn generated(bytes: &[u8]) -> Lock {
             Access::Terms,
             Access::Unknown,
         ][usize::from(input.byte()) % 4];
-        let mut optional = || (input.byte() & 1 != 0).then(|| input.text());
+        // a reader writes any other control character in these as its escape
+        let mut optional = || {
+            (input.byte() & 1 != 0)
+                .then(|| input.text().replace(['\r', '\0', '\u{7f}', '\u{85}'], "?"))
+        };
         let title = optional();
         let license = optional();
         let doi = optional();

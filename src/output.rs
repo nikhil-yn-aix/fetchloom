@@ -2060,20 +2060,10 @@ fn masked(secret: &str) -> String {
 }
 
 /// `text` with control characters, bidi controls among them, written as escapes, so text from a
-/// server cannot move the cursor, recolor the terminal or reorder its words.
-fn plain(text: &str) -> Cow<'_, str> {
-    if !text.contains(crate::name::is_control) {
-        return Cow::Borrowed(text);
-    }
-    let mut shown = String::with_capacity(text.len() + 8);
-    for c in text.chars() {
-        if crate::name::is_control(c) {
-            shown.extend(c.escape_default());
-        } else {
-            shown.push(c);
-        }
-    }
-    Cow::Owned(shown)
+/// server cannot move the cursor, recolor the terminal or reorder its words. a table a command
+/// lays out itself passes each cell through it before measuring.
+pub(crate) fn plain(text: &str) -> Cow<'_, str> {
+    crate::name::escaped(text)
 }
 
 /// a JSON document in pieces of at most 1 MiB: one growing buffer copies itself at each doubling,

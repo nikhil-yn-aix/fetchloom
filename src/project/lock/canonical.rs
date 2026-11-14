@@ -490,7 +490,7 @@ mod tests {
             extract: !extra,
             web_page: false,
             resolved: format!("zenodo:{name}@1"),
-            title: extra.then(|| "Iris \"classic\"\tset\nline\r\u{1f}\u{7}".to_owned()),
+            title: extra.then(|| "Iris \"classic\"\tset\nline".to_owned()),
             license: extra.then(|| "CC-BY-4.0".to_owned()),
             doi: extra.then(|| "10.5281/zenodo.3608990".to_owned()),
             access: if extra {
