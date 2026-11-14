@@ -1631,6 +1631,19 @@ pub(crate) mod tests {
             existing(&missing, 3, hashed(Ok(digest)), &digest),
             Existing::Gone
         ));
+        // something is there that cannot be read, so it is judged rather than replaced
+        for refused in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotADirectory,
+        ] {
+            assert!(
+                matches!(
+                    existing(&Err(refused.into()), 3, hashed(Ok(digest)), &digest),
+                    Existing::Changed
+                ),
+                "{refused:?}"
+            );
+        }
     }
 
     #[test]
