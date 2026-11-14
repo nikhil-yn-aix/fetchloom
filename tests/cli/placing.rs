@@ -2811,9 +2811,8 @@ fn a_kept_edit_fails_a_strict_sync_and_status_check_until_it_matches() -> Result
     Ok(())
 }
 
-/// files a sync copies rather than links need room on the disk holding the data folder, not just
-/// the cache's: exFAT links nothing, so a sync whose copies that disk cannot hold asks first,
-/// naming it, and without a person to ask places nothing; `--yes` goes on anyway.
+/// copies need room on the data folder's disk, not just the cache's: on exFAT a sync that cannot
+/// fit them asks first, naming the disk, places nothing with nobody to ask, and `--yes` goes on.
 #[cfg(debug_assertions)]
 #[test]
 fn copies_the_data_folders_disk_cannot_hold_ask_first() -> Result {

@@ -1122,9 +1122,8 @@ impl<'a> Loop<'a> {
         self.context.yes || self.roomy.load(Ordering::Relaxed)
     }
 
-    /// asks once, before anything downloads, when the cache's disk may lack room for what placing
-    /// needs, as per-download questions miss a sum too big, then when the data folder's disk may
-    /// lack room for the files placing copies there.
+    /// asks once before anything downloads when the cache's disk may lack room for all placing
+    /// needs, which per-download questions miss, then likewise for the data folder's copies.
     fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
         if self.yes() {
             return Ok(());
@@ -1190,9 +1189,8 @@ impl<'a> Loop<'a> {
         Ok(needed)
     }
 
-    /// asks, as [`Loop::ask_room`] does, when the disk holding the data folder may lack room for
-    /// the files placing copies there rather than links, where `downloads` on the same disk take
-    /// from that room too.
+    /// asks, as [`Loop::ask_room`] does, when the data folder's disk may lack room for the files
+    /// placing copies there, less what `downloads` take of it when the cache shares that disk.
     fn ask_room_to_place(&self, placing: &Placing<'_>, downloads: u64) -> Result<(), Error> {
         let clones =
             || crate::build::Staging::new(&self.cache).is_ok_and(|staging| staging.clones());

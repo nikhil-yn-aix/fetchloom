@@ -846,10 +846,8 @@ impl<'a> Placing<'a> {
         self.targets.len()
     }
 
-    /// what placing copies into the data folder rather than links to the cache at `cache` or
-    /// clones, as far as can be told before trying: every file on another disk than the cache, on
-    /// exFAT or FAT and from a read-only cache; inside a synced folder and for `copy = true`, each
-    /// file where `clones` finds the disk makes no clones. none when it copies nothing.
+    /// what placing copies rather than links to `cache` or clones, told before trying: all on
+    /// another disk, FAT, exFAT or read-only cache; synced or `copy = true` ones `clones` denies.
     pub(crate) fn copies(
         &self,
         cache: &Path,
