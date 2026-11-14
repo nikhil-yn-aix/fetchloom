@@ -393,8 +393,7 @@ fn license_shown(license: &str) -> Cow<'_, str> {
 }
 
 /// the id of the creative commons license `link` names, as `CC-BY-SA-3.0-US` for
-/// `http://creativecommons.org/licenses/by-sa/3.0/us/`, or `CC0-1.0` for its public domain
-/// dedication. none for any other text.
+/// `http://creativecommons.org/licenses/by-sa/3.0/us/` or `CC0-1.0`; none for other text.
 fn creative_commons(link: &str) -> Option<String> {
     let url = url::Url::parse(link.trim()).ok()?;
     let host = url.host_str()?;
@@ -463,11 +462,8 @@ enum Folders {
     None,
 }
 
-/// the datasets as aligned columns, one per line for `grep`. on a terminal too narrow for them all,
-/// a folder that is the usual `data/<name>` gives way first, then the source is cut in the middle,
-/// down to [`SOURCE`] columns, then the license gives way, since `--json` and `list <name>` keep
-/// it, then every folder, and only then the source. a row still too wide goes on below, as
-/// [`folded`] lays it out.
+/// the datasets in aligned columns, a line each for `grep`. a narrow terminal drops usual folders,
+/// cuts the source to [`SOURCE`], drops the license, folders, the source, then [`folded`] lays it.
 fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
     let full = columns(datasets, Some(usize::MAX), (Folders::All, true), marks);
@@ -503,10 +499,8 @@ fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     folded(datasets, width, marks)
 }
 
-/// the datasets for a terminal `width` columns wide, as search puts facts that do not fit below:
-/// each name beside its contents, aligned, and a folder other than the usual one beside them
-/// where the row fits, else on an indented line of its own. a name too wide to stand beside the
-/// contents takes a line of its own, whole, with the rest below it.
+/// the datasets at a terminal `width`, as search folds rows: each name beside its contents, and an
+/// unusual folder beside them or indented below; a name too wide takes a line, the rest below.
 fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
     let rows: Vec<(Cow<'_, str>, String, String)> = datasets
         .iter()
@@ -901,9 +895,8 @@ mod tests {
         );
     }
 
-    /// arXiv states a paper's license as creative commons' link, which `list` shows by its id,
-    /// whole, piped or not, as its heading does; other licenses show as data.lock has them, and
-    /// `--json` keeps the link.
+    /// arXiv's creative commons license links show by their id, whole, piped or not, and in the
+    /// heading; other licenses show as data.lock has them, and `--json` keeps the link.
     #[test]
     fn a_creative_commons_link_shows_as_its_id() {
         let listed = |name: &str, license: &str| Listed {

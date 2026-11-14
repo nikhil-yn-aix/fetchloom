@@ -137,9 +137,8 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     .help(help))
 }
 
-/// the refusal of `word`, written as a path, which names nothing in `here`: a typo of a near name
-/// is likelier than words to search for, and a path is never sent to a search site. `pins` says
-/// the command can import the near name, as add can.
+/// the refusal of `word`, written as a path that names nothing in `here`, never sent to a search
+/// site: a typo of a near name is likelier, which `pins` says the command can import.
 fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
     let search = format!(
         "run `fetchloom search {}` to search for these words",
@@ -361,10 +360,8 @@ async fn find(
     })
 }
 
-/// about how long `candidate` takes to download, its listed size in the files its catalog counts
-/// from the first host its source names that this machine remembers a speed for, paced as that
-/// source asks, as [`estimate::time`](crate::net::estimate::time) plans a match. none without a
-/// size or a remembered host.
+/// about how long `candidate`'s listed size takes from the first of its hosts with a remembered
+/// speed, as [`estimate::time`](crate::net::estimate::time) plans it; none without either.
 fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::estimate::Time> {
     use crate::net::estimate;
     let size = candidate.size?;
@@ -408,9 +405,8 @@ fn line(candidate: &Candidate) -> String {
     line
 }
 
-/// one candidate as a person reads it: what to type, its title and its facts, already padded
-/// into columns, and whether the facts take a line of their own under the reference, or the title
-/// does, with the facts under it.
+/// one candidate as a person reads it: what to type, its title and facts padded into columns, and
+/// whether the facts, or the title with the facts, go on a line under the reference.
 #[derive(Debug)]
 struct Shown {
     reference: String,
@@ -424,12 +420,8 @@ struct Shown {
 const TITLE_LEAST: usize = 12;
 const TITLE_MOST: usize = 52;
 
-/// each candidate as what to type, its title and its facts, in columns every row shares: title,
-/// size, download time, downloads, note, a missing cell blank and an empty column left out.
-/// hugging face titles stay blank, as the reference names the repository. in `width` columns
-/// after `lead`, downloads give way first, then a dataset's title, while a paper's author line
-/// gives way before its title; size, time and note go under the reference when they do not fit,
-/// and a paper's title goes under it when even the title alone has no room beside it.
+/// each candidate's reference, title and facts in columns all rows share, in `width` after `lead`:
+/// downloads give way first, then titles, a paper's byline before its title, the rest goes under.
 fn parts(
     output: &Output,
     candidates: &[Candidate],
@@ -564,9 +556,8 @@ fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 4]> {
         .collect()
 }
 
-/// a paper's row once titles give way to facts: its title beside the reference in the `beside`
-/// columns left there, its note under it when both do not fit, or else the title on a line of its
-/// own under the reference, cut to `under` columns.
+/// a paper's row once titles give way: its title in the `beside` columns by the reference, its note
+/// under it when both do not fit, else the title on a line below, cut to `under` columns.
 fn paper_row(
     output: &Output,
     (reference, title): (String, &str),
@@ -983,9 +974,8 @@ mod tests {
         );
     }
 
-    /// a paper is known by its title, so on a narrow terminal its author line gives way first: the
-    /// title stays beside the reference where it fits, else on a line under it, and a note add
-    /// needs, `no open-access pdf`, stays too. a wide terminal shows both.
+    /// a narrow terminal drops a paper's author line before its title, which stays beside the
+    /// reference or goes under it with a note add needs, as `no open-access pdf`; wide shows both.
     #[test]
     fn a_papers_author_line_gives_way_before_its_title() {
         let paper = |reference: &str, title: &str, byline: &str, closed: bool| Candidate {

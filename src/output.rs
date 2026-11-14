@@ -1047,9 +1047,8 @@ impl Output {
         self.asking(ask)
     }
 
-    /// what a read of the terminal stdin waits for, such as the links `-i -` reads, so a person
-    /// sees a wait for their typing, not a hang: told with `-q` too, never with `--json`, as
-    /// [`Output::read_hidden`]'s prompt is.
+    /// what a read of the terminal's stdin waits for, as `-i -`'s links, so it never looks hung:
+    /// told with `-q` too, never with `--json`, as [`Output::read_hidden`]'s prompt is.
     pub(crate) fn awaiting(&self, text: &str) {
         if !self.json {
             self.line(&plain(text));
@@ -1339,9 +1338,8 @@ impl Output {
 }
 
 impl Output {
-    /// one row of a report on stdout, as `mark` draws it on stderr, such as `Missing` and its
-    /// subject, so a pipe or a file gets the rows. they are the answer, which `-q` keeps;
-    /// `--json` prints none.
+    /// one row of a report on stdout, as `mark` draws it on stderr, so a pipe or a file gets the
+    /// rows, the answer `-q` keeps; `--json` prints none.
     pub(crate) fn report(&self, verb: &str, text: &str) {
         let Some(line) = self.report_text(verb, text) else {
             return;
@@ -1477,10 +1475,8 @@ fn write_answer(
     }
 }
 
-/// help as wide as `width`: a table row wraps under its description column, or below its name
-/// when the name takes half the width, and prose flush. a command line stays whole to copy, but
-/// at a `terminal`, which would wrap it inside a word, it goes on after a shell's continuation
-/// mark, its comment below it.
+/// help as wide as `width`: a row wraps under its description, or below a name half as wide, prose
+/// flush; a command stays whole, but at a `terminal` goes on after a continuation mark.
 pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
@@ -1548,14 +1544,12 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     out.join("\n")
 }
 
-/// fetchloom's mark: the pin's head, as a pin pushed into a sheet shows from above, beside what a
-/// terminal that shows only ascii draws instead, which is nothing. `python/build_site.py` draws
-/// the same pin from the side for the site, and holds its head to this glyph.
+/// fetchloom's mark, a pin's head seen from above, and nothing on an ascii terminal; the site's
+/// pin, drawn from the side by `python/build_site.py`, is held to this glyph.
 const PIN: (&str, &str) = ("•", "");
 
-/// the welcome's first lines and a blank line: the pin's head in the accent before the name in bold
-/// and the version, and `purpose` under the name. none when either line needs `width` columns or
-/// more.
+/// the welcome's first lines: the pin's head in the accent, the name in bold and the version, then
+/// `purpose` under the name and a blank line; none when a line needs `width` columns or more.
 pub(crate) fn pinned_title(
     version: &str,
     purpose: &str,
@@ -2060,9 +2054,8 @@ fn masked(secret: &str) -> String {
     )
 }
 
-/// `text` with control characters, bidi controls among them, written as escapes, so text from a
-/// server cannot move the cursor, recolor the terminal or reorder its words. a table a command
-/// lays out itself passes each cell through it before measuring.
+/// `text` with control characters, bidi ones too, as escapes, so a server's text cannot move the
+/// cursor, recolor or reorder words; a table a command lays out escapes each cell before measuring.
 pub(crate) fn plain(text: &str) -> Cow<'_, str> {
     crate::name::escaped(text)
 }

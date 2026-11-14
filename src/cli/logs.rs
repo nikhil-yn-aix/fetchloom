@@ -90,10 +90,8 @@ pub(super) fn start(level: Level, color: bool, var: &dyn Fn(&str) -> Option<OsSt
     }
 }
 
-/// what logs on stderr show: what `FETCHLOOM_LOG` asks when it reads as a filter, else
-/// fetchloom's debug events at `-vv`. none when neither asks for any. other crates show their
-/// warnings and errors alone whatever it asks: below that some log what fetchloom keeps out of
-/// its own log, as `cookie_store` does each cookie a server sets.
+/// what stderr logs: `FETCHLOOM_LOG` read as a filter, else debug events at `-vv`, or none. other
+/// crates log warnings and errors alone, as below that `cookie_store` logs each cookie set.
 fn filter(level: Level, var: &dyn Fn(&str) -> Option<OsString>) -> Option<Targets> {
     let asked = var("FETCHLOOM_LOG")
         .and_then(|value| value.to_str()?.parse::<Targets>().ok())
