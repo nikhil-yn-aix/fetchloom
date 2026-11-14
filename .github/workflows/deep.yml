@@ -216,6 +216,9 @@ jobs:
           MUTATION_FILE: ${{ inputs.file }}
           MUTATION_TESTS: ${{ inputs.tests }}
           MUTATION_SLICE: ${{ inputs.slice }}
+          # cargo-mutants builds a copy of the tree without .git, where build.rs finds no commit and
+          # the version test of tests=all fails the baseline; the release build names it the same way
+          FETCHLOOM_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           mkdir -p target/ci-mutants
