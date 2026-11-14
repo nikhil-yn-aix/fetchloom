@@ -35,8 +35,7 @@ pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed, holds_pinned};
 pub(crate) use partial::{
-    Claim, Partial, PartialWriter, names, open_unfollowed, read_unfollowed, set_hash_batches,
-    set_hash_workers,
+    Claim, Partial, PartialWriter, names, set_hash_batches, set_hash_workers,
 };
 #[cfg(unix)]
 pub(crate) use results::seal_captured;
@@ -48,7 +47,7 @@ pub(crate) use usage::Usage;
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
-use crate::volume::{Volume, is_plain, refuses_links};
+use crate::volume::{Volume, is_plain, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 8] = [

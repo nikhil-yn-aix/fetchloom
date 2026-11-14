@@ -10,12 +10,12 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below};
-use crate::cache::{Cache, Copied, Stored, read_unfollowed};
+use crate::cache::{Cache, Copied, Stored};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::place::Placer;
 use crate::stop::Stop;
 use crate::threads::Threads;
-use crate::volume::is_plain;
+use crate::volume::{is_plain, read_unfollowed};
 
 /// copies from or to one folder mirror running at once, so a nas is not flooded.
 const COPIES: usize = 8;

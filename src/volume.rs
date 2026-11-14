@@ -390,6 +390,82 @@ pub(crate) fn is_plain(metadata: &Metadata) -> bool {
     metadata.file_type().is_file()
 }
 
+/// opens `path` to read and write without following a link at its end, and refuses anything
+/// that is not a plain file. `create` makes a missing file.
+pub(crate) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false);
+    open_plain(path, &mut options)
+}
+
+/// shares the no-follow checks so reading an object never needs write access to its bytes.
+pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
+    open_plain(path, OpenOptions::new().read(true))
+}
+
+/// opens an object to hash it and then date it again: to read, and on windows also to set its
+/// times, which a read-only file allows. unix lets the owner set times through any handle.
+pub(crate) fn open_to_redate(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+        open_plain(
+            path,
+            OpenOptions::new().access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES),
+        )
+    }
+    #[cfg(not(windows))]
+    read_unfollowed(path)
+}
+
+fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::OFlags;
+        use std::os::unix::fs::OpenOptionsExt;
+        // a fifo must not block opening before its handle can be refused
+        options.custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits().cast_signed());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // a link opens as itself rather than as what it points at, and is refused below
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let refused = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a link or a special file, which fetchloom never reads or writes",
+                path.display()
+            ),
+        )
+    };
+    let opened = options.open(path);
+    // what unix answers when the name is a link
+    #[cfg(unix)]
+    let opened = opened.map_err(|err| {
+        if err.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) {
+            refused()
+        } else {
+            err
+        }
+    });
+    let file = opened?;
+    if is_plain(&file.metadata()?) {
+        Ok(file)
+    } else {
+        Err(refused())
+    }
+}
+
 /// `permissions` that let the file's owner write it.
 fn writable(mut permissions: Permissions) -> Permissions {
     #[cfg(unix)]

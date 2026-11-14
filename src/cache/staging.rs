@@ -8,11 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-use super::partial::open_unfollowed;
 use super::upkeep::GRACE;
 use super::{Cache, Failure, NewObject};
 use crate::place::Placer;
 use crate::stop::Stop;
+use crate::volume::open_unfollowed;
 
 const SHARDS: usize = 16;
 

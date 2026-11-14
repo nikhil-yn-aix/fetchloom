@@ -7,8 +7,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{Cache, open_unfollowed, read_unfollowed};
+use super::Cache;
 use crate::stop::Stop;
+use crate::volume::{open_unfollowed, read_unfollowed};
 
 /// the file the cache-wide lock is taken on, in the cache's root.
 const LOCK: &str = "gc.lock";

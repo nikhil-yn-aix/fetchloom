@@ -21,13 +21,12 @@ use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache::read_unfollowed;
 use crate::space::Filesystem;
 use crate::stop::Stop;
 use crate::threads::Threads;
 #[cfg(windows)]
 use crate::volume::Volume;
-use crate::volume::{crosses_volumes, is_plain, refuses_links};
+use crate::volume::{crosses_volumes, is_plain, read_unfollowed, refuses_links};
 
 /// the most threads that place files or look up objects at once, since each call waits on the
 /// disk and, on windows, the antivirus scanner: placing 10,000 files on windows took 7.5 s on

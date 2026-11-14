@@ -784,7 +784,7 @@ fn freeable(cache: &Cache, now: SystemTime, threads: Threads, stop: &Stop) -> Op
 
 /// sets the time itself, since writing an empty file again leaves its time alone on windows.
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
-    crate::cache::open_unfollowed(marker, true)?.set_modified(now)
+    crate::volume::open_unfollowed(marker, true)?.set_modified(now)
 }
 
 /// every object a registered project, or `current`, needs, as gc keeps them. it fails, as gc

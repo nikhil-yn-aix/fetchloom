@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
-use super::{Cache, Staging, Stored, partial};
+use super::{Cache, Staging, Stored};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::stop::Stop;
 use crate::volume::{Volume, is_plain};
@@ -171,7 +171,7 @@ fn opened(source: &Path, size: u64) -> Result<File, Copied> {
     if found.len() != size {
         return Err(Copied::OtherSize);
     }
-    let input = match partial::read_unfollowed(source) {
+    let input = match crate::volume::read_unfollowed(source) {
         Ok(input) => input,
         Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Err(Copied::NotPlain),
         Err(err) => return Err(Copied::Unread(err)),
@@ -355,7 +355,7 @@ impl NewObject {
             tracing::debug!(%err, "no reflink, so the bytes are copied");
             return Ok(false);
         }
-        let mut clone = partial::read_unfollowed(&self.temp.path)?;
+        let mut clone = crate::volume::read_unfollowed(&self.temp.path)?;
         let (hasher, written) = (&mut self.hasher, &mut self.written);
         each_block(&mut clone, most, Block::sized(expected), stop, |block| {
             hasher.update(block);

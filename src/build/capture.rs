@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use icu_normalizer::ComposingNormalizerBorrowed;
 
-use crate::cache::{Cache, Copied, Member, Seen, read_unfollowed};
+use crate::cache::{Cache, Copied, Member, Seen};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::name;
 use crate::place::run_all;
 use crate::stop::Stop;
 use crate::threads::Threads;
+use crate::volume::read_unfollowed;
 use crate::work::Work;
 
 /// what a step wrote that a result cannot hold, by its path in the result folder.

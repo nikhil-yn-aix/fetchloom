@@ -543,7 +543,7 @@ impl Cache {
             let Some(key) = name.strip_suffix(".lock") else {
                 continue;
             };
-            let Some(_held) = super::partial::open_unfollowed(&entry.path(), false)
+            let Some(_held) = crate::volume::open_unfollowed(&entry.path(), false)
                 .ok()
                 .and_then(|lock| super::partial::unheld(&entry.path(), lock))
             else {
@@ -825,7 +825,7 @@ fn hash(
     stop: &Stop,
     progress: &dyn Fn(u64),
 ) -> io::Result<Sha256> {
-    let mut file = super::read_unfollowed(path)?;
+    let mut file = crate::volume::read_unfollowed(path)?;
     let mut hasher = digest::Hasher::default();
     let buffer = block.get();
     loop {
@@ -1505,7 +1505,7 @@ mod tests {
         let lock = cache.partial_folder(&key).join(format!("{key}.lock"));
         fs::create_dir_all(cache.partial_folder(&key)).unwrap();
         // a run waiting for the download opens the lock, gc sweeps, then the run takes the lock
-        let opened = super::super::partial::open_unfollowed(&lock, true).unwrap();
+        let opened = crate::volume::open_unfollowed(&lock, true).unwrap();
         cache.sweep(
             &Needed::default(),
             SystemTime::now() + GRACE + Duration::from_secs(60),

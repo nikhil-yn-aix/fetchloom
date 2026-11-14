@@ -1245,7 +1245,7 @@ fn sealed(
     #[cfg(not(unix))]
     let open = |file: &Found| {
         below(&walked.root, file)?;
-        crate::cache::read_unfollowed(&file.source)
+        crate::volume::read_unfollowed(&file.source)
     };
     let staging = cache.staging().map_err(|err| {
         Error::io(

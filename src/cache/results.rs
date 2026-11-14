@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::{Cache, Member, partial, unpacked};
+use super::{Cache, Member, unpacked};
 use crate::digest::{self, Sha256};
 use crate::place::{FolderUse, real_folder};
 use crate::stop::Stop;
@@ -101,7 +101,7 @@ impl Cache {
 
     /// the result recorded at `path` as `tree`, when it is whole and this user's alone.
     fn result_in(&self, path: &Path, tree: Sha256) -> Option<Built> {
-        let file = partial::read_unfollowed(path).ok()?;
+        let file = crate::volume::read_unfollowed(path).ok()?;
         let metadata = file.metadata().ok()?;
         #[cfg(unix)]
         {
@@ -138,7 +138,7 @@ impl Cache {
         stop: &Stop,
         waiting: impl FnOnce(),
     ) -> io::Result<KeyHold> {
-        let file = partial::open_unfollowed(&self.key_folder(key)?.join("lock"), true)?;
+        let file = crate::volume::open_unfollowed(&self.key_folder(key)?.join("lock"), true)?;
         let mut waiting = Some(waiting);
         loop {
             match file.try_lock() {
@@ -206,7 +206,7 @@ impl Cache {
 #[cfg(unix)]
 pub(crate) fn seal_captured(path: &Path, seen: &Seen, flush: bool) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let file = partial::read_unfollowed(path)?;
+    let file = crate::volume::read_unfollowed(path)?;
     if Seen::of(&file.metadata()?) != *seen {
         return Err(changed(path));
     }

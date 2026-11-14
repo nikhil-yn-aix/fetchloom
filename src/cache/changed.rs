@@ -49,9 +49,9 @@ impl Cache {
         // the object is hashed, sealed and dated through one handle, so a link swapped in for its
         // name meanwhile is never sealed or dated in its place
         let opened = if writable {
-            super::open_unfollowed(&path, false)
+            crate::volume::open_unfollowed(&path, false)
         } else {
-            super::partial::open_to_redate(&path)
+            crate::volume::open_to_redate(&path)
         };
         let block = || Block::sized(metadata.len().saturating_add(1));
         let hashed = opened.and_then(|file| Ok((Sha256::of_reader(&file, block())?, file)));
@@ -406,7 +406,7 @@ fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
 /// hashes the object at `path`, which `seen` describes, against `digest`. an intact one whose time
 /// moved since sealing is dated again through the same handle, so the next use need not hash it.
 pub(super) fn vouch(path: &Path, seen: &fs::Metadata, digest: &Sha256) -> io::Result<bool> {
-    let file = super::partial::open_to_redate(path)?;
+    let file = crate::volume::open_to_redate(path)?;
     let intact = Sha256::of_reader(&file, Block::sized(seen.len().saturating_add(1)))? == *digest;
     if intact && super::object::rewritten(path, seen) {
         super::object::redate(&file, seen);

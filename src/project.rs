@@ -199,7 +199,7 @@ fn holder(path: &Path) -> Option<String> {
 
 fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
     // a cloned or planted owner could be a link to a device or a fifo, which never ends
-    let file = crate::cache::read_unfollowed(path)?;
+    let file = crate::volume::read_unfollowed(path)?;
     let modified = file.metadata()?.modified()?;
     let mut bytes = Vec::new();
     file.take(OWNER_CAP + 1).read_to_end(&mut bytes)?;
@@ -352,7 +352,7 @@ impl Project {
     /// the state file and how it looks, opened without following a link: a planted link to a
     /// device or a fifo would never end, and reads as no state at all.
     pub(crate) fn open_state(&self) -> io::Result<(fs::File, Look)> {
-        let file = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state"))?;
+        let file = crate::volume::read_unfollowed(&self.root.join(FOLDER).join("state"))?;
         let found = Look::of(&file.metadata()?);
         Ok((file, found))
     }
@@ -556,7 +556,7 @@ impl Project {
         for _ in 0..TRIES {
             let folder = self.inner()?;
             let path = folder.join("lock");
-            let file = match crate::cache::open_unfollowed(&path, true) {
+            let file = match crate::volume::open_unfollowed(&path, true) {
                 Ok(file) => file,
                 // a command that set out to start this project, and did not, removed the folder
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,

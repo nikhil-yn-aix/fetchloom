@@ -15,7 +15,7 @@ use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{find, known, locked};
 use super::sync::{Loop, Scope, place};
-use crate::cache::{Cache, read_unfollowed};
+use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
@@ -26,6 +26,7 @@ use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::source::Access;
 use crate::stop::Stop;
+use crate::volume::read_unfollowed;
 use crate::{plan, recipe, units};
 
 /// what a push did, or with `--dry-run` would do, as `--json` prints it.

@@ -156,7 +156,7 @@ fn walk(
 /// the hash and size of a file's bytes, with each CRLF made LF when the file is text: no NUL in
 /// its first [`SNIFF`] bytes, as git decides.
 fn file(path: &Path) -> io::Result<(Sha256, u64)> {
-    let mut file = crate::cache::read_unfollowed(path)?;
+    let mut file = crate::volume::read_unfollowed(path)?;
     let mut first = vec![0; SNIFF];
     let mut filled = 0;
     while filled < SNIFF {
