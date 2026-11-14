@@ -985,7 +985,7 @@ fn a_remembered_host_times_its_sites_matches() -> Result {
         assert!(rows.iter().all(|row| row.chars().count() <= 80), "{screen}");
         assert!(
             rows.iter()
-                .any(|row| row.contains(" about ") || row.contains(" a few seconds")),
+                .any(|row| row.contains(" about ") || row.contains(" under 10 s")),
             "{screen}"
         );
     }

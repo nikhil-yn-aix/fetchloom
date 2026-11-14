@@ -149,12 +149,12 @@ pub(crate) fn duration(elapsed: Duration) -> String {
     format!("{} min {:02} s", whole / 60, whole % 60)
 }
 
-/// an estimate as a person plans around it, rounded to what it can claim: `a few seconds`,
+/// an estimate as a person plans around it, rounded to what it can claim: `under 10 s`,
 /// `about 40 s`, `about 3 min`, `about 15 min`, `about 1 h 30 min`, `about 14 h`, `about 3 days`.
 pub(crate) fn about(estimate: Duration) -> String {
     let seconds = estimate.as_secs_f64();
     if seconds < 10.0 {
-        return "a few seconds".to_owned();
+        return "under 10 s".to_owned();
     }
     format!("about {}", rough(seconds, f64::round))
 }
@@ -397,8 +397,8 @@ mod tests {
     fn estimates_round_to_what_they_can_claim() {
         let about = |seconds: u64| about(Duration::from_secs(seconds));
         for (seconds, said) in [
-            (0, "a few seconds"),
-            (9, "a few seconds"),
+            (0, "under 10 s"),
+            (9, "under 10 s"),
             (10, "about 10 s"),
             (44, "about 40 s"),
             (55, "about 1 min"),

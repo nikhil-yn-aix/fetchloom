@@ -58,7 +58,7 @@ pub(crate) struct Time {
 const FLOOR_SHOWN: f64 = 60.0;
 
 impl Time {
-    /// as a person reads it, rounded: `about 3 min`, `at least 5 min`, `a few seconds`.
+    /// as a person reads it, rounded: `about 3 min`, `at least 5 min`, `under 10 s`.
     pub(crate) fn words(self) -> String {
         let took = Duration::from_secs(self.seconds);
         match self.bound {
@@ -328,7 +328,7 @@ mod tests {
         let host = known(2, 3 * MIB, 2 * MIB, A_MIB, 0.0);
         let total = Total::of(&[host], LIMITS);
         assert_eq!(total.files, 2);
-        assert_eq!(total.facts(), "3.0 MiB · a few seconds");
+        assert_eq!(total.facts(), "3.0 MiB · under 10 s");
         let unknown = Host {
             files: 3,
             bytes: MIB,

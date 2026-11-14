@@ -715,7 +715,7 @@ fn a_dry_run_times_its_downloads_once_a_host_is_known() -> Result {
         .strip_prefix("      Would download b/b.bin · 1.0 MiB · ")
         .ok_or_else(|| format!("not the new file's total: {later}"))?;
     assert!(
-        said == "a few seconds" || said.starts_with("about "),
+        said == "under 10 s" || said.starts_with("about "),
         "{later}"
     );
     let document = json(&run(&["--json", "sync", "-n"])?)?;
