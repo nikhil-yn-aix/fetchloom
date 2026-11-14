@@ -406,30 +406,44 @@ impl Net {
     /// the saved credential for the host and port of `url`, when one may go with a request on
     /// its `first_origin`.
     fn site(&self, url: &Url, first_origin: bool) -> Option<&Site> {
-        if !first_origin || !self.carries(url) {
+        if !first_origin {
+            return None;
+        }
+        self.site_of(url)
+    }
+
+    /// the website with a saved credential at the host and port of `url`, when a request may
+    /// carry what it keeps there.
+    fn site_of(&self, url: &Url) -> Option<&Site> {
+        if !self.carries(url) {
             return None;
         }
         self.sites.0.iter().find(|site| site.is_for(url))
     }
 
-    /// the headers a website's saved credential adds to a request for `url` on its
-    /// `first_origin`: its own, and a cookie header with its cookies that apply, the ones the
-    /// site set this run, which go nowhere else, and the run's shared ones for the link.
+    /// the headers a website with a saved credential adds to a request for `url`: on its
+    /// `first_origin`, its own and a cookie header with its saved cookies that apply; on any hop,
+    /// as on the way back from another origin, the cookies the site set this run that apply,
+    /// which go nowhere else, with the run's shared ones for the link.
     pub(super) fn site_headers(
         &self,
         url: &Url,
         first_origin: bool,
     ) -> Vec<(HeaderName, HeaderValue)> {
-        let Some(site) = self.site(url, first_origin) else {
+        let Some(site) = self.site_of(url) else {
             return Vec::new();
         };
-        let mut headers = site.headers.clone();
-        let now = SystemTime::now();
-        let cookies: Vec<&Cookie> = site
-            .cookies
-            .iter()
-            .filter(|cookie| cookie.applies(url, now))
-            .collect();
+        let (mut headers, cookies) = if first_origin {
+            let now = SystemTime::now();
+            let cookies: Vec<&Cookie> = site
+                .cookies
+                .iter()
+                .filter(|cookie| cookie.applies(url, now))
+                .collect();
+            (site.headers.clone(), cookies)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let jar = self.wire().ok().map(|wire| &wire.cookies);
         let kept = jar.and_then(|jar| jar.kept(&site.named(), url));
         if !cookies.is_empty() || kept.is_some() {
@@ -440,11 +454,14 @@ impl Net {
             }
         }
         // the header names only; the values are the secret
-        tracing::debug!(
-            host = site.host,
-            headers = headers.len(),
-            "sending a site's saved credential"
-        );
+        if !headers.is_empty() {
+            tracing::debug!(
+                host = site.host,
+                headers = headers.len(),
+                first_origin,
+                "sending a site's credential or the cookies it set"
+            );
+        }
         headers
     }
 

@@ -634,16 +634,21 @@ fn saved_cookies(sandbox: &Sandbox, host: &str, expires: i64) -> Result {
 
 /// the target and cookie of each request `server` took, a check that asks nothing left out.
 fn cookies_by_target(server: &Routes) -> Vec<(String, Option<String>)> {
+    by_target(server, "cookie")
+}
+
+/// the target of each request `server` took, with the value of its field `name`, lowercased.
+fn by_target(server: &Routes, name: &str) -> Vec<(String, Option<String>)> {
     server
         .requests()
         .iter()
         .filter_map(|head| {
             let target = head.lines().next()?.split(' ').nth(1)?.to_owned();
-            let cookie = head.lines().find_map(|line| {
+            let value = head.lines().find_map(|line| {
                 let (field, value) = line.split_once(':')?;
-                (field == "cookie").then(|| value.trim().to_owned())
+                (field == name).then(|| value.trim().to_owned())
             });
-            Some((target, cookie))
+            Some((target, value))
         })
         .collect()
 }
@@ -721,6 +726,55 @@ fn a_cookie_a_signed_in_site_sets_goes_only_where_its_credential_may() -> Result
             ("http://data.lab/renew".to_owned(), None),
             ("http://files.data.lab/file.csv".to_owned(), None)
         ]
+    );
+    Ok(())
+}
+
+/// the cookies a signed-in site sets go back to it after a redirect through another origin, as
+/// any cookie jar sends them, while its saved token stays on the first origin.
+#[test]
+fn a_signed_in_sites_cookies_go_back_to_it_after_a_redirect_elsewhere() -> Result {
+    let sandbox = Sandbox::new()?;
+    let moved = |location: &str, cookie: Option<&str>| {
+        let mut headers = vec![("Location", location), ("Content-Length", "0")];
+        headers.extend(cookie.map(|cookie| ("Set-Cookie", cookie)));
+        reply("302 Found", &headers, b"")
+    };
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let other = Routes::start(vec![])?;
+    site.change(vec![(
+        "/start".to_owned(),
+        moved(
+            &format!("{}/bounce", other.url),
+            Some("session=s-new; Path=/"),
+        ),
+    )]);
+    other.change(vec![(
+        "/bounce".to_owned(),
+        moved(&format!("{}/data.csv", site.url), None),
+    )]);
+    sign_in_with_token(&sandbox, &host_of(&site), "t-secret")?;
+    sandbox.allow(&other.url);
+    let output = sandbox.run(&["get", &format!("{}/start", site.url), "-o", "out.csv"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        cookies_by_target(&site),
+        [
+            ("/start".to_owned(), None),
+            ("/data.csv".to_owned(), Some("session=s-new".to_owned()))
+        ]
+    );
+    assert_eq!(
+        by_target(&site, "authorization"),
+        [
+            ("/start".to_owned(), Some("bearer t-secret".to_owned())),
+            ("/data.csv".to_owned(), None)
+        ]
+    );
+    assert_eq!(cookies_by_target(&other), [("/bounce".to_owned(), None)]);
+    assert_eq!(
+        by_target(&other, "authorization"),
+        [("/bounce".to_owned(), None)]
     );
     Ok(())
 }
