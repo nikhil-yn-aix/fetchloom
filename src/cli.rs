@@ -82,6 +82,8 @@ struct Context {
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
     /// what this machine remembers of each host's speed, and what this run's transfers add.
     speeds: net::speeds::Speeds,
+    /// how the run's downloads hash, read from its settings once, shared by every download.
+    hashing: crate::cache::Hashing,
 }
 
 /// a refusal that signing in may lift.
@@ -119,7 +121,22 @@ impl Context {
             building: None,
             lists: std::sync::Mutex::default(),
             speeds: net::speeds::Speeds::default(),
+            hashing: crate::cache::Hashing::default(),
         }
+    }
+
+    /// runs on `settings` from here on: their thread cap, how downloads hash, and what work deep
+    /// inside a run reads.
+    fn take_settings(&mut self, settings: Settings) {
+        if let Some(threads) = settings.threads {
+            self.threads = self.threads.at_most(threads.value);
+        }
+        share(&settings);
+        self.hashing = crate::cache::Hashing::new(
+            settings.hash_batches(),
+            self.threads.limit(settings.hash_workers()),
+        );
+        self.settings = settings;
     }
 
     fn wrote_lists(&self, root: &std::path::Path, written: Vec<String>) {
@@ -218,6 +235,7 @@ impl Context {
             .with_signing(signing)
             .with_google(google)
             .with_azure(azure)
+            .with_hashing(self.hashing.clone())
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value);
@@ -587,9 +605,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
 }
 
 /// hands the settings that work deep inside a run reads to it, once a run has read them.
-fn share(settings: &Settings, threads: Threads) {
-    crate::cache::set_hash_batches(settings.hash_batches());
-    crate::cache::set_hash_workers(threads.limit(settings.hash_workers()));
+fn share(settings: &Settings) {
     crate::source::set_most_files(settings.most_files.value);
     crate::project::lock::set_room(settings.machine.container_room());
     crate::archive::set_limits(settings.archive_limits());
@@ -681,13 +697,7 @@ pub(crate) fn run() -> ExitCode {
     };
     let _ = SETTINGS_FILE.set(file.clone());
     match Settings::read(&var, file, Machine::read()) {
-        Ok(settings) => {
-            if let Some(threads) = settings.threads {
-                context.threads = context.threads.at_most(threads.value);
-            }
-            share(&settings, context.threads);
-            context.settings = settings;
-        }
+        Ok(settings) => context.take_settings(settings),
         Err(error) => return finish::<()>(&context, name, Err(bypassable(error, &var)), started),
     }
     match fetch::mirrors::read(&global.mirror, &context.settings) {

@@ -31,9 +31,7 @@ pub(crate) use held::Access;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned};
-pub(crate) use partial::{
-    Claim, Partial, PartialWriter, names, set_hash_batches, set_hash_workers,
-};
+pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, names};
 #[cfg(unix)]
 pub(crate) use results::seal_captured;
 pub(crate) use results::{Built, Seen};

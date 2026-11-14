@@ -2,12 +2,11 @@
 
 use std::fs::File;
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 mod lanes;
 
 use lanes::{Input, Lane, Workers};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
@@ -16,21 +15,33 @@ use bytes::Bytes;
 use super::hash_range;
 use crate::digest::{Hasher, Md5, Sha256};
 
-/// how many batches a download queues for its hash worker unless [`set_batches`] says otherwise.
+/// how many batches a download queues for its hash worker unless its [`Hashing`] says otherwise.
 const QUEUED: usize = 16;
-/// the batches each download queues, which the run's memory budget sets once it is read.
-static BATCHES: AtomicUsize = AtomicUsize::new(QUEUED);
 
-/// sets how many batches each download queues for its hash worker, for every later download.
-pub(crate) fn set_batches(batches: usize) {
-    BATCHES.store(batches.max(1), Ordering::Relaxed);
+/// how a run's downloads hash, as its settings give it: the batches each download queues for its
+/// hash worker, and the processors their extra checksum lanes share. clones share those
+/// processors, so one value serves every download of a run.
+#[derive(Clone)]
+pub(crate) struct Hashing {
+    batches: usize,
+    workers: Arc<Workers>,
 }
 
-static WORKERS: OnceLock<Arc<Workers>> = OnceLock::new();
+impl Hashing {
+    /// `batches` queued by each download, at least one, and `workers` processors for every
+    /// download's extra lanes, inside the caller's thread cap.
+    pub(crate) fn new(batches: usize, workers: usize) -> Hashing {
+        Hashing {
+            batches: batches.max(1),
+            workers: Arc::new(Workers::new(workers)),
+        }
+    }
+}
 
-/// sets the CPU budget for additional checksum lanes, inside the caller's thread cap.
-pub(crate) fn set_workers(workers: usize) {
-    let _ = WORKERS.set(Arc::new(Workers::new(workers)));
+impl Default for Hashing {
+    fn default() -> Hashing {
+        Hashing::new(QUEUED, 1)
+    }
 }
 
 #[derive(Clone)]
@@ -40,9 +51,9 @@ struct Policy {
 }
 
 impl Policy {
-    fn current() -> Policy {
+    fn of(hashing: &Hashing) -> Policy {
         Policy {
-            workers: Arc::clone(WORKERS.get_or_init(|| Arc::new(Workers::new(1)))),
+            workers: Arc::clone(&hashing.workers),
             start: lanes::spawn,
         }
     }
@@ -95,17 +106,33 @@ struct Inline {
 }
 
 impl HashPipe {
-    pub(super) fn new(hasher: Hasher, file: Arc<File>, received: u64) -> io::Result<Self> {
-        Self::with_policy(hasher, file, received, Policy::current())
+    pub(super) fn new(
+        hasher: Hasher,
+        file: Arc<File>,
+        received: u64,
+        hashing: &Hashing,
+    ) -> io::Result<Self> {
+        Self::queued(hasher, file, received, hashing.batches, Policy::of(hashing))
     }
 
+    #[cfg(test)]
     fn with_policy(
         hasher: Hasher,
         file: Arc<File>,
         received: u64,
         policy: Policy,
     ) -> io::Result<Self> {
-        let (sender, inbox) = mpsc::sync_channel(BATCHES.load(Ordering::Relaxed));
+        Self::queued(hasher, file, received, QUEUED, policy)
+    }
+
+    fn queued(
+        hasher: Hasher,
+        file: Arc<File>,
+        received: u64,
+        batches: usize,
+        policy: Policy,
+    ) -> io::Result<Self> {
+        let (sender, inbox) = mpsc::sync_channel(batches);
         let worker = thread::Builder::new()
             .name("fetchloom-hash".to_owned())
             .spawn(move || hash(&file, hasher, received, &inbox, &policy))?;

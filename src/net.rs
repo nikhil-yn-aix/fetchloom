@@ -246,6 +246,8 @@ pub(crate) struct Net {
     credentials: LazyLock<Vec<Key>, Box<dyn FnOnce() -> Vec<Key> + Send>>,
     /// the tokens, headers and cookies people saved for websites, looked for as `credentials`.
     sites: site::Sites,
+    /// how each download hashes its bytes, which the run's settings give.
+    hashing: crate::cache::Hashing,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: crate::source::Signing,
     /// which requests to cloud storage buckets carry a google token.
@@ -451,6 +453,7 @@ impl Net {
             typed: address::Typed::default(),
             credentials: LazyLock::new(Box::new(move || keys(given))),
             sites: site::Sites::default(),
+            hashing: crate::cache::Hashing::default(),
             signing: crate::source::Signing::default(),
             google: Google::default(),
             azure: Azure::default(),
@@ -512,6 +515,12 @@ impl Net {
     /// each alone: another port or scheme of its host is trusted no more than a host in data.toml.
     pub(crate) fn trust(&self, origins: impl IntoIterator<Item = url::Origin>) {
         self.typed.allow(origins);
+    }
+
+    /// hashes each download as `hashing` says, the run's batches and checksum processors.
+    pub(crate) fn with_hashing(mut self, hashing: crate::cache::Hashing) -> Net {
+        self.hashing = hashing;
+        self
     }
 
     /// signs requests for the S3 buckets `signing` lists, once S3 refused them without a key.

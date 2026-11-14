@@ -356,6 +356,7 @@ struct Body {
     md5: bool,
     /// keep the ranges an earlier split download finished past `offset`.
     keep: bool,
+    hashing: crate::cache::Hashing,
 }
 
 trait Chunks: Send {
@@ -857,6 +858,7 @@ impl Net {
             validators: validators.clone(),
             md5: fetch.expect.needs_md5(),
             keep: splits && status == StatusCode::PARTIAL_CONTENT && earlier.is_some(),
+            hashing: self.hashing.clone(),
         };
         let Some(writer) = open(partial, body).await? else {
             return Ok(Answer::StartOver);
@@ -1610,12 +1612,14 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
         validators,
         md5,
         keep,
+        hashing,
     } = body;
     let partial = partial.clone();
-    let opened =
-        tokio::task::spawn_blocking(move || partial.writer(offset, total, validators, md5, keep))
-            .await
-            .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
+    let opened = tokio::task::spawn_blocking(move || {
+        partial.writer_with(offset, total, validators, md5, keep, &hashing)
+    })
+    .await
+    .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;
     match opened {
         Ok(writer) => Ok(Some(writer)),
         Err(err) if err.kind() == io::ErrorKind::InvalidData => {

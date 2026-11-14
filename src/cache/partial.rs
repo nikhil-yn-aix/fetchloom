@@ -18,7 +18,7 @@ use crate::volume::{is_plain, open_unfollowed};
 
 mod hashing;
 
-pub(crate) use hashing::{set_batches as set_hash_batches, set_workers as set_hash_workers};
+pub(crate) use hashing::Hashing;
 
 use hashing::HashPipe;
 
@@ -239,14 +239,16 @@ impl Partial {
     /// writes from byte `offset` on, after hashing the bytes before it again, which fail with
     /// [`io::ErrorKind::InvalidData`] when they no longer hash as recorded or may not be continued.
     /// bytes past it are cut unless `keep` keeps a split download's ranges that still hash as
-    /// recorded. `md5` also computes the MD5, to check one a source stated.
-    pub(crate) fn writer(
+    /// recorded. `md5` also computes the MD5, to check one a source stated. a download too small
+    /// for a hash worker of its own hashes inline; a larger one hashes as `hashing` says.
+    pub(crate) fn writer_with(
         &self,
         offset: u64,
         length: Option<u64>,
         validators: Validators,
         md5: bool,
         keep: bool,
+        hashing: &Hashing,
     ) -> io::Result<PartialWriter> {
         let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
         let (file, begun) = self
@@ -284,7 +286,7 @@ impl Partial {
         let hasher = if small {
             HashPipe::inline(hasher, Arc::clone(&file), offset)
         } else {
-            HashPipe::new(hasher, Arc::clone(&file), offset)?
+            HashPipe::new(hasher, Arc::clone(&file), offset, hashing)?
         };
         let mut writer = PartialWriter {
             cache: self.cache.clone(),
@@ -316,6 +318,19 @@ impl Partial {
         }
         writer.record.sha256 = writer.hasher.sha256_so_far(writer.prefix)?;
         Ok(writer)
+    }
+
+    /// [`Partial::writer_with`] at the default [`Hashing`].
+    #[cfg(test)]
+    pub(crate) fn writer(
+        &self,
+        offset: u64,
+        length: Option<u64>,
+        validators: Validators,
+        md5: bool,
+        keep: bool,
+    ) -> io::Result<PartialWriter> {
+        self.writer_with(offset, length, validators, md5, keep, &Hashing::default())
     }
 
     /// forgets the bytes so far, so the download starts again from the first byte.
