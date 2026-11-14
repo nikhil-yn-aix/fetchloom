@@ -159,11 +159,7 @@ fn sqlite_rows(db: &Connection, table: &str) -> (Vec<String>, Vec<Vec<Value>>) {
     let mut statement = db
         .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
         .unwrap();
-    let names: Vec<String> = statement
-        .column_names()
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
+    let names: Vec<String> = statement.column_names().map(str::to_owned).collect();
     let rows = statement
         .query_map([], |row| {
             (0..names.len())

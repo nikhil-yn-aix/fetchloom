@@ -158,6 +158,57 @@ fn rows_still_in_the_log_count_up_to_its_last_whole_commit() {
     assert_eq!(count(&other), 10);
 }
 
+/// sums `log`'s header and frames of `page_size` bytes again, as SQLite's writer does.
+fn summed(log: &mut [u8], page_size: usize) {
+    let big = be32(log, 0) == 0x377f_0683;
+    let mut sums = checksum((0, 0), &log[..24], big);
+    log[24..28].copy_from_slice(&sums.0.to_be_bytes());
+    log[28..32].copy_from_slice(&sums.1.to_be_bytes());
+    let frame = 24 + page_size;
+    for at in (32..=log.len() - frame).step_by(frame) {
+        sums = checksum(
+            checksum(sums, &log[at..at + 8], big),
+            &log[at + 24..at + frame],
+            big,
+        );
+        log[at + 16..at + 20].copy_from_slice(&sums.0.to_be_bytes());
+        log[at + 20..at + 24].copy_from_slice(&sums.1.to_be_bytes());
+    }
+}
+
+/// a log whose page size is not the database's adds nothing: one SQLite wrote for a database
+/// of other pages, or this database's own frames under a header that names another size. SQLite
+/// before 3.54.0 read such a pair into memory it had not filled (CVE-2026-119375).
+#[test]
+fn a_log_of_another_page_size_adds_nothing() {
+    let folder = tempfile::tempdir().unwrap();
+    let logged = |name: &str, page_size: u32| {
+        let path = folder.path().join(name);
+        let db = written(&path, page_size, "WAL");
+        insert(&db, 0..10);
+        db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+        insert(&db, 10..30);
+        let mut log = path.as_os_str().to_owned();
+        log.push("-wal");
+        (std::fs::read(&path).unwrap(), std::fs::read(log).unwrap())
+    };
+    let (file, log) = logged("small.sqlite", 1024);
+    let (_, larger) = logged("large.sqlite", 4096);
+    let count = |log: &[u8]| {
+        Database::parse(file.clone(), Some(log))
+            .unwrap()
+            .rows("cookies", &["name"])
+            .unwrap()
+            .len()
+    };
+    assert_eq!(count(&log), 30);
+    assert_eq!(count(&larger), 10);
+    let mut renamed = log.clone();
+    renamed[8..12].copy_from_slice(&2048_u32.to_be_bytes());
+    summed(&mut renamed, 1024);
+    assert_eq!(count(&renamed), 10);
+}
+
 #[test]
 fn what_is_no_database_is_refused_and_a_missing_table_named() {
     for bytes in [
@@ -501,16 +552,7 @@ fn pages_and_bytes_are_kept_to_what_the_files_hold() {
     let frame = 24 + 1024;
     let last = 32 + (log.len() - 32) / frame * frame - frame;
     log[last + 4..last + 8].copy_from_slice(&u32::MAX.to_be_bytes());
-    let mut sums = checksum((0, 0), &log[..24], false);
-    for at in (32..log.len()).step_by(frame) {
-        sums = checksum(
-            checksum(sums, &log[at..at + 8], false),
-            &log[at + 24..at + frame],
-            false,
-        );
-        log[at + 16..at + 20].copy_from_slice(&sums.0.to_be_bytes());
-        log[at + 20..at + 24].copy_from_slice(&sums.1.to_be_bytes());
-    }
+    summed(&mut log, 1024);
     let held = u32::try_from(file.len() / 1024 + (log.len() - 32) / frame).unwrap();
     let database = Database::parse(file.clone(), Some(&log)).unwrap();
     assert!(database.pages <= held, "{} pages", database.pages);

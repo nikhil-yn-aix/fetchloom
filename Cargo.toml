@@ -143,7 +143,7 @@ clap_mangen = "0.3.3"
 roff = "1.1"
 # browser cookie databases for tests, written by SQLite itself, which the crate's own reader of
 # those files is checked against
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 
 # a pty pair, for the test of a question's hold on its terminal
 [target.'cfg(unix)'.dev-dependencies]
