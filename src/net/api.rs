@@ -76,7 +76,7 @@ pub(crate) struct Response {
     /// reached the wrong region.
     pub(crate) region: Option<String>,
     /// how a request for an S3 bucket went out: signed with a key or not, and why.
-    pub(crate) keyed: Option<crate::source::Keyed>,
+    pub(crate) keyed: Option<super::s3::Keyed>,
     /// how a request for a cloud storage bucket went out: with a google token or not, and why.
     pub(crate) authorized: Option<super::Authorized>,
     /// how a request to google drive's api went out: with a google token or not, and whose.
@@ -405,7 +405,7 @@ impl Net {
             .find_map(|link| response.url().join(&link).ok());
         let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
-        let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
+        let keyed = response.extensions().get::<super::s3::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
         let drive = response.extensions().get::<super::DriveAnswered>().cloned();
         let sent = response

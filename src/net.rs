@@ -15,6 +15,7 @@ mod rate;
 mod relink;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod roots;
+pub(crate) mod s3;
 pub(crate) mod sign;
 pub(crate) mod site;
 pub(crate) mod speeds;
@@ -256,14 +257,14 @@ pub(crate) struct Net {
     /// how each download hashes its bytes, which the run's settings give.
     hashing: crate::cache::Hashing,
     /// which requests to S3 buckets go signed, and with which keys.
-    signing: crate::source::Signing,
+    signing: s3::Signing,
     /// which requests to cloud storage buckets carry a google token.
     google: Google,
     /// which requests to azure containers carry a SAS.
     azure: Azure,
     /// buckets that refused an old version this run, though the object as it is now matched its
     /// pin: they likely refuse every old version, so their objects are asked for as they are now.
-    refuse_versions: Mutex<std::collections::HashSet<crate::source::Bucket>>,
+    refuse_versions: Mutex<std::collections::HashSet<s3::Bucket>>,
     /// in mirror-only mode, the web mirrors' addresses, each ending in `/`: a request goes only
     /// below one of them, and only as a mirror's request.
     mirrors_only: Option<Vec<Url>>,
@@ -475,7 +476,7 @@ impl Net {
             credentials: LazyLock::new(Box::new(move || keys(given))),
             sites: site::Sites::default(),
             hashing: crate::cache::Hashing::default(),
-            signing: crate::source::Signing::default(),
+            signing: s3::Signing::default(),
             google: Google::default(),
             azure: Azure::default(),
             refuse_versions: Mutex::default(),
@@ -554,7 +555,7 @@ impl Net {
     }
 
     /// signs requests for the S3 buckets `signing` lists, once S3 refused them without a key.
-    pub(crate) fn with_signing(mut self, signing: crate::source::Signing) -> Net {
+    pub(crate) fn with_signing(mut self, signing: s3::Signing) -> Net {
         self.signing = signing;
         self
     }
@@ -871,7 +872,7 @@ impl Net {
         shape: &impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
         first_origin: bool,
         (signer, tokened, blobbed): (
-            Option<&crate::source::Signer>,
+            Option<&s3::Signer>,
             &google::Tokened<'_>,
             &azure::Blobbed<'_>,
         ),
@@ -896,7 +897,7 @@ impl Net {
     /// are then forgotten. the refusal's body is read to learn why, then put back to read again.
     async fn keys_expired(
         &self,
-        signer: Option<&crate::source::Signer>,
+        signer: Option<&s3::Signer>,
         hop: &Url,
         response: &mut reqwest::Response,
     ) -> Result<bool, Failure> {
@@ -912,7 +913,7 @@ impl Net {
         let taken = std::mem::replace(response, http::Response::new(Vec::new()).into());
         let body;
         (*response, body) = self.read_back(taken, LARGEST_REFUSAL).await?;
-        if !crate::source::Signer::says_expired(response.status().as_u16(), &body) {
+        if !s3::Signer::says_expired(response.status().as_u16(), &body) {
             return Ok(false);
         }
         tracing::debug!(url = %Shown(hop), "S3 said the keys expired, so the request goes again with new ones");

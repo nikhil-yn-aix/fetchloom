@@ -3,9 +3,10 @@
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Keyed, Listed, Object, Prefix, is_region, object_url, query, s3_host};
+use super::{Listed, Object, Prefix, object_url, query};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
+use crate::net::s3::{Keyed, is_region, s3_host};
 use crate::net::{Api, Response};
 use crate::xml;
 

@@ -38,7 +38,8 @@ use tracing::Instrument as _;
 use url::Url;
 
 pub(crate) use crate::auth::azure::AzureContainer;
-pub(crate) use bucket::{Bucket, GcsBucket, Keyed, Signer, Signing, unversioned, with_version};
+pub(crate) use crate::net::s3::{Bucket, Keyed, Signing, unversioned, with_version};
+pub(crate) use bucket::GcsBucket;
 pub(crate) use drive::DriveId;
 
 use crate::digest::{Md5, Sha256};

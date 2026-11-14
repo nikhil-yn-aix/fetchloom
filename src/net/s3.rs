@@ -1,17 +1,21 @@
-//! which requests to an S3 bucket go signed: a listed bucket's, once S3 refused one without a key
-//! this run. a bucket nobody listed is never signed for, whatever a project names, and one whose
-//! keys could not be had fails rather than going without them.
+//! S3 buckets as the settings and links name them, and which requests to one go signed: a listed
+//! bucket's, once S3 refused one without a key this run. a bucket nobody listed is never signed
+//! for, whatever a project names, and one whose keys could not be had fails rather than going
+//! without them.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
+use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use super::{Bucket, Store, is_bucket, s3_host};
+use super::Shown;
+use super::sign::UNRESERVED;
 use crate::auth::aws::{self, Identity, Keys};
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::net::sign::{self, Request, Scope};
 use crate::stop::Stop;
 
@@ -96,7 +100,7 @@ impl Signing {
             .unwrap_or_default();
         if let Some((named, region)) = s3_host(&host) {
             let name = named.unwrap_or(first);
-            if url.scheme() != "https" || !is_bucket(Store::S3, name) {
+            if url.scheme() != "https" || !is_bucket(name) {
                 return None;
             }
             let bucket = Bucket {
@@ -316,6 +320,271 @@ fn service_region(host: &str) -> Option<String> {
 /// whether `text` can stand as a region in a signature: lowercase letters, digits and `-`.
 fn plausible(text: &str) -> bool {
     (1..=64).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// an S3 bucket as the `s3_buckets` setting names it: one on AWS, or one at another service that
+/// speaks S3's API, known by its origin.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Bucket {
+    endpoint: Option<url::Origin>,
+    name: String,
+}
+
+impl Bucket {
+    /// the bucket `name` on AWS, or at the service at `endpoint`.
+    pub(crate) fn new(endpoint: Option<url::Origin>, name: String) -> Bucket {
+        Bucket { endpoint, name }
+    }
+
+    /// the origin of the service that holds the bucket, none for AWS.
+    pub(crate) fn endpoint(&self) -> Option<&url::Origin> {
+        self.endpoint.as_ref()
+    }
+
+    /// reads `s3://name`, or a bare name, for a bucket on AWS, and `s3:https://host:port/name`
+    /// for one at another service, each with or without a final `/`.
+    pub(crate) fn parse(text: &str) -> Option<Bucket> {
+        let text = text.trim();
+        let text = text.strip_suffix('/').unwrap_or(text);
+        let (endpoint, name) = match text.split_once(':') {
+            None => (None, text),
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
+                if let Some(name) = rest.strip_prefix("//") {
+                    (None, name)
+                } else {
+                    let (origin, name) = endpoint(rest)?;
+                    (Some(origin), name)
+                }
+            }
+            Some(_) => return None,
+        };
+        is_bucket(name).then(|| Bucket {
+            endpoint,
+            name: name.to_owned(),
+        })
+    }
+
+    /// the bucket a link to one of its objects names: on AWS by its host or first segment,
+    /// elsewhere by its origin and first segment, as an S3-like service serves every bucket.
+    pub(crate) fn holding(url: &Url) -> Option<Bucket> {
+        let host = url.host_str()?.to_ascii_lowercase();
+        let mut segments = url.path_segments()?;
+        let first = segments.next().unwrap_or_default();
+        // a bucket named in the path still needs an object key after it
+        let keyed = segments.next().is_some_and(|key| !key.is_empty());
+        let (endpoint, name) = match s3_host(&host) {
+            Some((Some(named), _)) => (None, named),
+            Some((None, _)) if keyed => (None, first),
+            None if keyed => (Some(url.origin()), first),
+            _ => return None,
+        };
+        is_bucket(name).then(|| Bucket {
+            endpoint,
+            name: name.to_owned(),
+        })
+    }
+
+    /// the service that holds the bucket, as messages name it: S3, or the host of another.
+    pub(crate) fn service(&self) -> String {
+        let Some(origin) = &self.endpoint else {
+            return "S3".to_owned();
+        };
+        let origin = origin.ascii_serialization();
+        origin
+            .split_once("://")
+            .map_or_else(|| origin.clone(), |(_, host)| host.to_owned())
+    }
+
+    /// what was missing when no keys were found to sign for the bucket.
+    pub(crate) fn keyless(&self) -> String {
+        match &self.endpoint {
+            Some(origin) => format!(
+                "no AWS settings send keys to {}",
+                origin.ascii_serialization()
+            ),
+            None => "no AWS keys were found".to_owned(),
+        }
+    }
+
+    /// how to give fetchloom keys for the bucket.
+    pub(crate) fn keys_help(&self) -> String {
+        match &self.endpoint {
+            Some(origin) => {
+                let origin = origin.ascii_serialization();
+                format!(
+                    "put endpoint_url = {origin} in a profile in ~/.aws/config, with its keys in ~/.aws/credentials, or set AWS_ENDPOINT_URL_S3={origin} with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+                )
+            }
+            None => "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets".to_owned(),
+        }
+    }
+
+    /// how to let fetchloom sign for the bucket.
+    pub(crate) fn listing_help(&self) -> String {
+        format!(
+            "if you trust {self} with your AWS keys, add it to s3_buckets in the settings file or FETCHLOOM_S3_BUCKETS"
+        )
+    }
+
+    /// `text` as a message may repeat it, with any login in it masked.
+    pub(crate) fn shown(text: &str) -> String {
+        match text.split_once(':') {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
+                format!("{scheme}:{}", crate::shown::mask_query(rest))
+            }
+            _ => crate::shown::mask_query(text).into_owned(),
+        }
+    }
+}
+
+impl Keyed {
+    /// the error for a download S3 refused, as this says the request for it went.
+    pub(crate) fn refusal(&self, url: &Url) -> Error {
+        let shown = Shown(url);
+        match self {
+            Keyed::Signed { bucket, key, .. } => Error::new(
+                Kind::AuthRequired,
+                format!("{} refused the AWS key {key} for {shown}", bucket.service()),
+            )
+            .help(format!(
+                "ask the owner of {bucket} to let that key read it, or set AWS_PROFILE to a profile whose key can"
+            )),
+            Keyed::Unsigned {
+                bucket,
+                listed: true,
+            } => Error::new(
+                Kind::AuthRequired,
+                format!(
+                    "{} refused {shown} without a key, and {}",
+                    bucket.service(),
+                    bucket.keyless()
+                ),
+            )
+            .help(bucket.keys_help()),
+            Keyed::Unsigned {
+                bucket,
+                listed: false,
+            } => Error::new(
+                Kind::AuthRequired,
+                format!("{} refused {shown} without a key", bucket.service()),
+            )
+            .help(bucket.listing_help()),
+        }
+    }
+}
+
+impl fmt::Display for Bucket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.endpoint {
+            Some(endpoint) => write!(f, "s3:{}/{}", endpoint.ascii_serialization(), self.name),
+            None => write!(f, "s3://{}", self.name),
+        }
+    }
+}
+
+/// `url` pinned to the S3 object version `version`.
+pub(crate) fn with_version(url: &Url, version: &str) -> Url {
+    let mut pinned = url.clone();
+    let pair = format!("versionId={}", utf8_percent_encode(version, UNRESERVED));
+    let joined = match url.query().filter(|query| !query.is_empty()) {
+        Some(query) => format!("{query}&{pair}"),
+        None => pair,
+    };
+    pinned.set_query(Some(&joined));
+    pinned
+}
+
+/// `url` without the S3 object version it pins, and that version, when it pins one.
+pub(crate) fn unversioned(url: &Url) -> Option<(Url, String)> {
+    let pairs: Vec<&str> = url.query()?.split('&').collect();
+    let value = pairs
+        .iter()
+        .find_map(|pair| pair.strip_prefix("versionId="))?;
+    let version = percent_decode_str(value).decode_utf8().ok()?.into_owned();
+    let kept: Vec<&str> = pairs
+        .into_iter()
+        .filter(|pair| !pair.starts_with("versionId="))
+        .collect();
+    let mut current = url.clone();
+    current.set_query((!kept.is_empty()).then(|| kept.join("&")).as_deref());
+    Some((current, version))
+}
+
+/// reads `https://host[:port]/rest` as the origin of a service that speaks S3's API and the path
+/// after it. none for a login, a query, a fragment or anything but a plain web origin.
+pub(crate) fn endpoint(text: &str) -> Option<(url::Origin, &str)> {
+    let (scheme, rest) = text.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") || text.contains(['?', '#']) {
+        return None;
+    }
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.is_empty() {
+        return None;
+    }
+    let url = Url::parse(&format!("{scheme}://{authority}/")).ok()?;
+    let plain = url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/";
+    plain.then(|| (url.origin(), path))
+}
+
+/// whether `name` follows S3's bucket naming rules.
+pub(crate) fn is_bucket(name: &str) -> bool {
+    named(name, 63, false)
+}
+
+/// whether `name` is 3 to `longest` lowercase letters, digits, `-` and `.`, and `_` when
+/// `underscore`, starting and ending with a letter or digit, as S3 and cloud storage name buckets.
+pub(crate) fn named(name: &str, longest: usize, underscore: bool) -> bool {
+    let bytes = name.as_bytes();
+    let ends = |byte: Option<&u8>| byte.is_some_and(u8::is_ascii_alphanumeric);
+    (3..=longest).contains(&name.len())
+        && ends(bytes.first())
+        && ends(bytes.last())
+        && !name.contains("..")
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'.')
+                || (byte == b'_' && underscore)
+        })
+}
+
+/// reads an S3 host: the bucket when the host names one, and the region when it names one.
+/// `None` when the host is not an S3 endpoint fetchloom lists, such as a website endpoint.
+pub(crate) fn s3_host(host: &str) -> Option<(Option<&str>, Option<&str>)> {
+    let rest = host.strip_suffix(".amazonaws.com")?;
+    let (bucket, endpoint) = if rest == "s3" || rest.starts_with("s3.") || rest.starts_with("s3-") {
+        (None, rest)
+    } else {
+        let at = rest.rfind(".s3")?;
+        (Some(&rest[..at]), &rest[at + 1..])
+    };
+    let region = match endpoint {
+        "s3" => None,
+        other => {
+            let region = other
+                .strip_prefix("s3.")
+                .or_else(|| other.strip_prefix("s3-"))?;
+            if !is_region(region) {
+                return None;
+            }
+            Some(region)
+        }
+    };
+    Some((bucket, region))
+}
+
+/// whether `text` reads as an AWS region, such as `us-west-2`.
+pub(crate) fn is_region(text: &str) -> bool {
+    text.contains('-')
+        && !text.starts_with("website")
+        && text.ends_with(|c: char| c.is_ascii_digit())
         && text
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')

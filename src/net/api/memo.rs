@@ -8,8 +8,8 @@ use tokio::sync::Notify;
 use url::Url;
 
 use super::Response;
+use crate::net::s3::Keyed;
 use crate::net::{Authorized, Wire};
-use crate::source::Keyed;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Sent {

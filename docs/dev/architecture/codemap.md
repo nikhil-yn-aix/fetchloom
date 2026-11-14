@@ -162,7 +162,6 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/bucket/s3.rs` | S3's `ListObjectsV2`, following a bucket to its region | `list` |  |
 | `src/source/bucket/gcs.rs` | google cloud storage's JSON object list | `list` |  |
 | `src/source/bucket/azure.rs` | azure's `List Blobs`, with a SAS only for a container `azure_containers` lists | `list` |  |
-| `src/source/bucket/signing.rs` | which S3 requests go signed, with which keys and region | `Signing` | `Located`, `Signer`, `Keyed` |
 
 ## auth
 
@@ -208,6 +207,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/relink.rs` | links a source gives only for a while: a fresh one by the stable link data.lock keeps, asked again once when it expired, and during a download only while it holds no slot | `Net::relinked`, `Net::refreshed` |  |
 | `src/net/address.rs` | where a request may go: private addresses only for origins a person typed, named as a mirror or listed in `allowed_origins`; DNS; and proxies with the variables that name them | `Reach`, `Proxies` | `Typed`, `Resolver`, `is_private`, `named` |
 | `src/net/address/reach.rs` | whether the proxy carrying a request can be reached, so a dead proxy is named within seconds | `Proxies::carrier` | `Carrier`, `unreachable`, `watch`, `reached` |
+| `src/net/s3.rs` | S3 buckets as the settings and links name them, and which S3 requests go signed, with which keys and region; a refusal's words by how the request went | `Signing`, `Bucket` | `Located`, `Signer`, `Keyed`, `with_version`, `unversioned` |
 | `src/net/sign.rs` | AWS signature version 4: the canonical request and the authorization header, on `hmac` and `sha2`, so the secret itself is never sent | `authorization` | `Keys`, `Scope`, `Request`, `canonical`, `amz_date` |
 | `src/net/google.rs` | which requests carry a google token: listed buckets once refused, and the drive requests `drive` lets through; and the token request | `Google` | `Located`, `Bearer`, `Authorized`, `google_token`, `post_grant` |
 | `src/net/google/drive.rs` | which drive api requests carry a token: items `drive_folders` lists and what google lists inside them | `Drive` |  |
