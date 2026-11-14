@@ -213,6 +213,7 @@ pub(crate) fn live(
         work.clone(),
         std::sync::Arc::default(),
         std::sync::Arc::new(|_| {}),
-    );
+    )
+    .with_rules(super::rules());
     (net, work)
 }

@@ -238,6 +238,7 @@ impl Context {
             .with_memory(self.settings.memory.value)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
+            .with_rules(crate::source::rules())
             .with_signing(signing)
             .with_google(google)
             .with_azure(azure)

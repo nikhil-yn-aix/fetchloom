@@ -15,6 +15,7 @@ mod rate;
 mod relink;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod roots;
+mod rules;
 pub(crate) mod s3;
 pub(crate) mod sign;
 pub(crate) mod site;
@@ -44,6 +45,7 @@ pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_m
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, DriveAnswered, Google, Private};
 pub(crate) use rate::Rate;
+pub(crate) use rules::Rules;
 
 use self::failure::Failure;
 use crate::error::{Error, Kind};
@@ -256,6 +258,8 @@ pub(crate) struct Net {
     sites: site::Sites,
     /// how each download hashes its bytes, which the run's settings give.
     hashing: crate::cache::Hashing,
+    /// what the sources say about requests to their hosts.
+    rules: Rules,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: s3::Signing,
     /// which requests to cloud storage buckets carry a google token.
@@ -476,6 +480,7 @@ impl Net {
             credentials: LazyLock::new(Box::new(move || keys(given))),
             sites: site::Sites::default(),
             hashing: crate::cache::Hashing::default(),
+            rules: Rules::default(),
             signing: s3::Signing::default(),
             google: Google::default(),
             azure: Azure::default(),
@@ -546,6 +551,12 @@ impl Net {
     /// each alone: another port or scheme of its host is trusted no more than a host in data.toml.
     pub(crate) fn trust(&self, origins: impl IntoIterator<Item = url::Origin>) {
         self.typed.allow(origins);
+    }
+
+    /// follows the sources' `rules` about requests to their hosts.
+    pub(crate) fn with_rules(mut self, rules: Rules) -> Net {
+        self.rules = rules;
+        self
     }
 
     /// hashes each download as `hashing` says, the run's batches and checksum processors.

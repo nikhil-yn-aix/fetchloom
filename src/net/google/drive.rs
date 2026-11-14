@@ -17,7 +17,6 @@ use crate::cache::{Cache, UrlRecord};
 use crate::error::{Error, Kind};
 use crate::net::download::{Fetch, Fetched, Listener};
 use crate::net::failure::{self, Failure};
-use crate::source::drive as source;
 
 /// where fetchloom's docs say how to let it read private drive items.
 const GUIDE: &str = "https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-google-drive-files";
@@ -509,7 +508,7 @@ impl Net {
                 if searched.iter().any(|(done, _)| done == root.as_str()) {
                     continue;
                 }
-                let found = source::search(self, root).await;
+                let found = (self.rules.drive_search)(self, root).await;
                 if let Err(error) = &found
                     && error.kind == Kind::Interrupted
                 {
@@ -575,7 +574,7 @@ impl Net {
             .map(|inside| inside.name.clone());
         let name = match heard {
             Some(name) => name,
-            None => Box::pin(source::file(self, id)).await?.name,
+            None => (self.rules.drive_name)(self, id).await?,
         };
         let private = Fetch {
             url: fetch.url.clone(),

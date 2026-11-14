@@ -672,6 +672,15 @@ pub(crate) fn byline(authors: &[String], year: Option<&str>) -> Option<String> {
     })
 }
 
+/// what the sources say about requests to their hosts, for the network to follow.
+pub(crate) fn rules() -> net::Rules {
+    net::Rules {
+        refused_download,
+        drive_search: |net, root| Box::pin(drive::search(net, root)),
+        drive_name: |net, id| Box::pin(async move { Ok(drive::file(net, id).await?.name) }),
+    }
+}
+
 /// a download request with the source's response handling.
 pub(crate) fn fetch_plan(url: &Url) -> Fetch {
     let (from, divert) = drive::fetch_plan(url)

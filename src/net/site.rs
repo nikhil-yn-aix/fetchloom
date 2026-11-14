@@ -686,8 +686,7 @@ impl Net {
     ) -> Option<Error> {
         let code = status.as_u16();
         let host = url.host_str()?.to_ascii_lowercase();
-        if crate::source::refused_download(url, code).is_some()
-            || Account::from_host(&host).is_some()
+        if (self.rules.refused_download)(url, code).is_some() || Account::from_host(&host).is_some()
         {
             return None;
         }
