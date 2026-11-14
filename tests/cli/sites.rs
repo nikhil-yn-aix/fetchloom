@@ -558,6 +558,54 @@ fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> R
     Ok(())
 }
 
+/// a key file of fetchloom's own that is not valid JSON is named, by `auth` and by a run that
+/// looks for keys, rather than read as holding none; and a save that cannot go in it claims
+/// nothing.
+#[test]
+fn a_broken_key_file_is_named_wherever_its_keys_are_missed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![(
+        "/data.csv".to_owned(),
+        reply(
+            "401 Unauthorized",
+            &[("WWW-Authenticate", "Bearer"), ("Content-Length", "0")],
+            b"",
+        ),
+    )])?;
+    let host = host_of(&site);
+    sign_in_with_token(&sandbox, &host, "t-kept")?;
+    let home = sandbox.work().parent().ok_or("no sandbox")?.join("home");
+    let keys = if cfg!(windows) {
+        home.join("fetchloom")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/fetchloom")
+    } else {
+        home.join(".config/fetchloom")
+    }
+    .join("credentials.json");
+    let saved = std::fs::read_to_string(&keys)?;
+    std::fs::write(&keys, saved.replacen('{', "{,", 1))?;
+    let named = "credentials.json is not valid JSON (key must be a string at line 1 column 2), so fetchloom uses none of the keys saved in it";
+    let listed = json(&sandbox.run(&["auth", "--offline", "--json"])?)?;
+    let warnings = crate::support::warned(&listed);
+    assert!(
+        warnings.iter().any(|warning| warning.contains(named)),
+        "{warnings:?}"
+    );
+    let output = sandbox.run(&["get", &format!("{}/data.csv", site.url)])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(stderr.contains(named), "{stderr}");
+    let again = with_stdin(
+        sandbox.command(&["auth", "login", &host, "--token", "--with-token"]),
+        "t-new\n",
+    )?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(50), "{stderr}");
+    assert!(!stderr.contains("went in"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn auth_lists_a_websites_token_and_logout_removes_it() -> Result {
     let sandbox = Sandbox::new()?;

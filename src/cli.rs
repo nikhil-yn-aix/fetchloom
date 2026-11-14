@@ -257,8 +257,9 @@ impl Context {
     }
 }
 
-/// warns once per run about a `.netrc` other users can open and about keys no request header
-/// can carry, so a command that quietly signs in without them says why.
+/// warns once per run about a `.netrc` other users can open, a key file of fetchloom's own it
+/// cannot read and keys no request header can carry, so a command that quietly signs in without
+/// them says why.
 fn caution(
     output: &Output,
     cautioned: &std::sync::atomic::AtomicBool,
@@ -277,6 +278,13 @@ fn caution(
                 path.display()
             ),
             &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+        );
+    }
+    if let Some(error) = crate::auth::store::unreadable(&crate::machine::env) {
+        output.warn_with(
+            Warning::AuthUnusable,
+            &error.message,
+            error.help.as_deref().unwrap_or_default(),
         );
     }
     for credential in credentials {

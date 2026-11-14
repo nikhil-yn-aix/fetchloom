@@ -635,7 +635,16 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     let file = crate::machine::settings_folder(var)
         .unwrap_or_default()
         .join("credentials.json");
-    if told || context.yes {
+    let asked = !(told || context.yes);
+    if asked {
+        let question = format!(
+            "no credential store here, so {they} would go in a file only you can read\nsave {it} to {}?",
+            crate::units::path(&file)
+        );
+        agrees(context, host, saved, &question, false)?;
+    }
+    let origin = site::save(var, host, saved, store::Place::File).map_err(failed)?;
+    if !asked {
         context.output.warn(
             Warning::AuthNoKeyring,
             &format!(
@@ -643,14 +652,8 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
                 file.display()
             ),
         );
-    } else {
-        let question = format!(
-            "no credential store here, so {they} would go in a file only you can read\nsave {it} to {}?",
-            crate::units::path(&file)
-        );
-        agrees(context, host, saved, &question, false)?;
     }
-    site::save(var, host, saved, store::Place::File).map_err(failed)
+    Ok(origin)
 }
 
 /// what is saved, as a line names it: "a token", "the X-API-Key header" or "3 cookies from

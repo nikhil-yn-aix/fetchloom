@@ -114,6 +114,9 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             &format!("limit it to yourself with `chmod 600 {}`", path.display()),
         );
     }
+    if let Some(error) = store::unreadable(&crate::machine::env) {
+        unusable(output, &error);
+    }
     if context.mirrors.mirrors.only {
         output.hint(
             "mirrors_only lets fetchloom ask its mirrors alone, so no key is checked with its site",
@@ -755,12 +758,7 @@ fn save(
             let file = crate::machine::settings_folder(var)
                 .unwrap_or_default()
                 .join("credentials.json");
-            if told {
-                output.warn(Warning::AuthNoKeyring, &format!(
-                    "this machine has no credential store, so the key is saved in {}, readable only by you",
-                    file.display()
-                ));
-            } else {
+            if !told {
                 let (question, default) = save_question(account, &file);
                 if !agrees(question, default)? {
                     output.hint(&format!(
@@ -771,6 +769,12 @@ fn save(
                 }
             }
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
+            if told {
+                output.warn(Warning::AuthNoKeyring, &format!(
+                    "this machine has no credential store, so the key is saved in {}, readable only by you",
+                    file.display()
+                ));
+            }
             Ok(Some(file.display().to_string()))
         }
     }

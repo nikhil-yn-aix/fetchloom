@@ -163,6 +163,39 @@ fn file(var: Var<'_>) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// fetchloom's own key file or index that is there but cannot be read, with why: the keys it
+/// holds read as none until it is fixed, so `auth` and a run that looks for keys warn of it.
+pub(crate) fn unreadable(var: Var<'_>) -> Option<crate::error::Error> {
+    let folder = crate::machine::settings_folder(var)?;
+    let index = folder.join("accounts.json");
+    let keys = folder.join("credentials.json");
+    let (path, why) = problem::<BTreeMap<String, Place>>(&index)
+        .map(|why| (index, why))
+        .or_else(|| problem::<BTreeMap<String, String>>(&keys).map(|why| (keys, why)))?;
+    Some(
+        crate::error::Error::new(
+            crate::error::Kind::AuthRequired,
+            format!(
+                "{} {why}, so fetchloom uses none of the keys saved in it",
+                crate::units::path(&path)
+            ),
+        )
+        .help("fix it, or delete it and sign in again"),
+    )
+}
+
+/// why the file at `path` cannot be read as `T`, as a clause after its name: `is not valid JSON
+/// (…)` or `could not be read: …`. none when it can, or is not there.
+fn problem<T: serde::de::DeserializeOwned>(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str::<T>(&text)
+            .err()
+            .map(|err| format!("is not valid JSON ({err})")),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => Some(format!("could not be read: {}", crate::error::said(&err))),
+    }
+}
+
 /// what `path` holds, empty when it does not exist. a file that cannot be read or is not valid
 /// JSON is an error, so writing it back never drops the keys it held.
 fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
@@ -373,6 +406,32 @@ mod tests {
         )
         .unwrap();
         assert!(keys.contains("d-key"));
+    }
+
+    /// an index of saved keys that does not read leaves every key unfound, so it is named; one
+    /// that is not there yet is no problem.
+    #[test]
+    fn an_index_that_does_not_read_is_named() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().as_os_str().to_owned();
+        let var = |name: &str| -> Option<OsString> {
+            match name {
+                "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => Some(root.clone()),
+                _ => None,
+            }
+        };
+        assert!(unreadable(&var).is_none());
+        let folder = crate::machine::settings_folder(&var).unwrap();
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("accounts.json"), r#"{"zenodo": "drawer"}"#).unwrap();
+        let error = unreadable(&var).unwrap();
+        assert!(
+            error
+                .message
+                .contains("accounts.json is not valid JSON (unknown variant"),
+            "{}",
+            error.message
+        );
     }
 
     thread_local! {
