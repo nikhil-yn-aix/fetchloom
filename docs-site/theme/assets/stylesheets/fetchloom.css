@@ -31,6 +31,18 @@
   font-display: swap;
   src: url("../fonts/source-sans-3-latin-wght-normal.woff2") format("woff2");
 }
+/* the box drawing, arrows and dots that code and transcripts use, which the latin subset lacks:
+   Source Code Pro's upright variable face as Adobe publishes it in release
+   2.042R-u/1.062R-i/1.026R-vf, unchanged, with its licence beside it. a browser fetches it only
+   for a page whose code needs one of these; the subset, declared after it, draws what it has */
+@font-face {
+  font-family: "Source Code Pro";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("../fonts/SourceCodeVF-Upright.ttf.woff2") format("woff2");
+  unicode-range: U+2022, U+2190-2193, U+2500-257F, U+25CF;
+}
 @font-face {
   font-family: "Source Code Pro";
   font-style: normal;

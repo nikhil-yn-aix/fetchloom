@@ -333,6 +333,39 @@ class Colors(unittest.TestCase):
                                      "fail": colors["fail"], "accent": colors["accent"]}, theme)
 
 
+class Fonts(unittest.TestCase):
+    # the characters @fontsource-variable/source-code-pro's latin subset, the site's code face, has
+    LATIN = [(0x0, 0xff), (0x131, 0x131), (0x152, 0x153), (0x2bb, 0x2bc), (0x2c6, 0x2c6), (0x2da, 0x2da),
+             (0x2dc, 0x2dc), (0x304, 0x304), (0x308, 0x308), (0x329, 0x329), (0x2000, 0x206f), (0x20ac, 0x20ac),
+             (0x2122, 0x2122), (0x2191, 0x2191), (0x2193, 0x2193), (0x2212, 0x2212), (0x2215, 0x2215),
+             (0xfeff, 0xfeff), (0xfffd, 0xfffd)]
+
+    def test_code_the_latin_subset_cannot_draw_has_a_code_face_of_its_own(self):
+        """every character of the docs' code outside the latin subset is in the unicode-range of
+        another face of the code family, a file the site ships, so the system's mono never draws it."""
+        css = (build_site.ROOT / build_site.STYLESHEET).read_text(encoding="utf-8")
+        claimed = []
+        for face in re.findall(r"@font-face \{([^}]*)\}", css):
+            if '"Source Code Pro"' not in face or "unicode-range" not in face:
+                continue
+            source = re.search(r'url\("\.\./fonts/([^"]+)"\)', face)[1]
+            self.assertTrue((build_site.ROOT / "docs-site/theme/assets/fonts" / source).is_file(), source)
+            for low, _, high in re.findall(r"U\+([0-9A-F]+)(-([0-9A-F]+))?", re.search(r"unicode-range: ([^;]+);", face)[1]):
+                claimed.append((int(low, 16), int(high or low, 16)))
+        drawn = set()
+        for page in (build_site.ROOT / "docs").rglob("*.md"):
+            text = page.read_text(encoding="utf-8")
+            blocks = re.findall(r"^```[^\n]*\n(.*?)^```", text, re.S | re.M)
+            spans = re.findall(r"`([^`\n]+)`", re.sub(r"^```[^\n]*\n.*?^```", "", text, flags=re.S | re.M))
+            drawn.update(character for code in blocks + spans for character in code)
+        lacking = sorted(character for character in drawn
+                         if not any(low <= ord(character) <= high for low, high in self.LATIN))
+        self.assertTrue(lacking)
+        for character in lacking:
+            with self.subTest(character=f"U+{ord(character):04X}"):
+                self.assertTrue(any(low <= ord(character) <= high for low, high in claimed))
+
+
 class Build(unittest.TestCase):
     def test_zensical_builds_the_site_before_the_steps_that_finish_it(self):
         steps = []
