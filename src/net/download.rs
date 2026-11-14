@@ -920,7 +920,10 @@ impl Net {
                                 .map_err(|err| Failure::Final(local(&err)))?,
                         )
                     {
-                        return Err(Failure::Final(crate::source::lfs_pointer(&fetch.url)));
+                        return Err(Failure::Final(lfs_pointer(
+                            &fetch.url,
+                            (self.rules.lfs_link)(&fetch.url),
+                        )));
                     }
                     self.heard.received(
                         &host,
@@ -1528,6 +1531,26 @@ const LFS_LARGEST: u64 = 1024;
 /// whether a small file whose first bytes are `head` is a git-lfs pointer.
 fn is_lfs_pointer(head: &[u8]) -> bool {
     head.starts_with(LFS_POINTER)
+}
+
+/// the error for `url`, which answered with a git-lfs pointer rather than the file, with `link`,
+/// where its site serves the file itself, when its source knows.
+fn lfs_pointer(url: &Url, link: Option<String>) -> Error {
+    let error = Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{} sent a git-lfs pointer, not the file it stands for",
+            super::Shown(url)
+        ),
+    );
+    match link {
+        Some(link) => error.help(format!(
+            "git-lfs keeps that file apart from the repository: use {link} instead"
+        )),
+        None => error.help(
+            "git-lfs keeps that file apart from the repository: use the link its site gives to download the file itself",
+        ),
+    }
 }
 
 /// a pinned size bounds the download, so an answer stating another length is refused unread.

@@ -35,6 +35,9 @@ pub(crate) struct Rules {
     /// a source's own error for a download it refused with a status, when it says more than the
     /// status does.
     pub(crate) refused_download: fn(&Url, u16) -> Option<Error>,
+    /// where a source serves the file a git-lfs pointer stands for, for a link that answered with
+    /// one.
+    pub(crate) lfs_link: fn(&Url) -> Option<String>,
     /// lists a folder `drive_folders` names through drive's api with a token, so the network
     /// hears which items it holds.
     pub(crate) drive_search: for<'a> fn(&'a Net, &'a DriveId) -> Asking<'a, ()>,
@@ -69,6 +72,7 @@ impl Default for Rules {
             relink: |_| None,
             link_expired: |_, _| false,
             refused_download: |_, _| None,
+            lfs_link: |_| None,
             drive_search: unsearched,
             drive_name: unnamed,
         }
