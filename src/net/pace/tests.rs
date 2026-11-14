@@ -391,6 +391,14 @@ fn requests_to_arxivs_hosts_start_three_seconds_apart_whichever_they_ask() {
         .admit(&name("https://oaipmh.arxiv.org/oai"), later)
         .unwrap_err();
     assert_eq!(hold.until, start + Duration::from_secs(3));
+    // a name with a closing dot is the same host
+    for dotted in [
+        "https://export.arxiv.org./api/query",
+        "https://ARXIV.org../pdf/1706.03762v7",
+    ] {
+        let same = paces.admit(&name(dotted), later).unwrap_err();
+        assert_eq!(same.until, hold.until, "{dotted}");
+    }
     assert!(
         paces
             .admit(

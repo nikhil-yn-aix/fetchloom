@@ -1154,9 +1154,12 @@ async fn unanswered(
 #[derive(Clone, Debug)]
 struct RedirectName(String);
 
-/// the host of a URL as people say it, for messages.
+/// the host of a URL as people say it, for messages, and as requests to it are counted, paced and
+/// grouped: without the closing dot a fully qualified name may end with, which names the same
+/// host, so `export.arxiv.org.` is paced as arXiv.
 pub(crate) fn host(url: &Url) -> &str {
-    url.host_str().unwrap_or("the server")
+    url.host_str()
+        .map_or("the server", |host| host.trim_end_matches('.'))
 }
 
 /// the name requests to `url`'s host are paced and counted under, which hosts limited together
