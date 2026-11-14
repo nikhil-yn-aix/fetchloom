@@ -1065,20 +1065,37 @@ fn ask_room(
     free: u64,
     cache: &std::path::Path,
 ) -> Result<(), Error> {
+    ask_room_on(
+        output,
+        doing,
+        (needed, free),
+        &format!("the cache at {}", units::path(cache)),
+        "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores",
+    )
+}
+
+/// [`ask_room`] on the disk holding `place`, as `the cache at ~/.cache/fetchloom` names it, with
+/// `help` for a run no one can answer.
+fn ask_room_on(
+    output: &Output,
+    doing: &str,
+    (needed, free): (u64, u64),
+    place: &str,
+    help: &str,
+) -> Result<(), Error> {
     let (needs, has) = (units::size(needed), units::size(free));
     let cancel = format!("{doing} ({needs})");
-    let shortage = format!(
-        "{doing} needs at least {needs} on the disk holding the cache at {}, which has {has} free",
-        units::path(cache)
-    );
+    let shortage =
+        format!("{doing} needs at least {needs} on the disk holding {place}, which has {has} free");
     match output
         .confirm(&format!("{shortage}. go on anyway?"))
         .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
-        Some(false) => Err(Error::new(Kind::Unconfirmed, format!("did not start {doing}")).cancelled(cancel)),
-        None => Err(Error::new(Kind::Unconfirmed, shortage)
-        .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores")),
+        Some(false) => {
+            Err(Error::new(Kind::Unconfirmed, format!("did not start {doing}")).cancelled(cancel))
+        }
+        None => Err(Error::new(Kind::Unconfirmed, shortage).help(help.to_owned())),
     }
 }
 

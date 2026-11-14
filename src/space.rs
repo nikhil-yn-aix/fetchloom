@@ -200,6 +200,31 @@ fn measured(_: &Path) -> Option<u64> {
     None
 }
 
+/// whether `one` and `other`, which must exist, are on one disk; none when the system does not
+/// say.
+pub(crate) fn same_disk(one: &Path, other: &Path) -> Option<bool> {
+    Some(disk(one)? == disk(other)?)
+}
+
+#[cfg(unix)]
+fn disk(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|metadata| metadata.dev())
+}
+
+#[cfg(windows)]
+fn disk(path: &Path) -> Option<u64> {
+    let handle = winapi_util::Handle::from_path_any(path).ok()?;
+    winapi_util::file::information(&handle)
+        .ok()
+        .map(|information| information.volume_serial_number())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn disk(_: &Path) -> Option<u64> {
+    None
+}
+
 /// the total bytes of the disk holding `path`, which must exist; none when the system does not say.
 pub(crate) fn total(path: &Path) -> Option<u64> {
     sized(path)

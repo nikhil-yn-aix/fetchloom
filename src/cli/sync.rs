@@ -1123,12 +1123,36 @@ impl<'a> Loop<'a> {
     }
 
     /// asks once, before anything downloads, when the cache's disk may lack room for what placing
-    /// needs, as per-download questions miss a sum too big; an archive of unknown files counts
-    /// twice. a file the disk cannot hold, as FAT32 none of 4 GiB, is refused first.
+    /// needs, as per-download questions miss a sum too big, then when the data folder's disk may
+    /// lack room for the files placing copies there.
     fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
-        if self.yes() || self.net.offline().enabled() {
+        if self.yes() {
             return Ok(());
         }
+        let needed = if self.net.offline().enabled() {
+            0
+        } else {
+            self.download_room(lock, placing)?
+        };
+        let free = crate::space::free(self.cache.root());
+        if crate::space::short(needed, free).is_none() {
+            return self.ask_room_to_place(placing, needed);
+        }
+        super::ask_room(
+            &self.context.output,
+            "this sync",
+            needed,
+            free.unwrap_or_default(),
+            self.cache.root(),
+        )
+        .map_err(|error| self.as_left(error))?;
+        self.roomy.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// what downloading for placing takes on the cache's disk; an archive of unknown files counts
+    /// twice. a file the disk cannot hold, as FAT32 none of 4 GiB, is refused first.
+    fn download_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<u64, Error> {
         let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
         let none = HashSet::new();
         let missing = archives::of(lock, placing.missing_as_is(&self.cache, &none, &none)?);
@@ -1163,16 +1187,33 @@ impl<'a> Loop<'a> {
             let download = if lacks(file) { file.size } else { 0 };
             needed = needed.saturating_add(download).saturating_add(file.size);
         }
-        let free = crate::space::free(self.cache.root());
+        Ok(needed)
+    }
+
+    /// asks, as [`Loop::ask_room`] does, when the disk holding the data folder may lack room for
+    /// the files placing copies there rather than links, where `downloads` on the same disk take
+    /// from that room too.
+    fn ask_room_to_place(&self, placing: &Placing<'_>, downloads: u64) -> Result<(), Error> {
+        let clones =
+            || crate::build::Staging::new(&self.cache).is_ok_and(|staging| staging.clones());
+        let Some(copies) = placing.copies(self.cache.root(), &clones)? else {
+            return Ok(());
+        };
+        let needed = if copies.beside_cache {
+            copies.bytes.saturating_add(downloads)
+        } else {
+            copies.bytes
+        };
+        let free = crate::space::free(&copies.at);
         if crate::space::short(needed, free).is_none() {
             return Ok(());
         }
-        super::ask_room(
+        super::ask_room_on(
             &self.context.output,
             "this sync",
-            needed,
-            free.unwrap_or_default(),
-            self.cache.root(),
+            (needed, free.unwrap_or_default()),
+            &format!("the data folder at {}", units::path(&copies.folder)),
+            "free space on that disk, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores",
         )
         .map_err(|error| self.as_left(error))?;
         self.roomy.store(true, Ordering::Relaxed);

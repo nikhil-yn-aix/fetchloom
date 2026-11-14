@@ -2810,3 +2810,48 @@ fn a_kept_edit_fails_a_strict_sync_and_status_check_until_it_matches() -> Result
     assert_eq!(fs::read(&placed)?, V1);
     Ok(())
 }
+
+/// files a sync copies rather than links need room on the disk holding the data folder, not just
+/// the cache's: exFAT links nothing, so a sync whose copies that disk cannot hold asks first,
+/// naming it, and without a person to ask places nothing; `--yes` goes on anyway.
+#[cfg(debug_assertions)]
+#[test]
+fn copies_the_data_folders_disk_cannot_hold_ask_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 2048];
+    let server = Server::start("/files/big.bin", vec![file(&body, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox.work().join("data").join("big").join("big.bin");
+    delete(&placed)?;
+    let sync = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_FILESYSTEM", "exfat")
+            .env("FETCHLOOM_TEST_FREE", "1000")
+            .output()
+    };
+    let refused = sync(&["--json", "sync"])?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr)?);
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{error}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "this sync needs at least 2.0 KiB on the disk holding the data folder at {}, which has 1000 B free",
+            sandbox.work().join("data").display()
+        )
+    );
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("--yes")),
+        "{error}"
+    );
+    assert!(!placed.exists(), "nothing was placed");
+    let output = sync(&["sync", "--yes"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(&placed)?, body);
+    Ok(())
+}

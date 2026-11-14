@@ -846,6 +846,52 @@ impl<'a> Placing<'a> {
         self.targets.len()
     }
 
+    /// what placing copies into the data folder rather than links to the cache at `cache` or
+    /// clones, as far as can be told before trying: every file on another disk than the cache, on
+    /// exFAT or FAT and from a read-only cache; inside a synced folder and for `copy = true`, each
+    /// file where `clones` finds the disk makes no clones. none when it copies nothing.
+    pub(crate) fn copies(
+        &self,
+        cache: &Path,
+        clones: &dyn Fn() -> bool,
+    ) -> Result<Option<Copies>, Error> {
+        let placed: Vec<&Target<'_>> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(_, action)| needs_bytes(action))
+            .map(|(target, _)| target)
+            .collect();
+        if placed.is_empty() {
+            return Ok(None);
+        }
+        let folder = self.project.planned_data_dir(self.manifest)?;
+        let Some(at) = folder
+            .ancestors()
+            .find(|path| path.is_dir())
+            .map(Path::to_path_buf)
+        else {
+            return Ok(None);
+        };
+        let beside_cache = crate::space::same_disk(&at, cache) != Some(false);
+        let shares = beside_cache && !crate::space::Filesystem::of(&at).serializes();
+        let links =
+            shares && Placer::new(&folder).unlinked().is_none() && !crate::volume::read_only(cache);
+        // one probe a run, and only once a file would otherwise be copied
+        let probed = std::cell::OnceCell::new();
+        let bytes = placed
+            .iter()
+            .filter(|target| (target.copy || !links) && !*probed.get_or_init(|| shares && clones()))
+            .map(|target| target.size)
+            .fold(0, u64::saturating_add);
+        Ok((bytes > 0).then_some(Copies {
+            folder,
+            at,
+            bytes,
+            beside_cache,
+        }))
+    }
+
     /// removes what no dataset needs, places what is missing or outdated and records it, `synced`
     /// complete if every file the lock asks for is in place. `told` names an add's datasets, whose
     /// lines wait for `-v` since the add tells them, and whose files go if placing fails or stops.
@@ -1034,6 +1080,16 @@ fn record(
         }
     }
     Ok(())
+}
+
+/// the files placing copies into the data folder, as [`Placing::copies`] tells them.
+pub(crate) struct Copies {
+    /// the data folder, and its nearest folder that exists, whose disk the copies fill.
+    pub(crate) folder: std::path::PathBuf,
+    pub(crate) at: std::path::PathBuf,
+    pub(crate) bytes: u64,
+    /// whether the cache is on that disk too, so what it downloads takes from the same room.
+    pub(crate) beside_cache: bool,
 }
 
 /// data.toml and data.lock as a sync read them before it began.
