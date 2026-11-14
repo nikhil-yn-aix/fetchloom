@@ -41,10 +41,6 @@ an empty blob named like a folder that other blobs are in is a mark some tools l
 |---|---|---|
 | azure container | `azure:<account>/<container>/<prefix>` | `https://<account>.blob.core.windows.net/<container>/<name>` |
 
-## private containers
-
-see [private containers](../guides/private-cloud-storage.md#private-containers).
-
 ## access and limits
 
 a container azure lists only once a SAS, a key or a token goes with the request records `access = "login"` in [data.lock](../reference/data-lock.md), since a teammate needs one too; a public one records no `access`. only azure's public cloud, `*.blob.core.windows.net`, is read: other clouds, data lake (`dfs`) endpoints, static website hosts and the `$root` and `$web` containers are not. a blob in the archive tier fails to download until its owner rehydrates it. identities of azure app service, azure arc, service fabric and workload identity federation are not read, and the planetary computer's own SAS service is not asked: give such a container a SAS from `planetarycomputer.microsoft.com/api/sas/v1/token/<account>/<container>` yourself.

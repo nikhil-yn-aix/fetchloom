@@ -56,14 +56,6 @@ a cloud storage URL keeps the object's generation. a listing with a missing, emp
 | S3 bucket | `s3://<bucket>/<prefix>`, or `s3:https://<host>/<bucket>/<prefix>` at another service | the object's HTTPS URL on the endpoint that listed it, with `?versionId=<id>` when the bucket keeps versions |
 | cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
 
-## private S3 buckets
-
-see [private S3 buckets](../guides/private-cloud-storage.md#private-s3-buckets).
-
-## private cloud storage buckets
-
-see [private cloud storage buckets](../guides/private-cloud-storage.md#private-cloud-storage-buckets).
-
 ## access and limits
 
 a bucket that S3 or cloud storage lists only once a key or token goes with the request records `access = "login"` in [data.lock](../reference/data-lock.md), since a teammate needs one too, and [`push`](../commands/push.md#data-you-may-not-share) asks before copying it into a mirror. a bucket either lists to anyone records no `access`.

@@ -37,7 +37,3 @@ google docs exports can change between downloads. select and exclude patterns al
 exclude those paths, or ask the owner to upload fixed files. `add` saves exclusions in `data.toml`; an existing project needs that setting edited there. every select pattern must match before exclusions, and some fixed files must remain. empty folders and empty selections are refused.
 
 shared links can change their contents. file hashes pin bytes after resolution, and a later `get` can accept changed bytes. use the project lock when the input must stay fixed.
-
-## private files and folders
-
-see [private Google Drive files](../guides/private-cloud-storage.md#private-google-drive-files).

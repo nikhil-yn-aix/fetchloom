@@ -4,9 +4,7 @@ import base64
 from datetime import datetime
 import hashlib
 import html
-import json
 from pathlib import Path
-import posixpath
 import re
 import shutil
 import subprocess
@@ -35,20 +33,6 @@ RECORDED = "docs-site/home"
 # where the home page's label goes: the figure naming the file of data.lock it shows
 LABEL = re.compile(r'<figure class="fl-label" data-file="([^"]+)">')
 STYLESHEET = "docs-site/theme/assets/stylesheets/fetchloom.css"
-MOVED = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>fetchloom</title>
-<link rel="canonical" href="{canonical}">
-<script>location.replace({target_js} + location.hash)</script>
-<meta http-equiv="refresh" content="0; url={target}">
-</head>
-<body>
-<p>this page is now at <a href="{target}">{canonical}</a></p>
-</body>
-</html>
-"""
 
 
 def page_url(page):
@@ -91,35 +75,6 @@ def export_agents(root, site):
         parts.append(f"---\n\nsource: {SITE_URL}{page_url(page)}\n\n{body}\n")
     (site / "llms-full.txt").write_text("\n".join(parts), encoding="utf-8")
     print(f"llms-full.txt has {len(pages)} pages")
-
-
-def redirects(root):
-    """the (address, page) rows of docs-site/redirects.txt: each address the site once served and
-    the docs page that answers it now."""
-    rows = []
-    for line in (root / "docs-site/redirects.txt").read_text(encoding="utf-8").splitlines():
-        if line.strip() and not line.startswith("#"):
-            address, page = line.split()
-            rows.append((address, page))
-    return rows
-
-
-def write_redirects(site, rows):
-    """a page at each old address that sends the visitor on to its page's address, with the
-    #fragment they came with."""
-    for address, page in rows:
-        url = page_url(page)
-        if not (site / url / "index.html").is_file():
-            raise ValueError(f"{address} redirects to {page}, which the site does not have")
-        moved = site / address
-        if moved.exists():
-            raise ValueError(f"{address} is a page of the site, so nothing can redirect from it")
-        relative = posixpath.relpath(url or ".", posixpath.dirname(address) or ".")
-        target = "./" if relative == "." else relative + "/"
-        moved.parent.mkdir(parents=True, exist_ok=True)
-        moved.write_text(MOVED.format(canonical=html.escape(SITE_URL + url), target=html.escape(target),
-                                      target_js=json.dumps(target)), encoding="utf-8")
-    print(f"{len(rows)} old addresses redirect")
 
 
 def matches(data, integrity):
@@ -288,7 +243,6 @@ def main():
     color_transcripts(SITE)
     add_pin(ROOT, SITE)
     add_mermaid(SITE, ROOT / "docs-site/.cache")
-    write_redirects(SITE, redirects(ROOT))
     export_agents(ROOT, SITE)
 
 

@@ -1,11 +1,10 @@
-"""check a built site: every docs address fetchloom prints is a page's own and reaches its heading, every
+"""check a built site: every docs address fetchloom prints reaches a page and its heading, every
 heading keeps the id github gives it, no link names a markdown file, and no page loads anything
 from another host."""
 
 import argparse
 import html.parser
 from pathlib import Path
-import posixpath
 import re
 import sys
 from urllib.parse import urlsplit
@@ -88,20 +87,11 @@ def page_file(site, path):
     return candidate if candidate.is_file() else None
 
 
-def unreached(site, url, final=False):
-    """what is wrong with a docs address, or none when it reaches a page, through a moved page's
-    address unless ``final`` asks for the page's own, with its #fragment on that page."""
+def unreached(site, url):
+    """what is wrong with a docs address, or none when it reaches a page and its #fragment there."""
     path, _, fragment = url[len(SITE_URL):].partition("#")
     address = SITE_URL + path
     file = page_file(site, path.lstrip("/"))
-    if file:
-        moved = re.search(r'<meta http-equiv="refresh" content="0; url=([^"]+)">', file.read_text(encoding="utf-8"))
-        if moved:
-            here = file.parent.relative_to(site).as_posix()
-            target = posixpath.normpath(posixpath.join(here, moved[1]))
-            if final:
-                return f"{address} is an old address of {SITE_URL}/{'' if target == '.' else target + '/'}"
-            file = page_file(site, "" if target == "." else target)
     if not file:
         return f"{address} reaches no page"
     if fragment and fragment not in parsed(file).ids:
@@ -160,7 +150,7 @@ def main():
     parser.add_argument("site", type=Path, nargs="?", default=ROOT / "site")
     site = parser.parse_args().site.resolve()
     addresses = sorted(printed(ROOT))
-    problems = [problem for problem in (unreached(site, url, final=True) for url in addresses) if problem]
+    problems = [problem for problem in (unreached(site, url) for url in addresses) if problem]
     problems += markdown_links(site) + github_ids(ROOT, site) + external(site)
     for problem in problems:
         print(problem)
