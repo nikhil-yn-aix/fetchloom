@@ -1527,6 +1527,7 @@ fn the_transfer_time_ends_with_the_last_byte() {
         name: None,
         origin: Origin::Network,
         version: None,
+        began: None,
         arrived: arrived.map(|seconds| started + Duration::from_secs(seconds)),
         asked: Duration::ZERO,
     };
@@ -1550,6 +1551,7 @@ fn the_transfer_time_leaves_out_the_wait_for_an_answer() {
         name: None,
         origin: Origin::Network,
         version: None,
+        began: None,
         arrived: Some(at(arrived)),
         asked: Duration::from_secs(asked),
     };

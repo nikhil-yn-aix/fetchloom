@@ -443,7 +443,7 @@ async fn one_link(
         &cache,
         wanted,
         fetched,
-        started,
+        Some(started),
         (&mut Taken::default(), true),
     )
     .await?;
@@ -521,7 +521,6 @@ async fn many(
         }
     }
     approve(context, &cache, &jobs)?;
-    let started = Instant::now();
     let mut fetched: Vec<Vec<Result<Fetched, Error>>> = links.iter().map(|_| Vec::new()).collect();
     if !jobs.is_empty() {
         let fetched_all = fetch::apart(context, net, &cache, jobs)
@@ -545,16 +544,7 @@ async fn many(
             }
         };
         let last = index + 1 == links.len();
-        match settle(
-            context,
-            &cache,
-            wanted,
-            fetched,
-            started,
-            (&mut taken, last),
-        )
-        .await
-        {
+        match settle(context, &cache, wanted, fetched, (&mut taken, last)).await {
             Ok(done) => {
                 context.output.answer(&done.folder.display().to_string());
                 items.push(Item::done(link, &done));
@@ -800,7 +790,6 @@ async fn settle(
     cache: &Cache,
     wanted: Wanted,
     fetched: Vec<Result<Fetched, Error>>,
-    started: Instant,
     taken: (&mut Taken, bool),
 ) -> Result<Done, Error> {
     let labels: Vec<String> = wanted.files.iter().map(|file| file.path.clone()).collect();
@@ -815,17 +804,18 @@ async fn settle(
     if let Some(error) = fetch::together(&labels, failed) {
         return Err(error);
     }
-    finish(context, cache, wanted, found, started, taken).await
+    finish(context, cache, wanted, found, None, taken).await
 }
 
 /// checks what arrived, unpacks archives and puts every file in the link's folder, refused when an
-/// earlier link of the run took it. the run's `last` link marks the run's work as finishing.
+/// earlier link of the run took it. the run's `last` link marks the run's work as finishing. a link
+/// downloaded alone is timed from `started`; one downloaded beside others has none.
 async fn finish(
     context: &Context,
     cache: &Cache,
     wanted: Wanted,
     fetched: Vec<Fetched>,
-    started: Instant,
+    started: Option<Instant>,
     (taken, last): (&mut Taken, bool),
 ) -> Result<Done, Error> {
     let Wanted {
@@ -1535,7 +1525,7 @@ fn tell_fetched(
     paths: &[String],
     fetched: &[Fetched],
     files: &[Remote],
-    started: Instant,
+    started: Option<Instant>,
 ) {
     let (verb, text) = fetched_step(paths, fetched, files, started);
     context.output.step(verb, &text);
@@ -1545,14 +1535,19 @@ fn tell_fetched(
 }
 
 /// the step that tells what one link's downloads brought: downloaded, checked or found, with the
-/// time since `started` their bytes took to arrive, which leaves out a slow disk's time after.
+/// time since `started` their bytes took to arrive, which leaves out a slow disk's time after. a
+/// link downloaded beside others, with no `started`, is timed by its own downloads alone, since the
+/// time around them went to the other links and the disk they share.
 fn fetched_step(
     paths: &[String],
     fetched: &[Fetched],
     files: &[Remote],
-    started: Instant,
+    started: Option<Instant>,
 ) -> (&'static str, String) {
-    let took = Fetched::transfer(fetched, started);
+    let took = match started {
+        Some(started) => Fetched::transfer(fetched, started),
+        None => Fetched::transfer_alone(fetched),
+    };
     if let ([path], [fetched], [remote]) = (paths, fetched, files) {
         return match fetched.origin {
             Origin::Network => (
@@ -1669,6 +1664,7 @@ mod tests {
             name: None,
             origin: Origin::Network,
             version: None,
+            began: None,
             arrived: Some(started + std::time::Duration::from_secs(3)),
             asked: std::time::Duration::ZERO,
         };
@@ -1682,11 +1678,47 @@ mod tests {
             etag: None,
         };
         assert_eq!(
-            fetched_step(&["iris.csv".to_owned()], &[fetched], &[remote], started),
+            fetched_step(
+                &["iris.csv".to_owned()],
+                &[fetched],
+                &[remote],
+                Some(started)
+            ),
             (
                 "Downloaded",
                 "iris.csv · 3.0 KiB in 3.0 s · 1.0 KiB/s".to_owned()
             )
+        );
+    }
+
+    /// a link downloaded beside others is timed by its own download: the time before it went to
+    /// the files ahead of it, and the time after to the rest and the disk they share.
+    #[test]
+    fn a_link_downloaded_beside_others_is_timed_by_its_own_download() {
+        let start = Instant::now();
+        let fetched = Fetched {
+            digest: crate::digest::sha256(b"0"),
+            size: 100_000,
+            moved: 100_000,
+            name: None,
+            origin: Origin::Network,
+            version: None,
+            began: Some(start + std::time::Duration::from_secs(40)),
+            arrived: Some(start + std::time::Duration::from_millis(40_500)),
+            asked: std::time::Duration::ZERO,
+        };
+        let remote = Remote {
+            path: "0.bin".to_owned(),
+            size: None,
+            sha256: None,
+            md5: None,
+            url: url::Url::parse("https://example.org/0.bin").unwrap(),
+            named_by_server: false,
+            etag: None,
+        };
+        assert_eq!(
+            fetched_step(&["0.bin".to_owned()], &[fetched], &[remote], None),
+            ("Downloaded", "0.bin · 97.7 KiB in 500 ms".to_owned())
         );
     }
 

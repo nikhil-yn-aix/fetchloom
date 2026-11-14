@@ -602,7 +602,7 @@ async fn download(
         std::slice::from_ref(&remote.path),
         std::slice::from_ref(&fetched),
         std::slice::from_ref(remote),
-        started,
+        Some(started),
     );
     Ok(fetched)
 }
@@ -1456,6 +1456,7 @@ mod tests {
             name: None,
             origin: Origin::Cache,
             version: None,
+            began: None,
             arrived: None,
             asked: std::time::Duration::ZERO,
         };

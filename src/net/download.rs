@@ -124,6 +124,7 @@ impl Fetch {
             name: None,
             origin: Origin::Cache,
             version,
+            began: None,
             arrived: None,
             asked: Duration::ZERO,
         })
@@ -266,6 +267,8 @@ pub(crate) struct Fetched {
     pub(crate) origin: Origin,
     /// the S3 version the bytes were, when their bucket keeps versions.
     pub(crate) version: Option<String>,
+    /// when the download's first request went out, none when nothing was downloaded.
+    pub(crate) began: Option<Instant>,
     /// when the last byte this run received arrived, before the disk kept the file. none when
     /// nothing was received.
     pub(crate) arrived: Option<Instant>,
@@ -283,6 +286,27 @@ impl Fetched {
         started: Instant,
     ) -> units::Took {
         Fetched::transfer_until(fetched, started, Instant::now())
+    }
+
+    /// how long the downloads among `fetched` took themselves, from the first one's first request
+    /// to the last byte, for downloads that ran beside others: the time before belongs to the
+    /// files ahead of them and the time after to the files behind and the disk they share.
+    pub(crate) fn transfer_alone<'a>(
+        fetched: impl IntoIterator<Item = &'a Fetched>,
+    ) -> units::Took {
+        let mut span: Option<(Instant, Instant)> = None;
+        for fetched in fetched {
+            let (Some(began), Some(arrived)) = (fetched.began, fetched.arrived) else {
+                continue;
+            };
+            let arrived = arrived.checked_sub(fetched.asked).unwrap_or(arrived);
+            span = Some(span.map_or((began, arrived), |(first, last)| {
+                (first.min(began), last.max(arrived))
+            }));
+        }
+        units::Took::from(span.map_or(Duration::ZERO, |(first, last)| {
+            last.saturating_duration_since(first)
+        }))
     }
 
     /// [`Fetched::transfer`], with `now` as the moment it ends.
@@ -633,6 +657,7 @@ impl Net {
             split: true,
             permits: Some(self.permit(&fetch.from).await?),
         };
+        let began = Instant::now();
         let mut retry = Retry::new(self, &fetch.url).telling(on);
         let reach = Reach::default();
         let watched = |event: Event| {
@@ -675,7 +700,7 @@ impl Net {
                         let moved = reach.moved.load(Ordering::Relaxed);
                         let mut fetched =
                             self.remember(fetch, cache, &stored, validators, told, moved);
-                        fetched.arrived = Some(arrived);
+                        (fetched.began, fetched.arrived) = (Some(began), Some(arrived));
                         return Ok(fetched);
                     }
                     // bytes from two connections may not belong together, so a resumed or split
@@ -1326,6 +1351,7 @@ impl Net {
             name: told.name,
             origin: Origin::Network,
             version,
+            began: None,
             arrived: None,
             asked: Duration::ZERO,
         }
@@ -1578,6 +1604,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
         name: record.name,
         origin,
         version: record.validators.version,
+        began: None,
         arrived: None,
         asked: Duration::ZERO,
     }

@@ -1747,6 +1747,7 @@ mod tests {
                 name: Some("other.txt".to_owned()),
                 origin: crate::net::Origin::Network,
                 version: None,
+                began: None,
                 arrived: None,
                 asked: std::time::Duration::ZERO,
             },
@@ -1777,6 +1778,7 @@ mod tests {
             name: None,
             origin: crate::net::Origin::Network,
             version: Some(version.to_owned()),
+            began: None,
             arrived: None,
             asked: std::time::Duration::ZERO,
         };
@@ -1957,6 +1959,7 @@ mod tests {
                 name: None,
                 origin: crate::net::Origin::Network,
                 version: None,
+                began: None,
                 arrived: None,
                 asked: std::time::Duration::ZERO,
             };
