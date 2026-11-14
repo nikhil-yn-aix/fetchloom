@@ -6,7 +6,7 @@ use url::Url;
 
 use super::*;
 use crate::net::scripted::{reply, serve};
-use crate::net::{Allowed, Lane, Options, Splitting};
+use crate::net::{Allowed, Credential, Lane, Options, Splitting};
 use crate::source::recorded::block_on;
 
 fn token(host: &str, value: &str) -> Site {
@@ -371,8 +371,8 @@ fn a_cookie_for_a_whole_suffix_stays_with_the_host_that_set_it() {
     );
 }
 
-/// a cookie the run's shared jar keeps for a signed-in site's host, as an answer over plain http
-/// to it may set, never takes the place of a saved cookie of its name.
+/// a cookie the run's shared jar keeps for a signed-in site's host, as an answer from another of
+/// its ports may set, never takes the place of a saved cookie of its name.
 #[test]
 fn a_shared_cookie_never_displaces_a_saved_one() {
     use reqwest::cookie::CookieStore as _;
@@ -388,11 +388,107 @@ fn a_shared_cookie_never_displaces_a_saved_one() {
     let net = net(vec![saved]);
     let cookies = &net.wire().unwrap().cookies;
     let value = HeaderValue::from_static("session=planted; Path=/");
-    let plain = Url::parse("http://data.lab/x").unwrap();
-    cookies.set_cookies(&mut std::iter::once(&value), &plain);
+    let elsewhere = Url::parse("https://data.lab:8443/x").unwrap();
+    cookies.set_cookies(&mut std::iter::once(&value), &elsewhere);
     assert_eq!(
         sent(&net, "https://data.lab/files/2", &header::COOKIE).as_deref(),
         Some("session=session-value")
+    );
+}
+
+/// an answer a signed-in host's credential could not go with, plain http off this machine on any
+/// of its ports, sets no cookie the host's requests send, in the site's own jar or the shared one,
+/// so whoever answers in the host's name on the way cannot plant a session. an answer the
+/// credential could go with, as on this machine or an origin `allowed_origins` lists, keeps its
+/// cookies.
+#[test]
+fn a_plain_http_answer_sets_no_cookie_a_signed_in_host_sends() {
+    use reqwest::cookie::CookieStore as _;
+
+    let saved = |host: &str| {
+        Site::new(
+            host,
+            Vec::new(),
+            vec![cookie("session", "/", false, None)],
+            "the cookies".to_owned(),
+            String::new(),
+        )
+        .unwrap()
+    };
+    let sites = [
+        "data.lab",
+        "data.lab:8443",
+        "127.0.0.1:8080",
+        "lab.example:8080",
+    ];
+    let allowed = Allowed {
+        origins: vec![Url::parse("http://lab.example:8080").unwrap().origin()],
+        ..Allowed::default()
+    };
+    let net = net(sites.map(saved).to_vec()).with_allowed_origins(allowed);
+    let cookies = &net.wire().unwrap().cookies;
+    for (cookie, from) in [
+        ("session=planted; Path=/", "http://data.lab:443/x"),
+        ("session=planted; Path=/", "http://data.lab:8443/x"),
+        ("session2=planted; Path=/", "http://data.lab/x"),
+        ("session=renewed; Path=/", "http://127.0.0.1:8080/x"),
+        ("session=renewed; Path=/", "http://lab.example:8080/x"),
+    ] {
+        let value = HeaderValue::from_static(cookie);
+        cookies.set_cookies(&mut std::iter::once(&value), &Url::parse(from).unwrap());
+    }
+    for url in ["https://data.lab/files", "https://data.lab:8443/files"] {
+        assert_eq!(
+            sent(&net, url, &header::COOKIE).as_deref(),
+            Some("session=session-value"),
+            "{url}"
+        );
+    }
+    for url in [
+        "http://127.0.0.1:8080/files",
+        "http://lab.example:8080/files",
+    ] {
+        assert_eq!(
+            sent(&net, url, &header::COOKIE).as_deref(),
+            Some("session=renewed"),
+            "{url}"
+        );
+    }
+}
+
+/// a host with a `.netrc` login takes no cookie from an answer its login could not go with, so its
+/// https requests never carry one a plain-http answer set beside the login; an https answer still
+/// renews its session.
+#[test]
+fn a_plain_http_answer_sets_no_cookie_for_a_host_with_a_login() {
+    use reqwest::cookie::CookieStore as _;
+
+    let options = Options {
+        offline: crate::net::Offline::No,
+        jobs: 1,
+        credentials: vec![Credential {
+            host: "urs.lab".to_owned(),
+            header: "authorization",
+            value: "Basic YWRhOnB3".to_owned(),
+            every_hop: true,
+            every_port: true,
+        }],
+        split: Splitting::Never,
+    };
+    let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+    let cookies = &net.wire().unwrap().cookies;
+    let url = |text: &str| Url::parse(text).unwrap();
+    let set = |cookie: &'static str, from: &str| {
+        let value = HeaderValue::from_static(cookie);
+        cookies.set_cookies(&mut std::iter::once(&value), &url(from));
+    };
+    set("planted=1; Path=/", "http://urs.lab/x");
+    set("planted=2; Path=/", "http://urs.lab:443/x");
+    assert_eq!(cookies.cookies(&url("https://urs.lab/oauth")), None);
+    set("session=fresh; Path=/", "https://urs.lab/x");
+    assert_eq!(
+        cookies.cookies(&url("https://urs.lab/oauth")),
+        Some(HeaderValue::from_static("session=fresh"))
     );
 }
 

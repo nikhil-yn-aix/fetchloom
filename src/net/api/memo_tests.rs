@@ -193,16 +193,19 @@ fn credential_values_and_bucket_scopes_cannot_share_a_memo_entry() {
     let url = Url::parse("https://example.org/listing").unwrap();
     let mut net = net(&url);
     let anonymous = key(&net, &url);
-    net.credentials.push(crate::net::Key {
-        host: "example.org".to_owned(),
-        port: 443,
-        name: header::AUTHORIZATION,
-        value: header::HeaderValue::from_static("Bearer first"),
-        every_hop: false,
-        every_port: false,
-    });
+    let token = |value: &str| {
+        let credential = crate::net::Credential {
+            host: "example.org".to_owned(),
+            header: "authorization",
+            value: value.to_owned(),
+            every_hop: false,
+            every_port: false,
+        };
+        move || vec![credential]
+    };
+    net = net.finding_credentials(token("Bearer first"));
     let first = key(&net, &url);
-    net.credentials[0].value = header::HeaderValue::from_static("Bearer second");
+    net = net.finding_credentials(token("Bearer second"));
     let second = key(&net, &url);
     let mut bucket = second.clone();
     bucket.authorized = Some(crate::net::Authorized::Token {

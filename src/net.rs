@@ -238,7 +238,7 @@ pub(crate) struct Net {
     typed: address::Typed,
     /// the keys requests may carry, looked for when the first request needs one, so a run that
     /// sends none reads no key files and asks no credential store.
-    credentials: LazyLock<Vec<Key>, Box<dyn FnOnce() -> Vec<Key> + Send>>,
+    credentials: Arc<LazyLock<Vec<Key>, FindKeys>>,
     /// the tokens, headers and cookies people saved for websites, looked for as `credentials`.
     sites: site::Sites,
     /// how each download hashes its bytes, which the run's settings give.
@@ -292,6 +292,9 @@ pub(crate) struct Net {
 /// for a host's pace before each.
 #[derive(Clone, Copy)]
 struct Answering(Duration);
+
+/// how a run finds the keys requests may carry, once the first request needs them.
+type FindKeys = Box<dyn FnOnce() -> Vec<Key> + Send>;
 
 /// a credential as requests carry it: to one host and port.
 struct Key {
@@ -467,7 +470,7 @@ impl Net {
             offline: options.offline,
             metadata: api::Memo::new(crate::machine::LEAST_MEMORY / 16),
             typed: address::Typed::default(),
-            credentials: LazyLock::new(Box::new(move || keys(given))),
+            credentials: Arc::new(LazyLock::new(Box::new(move || keys(given)))),
             sites: site::Sites::default(),
             hashing: crate::cache::Hashing::default(),
             rules: Rules::default(),
@@ -510,7 +513,7 @@ impl Net {
         mut self,
         find: impl FnOnce() -> Vec<Credential> + Send + 'static,
     ) -> Net {
-        self.credentials = LazyLock::new(Box::new(move || keys(find())));
+        self.credentials = Arc::new(LazyLock::new(Box::new(move || keys(find()))));
         self
     }
 
@@ -519,7 +522,11 @@ impl Net {
     fn wire(&self) -> Result<&Wire, Error> {
         self.wire
             .get_or_init(|| {
-                let cookies = self.sites.cookies();
+                let keys = Arc::clone(&self.credentials);
+                let cookies = self.sites.cookies(move |host| {
+                    keys.iter()
+                        .any(|key| key.every_hop && host.eq_ignore_ascii_case(&key.host))
+                });
                 let wire = Wire::new(&self.typed, self.offline.enabled(), self.connect, cookies);
                 #[cfg(test)]
                 let wire = wire.map(|wire| Wire {

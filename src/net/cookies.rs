@@ -11,6 +11,9 @@ type SiteOf = Box<dyn Fn(&Url) -> Option<String> + Send + Sync>;
 /// whether a request for a link may carry a cookie, as `site::carried` judges.
 type Carries = Box<dyn Fn(&Url) -> bool + Send + Sync>;
 
+/// whether a link's host has a saved credential, on any port, or a `.netrc` login.
+type Guarded = Box<dyn Fn(&Url) -> bool + Send + Sync>;
+
 /// the cookies this run's answers set: one jar a request draws on by cookie rules where a saved
 /// credential may go, each cookie in it for the host that set it alone, and one of its own for
 /// each site a person saved a credential for, whose cookies, a renewed session among them, go
@@ -22,6 +25,8 @@ pub(super) struct Cookies {
     /// where the shared jar's cookies may go: where a saved credential may, so a session a host
     /// with a `.netrc` login set never crosses plain http off this machine or a proxy.
     carries: Option<Carries>,
+    /// the hosts whose cookies only an answer a credential could go with may set.
+    guarded: Option<Guarded>,
 }
 
 #[derive(Default)]
@@ -41,6 +46,7 @@ impl Cookies {
             state: Mutex::default(),
             site: Some(Box::new(site)),
             carries: None,
+            guarded: None,
         }
     }
 
@@ -55,10 +61,27 @@ impl Cookies {
         }
     }
 
+    /// the store, taking no cookie for a host `guarded` names from an answer a credential could
+    /// not go with, as `carrying` judges.
+    pub(super) fn guarding(
+        self,
+        guarded: impl Fn(&Url) -> bool + Send + Sync + 'static,
+    ) -> Cookies {
+        Cookies {
+            guarded: Some(Box::new(guarded)),
+            ..self
+        }
+    }
+
+    /// whether a credential could go with a request for `url`, and so the cookies of its answer.
+    fn carried(&self, url: &Url) -> bool {
+        self.carries.as_ref().is_none_or(|carries| carries(url))
+    }
+
     /// the shared jar's cookies for a request for `url`, when it may carry them, and how many
     /// times the jar has changed.
     pub(super) fn snapshot(&self, url: &Url) -> (Option<HeaderValue>, u64) {
-        let carried = self.carries.as_ref().is_none_or(|carries| carries(url));
+        let carried = self.carried(url);
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let cookies = if carried {
             state.jar.cookies(url)
@@ -93,6 +116,15 @@ impl CookieStore for Cookies {
     fn set_cookies(&self, headers: &mut dyn Iterator<Item = &HeaderValue>, url: &Url) {
         let mut headers = headers.peekable();
         if headers.peek().is_none() {
+            return;
+        }
+        // whoever is on the way can answer plain http in the host's name, so a session it sets
+        // for a signed-in host would make the host's own requests run as someone else
+        if !self.carried(url) && self.guarded.as_ref().is_some_and(|guarded| guarded(url)) {
+            tracing::debug!(
+                host = url.host_str(),
+                "an answer no credential could go with set cookies for a signed-in host, so they are left out"
+            );
             return;
         }
         let site = self.site.as_ref().and_then(|site| site(url));
