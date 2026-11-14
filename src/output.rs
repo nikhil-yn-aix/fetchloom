@@ -680,6 +680,7 @@ impl Output {
         let dim = paint(color, Paint::new().dimmed());
         let typed = plain(typed);
         let title = plain(title);
+        let facts = plain(facts);
         let head = format!("{:>11} {accent}{typed:pad$}{accent:#}", "");
         let head_width = 12 + typed.chars().count().max(pad);
         let width = self.width().unwrap_or(usize::MAX);

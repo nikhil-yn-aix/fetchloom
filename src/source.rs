@@ -653,14 +653,21 @@ pub(crate) struct Found {
     pub(crate) note: Option<String>,
 }
 
-/// a paper's first author's last name and its `year`, as `Vaswani et al. 2017`.
+/// a paper's first author's last name and its `year`, as `Vaswani et al. 2017`, without any
+/// control character the server put in the name.
 pub(crate) fn byline(authors: &[String], year: Option<&str>) -> Option<String> {
     let first = authors.first()?;
-    let surname = first.rsplit(' ').next().unwrap_or(first);
+    let surname: String = first
+        .rsplit(' ')
+        .next()
+        .unwrap_or(first)
+        .chars()
+        .filter(|c| !crate::name::is_control(*c))
+        .collect();
     let who = if authors.len() > 1 {
         format!("{surname} et al.")
     } else {
-        surname.to_owned()
+        surname
     };
     let year =
         year.filter(|year| year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()));
@@ -1169,6 +1176,20 @@ fn malformed(text: &str, expected: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// an author's name a server gave leaves its control characters out of the byline, so a
+    /// surname cannot steer the terminal that shows a search.
+    #[test]
+    fn a_byline_leaves_control_characters_out() {
+        let authors = [
+            "Ada Love\u{202e}lace\u{1b}]0;x\u{7}".to_owned(),
+            "Charles Babbage".to_owned(),
+        ];
+        assert_eq!(
+            byline(&authors, Some("1843")).as_deref(),
+            Some("Lovelace]0;x et al. 1843")
+        );
+    }
 
     /// every prefix a guess may offer is one the parser reads, so a guess never names another
     /// unknown one.
