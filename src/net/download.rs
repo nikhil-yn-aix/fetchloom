@@ -1626,7 +1626,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
 }
 
 fn local(err: &io::Error) -> Error {
-    Error::io("could not write to the cache", err)
+    crate::cache::unwritten(err)
 }
 
 /// the headers that ask for the rest of an earlier download, which `If-Range` keeps to the

@@ -555,7 +555,7 @@ async fn claimed(
         match cache.claim(remote.url.as_str()) {
             Ok(Claim::Owned(link)) => return Ok((link, waited)),
             Ok(Claim::Busy) => waited = true,
-            Err(err) => return Err(Error::io("could not write to the cache", &err)),
+            Err(err) => return Err(crate::cache::unwritten(&err)),
         }
         if tell && waiting.is_none() {
             waiting = Some(context.output.wait(

@@ -974,6 +974,7 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     }
     let people = sandbox.run(&["get", &server.url]);
     let scripts = sandbox.run(&["--json", "get", &server.url]);
+    let added = sandbox.run(&["add", &server.url]);
     for (folder, permissions) in folders.iter().zip(before) {
         fs::set_permissions(folder, permissions)?;
     }
@@ -982,10 +983,14 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
         "could not write to the cache: permission was denied in {}",
         sandbox.cache().join("partial").display()
     );
-    let stderr = text(&people.stderr)?;
-    assert_eq!(people.status.code(), Some(50), "{stderr}");
-    assert!(stderr.contains(&refused), "{stderr}");
-    assert!(stderr.contains("help: check its permissions"), "{stderr}");
+    // a lab's shared cache may be read-only for everyone but whoever keeps it
+    let shared = "help: the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
+    for output in [people, added?] {
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{stderr}");
+        assert!(stderr.contains(&refused), "{stderr}");
+        assert!(stderr.contains(shared), "{stderr}");
+    }
     let report: serde_json::Value = serde_json::from_slice(&scripts.stdout)?;
     assert_eq!(scripts.status.code(), Some(50), "{report}");
     assert_eq!(report["errors"][0]["kind"], "local.io", "{report}");

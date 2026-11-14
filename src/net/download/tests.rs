@@ -201,6 +201,19 @@ fn a_cache_write_the_disk_refuses_says_what_to_do() {
         full.help.as_deref(),
         Some("free some space on that disk, then run the command again")
     );
+    // a lab's shared cache may be read-only for everyone but whoever keeps it
+    let shared = "the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
+    let mut refusals = vec![io::ErrorKind::ReadOnlyFilesystem];
+    if cfg!(unix) {
+        refusals.push(io::ErrorKind::PermissionDenied);
+    }
+    for kind in refusals {
+        assert_eq!(
+            local(&kind.into()).help.as_deref(),
+            Some(shared),
+            "{kind:?}"
+        );
+    }
 }
 
 fn net(url: &Url) -> Net {

@@ -617,6 +617,24 @@ impl Cache {
     }
 }
 
+/// the error for a write to the cache that `err` refused. a cache that is read-only for this
+/// account, as a lab's shared one may be, takes nothing new, so the help names a cache of the
+/// person's own; on windows a refused write is more often a file another program holds open.
+pub(crate) fn unwritten(err: &io::Error) -> crate::error::Error {
+    let error = crate::error::Error::io("could not write to the cache", err);
+    let read_only = match err.kind() {
+        io::ErrorKind::ReadOnlyFilesystem => true,
+        io::ErrorKind::PermissionDenied => !cfg!(windows),
+        _ => false,
+    };
+    if read_only {
+        return error.help(
+            "the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need",
+        );
+    }
+    error
+}
+
 #[cfg(target_os = "macos")]
 const BACKUP_EXCLUSION: &str = "com.apple.metadata:com_apple_backup_excludeItem";
 
