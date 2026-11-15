@@ -2335,6 +2335,30 @@ fn remove_in_a_copy_says_what_it_keeps_and_why() -> Result {
     Ok(())
 }
 
+/// fat and exfat keep no lasting file numbers, so a move gives the folder another while its
+/// creation time stays: a state that records that time is still the folder's, and remove deletes
+/// the file fetchloom placed.
+#[test]
+fn a_state_whose_folder_kept_its_creation_time_is_still_used() -> Result {
+    let sandbox = Sandbox::new()?;
+    let Ok(created) = fs::metadata(sandbox.work())?.created() else {
+        return crate::support::skipped("creation-time", "this disk keeps no creation time");
+    };
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let path = sandbox.work().join(".fetchloom").join("state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let inode = state["folder"]["inode"].as_u64().unwrap_or_default();
+    let created = created.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    state["folder"] =
+        serde_json::json!({"inode": inode.wrapping_add(1), "created": u64::try_from(created)?});
+    fs::write(&path, serde_json::to_vec(&state)?)?;
+    let removed = sandbox.run(&["--offline", "remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 /// a renamed folder is the same folder, so its state is still used: remove deletes the file
 /// fetchloom placed, with no sync first, which would write the state again.
 #[test]

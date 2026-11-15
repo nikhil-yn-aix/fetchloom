@@ -59,36 +59,48 @@ pub(crate) struct State {
 }
 
 /// which folder a state was written for: its file number, the inode on unix and the file index
-/// on windows, which a rename or a move within its disk keeps and a copy does not. the disk's own
-/// number is left out, since network disks number it apart on each machine. a clone or a copy of a
-/// project is another folder, so the records of a state that came with it, which anyone could have
-/// written, are not used.
+/// on windows, and its creation time where the disk keeps one. a rename or a move within the disk
+/// keeps the number, and a move on fat or exfat, which keep no lasting numbers, keeps the time.
+/// the disk's own number is left out, since network disks number it apart on each machine. a
+/// clone, a copy or a state from git matches neither, so the records of a state that came with it,
+/// which anyone could have written, are not used.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Folder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inode: Option<u64>,
+    /// nanoseconds since 1970.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created: Option<u64>,
 }
 
 impl Folder {
-    /// the folder at `root`, none when the system cannot say.
+    /// the folder at `root`, none when the system can tell neither its number nor its creation
+    /// time.
     pub(crate) fn of(root: &std::path::Path) -> Option<Folder> {
+        let metadata = std::fs::metadata(root).ok();
+        let created = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.created().ok())
+            .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| u64::try_from(since.as_nanos()).ok());
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let inode = std::fs::metadata(root).ok()?.ino();
-            Some(Folder { inode: Some(inode) })
-        }
+        let inode = metadata.as_ref().map(std::os::unix::fs::MetadataExt::ino);
         #[cfg(windows)]
-        {
-            let handle = winapi_util::Handle::from_path_any(root).ok()?;
-            let index = winapi_util::file::information(&handle).ok()?.file_index();
-            Some(Folder { inode: Some(index) })
-        }
+        let inode = winapi_util::Handle::from_path_any(root)
+            .and_then(|handle| winapi_util::file::information(&handle))
+            .ok()
+            .map(|information| information.file_index());
         #[cfg(not(any(unix, windows)))]
-        {
-            let _ = root;
-            None
-        }
+        let inode = None;
+        (inode.is_some() || created.is_some()).then_some(Folder { inode, created })
+    }
+
+    /// whether a state written for this folder is one for `here`: the same number, or the same
+    /// creation time. what either side cannot tell matches nothing.
+    pub(crate) fn matches(&self, here: &Folder) -> bool {
+        let same =
+            |recorded: Option<u64>, found: Option<u64>| recorded.is_some() && recorded == found;
+        same(self.inode, here.inode) || same(self.created, here.created)
     }
 }
 
@@ -799,6 +811,31 @@ impl Look {
 mod tests {
     use super::*;
     use crate::digest;
+
+    /// a state is its folder's when the number or the creation time match, so a move on a disk of
+    /// no lasting numbers keeps it, and a copy, whose both differ, does not. what either side
+    /// cannot tell matches nothing: without a creation time the number alone decides.
+    #[test]
+    fn a_folder_matches_by_its_number_or_its_creation_time() {
+        let folder = |inode, created| Folder { inode, created };
+        for (recorded, here, matches) in [
+            (folder(Some(7), Some(100)), folder(Some(7), Some(100)), true),
+            (folder(Some(7), Some(100)), folder(Some(8), Some(100)), true),
+            (folder(Some(7), Some(100)), folder(Some(7), Some(200)), true),
+            (
+                folder(Some(7), Some(100)),
+                folder(Some(8), Some(200)),
+                false,
+            ),
+            (folder(Some(7), None), folder(Some(7), Some(100)), true),
+            (folder(Some(7), Some(100)), folder(Some(7), None), true),
+            (folder(Some(7), None), folder(Some(8), Some(100)), false),
+            (folder(Some(7), Some(100)), folder(Some(8), None), false),
+            (folder(None, None), folder(None, None), false),
+        ] {
+            assert_eq!(recorded.matches(&here), matches, "{recorded:?} {here:?}");
+        }
+    }
 
     /// a record of `dataset` holding `size` bytes.
     fn placed(dataset: &str, size: u64) -> Placed {

@@ -417,7 +417,10 @@ impl Project {
                 Ok((state, found.modified))
             })
             .unwrap_or_default();
-        if !state.was_read() || state.folder == Folder::of(&self.root) {
+        let here = Folder::of(&self.root);
+        let ours = (state.folder.as_ref().zip(here.as_ref()))
+            .is_some_and(|(recorded, here)| recorded.matches(here));
+        if !state.was_read() || ours {
             return (state, written);
         }
         TOLD.call_once(|| {
