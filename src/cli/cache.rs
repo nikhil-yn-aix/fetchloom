@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use self::usage::Usage;
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Supply, Use};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Scan, Supply, Use};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
@@ -34,6 +34,8 @@ pub(super) struct Info {
     path: PathBuf,
     #[serde(flatten)]
     usage: Usage,
+    /// the `cache_budget` setting, which `bytes` is held against, none when no budget is set.
+    budget: Option<u64>,
     projects: Vec<PathBuf>,
     /// downloads a run stopped before they finished, kept so a later run can continue them.
     unfinished_downloads: u64,
@@ -67,6 +69,10 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
             units::size(usage.bytes)
         ),
     );
+    let budget = context.settings.cache_budget.value;
+    if let Some(budget) = budget {
+        output.label("Budget", &budget_line(usage.bytes, budget));
+    }
     tell_projects(output, &projects);
     let unfinished = cache.unfinished();
     if unfinished.downloads > 0 {
@@ -87,10 +93,23 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     Ok(Info {
         path: cache.root().to_path_buf(),
         usage,
+        budget,
         projects,
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
+}
+
+/// what the cache's files hold of `budget`, and by how much they pass it.
+fn budget_line(bytes: u64, budget: u64) -> String {
+    let used = format!("{} of {} used", units::size(bytes), units::size(budget));
+    match bytes.checked_sub(budget).filter(|past| *past > 0) {
+        Some(past) => format!(
+            "{used} · {} past it, so a sync that downloads more asks first",
+            units::size(past)
+        ),
+        None => used,
+    }
 }
 
 fn tell_projects(output: &Output, projects: &[PathBuf]) {
@@ -774,13 +793,24 @@ fn remind_at(output: &Output, root: &Path, threads: Threads, stop: &Stop) {
 /// the bytes gc would free at `now`, as `fetchloom cache` tells them, read on at most `threads`
 /// workers; none when a project is out of reach, which gc would forget, or the cache unreadable.
 fn freeable(cache: &Cache, now: SystemTime, threads: Threads, stop: &Stop) -> Option<u64> {
+    let scan = cache.scan_objects(threads, stop).ok()?;
+    freeable_in(cache, &scan, now, threads, stop)
+}
+
+/// [`freeable`] of the objects `scan` found in `cache`.
+pub(super) fn freeable_in(
+    cache: &Cache,
+    scan: &Scan,
+    now: SystemTime,
+    threads: Threads,
+    stop: &Stop,
+) -> Option<u64> {
     let found = needed_with(cache, None, stop, false, Uses::Untold).ok()?;
     if !found.complete {
         return None;
     }
-    let scan = cache.scan_objects(threads, stop).ok()?;
-    // the reminder tells nothing of copies, so it reads no project's files
-    let usage = Usage::measure(&scan, &found.needed, &[], now, threads, stop).ok()?;
+    // what gc frees tells nothing of copies, so it reads no project's files
+    let usage = Usage::measure(scan, &found.needed, &[], now, threads, stop).ok()?;
     Some(usage.freeable)
 }
 

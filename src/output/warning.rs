@@ -29,6 +29,8 @@ pub(crate) enum Warning {
     BuildUnchecked,
     /// a cached file changed, so it is downloaded again when it is needed.
     CacheChanged,
+    /// a run told `--yes` goes on though its downloads take the cache past `cache_budget`.
+    CacheOverBudget,
     /// a path in the cache could not be read, or removed.
     CacheUnreadable,
     /// the project could not join the cache's list of projects, which gc keeps files for.
@@ -130,6 +132,7 @@ impl Warning {
             Warning::BuildUnbuilt => "build.unbuilt",
             Warning::BuildUnchecked => "build.unchecked",
             Warning::CacheChanged => "cache.changed",
+            Warning::CacheOverBudget => "cache.over_budget",
             Warning::CacheUnreadable => "cache.unreadable",
             Warning::CacheUnregistered => "cache.unregistered",
             Warning::DownloadEncoded => "download.encoded",
@@ -209,6 +212,7 @@ mod tests {
             BuildUnbuilt,
             BuildUnchecked,
             CacheChanged,
+            CacheOverBudget,
             CacheUnreadable,
             CacheUnregistered,
             DownloadEncoded,

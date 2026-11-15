@@ -260,6 +260,7 @@ fn rows(context: &Context) -> Vec<Shown> {
         only_variable: false,
     });
     shown.push(build_floor);
+    shown.push(optional_size("cache_budget", settings.cache_budget));
     shown.extend(variables(context));
     shown
 }
@@ -421,6 +422,18 @@ fn size(name: &'static str, set: Set<u64>) -> Shown {
         origin: vec![set.origin],
         variable: crate::settings::variable(name),
         said: units::size(set.value),
+        only_variable: false,
+    }
+}
+
+/// a size that may be unset, which then sets no limit.
+fn optional_size(name: &'static str, set: Set<Option<u64>>) -> Shown {
+    Shown {
+        name,
+        value: set.value.map_or(Value::Null, |bytes| json!(bytes)),
+        origin: vec![set.origin],
+        variable: crate::settings::variable(name),
+        said: set.value.map_or_else(|| "no limit".to_owned(), units::size),
         only_variable: false,
     }
 }

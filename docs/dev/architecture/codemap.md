@@ -69,6 +69,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/cli/sync.rs` | the loop: resolve what data.toml changed, learn every file's hash, fetch what the new lock names, write data.lock, then place; also `tell_stale`, the warning for a recipe not built yet or changed since its build, and `Loop::ready`, which fetches what a step reads | `Loop`, `Loop::relock` | `Scope`, `Upgrade`, `Loop::relock_dry`, `Loop::preview`, `Loop::write_lock`, `Loop::place`, `pinned` |
+| `src/cli/sync/cache_budget.rs` | the `cache_budget` setting: whether a run's downloads take the cache past it, and the question, refusal or warning that says what frees room | `weigh`, `ask` | `Past`, `Over`, `largest` |
 | `src/cli/sync/draft.rs` | a dataset on its way into data.lock: selected files whose pins are still being learned, with hashes no source states filled in from earlier locks or the bytes | `Draft` | `jobs`, `learn`, `unknown_archives`, `finish`, `filter` |
 | `src/cli/sync/rename.rs` | a source or recipe renamed in data.toml, which takes over the old name's pin when the match is unique, asking no source | `carry` | `Rename`, `forecast`, `results`, `pairs_by_key` |
 | `src/cli/sync/disk.rs` | the survey of the data folder, read once per command: racy files hashed, aliases, hardlinks someone edited, and what a removal leaves | `Survey`, `audit` | `read_within`, `hash_racy`, `check_doubted`, `retarget`, `smudge_edited`, `retired`, `left_behind` |

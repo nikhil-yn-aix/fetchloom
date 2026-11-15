@@ -114,6 +114,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_BUILD_FLOOR
                        the least free space a build's step may leave on the
                        cache's disk, as 20G; 1G or 1% of that disk by default
+  FETCHLOOM_CACHE_BUDGET
+                       how much the cache's files may hold, as 200G: a sync
+                       that would download past it asks first; none by default
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
@@ -135,9 +138,9 @@ const ENVIRONMENT: &str = "fetchloom environment
 
 a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
 memory, most_files, the archive_ settings, allowed_origins, s3_buckets,
-gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to
-and build_floor for every run, one per line, as jobs = 16. a variable wins over
-the file.
+gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to,
+build_floor and cache_budget for every run, one per line, as jobs = 16. a
+variable wins over the file.
 fetchloom settings shows each value and where it came from.
 
 keys are read as each source's own tools read them, and a variable wins over

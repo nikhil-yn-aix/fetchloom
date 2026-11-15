@@ -32,7 +32,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 21] = [
+const KEYS: [(&str, &str); 22] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -54,6 +54,7 @@ const KEYS: [(&str, &str); 21] = [
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
     ("build_floor", "FETCHLOOM_BUILD_FLOOR"),
+    ("cache_budget", "FETCHLOOM_CACHE_BUDGET"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
@@ -405,6 +406,9 @@ pub(crate) struct Settings {
     /// the least free space a recipe's step may leave on the disk holding the cache, or none for
     /// the larger of 1 GiB and 1% of that disk.
     pub(crate) build_floor: Set<Option<u64>>,
+    /// the most bytes the cache's files may hold before a run that downloads more asks first, or
+    /// none for no budget. nothing is ever deleted to keep within it.
+    pub(crate) cache_budget: Set<Option<u64>>,
 }
 
 impl Settings {
@@ -433,6 +437,7 @@ impl Settings {
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
             build_floor: Set::default(None),
+            cache_budget: Set::default(None),
             memory,
             steady_memory: memory.value,
             threads: None,
@@ -509,7 +514,12 @@ impl Settings {
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_folder(&given, "push_to")?,
-            build_floor: floor(&given, "build_floor")?,
+            build_floor: optional_size(
+                &given,
+                "build_floor",
+                "to use the default, the larger of 1.0 GiB and 1% of the disk holding the cache",
+            )?,
+            cache_budget: optional_size(&given, "cache_budget", "for no budget")?,
             memory,
             steady_memory: steady.value,
             threads,
@@ -767,9 +777,9 @@ fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Err
         })
 }
 
-/// the byte size `key` holds, such as `20G`, or none when it is unset or empty, for the default the
-/// disk holding the cache sets.
-fn floor(given: &Given<'_>, key: &str) -> Result<Set<Option<u64>>, Error> {
+/// the byte size `key` holds, such as `20G`, or none when it is unset or empty, which `unset`
+/// says the meaning of, as `for no budget`.
+fn optional_size(given: &Given<'_>, key: &str, unset: &str) -> Result<Set<Option<u64>>, Error> {
     let Some((text, origin, named)) = given.get(key) else {
         return Ok(Set::default(None));
     };
@@ -784,7 +794,7 @@ fn floor(given: &Given<'_>, key: &str) -> Result<Set<Option<u64>>, Error> {
                 format!("{named} is \"{text}\", which is not a size such as 512M or 4G"),
             )
             .help(format!(
-                "{} to use the default, the larger of 1.0 GiB and 1% of the disk holding the cache, or set it to a size such as 512M or 4G",
+                "{} {unset}, or set it to a size such as 512M or 4G",
                 undo(origin, key)
             ))
         })

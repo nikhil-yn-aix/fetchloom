@@ -1,6 +1,7 @@
 //! the loop at the heart of a project: resolve what data.toml changed, learn every file's hash,
 //! put what the lock names in the cache, then write data.lock.
 
+mod cache_budget;
 pub(super) mod disk;
 mod draft;
 pub(super) mod place;
@@ -113,6 +114,8 @@ pub(super) struct Loop<'a> {
     wrote_lock: AtomicBool,
     /// whether a person said yes despite a short disk, which also covers every download's size.
     roomy: AtomicBool,
+    /// whether this run found its downloads take the cache past `cache_budget`, which it tells once.
+    past_budget: AtomicBool,
     /// the command [`Loop::ready`] readies files for, which its help says to run again.
     readying: &'static str,
     /// whether placing follows relocking, so the first downloads tell what placing adds.
@@ -156,6 +159,7 @@ impl<'a> Loop<'a> {
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
+            past_budget: AtomicBool::new(false),
             readying: "build",
             places: AtomicBool::new(false),
             ahead: Mutex::default(),
@@ -1067,11 +1071,13 @@ impl<'a> Loop<'a> {
         );
         let called = fetch::called(told().map(|job| job.label.as_str()), planned.files);
         fetch::tell_planned(&self.context.output, &called, &planned);
+        let what = units::count(jobs.len() as u64, "file", "files");
+        self.ask_budget(&format!("downloading {what}"), room, None)?;
         let roomy = super::confirm(
             &self.context.output,
             self.yes(),
             self.context.settings.ask_above.value,
-            &units::count(jobs.len() as u64, "file", "files"),
+            &what,
             size,
             Some((self.cache.root(), room)),
         )
@@ -1128,6 +1134,7 @@ impl<'a> Loop<'a> {
         } else {
             self.download_room(lock, placing)?
         };
+        self.ask_budget("this sync", needed, Some(lock))?;
         let free = crate::space::free(self.cache.root());
         if crate::space::short(needed, free).is_none() {
             return self.ask_room_to_place(placing, needed);
@@ -1151,6 +1158,47 @@ impl<'a> Loop<'a> {
         .map_err(|error| self.as_left(error))?;
         self.roomy.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// asks once, as for a disk without room, when the `adding` bytes `doing` downloads would take
+    /// the cache past the `cache_budget` setting. only then are the cache's files read, and what
+    /// frees room told: gc's share and the largest datasets of `lock`, else of data.lock.
+    fn ask_budget(&self, doing: &str, adding: u64, lock: Option<&Lock>) -> Result<(), Error> {
+        if self.past_budget.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let (threads, stop) = (self.context.threads, &self.context.stop);
+        let mut scan = None;
+        let budget = self.context.settings.cache_budget.value;
+        let Some(past) = cache_budget::weigh(budget, adding, || {
+            let found = self.cache.scan_objects(threads, stop).ok()?;
+            let held = found.objects.iter().map(|object| object.size);
+            let held = held.fold(0, u64::saturating_add);
+            scan = Some(found);
+            Some(held)
+        }) else {
+            return Ok(());
+        };
+        self.past_budget.store(true, Ordering::Relaxed);
+        let now = SystemTime::now();
+        let freeable =
+            scan.and_then(|scan| super::cache::freeable_in(&self.cache, &scan, now, threads, stop));
+        let pinned = match lock {
+            Some(_) => None,
+            None => self.project.lock().ok().flatten(),
+        };
+        let largest = lock
+            .or(pinned.as_ref())
+            .map(|lock| cache_budget::largest(lock, cache_budget::LARGEST))
+            .unwrap_or_default();
+        let over = cache_budget::Over {
+            doing,
+            past,
+            freeable,
+            largest,
+        };
+        cache_budget::ask(&self.context.output, self.context.yes, &over)
+            .map_err(|error| self.as_left(error))
     }
 
     /// what downloading for placing takes on the cache's disk; an archive of unknown files counts

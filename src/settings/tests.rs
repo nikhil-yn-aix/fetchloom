@@ -68,6 +68,31 @@ fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
     );
 }
 
+/// no budget unless one is set, and a size the budget cannot read says how to have none.
+#[test]
+fn the_cache_budget_is_a_size_or_none() {
+    assert_eq!(read(&[], None).unwrap().cache_budget, Set::default(None));
+    assert_eq!(
+        read(&[("FETCHLOOM_CACHE_BUDGET", "200G")], None)
+            .unwrap()
+            .cache_budget,
+        Set {
+            value: Some(200 << 30),
+            origin: Origin::Environment
+        }
+    );
+    let error = read(&[("FETCHLOOM_CACHE_BUDGET", "200 GiB")], None).unwrap_err();
+    assert_eq!(error.kind, Kind::Usage);
+    assert_eq!(
+        error.message,
+        "FETCHLOOM_CACHE_BUDGET is \"200 GiB\", which is not a size such as 512M or 4G"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("unset FETCHLOOM_CACHE_BUDGET for no budget, or set it to a size such as 512M or 4G")
+    );
+}
+
 #[test]
 fn unset_variables_keep_the_defaults() {
     let settings = read(&[], None).unwrap();
@@ -257,7 +282,7 @@ fn a_mistyped_key_is_told_the_setting_it_is_near() {
     assert_eq!(
         unknown.help.as_deref(),
         Some(
-            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, build_floor, cache_budget, each a number or text"
         )
     );
 }

@@ -2767,6 +2767,74 @@ fn a_sync_told_yes_warns_of_too_little_room_and_goes_on() -> Result {
     Ok(())
 }
 
+/// a sync whose downloads take the cache past `cache_budget` is stopped like one short of room
+/// when no one can answer, saying what frees room, and goes on with a warning under `--yes`.
+/// `fetchloom cache` holds the cache's files against the budget.
+#[test]
+fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let fresh = clone(&sandbox, "fresh")?;
+    let cache = sandbox.folder("budget-cache")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&fresh, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_CACHE_BUDGET", "1.5K")
+            .output()
+    };
+    let output = run(&["sync", "one"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+
+    let output = run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{document}");
+    assert_eq!(
+        error["message"],
+        "this sync would bring the cache to 2.0 KiB, past the 1.5 KiB cache_budget"
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "`fetchloom cache gc` would free nothing now",
+            "this project's largest datasets are one (1.0 KiB) and two (1.0 KiB)"
+        ])
+    );
+    assert_eq!(document["work"]["bytes_down"], 0);
+    assert!(!fresh.join("data").join("two").exists());
+
+    let output = run(&["--json", "sync", "--yes"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warning(&document, "cache.over_budget")["message"],
+        "this sync brings the cache to 2.0 KiB, past the 1.5 KiB cache_budget",
+        "{document}"
+    );
+    assert!(fresh.join("data").join("two").exists());
+
+    let info = json(&run(&["--json", "cache"])?)?;
+    assert_eq!(info["result"]["budget"], 1536, "{info}");
+    assert_eq!(info["result"]["bytes"], 2048, "{info}");
+    let told = text(&run(&["cache"])?.stderr)?;
+    assert!(
+        told.contains(
+            "     Budget 2.0 KiB of 1.5 KiB used \u{b7} 512 B past it, so a sync that downloads more asks first\n"
+        ),
+        "{told}"
+    );
+    Ok(())
+}
+
 /// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {

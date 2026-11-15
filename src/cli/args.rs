@@ -109,7 +109,7 @@ on disk: nothing. it reads the FETCHLOOM_* variables and the settings file";
   fetchloom cache gc --now
   fetchloom cache verify
 
-on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache verify` notes changed ones, which are downloaded again when needed. neither changes data/";
+on disk: `cache` reports usage, against the cache_budget setting when one is set. `cache gc` deletes unused cached files; `cache verify` notes changed ones, which are downloaded again when needed. neither changes data/";
 
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
