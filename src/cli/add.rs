@@ -1125,6 +1125,7 @@ pub(super) async fn sync_add(
         .relock(manifest, old, &Upgrade::Nothing, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
+    work.tell_versions_kept(manifest, &before, &lock, &Upgrade::Nothing);
     for promise in promised {
         promise.kept(&lock)?;
     }

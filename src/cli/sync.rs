@@ -53,7 +53,7 @@ pub(super) enum Upgrade {
 }
 
 impl Upgrade {
-    pub(super) fn includes(&self, name: &str) -> bool {
+    fn includes(&self, name: &str) -> bool {
         match self {
             Upgrade::Nothing => false,
             Upgrade::All => true,
@@ -350,6 +350,38 @@ impl<'a> Loop<'a> {
             lock,
             &self.scope,
         )
+    }
+
+    /// says of each dataset `new` keeps at the version `before` pinned, though data.toml took that
+    /// version out of its ref, that it stays there and which command takes the newest. an upgrade
+    /// of it asked for the newest, so it says nothing.
+    pub(super) fn tell_versions_kept(
+        &self,
+        manifest: &Manifest,
+        before: &Before,
+        new: &Lock,
+        upgrade: &Upgrade,
+    ) {
+        for dataset in &new.datasets {
+            let Some(old) = before.get(new, &dataset.name) else {
+                continue;
+            };
+            let kept = old.resolved == dataset.resolved
+                && !upgrade.includes(&dataset.name)
+                && manifest
+                    .datasets
+                    .get(&dataset.name)
+                    .and_then(Entry::source)
+                    .is_some_and(|source| keeps_version(old, source));
+            if kept {
+                self.context.output.hint(&format!(
+                    "data.toml names no version of {}, so it stays at {}, as data.lock pins it; `{}` takes the newest",
+                    dataset.name,
+                    short_revision(dataset.resolved.clone()),
+                    super::project::command(&format!("lock --upgrade {}", dataset.name))
+                ));
+            }
+        }
     }
 
     /// puts in the cache every file of the fetched datasets `names`, as a build's private copy
@@ -2128,7 +2160,7 @@ fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String
 
 /// whether `source`'s ref is the one `locked` was pinned for with its version taken out, and
 /// `locked` pins a version of that same dataset, which a lock then keeps until an upgrade.
-pub(super) fn keeps_version(locked: &Locked, source: &Source) -> bool {
+fn keeps_version(locked: &Locked, source: &Source) -> bool {
     Reference::version_left_out(&locked.reference, &source.reference)
         && Reference::version_left_out(&locked.resolved, &source.reference)
 }
@@ -2263,7 +2295,7 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
 }
 
 /// a reference pinned to a 40-digit commit, shown cut to 7 digits as git does; data.lock keeps 40.
-pub(super) fn short_revision(reference: String) -> String {
+fn short_revision(reference: String) -> String {
     match reference.rsplit_once('@') {
         Some((head, revision))
             if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>

@@ -562,15 +562,30 @@ fn a_version_taken_out_stays_locked_until_an_upgrade() -> Result {
         Ok(fs::read_to_string(&lock)?.contains(&format!("resolved = \"github:jqlang/jq@{tag}\"")))
     };
 
-    let locked = run(&["lock"])?;
-    ok(&locked)?;
-    let said = text(&locked.stderr)?;
-    assert!(!said.contains("Upgraded"), "{said}");
-    assert!(
-        said.contains("hint: data.toml names no version of jq, so it stays at github:jqlang/jq@jq-1.8.2, as data.lock pins it; `fetchloom lock --upgrade jq` takes the newest"),
-        "{said}"
-    );
-    assert!(pinned("jq-1.8.2")?, "{}", fs::read_to_string(&lock)?);
+    // each command that pins data.toml anew keeps the version, and says so once
+    fs::write(sandbox.folder("more")?.join("more.csv"), "more")?;
+    let taken_out = (fs::read(&manifest)?, fs::read(&lock)?);
+    for args in [
+        &["lock"][..],
+        &["sync"],
+        &["add", "../more", "--as", "more"],
+    ] {
+        fs::write(&manifest, &taken_out.0)?;
+        fs::write(&lock, &taken_out.1)?;
+        let kept = run(args)?;
+        ok(&kept)?;
+        let said = text(&kept.stderr)?;
+        assert!(!said.contains("Upgraded"), "{args:?}: {said}");
+        assert!(
+            said.contains("hint: data.toml names no version of jq, so it stays at github:jqlang/jq@jq-1.8.2, as data.lock pins it; `fetchloom lock --upgrade jq` takes the newest"),
+            "{args:?}: {said}"
+        );
+        assert!(
+            pinned("jq-1.8.2")?,
+            "{args:?}: {}",
+            fs::read_to_string(&lock)?
+        );
+    }
     ok(&run(&["lock", "--check"])?)?;
 
     let upgraded = run(&["lock", "--upgrade", "jq"])?;

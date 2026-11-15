@@ -928,7 +928,6 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if args.dry.dry_run {
         return preview_lock(context, &project, &manifest, old, &upgrade).await;
     }
-    let kept_versions = versions_kept(&manifest, old.as_ref(), &upgrade);
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
     let (lock, before) = work.relock(&manifest, old, &upgrade, Vec::new()).await?;
     // a stop asked while the datasets were resolved leaves data.lock as it was
@@ -945,18 +944,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         "Upgraded",
         &std::collections::HashSet::new(),
     );
-    for (name, resolved) in kept_versions {
-        if lock
-            .get(&name)
-            .is_some_and(|locked| locked.resolved == resolved)
-        {
-            context.output.hint(&format!(
-                "data.toml names no version of {name}, so it stays at {}, as data.lock pins it; `{}` takes the newest",
-                engine::short_revision(resolved),
-                command(&format!("lock --upgrade {name}"))
-            ));
-        }
-    }
+    work.tell_versions_kept(&manifest, &before, &lock, &upgrade);
     let pins = engine::repinned(&before, &lock);
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
@@ -980,27 +968,6 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         placement: None,
         ..Report::default()
     })
-}
-
-/// each dataset of `old` that a lock keeps at the version data.lock pins, though data.toml took
-/// that version out of its ref, with the reference of that version.
-fn versions_kept(
-    manifest: &Manifest,
-    old: Option<&Lock>,
-    upgrade: &Upgrade,
-) -> Vec<(String, String)> {
-    let pins = old.map_or(&[][..], |old| &old.datasets[..]);
-    pins.iter()
-        .filter(|locked| !upgrade.includes(&locked.name))
-        .filter(|locked| {
-            manifest
-                .datasets
-                .get(&locked.name)
-                .and_then(manifest::Entry::source)
-                .is_some_and(|source| engine::keeps_version(locked, source))
-        })
-        .map(|locked| (locked.name.clone(), locked.resolved.clone()))
-        .collect()
 }
 
 /// said instead of "up to date" when a lock changed nothing but the recipes `stale` need a build.
@@ -1453,6 +1420,7 @@ async fn sync_surveyed(
         .instrument(tracing::debug_span!("relock"))
         .await
         .map_err(|error| work.before_placing(error))?;
+    work.tell_versions_kept(manifest, &before, &lock, &upgrade);
     // a renamed recipe's kept rebuild follows its pin to the new name
     for (old, new) in before.renamed() {
         if let Some(candidate) = survey.state.candidates.remove(old) {
