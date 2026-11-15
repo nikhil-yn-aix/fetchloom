@@ -96,11 +96,13 @@ impl Folder {
     }
 
     /// whether a state written for this folder is one for `here`: the same number, or the same
-    /// creation time. what either side cannot tell matches nothing.
+    /// creation time. what either side cannot tell matches nothing, and a time to the whole second,
+    /// as hfs+ keeps it, cannot tell a copy made in the same second apart.
     pub(crate) fn matches(&self, here: &Folder) -> bool {
         let same =
             |recorded: Option<u64>, found: Option<u64>| recorded.is_some() && recorded == found;
-        same(self.inode, here.inode) || same(self.created, here.created)
+        let fine = |created: Option<u64>| created.filter(|nanos| nanos % 1_000_000_000 != 0);
+        same(self.inode, here.inode) || same(fine(self.created), fine(here.created))
     }
 }
 
@@ -814,7 +816,8 @@ mod tests {
 
     /// a state is its folder's when the number or the creation time match, so a move on a disk of
     /// no lasting numbers keeps it, and a copy, whose both differ, does not. what either side
-    /// cannot tell matches nothing: without a creation time the number alone decides.
+    /// cannot tell matches nothing: without a creation time, or with one to the whole second, the
+    /// number alone decides, while exfat's 10 ms still match.
     #[test]
     fn a_folder_matches_by_its_number_or_its_creation_time() {
         let folder = |inode, created| Folder { inode, created };
@@ -832,6 +835,22 @@ mod tests {
             (folder(Some(7), None), folder(Some(8), Some(100)), false),
             (folder(Some(7), Some(100)), folder(Some(8), None), false),
             (folder(None, None), folder(None, None), false),
+            // hfs+ keeps whole seconds, which a copy made in the same second shares
+            (
+                folder(Some(7), Some(5_000_000_000)),
+                folder(Some(8), Some(5_000_000_000)),
+                false,
+            ),
+            (
+                folder(Some(7), Some(5_000_000_000)),
+                folder(Some(7), Some(5_000_000_000)),
+                true,
+            ),
+            (
+                folder(Some(7), Some(5_010_000_000)),
+                folder(Some(8), Some(5_010_000_000)),
+                true,
+            ),
         ] {
             assert_eq!(recorded.matches(&here), matches, "{recorded:?} {here:?}");
         }

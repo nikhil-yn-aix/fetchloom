@@ -2344,6 +2344,17 @@ fn a_state_whose_folder_kept_its_creation_time_is_still_used() -> Result {
     let Ok(created) = fs::metadata(sandbox.work())?.created() else {
         return crate::support::skipped("creation-time", "this disk keeps no creation time");
     };
+    // a time to the whole second, as hfs+ keeps it, cannot tell folders apart, so it counts as none
+    if created
+        .duration_since(std::time::UNIX_EPOCH)?
+        .subsec_nanos()
+        == 0
+    {
+        return crate::support::skipped(
+            "creation-time",
+            "this disk keeps creation times to the whole second",
+        );
+    }
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let path = sandbox.work().join(".fetchloom").join("state");
