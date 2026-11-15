@@ -292,6 +292,22 @@ impl Partial {
         (any && open && kept.len() >= record.received).then_some(record)
     }
 
+    /// how many bytes a part holds that no record names, as a run killed before its first record,
+    /// or once every byte of a small file was in, leaves: a part it may write on, or one sealed to
+    /// publish. only a hash the source states can prove them, once the file is in.
+    pub(crate) fn unrecorded(&self) -> Option<u64> {
+        if self.recorded().is_some() {
+            return None;
+        }
+        let kept = self
+            .folder
+            .read_file(name_of(&self.bytes))
+            .and_then(|file| file.metadata())
+            .ok()?;
+        let open = continuable(&kept) || self.sealed(&kept);
+        (open && kept.len() > 0).then_some(kept.len())
+    }
+
     /// whether `metadata` is of a part a run sealed to publish and never published: read-only,
     /// and otherwise one it could write on, with no other name, so no object's.
     fn sealed(&self, metadata: &Metadata) -> bool {
@@ -301,17 +317,19 @@ impl Partial {
     }
 
     /// makes such a sealed part writable again when it holds the `offset` bytes its record names,
-    /// so it is published as any finished download is.
-    fn unseal(&self, offset: u64) {
+    /// or, `unrecorded`, the `offset` bytes of a part no record names, which a hash then checks, so
+    /// it is published as any finished download is.
+    fn unseal(&self, offset: u64, unrecorded: bool) {
         let Ok(file) = self.folder.read_file(name_of(&self.bytes)) else {
             return;
         };
         let Ok(metadata) = file.metadata() else {
             return;
         };
-        let named = self
-            .recorded()
-            .is_some_and(|record| record.names_all(offset));
+        let named = match self.recorded() {
+            Some(record) => record.names_all(offset),
+            None => unrecorded,
+        };
         if !named || metadata.len() != offset || !self.sealed(&metadata) {
             return;
         }
@@ -334,21 +352,23 @@ impl Partial {
 
     /// writes from byte `offset` on, after hashing the bytes before it again, which fail with
     /// [`io::ErrorKind::InvalidData`] when they no longer hash as recorded or may not be continued.
-    /// bytes past it are cut unless `keep` keeps a split download's ranges that still hash as
-    /// recorded. `md5` also computes the MD5, to check one a source stated. a download too small
-    /// for a hash worker of its own hashes inline; a larger one hashes as `hashing` says.
+    /// `unrecorded` takes the bytes of a part no record names at all as they are, for a download
+    /// whose stated hash checks them once the file is in. bytes past `offset` are cut unless
+    /// `keep` keeps a split download's ranges that still hash as recorded. `md5` also computes
+    /// the MD5, to check one a source stated. a download too small for a hash worker of its own
+    /// hashes inline; a larger one hashes as `hashing` says.
     pub(crate) fn writer_with(
         &self,
         offset: u64,
         length: Option<u64>,
         validators: Validators,
         md5: bool,
-        keep: bool,
+        (keep, unrecorded): (bool, bool),
         hashing: &Hashing,
     ) -> io::Result<PartialWriter> {
         let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
         let (file, begun) = self
-            .open(offset, keep, lean)
+            .open(offset, keep, lean, unrecorded)
             .map_err(|err| self.cache.explained(&self.folder.path(), err))?;
         let file = Arc::new(file);
         let mut hasher = if md5 {
@@ -366,12 +386,10 @@ impl Partial {
             })?;
         }
         let sha256 = hasher.sha256_so_far();
-        let recorded = if lean {
-            None
-        } else {
-            self.recorded().filter(|record| record.received == offset)
-        };
-        if offset > 0 && recorded.as_ref().map(|record| record.sha256) != Some(sha256) {
+        let record = if lean { None } else { self.recorded() };
+        let vouched = unrecorded && record.is_none();
+        let recorded = record.filter(|record| record.received == offset);
+        if offset > 0 && !vouched && recorded.as_ref().map(|record| record.sha256) != Some(sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "the bytes kept from an earlier download are not the ones it recorded",
@@ -398,6 +416,7 @@ impl Partial {
             writeback: cfg!(target_os = "linux")
                 .then(|| Writeback::new(WRITEBACK_AFTER, WRITEBACK_EVERY)),
             saved: Instant::now(),
+            named: recorded.is_some(),
             folder: Arc::clone(&self.folder),
             bytes: self.bytes.clone(),
             record_path: self.record.clone(),
@@ -427,7 +446,14 @@ impl Partial {
         md5: bool,
         keep: bool,
     ) -> io::Result<PartialWriter> {
-        self.writer_with(offset, length, validators, md5, keep, &Hashing::default())
+        self.writer_with(
+            offset,
+            length,
+            validators,
+            md5,
+            (keep, false),
+            &Hashing::default(),
+        )
     }
 
     /// forgets the bytes so far, so the download starts again from the first byte.
@@ -454,14 +480,20 @@ impl Partial {
     /// file, as a read-only one may be a name of the object, which must never become writable;
     /// only a sealed part with no other name, holding the `offset` bytes its record names, is
     /// opened again.
-    fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<(File, Option<SystemTime>)> {
+    fn open(
+        &self,
+        offset: u64,
+        keep: bool,
+        lean: bool,
+        unrecorded: bool,
+    ) -> io::Result<(File, Option<SystemTime>)> {
         let name = name_of(&self.bytes);
         if lean && let Ok(file) = self.folder.create_new(name) {
             let begun = super::object::begun(&file);
             return Ok((file, begun));
         }
         if offset > 0 {
-            self.unseal(offset);
+            self.unseal(offset, unrecorded);
         }
         // unix counts a second name in the metadata `continuable` reads; windows reports no link
         // count there, so it is asked for apart
@@ -551,6 +583,8 @@ pub(crate) struct PartialWriter {
     /// what was written since the disk last started writing it, on linux.
     writeback: Option<Writeback>,
     saved: Instant,
+    /// whether a record on the disk names this download's bytes, as one does from its first save.
+    named: bool,
     folder: Arc<Folder>,
     bytes: PathBuf,
     record_path: PathBuf,
@@ -634,6 +668,10 @@ impl PartialWriter {
             self.prefix = end;
             self.absorb()?;
         } else {
+            // a part no record names goes on from its end, so it must never hold a gap
+            if !self.named {
+                self.checkpoint()?;
+            }
             write_all_at(&self.file, at, bytes)?;
             self.wrote(at, bytes.len());
             if let Some(run) = self.runs.iter_mut().find(|run| run.end == at) {
@@ -752,6 +790,7 @@ impl PartialWriter {
         self.folder
             .replace(name_of(&self.record_path), &text, &scratch)?;
         self.saved = Instant::now();
+        self.named = true;
         Ok(())
     }
 

@@ -404,6 +404,9 @@ struct Body {
     md5: bool,
     /// keep the ranges an earlier split download finished past `offset`.
     keep: bool,
+    /// take the bytes before `offset` of a part no record names, which a stated hash checks once
+    /// the file is in.
+    unrecorded: bool,
     hashing: crate::cache::Hashing,
 }
 
@@ -965,7 +968,8 @@ impl Net {
     ) -> Result<Answer, Failure> {
         let earlier = partial
             .resumable()
-            .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
+            .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some())
+            .or_else(|| unrecorded(fetch, partial));
         let length = earlier.as_ref().and_then(|_| partial.length());
         // bytes kept that are all of the file ask for their last byte alone: an answer of the same
         // version says they still are, and names the file as a whole answer does
@@ -1028,7 +1032,7 @@ impl Net {
                 && headers::range_start(&head) == Some(0)
                 && earlier
                     .as_ref()
-                    .is_some_and(|(_, kept)| !headers::changed(kept, &validators));
+                    .is_some_and(|(_, kept)| !other_version(kept, &validators));
             return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);
@@ -1056,6 +1060,7 @@ impl Net {
                 && status == StatusCode::PARTIAL_CONTENT
                 && earlier.is_some()
                 && total.is_some(),
+            unrecorded: fetch.expect.proves(),
             hashing: self.hashing.clone(),
         };
         let resumable = if std::mem::take(&mut state.sent_whole) {
@@ -1181,6 +1186,7 @@ impl Net {
             validators: validators.clone(),
             md5: fetch.expect.needs_md5(),
             keep: false,
+            unrecorded: fetch.expect.proves(),
             hashing: self.hashing.clone(),
         };
         let Some(mut writer) = open(partial, body).await? else {
@@ -1697,7 +1703,7 @@ fn confirmed(
         (StatusCode::RANGE_NOT_SATISFIABLE, None) => true,
         _ => false,
     };
-    (alone && !headers::changed(kept, validators)).then_some(total)
+    (alone && !other_version(kept, validators)).then_some(total)
 }
 
 impl Net {
@@ -1719,7 +1725,7 @@ impl Net {
             StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
                 (Some((received, recorded)), Some(start))
                     if start == *received
-                        && !headers::changed(recorded, validators)
+                        && !other_version(recorded, validators)
                         && length.is_none_or(|length| {
                             headers::total_length(head, status) == Some(length)
                         }) =>
@@ -1939,7 +1945,8 @@ fn kept_before(
     partial: &Partial,
     on: Listener<'_>,
 ) -> Result<Option<(u64, Validators)>, Error> {
-    let Some((received, validators)) = partial.resumable() else {
+    let Some((received, validators)) = partial.resumable().or_else(|| unrecorded(fetch, partial))
+    else {
         return Ok(None);
     };
     let proven = fetch.expect.proves() || if_range(&validators).is_some();
@@ -1950,6 +1957,23 @@ fn kept_before(
     let stated = partial.length().or(fetch.expect.size);
     let whole = fetch.expect.pins() && received > 0 && stated == Some(received);
     Ok(whole.then_some((received, validators)))
+}
+
+/// the bytes of a part no record names, as kept bytes no server named, for a download whose stated
+/// hash checks them once the file is in: nothing else can.
+fn unrecorded(fetch: &Fetch, partial: &Partial) -> Option<(u64, Validators)> {
+    if !fetch.expect.proves() {
+        return None;
+    }
+    partial
+        .unrecorded()
+        .map(|bytes| (bytes, Validators::default()))
+}
+
+/// whether an answer states another version than kept bytes came with. bytes kept with no `ETag`
+/// or `Last-Modified`, which only a stated hash proves, name no version for one to differ from.
+fn other_version(kept: &Validators, stated: &Validators) -> bool {
+    (kept.etag.is_some() || kept.last_modified.is_some()) && headers::changed(kept, stated)
 }
 
 /// the headers that ask for the rest of an earlier download, which `If-Range` keeps to the
@@ -1985,11 +2009,12 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
         validators,
         md5,
         keep,
+        unrecorded,
         hashing,
     } = body;
     let partial = partial.clone();
     let opened = tokio::task::spawn_blocking(move || {
-        partial.writer_with(offset, total, validators, md5, keep, &hashing)
+        partial.writer_with(offset, total, validators, md5, (keep, unrecorded), &hashing)
     })
     .await
     .map_err(|err| Failure::Final(local(&io::Error::other(err))))?;

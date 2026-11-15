@@ -408,6 +408,24 @@ fn a_writer_that_keeps_no_ranges_cuts_them() {
     );
 }
 
+/// a part no record names goes on from its end, so a stream that writes past the prefix records
+/// the prefix first: a run killed then leaves no gap a later run would take for kept bytes.
+#[test]
+fn a_part_records_its_prefix_before_a_byte_past_it() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/ahead");
+    let mut writer = split_writer(&partial);
+    writer.write_at(0, b"abc").unwrap();
+    writer.write_at(6, b"ghi").unwrap();
+    drop(writer);
+    let record = partial
+        .recorded()
+        .expect("a part holding a gap has a record");
+    assert_eq!((record.received, record.ranges.len()), (3, 0));
+    assert_eq!(partial.unrecorded(), None);
+    assert_eq!(fs::read(&partial.bytes).unwrap(), b"abc\0\0\0ghi");
+}
+
 #[test]
 fn a_download_with_gaps_is_never_published() {
     let (_dir, cache) = cache();

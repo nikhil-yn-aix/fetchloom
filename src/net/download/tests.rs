@@ -650,6 +650,117 @@ fn a_whole_answer_as_long_as_a_part_kept_whole_finishes_it() {
     }
 }
 
+/// leaves what a run killed before it recorded any of `bytes` from `url` leaves, as a small file
+/// all of whose bytes came does, or any file in its first second: the bytes and no record of
+/// them, sealed for publication when `sealed`.
+fn unrecorded_part(cache: &Cache, url: &Url, bytes: &[u8], sealed: bool) {
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    drop(partial);
+    let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+    let part = cache
+        .root()
+        .join("partial")
+        .join(&key[..1])
+        .join(format!("{key}.part"));
+    fs::write(&part, bytes).unwrap();
+    if sealed {
+        crate::cache::tests::seal(&part);
+    }
+}
+
+/// bytes a killed run never recorded are kept when the file's pin can check them: all of a
+/// pinned file, whatever its size and sealed or not, are put in place with no request; part of
+/// it goes on from where it ends, and the pin checks the joined bytes. bytes that are not the
+/// pinned file, or no pin to check them, start the file over.
+#[test]
+fn bytes_no_record_names_are_kept_when_a_pin_checks_them() {
+    let body = pattern(0, (3 << 20) + 5);
+    let small = pattern(7, 300_000);
+    let pin = |bytes: &[u8]| Expect {
+        sha256: Some(crate::digest::sha256(bytes)),
+        size: Some(bytes.len() as u64),
+        ..Expect::default()
+    };
+    let half = body.len() / 2;
+    let rest = format!("bytes {half}-{}/{}", body.len() - 1, body.len());
+    let whole = |bytes: &[u8]| reply("200 OK", &[("ETag", "\"v1\"")], bytes);
+    let mut damaged = body.clone();
+    damaged[10] ^= 1;
+    for (expect, kept, file, answer, asked, moved) in [
+        (pin(&body), &body[..], &body, whole(&body), None, 0),
+        (pin(&small), &small[..], &small, whole(&small), None, 0),
+        (
+            pin(&body),
+            &body[..half],
+            &body,
+            reply(
+                "206 Partial Content",
+                &[("Content-Range", &rest), ("ETag", "\"v1\"")],
+                &body[half..],
+            ),
+            Some(format!("range: bytes={half}-")),
+            body.len() - half,
+        ),
+        (
+            pin(&body),
+            &damaged[..],
+            &body,
+            whole(&body),
+            Some("accept:".to_owned()),
+            body.len(),
+        ),
+        (
+            Expect::default(),
+            &body[..half],
+            &body,
+            whole(&body),
+            Some("accept:".to_owned()),
+            body.len(),
+        ),
+    ] {
+        for sealed in [false, true] {
+            let whole_part = kept.len() == file.len();
+            if sealed && !whole_part {
+                continue;
+            }
+            let (url, heads) = serve(vec![answer.clone()]);
+            let folder = tempfile::tempdir().unwrap();
+            let cache = Cache::open(folder.path().join("cache")).unwrap();
+            unrecorded_part(&cache, &url, kept, sealed);
+            let mut fetch = Fetch::new(url.clone());
+            fetch.expect = expect;
+            let case = format!(
+                "{} of {} kept, {expect:?}, sealed: {sealed}",
+                kept.len(),
+                file.len()
+            );
+            let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(())))
+                .unwrap_or_else(|err| panic!("{case}: {err:?}"));
+            assert_eq!(fetched.digest, crate::digest::sha256(file), "{case}");
+            assert_eq!(fetched.moved, moved as u64, "{case}");
+            let heads: Vec<String> = heads
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|head| head.to_ascii_lowercase())
+                .collect();
+            match &asked {
+                None => assert!(heads.is_empty(), "{case}: {heads:?}"),
+                Some(asked) => {
+                    assert_eq!(heads.len(), 1, "{case}: {heads:?}");
+                    let ranged = heads[0].contains("range:");
+                    assert!(
+                        heads[0].contains(asked.as_str()) && ranged == asked.starts_with("range"),
+                        "{case}: {heads:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// a pinned file whose every byte an earlier run kept is checked and put in place with no
 /// request, whether that run was killed before or after it sealed the file to publish it.
 #[test]
