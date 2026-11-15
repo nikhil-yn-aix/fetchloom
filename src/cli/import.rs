@@ -834,6 +834,19 @@ fn in_data_folder(
         "keep {data_dir}/ as it is by setting data_dir under [project] in data.toml to another folder"
     );
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let manifest = Project { root: root.clone() }
+        .manifest()
+        .ok()
+        .map(|(_, manifest)| manifest);
+    if start != root.join(data_dir)
+        && let Some(manifest) = &manifest
+        && let Some(owner) = owner(start, &root, manifest)
+    {
+        return error.help(format!(
+            "it is part of {owner} already, so there is nothing to add; `{}` prints where {owner} is",
+            super::project::command(&format!("path {owner}"))
+        ));
+    }
     let named = start
         .file_name()
         .and_then(|own| own.to_str())
@@ -841,6 +854,16 @@ fn in_data_folder(
     let Some((own, name)) = named.filter(|_| start != root.join(data_dir)) else {
         return error.help(format!("move what you keep there out of it, or {keep}"));
     };
+    // the name data.toml has already would make the add take the next free one
+    let taken = |name: &str| {
+        manifest
+            .as_ref()
+            .is_some_and(|read| read.datasets.contains_key(name))
+    };
+    let name = std::iter::once(name.clone())
+        .chain((2..100).map(|number| format!("{name}-{number}")))
+        .find(|name| !taken(name))
+        .unwrap_or(name);
     // a name the project's folder holds already would take the files in rather than be theirs
     let Some(out) = (1..100)
         .map(|number| match number {
@@ -862,12 +885,47 @@ fn in_data_folder(
     } else {
         format!(" --as {name}")
     };
+    // `mv .` cannot move the folder it stands in, so that one is named from its parent
+    let here = std::fs::canonicalize(here).unwrap_or_else(|_| here.to_path_buf());
+    let from = match here.strip_prefix(start) {
+        Ok(inside) => format!("{}{own}", "../".repeat(inside.components().count() + 1)),
+        Err(_) => shown.trim().to_owned(),
+    };
     error.help(format!(
         "move it out first, with `mv {} {}`, then run `{}` to place its files in {up}{data_dir}/{name}, or {keep}",
-        super::shell_word(shown.trim()),
+        super::shell_word(&from),
         super::shell_word(moved.strip_prefix("./").unwrap_or(&moved)),
         super::project::command(&format!("add {}{renamed}", super::shell_word(&moved)))
     ))
+}
+
+/// the dataset of `manifest` whose folder `start` is, or whose file there data.lock pins: an
+/// add of `start` would bring in what that dataset holds already.
+fn owner(start: &Path, root: &Path, manifest: &Manifest) -> Option<String> {
+    let lock = Project {
+        root: root.to_path_buf(),
+    }
+    .lock()
+    .ok()
+    .flatten();
+    manifest
+        .datasets
+        .keys()
+        .find(|name| {
+            let Ok(folder) = std::fs::canonicalize(root.join(plan::folder(manifest, name))) else {
+                return false;
+            };
+            let Ok(inside) = start.strip_prefix(&folder) else {
+                return false;
+            };
+            let inside = inside.to_string_lossy().replace('\\', "/");
+            inside.is_empty()
+                || lock
+                    .as_ref()
+                    .and_then(|lock| lock.get(name))
+                    .is_some_and(|locked| locked.files.iter().any(|file| file.path == inside))
+        })
+        .cloned()
 }
 
 /// the name a dataset imported from `start` takes without `--as`: the folder's, or the file's

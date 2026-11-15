@@ -523,6 +523,50 @@ fn data_already_in_the_data_folder_is_moved_out_first() -> Result {
     Ok(())
 }
 
+/// a path in the data folder that a dataset holds already is that dataset's, so nothing is added
+/// twice; a folder named from inside it is moved from its parent, since `mv .` cannot move it,
+/// and a name data.toml has already is never promised.
+#[test]
+fn a_path_a_dataset_holds_already_is_not_added_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    assert_eq!(sandbox.run(&["add", "../flowers"])?.status.code(), Some(0));
+    let work = sandbox.work();
+    let inside = work.join("data").join("flowers");
+    let refused = |here: &Path, typed: &str| -> Result<serde_json::Value> {
+        let output = sandbox
+            .command_in(here, &["--json", "add", typed])
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{typed}: {}",
+            text(&output.stdout)?
+        );
+        Ok(json(&output)?["errors"][0]["help"].clone())
+    };
+    for typed in ["./sepals.csv", "petals/red.csv", "."] {
+        assert_eq!(
+            refused(&inside, typed)?,
+            "it is part of flowers already, so there is nothing to add; `fetchloom path flowers` prints where flowers is",
+            "{typed}"
+        );
+    }
+    fs::write(inside.join("flowers.csv"), b"mine\n")?;
+    assert_eq!(
+        refused(&inside, "./flowers.csv")?,
+        "move it out first, with `mv ./flowers.csv ../../flowers.csv`, then run `fetchloom add ../../flowers.csv --as flowers-2` to place its files in ../../data/flowers-2, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
+    );
+    let raw = work.join("data").join("raw");
+    fs::create_dir_all(&raw)?;
+    fs::write(raw.join("visits.csv"), b"id\n1\n")?;
+    assert_eq!(
+        refused(&raw, ".")?,
+        "move it out first, with `mv ../raw ../../raw`, then run `fetchloom add ../../raw` to place its files in ../../data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
+    );
+    Ok(())
+}
+
 /// raw data imported from inside the git work tree, where `git add .` takes it, gets a warning with
 /// the commands that keep it out, and none once .gitignore leaves it out.
 #[test]
