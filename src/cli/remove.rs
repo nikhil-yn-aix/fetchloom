@@ -224,8 +224,19 @@ fn named(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
 /// the dataset, and `exclude` leaves out files below it.
 fn exclusion(manifest: &Manifest, typed: &str) -> Option<String> {
     let path = typed.trim_start_matches("./").trim_end_matches('/');
-    path.strip_prefix(&format!("{}/", manifest.data_dir))?;
     let command = super::project::command;
+    // the form `path` takes, `iris/Iris.csv`, names a file of a dataset too
+    if let Some((name, rest)) = path.split_once('/')
+        && manifest.datasets.contains_key(name)
+        && !rest.is_empty()
+    {
+        let file = format!("{}/{rest}", plan::folder(manifest, name));
+        return Some(format!(
+            "exclude leaves out files by their paths, as in `{}`",
+            command(&format!("exclude {}", crate::suggested::shell_word(&file)))
+        ));
+    }
+    path.strip_prefix(&format!("{}/", manifest.data_dir))?;
     if let Some(name) = manifest
         .datasets
         .keys()

@@ -519,6 +519,26 @@ fn exclude_and_remove_point_at_each_other() -> Result {
         assert_eq!(output.status.code(), Some(2), "{arguments:?}");
         assert_eq!(json(&output)?["errors"][0]["help"], help, "{arguments:?}");
     }
+    // a file named as `path` names it, or by its name alone where one dataset holds it
+    tree(&sandbox)?;
+    for (arguments, help) in [
+        (
+            &["exclude", "tree/sub/s1.txt", "--dry-run"][..],
+            "did you mean `fetchloom --json exclude data/tree/sub/s1.txt --dry-run`?",
+        ),
+        (
+            &["exclude", "keep.txt"],
+            "did you mean `fetchloom --json exclude data/tree/keep.txt`?",
+        ),
+        (
+            &["remove", "tree/keep.txt"],
+            "exclude leaves out files by their paths, as in `fetchloom exclude data/tree/keep.txt`",
+        ),
+    ] {
+        let output = sandbox.run(&[&["--json"][..], arguments].concat())?;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert_eq!(json(&output)?["errors"][0]["help"], help, "{arguments:?}");
+    }
     Ok(())
 }
 

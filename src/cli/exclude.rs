@@ -340,7 +340,7 @@ fn data_paths(
         .iter()
         .map(|path| {
             in_data_folder(root, here, &manifest.data_dir, path).map_err(|error| {
-                match removal(manifest, path) {
+                match removal(manifest, path).or_else(|| meant(manifest, (root, here), path)) {
                     Some(help) => error.help(help),
                     None => error,
                 }
@@ -359,6 +359,33 @@ fn removal(manifest: &Manifest, arg: &Path) -> Option<String> {
         "to take {name} out, run `{}`; to leave out some of its files, name them as {}/<file>",
         super::project::command(&format!("remove {name}")),
         plan::folder(manifest, name)
+    ))
+}
+
+/// the line meant by a file named as `path` names one, `iris/Iris.csv`, or by its name alone when
+/// one dataset's folder holds a file of that name: the path in the data folder, seen from `here`.
+fn meant(manifest: &Manifest, (root, here): (&Path, &Path), arg: &Path) -> Option<String> {
+    let typed = arg.to_str()?;
+    let path = match typed.split_once('/') {
+        Some((name, rest)) if manifest.datasets.contains_key(name) && !rest.is_empty() => {
+            format!("{}/{rest}", plan::folder(manifest, name))
+        }
+        Some(_) => return None,
+        None => {
+            let mut holding = manifest
+                .datasets
+                .keys()
+                .map(|name| format!("{}/{typed}", plan::folder(manifest, name)))
+                .filter(|path| std::fs::symlink_metadata(root.join(path)).is_ok());
+            let only = holding.next()?;
+            holding.next().is_none().then_some(only)?
+        }
+    };
+    let seen = format!("{}{path}", super::up_to(root, here));
+    let instead = super::project::command(&format!("exclude {}", super::shell_word(&seen)));
+    Some(format!(
+        "did you mean `{}`?",
+        super::meant(&[typed], &[&seen], instead)
     ))
 }
 
