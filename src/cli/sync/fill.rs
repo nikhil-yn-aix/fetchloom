@@ -1,7 +1,7 @@
 //! datasets `add --no-sync` pinned by what their sources state, as relocking meets them. a sync
 //! downloads each one it covers, checks every stated digest and size, and pins it whole as if its
-//! source listed it again; every other run carries it as it is. one data.toml changed, dropped or
-//! an upgrade asks for goes the way of any changed pin.
+//! source listed it again; every other run carries it as it is. one data.toml changed or no longer
+//! has, or an upgrade asks for, goes the way of any changed pin.
 
 use std::collections::HashSet;
 
