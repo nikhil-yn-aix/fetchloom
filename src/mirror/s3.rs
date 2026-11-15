@@ -381,7 +381,7 @@ impl Pusher {
         // a push signs from its first request, so its writes never go out without a key it has
         signing.refused(&Located::named(top.bucket.clone(), None), None)?;
         net.trust(top.bucket.endpoint().cloned());
-        let (multipart_above, least_part) = parts_from_settings();
+        let (multipart_above, least_part) = part_limits();
         Ok(Pusher {
             net,
             top,
@@ -948,7 +948,7 @@ impl From<Error> for Fault {
 
 /// the multipart threshold and least part: S3's, or in debug builds the size
 /// `FETCHLOOM_TEST_MULTIPART` sets for both, so a test pushes a small file in parts.
-fn parts_from_settings() -> (u64, u64) {
+fn part_limits() -> (u64, u64) {
     #[cfg(debug_assertions)]
     if let Some(size) = std::env::var("FETCHLOOM_TEST_MULTIPART")
         .ok()
