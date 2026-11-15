@@ -307,7 +307,7 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
                 crate::units::grouped(most as u64)
             ),
         )
-        .help("raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"));
+        .help("raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"));
     }
     if let Parts::Folder(root) = parts {
         folder(root)?;
@@ -714,7 +714,12 @@ mod tests {
         };
         let error =
             read::<LockedFile>(Parts::Folder(Path::new("/nowhere")), "huge", &listed).unwrap_err();
-        assert!(error.help.unwrap().contains("FETCHLOOM_MOST_FILES"));
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
+            )
+        );
     }
 
     fn members(count: usize) -> Vec<Member> {
