@@ -19,7 +19,7 @@ use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock::archives::{self, Pinned};
-use crate::project::lock::{Lock, Locked, Waiting};
+use crate::project::lock::{Lock, Locked, LockedFile, Waiting};
 use crate::project::manifest::{Manifest, Members};
 use crate::project::state::Candidate;
 use crate::recipe;
@@ -655,7 +655,7 @@ fn check(
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     survey.retarget(&project.root, &planned.targets);
-    compare(&mut status, project, &survey, &planned)?;
+    compare(&mut status, project, &manifest, &survey, &planned)?;
     let unplaced: HashSet<&str> = status.unplaced.iter().map(String::as_str).collect();
     for path in &status.unneeded {
         if let Some(placed) = survey.state.files.get(path)
@@ -924,6 +924,7 @@ fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked, members: &Mem
 fn compare(
     status: &mut Status,
     project: &Project,
+    manifest: &Manifest,
     survey: &Survey,
     planned: &plan::Plan<'_>,
 ) -> Result<(), Error> {
@@ -1012,18 +1013,47 @@ fn compare(
         .iter()
         .map(|(dataset, _)| *dataset)
         .collect();
+    let unrecorded = unrecorded_folders(manifest, survey, &planned.unknown);
     (status.unneeded, status.extra) = extra(survey, &wanted)
         .into_iter()
-        .filter(|path| {
-            !survey
-                .state
-                .files
-                .get(path)
-                .is_some_and(|placed| unsure.contains(placed.dataset.as_str()))
+        .filter(|path| match survey.state.files.get(path) {
+            Some(placed) => !unsure.contains(placed.dataset.as_str()),
+            None => !unrecorded
+                .iter()
+                .any(|folder| path.starts_with(folder.as_str())),
         })
         .partition(|path| going.contains(path));
     status.kept_copies = kept_copies(&status.extra, &wanted);
     Ok(())
+}
+
+/// the folders, each ending in `/`, where an archive of `unknown` unpacks for a dataset of which
+/// `survey` records no placed file, as in a copy, whose state is not used: any file there may be
+/// one of the archive's.
+fn unrecorded_folders(
+    manifest: &Manifest,
+    survey: &Survey,
+    unknown: &[(&str, &LockedFile)],
+) -> Vec<String> {
+    if unknown.is_empty() {
+        return Vec::new();
+    }
+    let recorded: HashSet<&str> = survey
+        .state
+        .files
+        .values()
+        .map(|placed| placed.dataset.as_str())
+        .collect();
+    unknown
+        .iter()
+        .filter(|(dataset, _)| !recorded.contains(dataset))
+        .map(|(dataset, archive)| {
+            format!(
+                "{}/",
+                plan::unpacked_folder(manifest, dataset, &archive.path)
+            )
+        })
+        .collect()
 }
 
 /// the files of `extra` named as sync names the changed copy it keeps of a file of `wanted` it put

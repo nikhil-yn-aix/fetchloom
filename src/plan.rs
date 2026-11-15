@@ -682,6 +682,16 @@ pub(crate) fn unpacked_paths(archive: &str, alone: bool, members: &[Member]) -> 
     place_under(&inside, members, |path| path)
 }
 
+/// the folder, relative to the project, that every file of `archive`, a file of `dataset`, lands
+/// below, whatever the archive holds: the one the archive is in, as [`unpacked_paths`] places.
+pub(crate) fn unpacked_folder(manifest: &Manifest, dataset: &str, archive: &str) -> String {
+    let folder = folder(manifest, dataset);
+    match archive.rsplit_once('/') {
+        Some((beside, _)) => format!("{folder}/{beside}"),
+        None => folder,
+    }
+}
+
 fn place_under(folder: &str, members: &[Member], rest: impl Fn(&str) -> &str) -> Vec<String> {
     members
         .iter()

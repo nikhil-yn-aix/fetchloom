@@ -404,6 +404,43 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
     Ok(())
 }
 
+/// in a copy no file has a record, so nothing tells the zip's files from others in its folder:
+/// status calls none of them extra, as it says it does not check them. a file elsewhere is extra.
+#[test]
+fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (_server, two, cache) = copied_zip(&sandbox, 1)?;
+    fs::write(two.join("data").join("notes.txt"), b"mine\n")?;
+    let status = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let document = json(&status(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(
+        (
+            &result["not_unpacked"],
+            &result["extra"],
+            &result["unneeded"]
+        ),
+        (
+            &serde_json::json!(["data/dataset/dataset.zip"]),
+            &serde_json::json!(["data/notes.txt"]),
+            &serde_json::json!([])
+        ),
+        "{document}"
+    );
+    let output = status(&["status"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        text(&output.stdout)?,
+        "      Extra data/notes.txt\n  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+    );
+    Ok(())
+}
+
 /// a clone whose cache never held the zip downloads it first, so status counts it among what a
 /// sync would download, as the dry run does.
 #[test]

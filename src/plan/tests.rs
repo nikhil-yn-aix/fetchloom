@@ -87,6 +87,11 @@ fn unpacked(archive: &str, members: &[&str], others: &[&str]) -> Vec<String> {
         .map(|target| target.path)
         .collect();
     paths.sort();
+    let below = format!("{}/", unpacked_folder(&manifest(ONE), "a", archive));
+    assert!(
+        paths.iter().all(|path| path.starts_with(&below)),
+        "{below}: {paths:?}"
+    );
     paths
 }
 
