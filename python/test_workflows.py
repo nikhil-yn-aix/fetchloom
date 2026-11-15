@@ -1,5 +1,5 @@
 """the workflows pin each tool's version once, in their env, agree on the tools they share and run
-on named images."""
+on named images, and keep the supply-chain rules docs/dev/engineering/ci.md lists."""
 
 import itertools
 import os
