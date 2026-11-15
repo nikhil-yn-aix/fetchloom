@@ -1011,7 +1011,21 @@ fn outage_wait(first: Duration, lost: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
+    /// a network of one job, without keys or split downloads, that tells `notify` what it waits
+    /// for.
+    fn telling(notify: crate::net::Notify) -> Net {
+        let options = crate::net::Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: crate::net::Splitting::Never,
+        };
+        Net::new(options, Arc::default(), Arc::default(), notify)
+    }
 
     /// a refusal also says how to reach this origin.
     #[test]
@@ -1075,17 +1089,8 @@ mod tests {
     /// leaves the count, so a stalled download stops at its retries.
     #[test]
     fn a_try_that_moved_nothing_keeps_counting() {
-        use crate::net::{Options, Splitting};
-        use std::sync::Arc;
-
         let url = Url::parse("https://example.org/file").unwrap();
-        let options = Options {
-            offline: Offline::No,
-            jobs: 1,
-            credentials: Vec::new(),
-            split: Splitting::Never,
-        };
-        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let net = telling(Arc::new(|_| {}));
         let mut retry = Retry::new(&net, &url);
         retry.attempt = 3;
         retry.moved(0);
@@ -1294,23 +1299,10 @@ mod tests {
 
     #[test]
     fn a_rate_limited_request_that_gives_up_counts_every_try() {
-        use crate::net::{Options, Splitting};
         use crate::source::recorded::block_on;
-        use std::sync::Arc;
 
         let url = Url::parse("https://example.org/file").unwrap();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        )
-        .with_retries(0);
+        let net = telling(Arc::new(|_| {})).with_retries(0);
         let mut retry = Retry::new(&net, &url);
         // a server that answers every request with a 429 whose limit resets at once
         let mut sent = 1;
@@ -1462,21 +1454,10 @@ mod tests {
     fn a_reply_that_is_not_http_is_the_servers_and_is_asked_once() {
         use crate::net::api::Api;
         use crate::net::scripted::serve;
-        use crate::net::{Options, Splitting};
 
         let garbled = b"HTTP/1.1 200 \x01bad\r\nContent-Length: 2\r\n\r\nok".to_vec();
         let (url, asked) = serve(vec![garbled; (RETRIES + 1) as usize]);
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            std::sync::Arc::default(),
-            std::sync::Arc::default(),
-            std::sync::Arc::new(|_| {}),
-        );
+        let net = telling(Arc::new(|_| {}));
         net.typed(&url);
         let error = crate::source::recorded::block_on(net.get(&url)).unwrap_err();
         assert_eq!(error.kind, Kind::NetworkStatus, "{}", error.message);
@@ -1524,22 +1505,10 @@ mod tests {
 
     #[test]
     fn retry_waits_can_be_interrupted_without_waiting_for_the_deadline() {
-        use crate::net::{Options, Splitting};
         use crate::source::recorded::block_on;
-        use std::sync::Arc;
 
         let url = Url::parse("https://example.org/list").unwrap();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        );
+        let net = telling(Arc::new(|_| {}));
         net.stop.ask();
         let mut retry = Retry::new(&net, &url);
         let error = block_on(retry.wait("busy".to_owned(), Some(Duration::from_secs(60)), false))
@@ -1557,22 +1526,10 @@ mod tests {
     /// less, as a server that breaks after a few bytes does, still counts.
     #[test]
     fn only_tries_that_move_the_file_little_count_toward_the_most_in_all() {
-        use crate::net::{Options, Splitting};
         use crate::source::recorded::block_on;
-        use std::sync::Arc;
 
         let url = Url::parse("https://example.org/file").unwrap();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        );
+        let net = telling(Arc::new(|_| {}));
         // a stop ends each wait at once, after the try is granted
         net.stop.ask();
         let mut retry = Retry::new(&net, &url);
@@ -1590,28 +1547,17 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_request_gets_the_retries_the_setting_allows() {
-        use crate::net::{Notice, Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let url = Url::parse("https://example.org/file").unwrap();
         for retries in [0, 2, MOST_RETRIES] {
             let heard = Arc::new(Mutex::new(Vec::new()));
             let kept = heard.clone();
-            let net = Net::new(
-                Options {
-                    offline: Offline::No,
-                    jobs: 1,
-                    credentials: Vec::new(),
-                    split: Splitting::Never,
-                },
-                Arc::default(),
-                Arc::default(),
-                Arc::new(move |notice| {
-                    if let Notice::Retrying { host, next, of, .. } = notice {
-                        kept.lock().unwrap().push((host, next, of));
-                    }
-                }),
-            )
+            let net = telling(Arc::new(move |notice| {
+                if let Notice::Retrying { host, next, of, .. } = notice {
+                    kept.lock().unwrap().push((host, next, of));
+                }
+            }))
             .with_retries(retries);
             let mut retry = Retry::new(&net, &url);
             let error = loop {
@@ -1638,27 +1584,16 @@ mod tests {
     /// rather than a second, and says so; once it refuses four in a row, no request goes.
     #[tokio::test(start_paused = true)]
     async fn a_paced_host_refusing_for_load_is_waited_for_then_asked_nothing_more() {
-        use crate::net::{Notice, Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let url = Url::parse("https://export.arxiv.org/api/query").unwrap();
         let heard = Arc::new(Mutex::new(Vec::new()));
         let kept = heard.clone();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(move |notice| {
-                if let Notice::Retrying { wait, .. } = notice {
-                    kept.lock().unwrap().push(wait);
-                }
-            }),
-        )
+        let net = telling(Arc::new(move |notice| {
+            if let Notice::Retrying { wait, .. } = notice {
+                kept.lock().unwrap().push(wait);
+            }
+        }))
         .with_rules(crate::source::rules());
         let name = net.paced(&url);
         let now = || tokio::time::Instant::now().into_std();
@@ -1702,27 +1637,16 @@ mod tests {
     /// retry is numbered of four, whatever the retries would allow.
     #[tokio::test(start_paused = true)]
     async fn a_paced_host_refusing_for_load_numbers_its_tries_of_four() {
-        use crate::net::{Notice, Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let url = Url::parse("https://export.arxiv.org/api/query").unwrap();
         let heard = Arc::new(Mutex::new(Vec::new()));
         let kept = heard.clone();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(move |notice| {
-                if let Notice::Retrying { next, of, .. } = notice {
-                    kept.lock().unwrap().push((next, of));
-                }
-            }),
-        )
+        let net = telling(Arc::new(move |notice| {
+            if let Notice::Retrying { next, of, .. } = notice {
+                kept.lock().unwrap().push((next, of));
+            }
+        }))
         .with_retries(10)
         .with_rules(crate::source::rules());
         let name = net.paced(&url);
@@ -1748,21 +1672,10 @@ mod tests {
     /// all than it showed before: the waits it has left count until they are spent.
     #[tokio::test(start_paused = true)]
     async fn the_tries_a_request_shows_never_count_down() {
-        use crate::net::{Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let url = Url::parse("https://example.org/file").unwrap();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        );
+        let net = telling(Arc::new(|_| {}));
         let shown = Mutex::new(Vec::new());
         let on = |event| {
             if let Event::Retrying { next, of, .. } = event {
@@ -1792,34 +1705,23 @@ mod tests {
     /// it is and that the tries before it waited, so a count that starts at 12 explains itself.
     #[tokio::test(start_paused = true)]
     async fn the_first_retry_after_rate_limit_waits_counts_them() {
-        use crate::net::{Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let url = Url::parse("https://example.org/data/file.bin").unwrap();
         let heard = Arc::new(Mutex::new(Vec::new()));
         let kept = heard.clone();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(move |notice| {
-                if let Notice::Retrying {
-                    what,
-                    next,
-                    of,
-                    waited,
-                    ..
-                } = notice
-                {
-                    kept.lock().unwrap().push((what, next, of, waited));
-                }
-            }),
-        );
+        let net = telling(Arc::new(move |notice| {
+            if let Notice::Retrying {
+                what,
+                next,
+                of,
+                waited,
+                ..
+            } = notice
+            {
+                kept.lock().unwrap().push((what, next, of, waited));
+            }
+        }));
         let mut retry = Retry::new(&net, &url);
         for _ in 0..=LIMITED {
             retry
@@ -1841,32 +1743,21 @@ mod tests {
     /// a network whose loss each request hears of, as a closure records it: `gone` for each
     /// line about a lost network, `retry` for each warning about another try.
     fn told() -> (Net, std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>) {
-        use crate::net::{Options, Splitting};
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let heard = Arc::new(Mutex::new(Vec::new()));
         let kept = heard.clone();
-        let net = Net::new(
-            Options {
-                offline: Offline::No,
-                jobs: 1,
-                credentials: Vec::new(),
-                split: Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(move |notice| {
-                let said = match notice {
-                    Notice::NetworkGone { longest } => {
-                        assert_eq!(longest, LONGEST_OUTAGE);
-                        "gone"
-                    }
-                    Notice::Retrying { .. } => "retry",
-                    Notice::Waiting { .. } => "waiting",
-                };
-                kept.lock().unwrap().push(said);
-            }),
-        );
+        let net = telling(Arc::new(move |notice| {
+            let said = match notice {
+                Notice::NetworkGone { longest } => {
+                    assert_eq!(longest, LONGEST_OUTAGE);
+                    "gone"
+                }
+                Notice::Retrying { .. } => "retry",
+                Notice::Waiting { .. } => "waiting",
+            };
+            kept.lock().unwrap().push(said);
+        }));
         (net, heard)
     }
 
