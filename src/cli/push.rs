@@ -281,18 +281,37 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
 }
 
 /// the folder or S3 bucket to push to, as `--to` names it, else the `push_to` setting; `usage`
-/// when neither names one, or `--to` names a web address.
+/// when neither names one, naming the mirrors of the `mirrors` setting push could copy into,
+/// which it never picks itself, or when `--to` names a web address.
 fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
     let Some(to) = &args.to else {
         let push_to = &context.settings.push_to;
         return push_to.value.clone().ok_or_else(|| {
             let error = Error::new(Kind::Usage, "push needs a folder to copy the files into");
+            let mirrors: Vec<String> = context
+                .settings
+                .mirrors
+                .value
+                .iter()
+                .filter(|mirror| !matches!(mirror, Location::Web(_)))
+                .map(ToString::to_string)
+                .collect();
+            let error = match mirrors.as_slice() {
+                [] => error,
+                [one] => error.detail(format!(
+                    "the mirrors setting names the mirror {one}; push copies into it only once you name it"
+                )),
+                many => error.detail(format!(
+                    "the mirrors setting names the mirrors {}; push copies into one only once you name it",
+                    units::listed(many, "and")
+                )),
+            };
             // only an empty variable clears push_to with nothing in its place
             if push_to.origin == crate::settings::Origin::Environment {
                 error.help("FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder>, or unset FETCHLOOM_PUSH_TO")
             } else {
                 error.help(
-                    "give --to <folder>, or set push_to in the settings file to a mirror's folder",
+                    "give --to <folder>, or save the folder for every push with `fetchloom settings set push_to <folder>`",
                 )
             }
         });
@@ -1620,8 +1639,9 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         selected.iter().map(String::as_str).collect()
     }
 
-    /// with no `--to`, an empty `FETCHLOOM_PUSH_TO` is named as what cleared `push_to`, rather
-    /// than sending a person to set `push_to` in a settings file that may already set it.
+    /// with no `--to` and no `push_to`, the help names `settings set push_to` and the details the
+    /// mirrors a person may choose; an empty `FETCHLOOM_PUSH_TO` is named as what cleared
+    /// `push_to`, rather than sending a person to set it in a settings file that may already.
     #[test]
     fn an_empty_push_to_variable_is_named_as_what_cleared_the_folder() {
         let mut context = Context::new(crate::output::Output::new(
@@ -1646,7 +1666,36 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         let error = target(&context, &args).unwrap_err();
         assert_eq!(
             error.help.as_deref(),
-            Some("give --to <folder>, or set push_to in the settings file to a mirror's folder")
+            Some(
+                "give --to <folder>, or save the folder for every push with `fetchloom settings set push_to <folder>`"
+            )
+        );
+        assert_eq!(error.details, Vec::<String>::new());
+        // a folder or a bucket is offered, a web mirror is none push can write, and none is taken
+        let folder = |path: &str| Location::Folder(PathBuf::from(path));
+        let bucket = Location::parse("s3://lab-data/fetchloom", None).unwrap();
+        let named = bucket.to_string();
+        context.settings.mirrors = crate::settings::Set {
+            value: vec![
+                folder("/mnt/lab/fetchloom"),
+                Location::Web(url::Url::parse("https://data.lab.example/fetchloom/").unwrap()),
+                bucket,
+            ],
+            origin: crate::settings::Origin::File,
+        };
+        let error = target(&context, &args).unwrap_err();
+        assert_eq!(
+            error.details,
+            [format!(
+                "the mirrors setting names the mirrors /mnt/lab/fetchloom and {named}; push copies into one only once you name it"
+            )]
+        );
+        context.settings.mirrors.value.truncate(1);
+        assert_eq!(
+            target(&context, &args).unwrap_err().details,
+            [
+                "the mirrors setting names the mirror /mnt/lab/fetchloom; push copies into it only once you name it"
+            ]
         );
         context.settings.push_to = crate::settings::Set {
             value: None,
