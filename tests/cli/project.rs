@@ -3194,3 +3194,48 @@ fn status_names_a_list_data_lock_no_longer_names() -> Result {
     );
     Ok(())
 }
+
+/// data.lock keeps a dataset's title as its source wrote it, control characters and all: an
+/// unrelated add writes data.lock again with the same bytes for it, and what fetchloom prints
+/// shows them escaped, never raw.
+#[test]
+fn a_title_stays_as_written_when_data_lock_is_written_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let resolved = pinned
+        .lines()
+        .find(|line| line.starts_with("resolved = "))
+        .ok_or("no resolved line")?;
+    let title = "title = \"Iris\\u001B]0;x\\u0007\"";
+    fs::write(
+        &lock,
+        pinned.replace(resolved, &format!("{resolved}\n{title}")),
+    )?;
+    fs::write(sandbox.folder("other")?.join("o.csv"), "o")?;
+    let other = sandbox.run(&["add", "../other", "--as", "other"])?;
+    assert_eq!(other.status.code(), Some(0), "{}", text(&other.stderr)?);
+    let written = fs::read_to_string(&lock)?;
+    assert!(written.contains(&format!("{title}\n")), "{written}");
+
+    let listed = sandbox.run(&["--json", "list"])?;
+    assert!(!listed.stdout.contains(&0x1b), "json keeps it escaped");
+    let document = json(&listed)?;
+    let iris = document["result"]["datasets"]
+        .as_array()
+        .and_then(|datasets| datasets.iter().find(|dataset| dataset["name"] == "iris"))
+        .ok_or("no iris")?;
+    assert_eq!(iris["title"], "Iris\u{1b}]0;x\u{7}");
+    for args in [&["list"][..], &["list", "iris"]] {
+        let shown = sandbox.run(args)?;
+        for stream in [&shown.stdout, &shown.stderr] {
+            assert!(
+                !stream.contains(&0x1b) && !stream.contains(&0x07),
+                "{args:?}"
+            );
+        }
+    }
+    Ok(())
+}

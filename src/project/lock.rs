@@ -920,8 +920,10 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
             entry.name()
         )));
     }
+    // a downloaded dataset's words stay as written, which writing data.lock again keeps, and the
+    // output shows escaped; a dataset not downloaded keeps its words as written apart
     for entry in &mut parsed {
-        if let Parsed::Source(locked, _) | Parsed::Stated(Stated { pin: locked, .. }) = entry {
+        if let Parsed::Stated(Stated { pin: locked, .. }) = entry {
             for words in [&mut locked.title, &mut locked.license, &mut locked.doi]
                 .into_iter()
                 .flatten()
@@ -2178,10 +2180,10 @@ mod tests {
         ]
     }
 
-    /// a title, license or doi a cloned lock gives cannot steer the terminal that shows it: every
-    /// reader takes each control character in them, but a tab or a line break, as its escape.
+    /// every reader takes a downloaded dataset's title, license and doi as data.lock writes them,
+    /// control characters too: the output escapes them, as it does all text it did not write.
     #[test]
-    fn a_control_character_in_a_title_license_or_doi_is_read_as_its_escape() {
+    fn a_title_license_or_doi_is_read_as_written() {
         let mut lock = sample();
         let iris = lock
             .datasets
@@ -2194,9 +2196,32 @@ mod tests {
         for read in every_form(&lock) {
             let read = read.unwrap();
             let iris = read.get("iris").unwrap();
-            assert_eq!(iris.title.as_deref(), Some("Iris\tset\n\\u{1b}]0;x\\u{7}"));
-            assert_eq!(iris.license.as_deref(), Some("\\u{9b}31mCC-BY-4.0"));
-            assert_eq!(iris.doi.as_deref(), Some("10.5281/\\u{202e}zenodo"));
+            assert_eq!(iris.title.as_deref(), Some("Iris\tset\n\u{1b}]0;x\u{7}"));
+            assert_eq!(iris.license.as_deref(), Some("\u{9b}31mCC-BY-4.0"));
+            assert_eq!(iris.doi.as_deref(), Some("10.5281/\u{202e}zenodo"));
+        }
+    }
+
+    /// a downloaded dataset's title, license and doi are shown escaped, but written back byte
+    /// for byte when data.lock is written again for another dataset, as a not-downloaded one's
+    /// are, so its bytes never depend on which command wrote them.
+    #[test]
+    fn a_downloaded_dataset_keeps_its_words_as_written() {
+        let mut lock = sample();
+        let iris = lock
+            .datasets
+            .iter_mut()
+            .find(|dataset| dataset.name == "iris")
+            .unwrap();
+        iris.title = Some("Iris\u{1b}]0;x\u{7}".to_owned());
+        iris.license = Some("\u{9b}31mCC-BY-4.0".to_owned());
+        iris.doi = Some("10.5281/\u{202e}zenodo".to_owned());
+        let text = lock.render();
+        for read in every_form(&lock) {
+            let read = read.unwrap();
+            let iris = read.get("iris").unwrap();
+            assert_eq!(iris.title.as_deref(), Some("Iris\u{1b}]0;x\u{7}"));
+            assert_eq!(read.render(), text);
         }
     }
 
