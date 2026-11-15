@@ -1814,6 +1814,64 @@ fn status_check_fails_while_a_pin_is_not_downloaded_yet() -> Result {
     Ok(())
 }
 
+/// `add --no-sync` of a link data.toml has but data.lock does not pin, written by hand or changed
+/// since its pin, pins it as a first add would and leaves data.toml as it is; once pinned, it
+/// changes nothing.
+#[test]
+fn add_no_sync_pins_a_dataset_data_toml_has_without_a_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[
+        ("rows.csv", ROWS, &md5_hex(ROWS)),
+        ("notes.txt", NOTES, &md5_hex(NOTES)),
+    ])?;
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let manifest = sandbox.work().join("data.toml");
+    let table = "[datasets.archiving]\nref = \"dryad:10.5061/dryad.j1fd7\"\n";
+    fs::write(&manifest, table)?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = |args: &[&str]| -> Result<String> {
+        let output = command(&sandbox, &routes, args).output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains("Pinned archiving in data.lock"), "{stderr}");
+        Ok(fs::read_to_string(&lock)?)
+    };
+    let first = pinned(&["add", page, "--no-sync"])?;
+    assert!(
+        first.contains("name = \"archiving\"") && first.contains("downloaded = false"),
+        "{first}"
+    );
+    assert!(first.contains("path = \"notes.txt\""), "{first}");
+    assert_eq!(fs::read_to_string(&manifest)?, table);
+    // data.toml leaves notes.txt out now, so the pin is out of date
+    let excluding = format!("{table}exclude = [\"notes.txt\"]\n");
+    fs::write(&manifest, &excluding)?;
+    let again = pinned(&["add", page, "--exclude", "notes.txt", "--no-sync"])?;
+    assert!(!again.contains("path = \"notes.txt\""), "{again}");
+    assert_eq!(fs::read_to_string(&manifest)?, excluding);
+    ok(&sandbox.run(&["--json", "lock", "--check"])?)?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", page, "--exclude", "notes.txt", "--no-sync"],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok archiving is already in data.toml"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&lock)?, again);
+    let downloads = routes
+        .targets()
+        .into_iter()
+        .filter(|target| target.ends_with("/download"))
+        .count();
+    assert_eq!(downloads, 0, "nothing downloads");
+    Ok(())
+}
+
 /// a pin by MD5 alone is only as strong as MD5 until the first sync records each file's
 /// SHA-256, and the add says so in one line; one by SHA-256 says nothing more.
 #[test]

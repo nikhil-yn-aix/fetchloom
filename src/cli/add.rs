@@ -660,7 +660,7 @@ async fn add_held(
             listing: &addition.listing,
         };
         if args.no_sync {
-            return stated::again(&work, &adding.manifest, &present, dry_run);
+            return stated::again(&work, adding, old, &present, (&parsed, link), dry_run);
         }
         return again(&work, adding, old, &present, dry_run, here).await;
     }

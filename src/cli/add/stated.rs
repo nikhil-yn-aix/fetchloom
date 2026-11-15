@@ -10,7 +10,7 @@ use super::{AddProject, BeforeAdd, changed_meanwhile, lock_changed_meanwhile, re
 use crate::error::{Error, Kind};
 use crate::project::lock::{self, Lock, Locked, Stated, StatedFile, Words};
 use crate::project::manifest::{self, Entry, Manifest};
-use crate::source::{Listing, Remote};
+use crate::source::{Listing, Parsed, Remote};
 use crate::units;
 
 /// the most files an error names; it counts the rest.
@@ -36,23 +36,57 @@ pub(super) fn refused_several() -> Error {
     ))
 }
 
-/// `add --no-sync` of `present`, which data.toml has already: with the same settings there is
-/// nothing to do, and other settings need the person's choice, as for any add.
+/// `add --no-sync` of `present`, which data.toml has already: other settings need the person's
+/// choice, as for any add. while data.lock pins it as data.toml asks there is nothing to do;
+/// else it is pinned as a first add pins it, and data.toml stays as it is.
 pub(super) fn again(
     work: &Loop<'_>,
-    manifest: &Manifest,
+    adding: &AddProject,
+    old: Option<Lock>,
     present: &super::Present<'_>,
+    (parsed, typed): (&Parsed, &str),
     dry_run: bool,
 ) -> Result<Report, Error> {
+    let manifest = &adding.manifest;
     super::same_settings(manifest, present)?;
-    work.context
-        .output
-        .done("Ok", &format!("{} is already in data.toml", present.name));
-    Ok(Report {
-        project: work.project.root.clone(),
-        dry_run,
-        ..Report::default()
-    })
+    let name = present.name;
+    let entry = &manifest.datasets[name];
+    if old.as_ref().is_some_and(|lock| pins(lock, name, entry)) {
+        work.context
+            .output
+            .done("Ok", &format!("{name} is already in data.toml"));
+        return Ok(Report {
+            project: work.project.root.clone(),
+            dry_run,
+            ..Report::default()
+        });
+    }
+    let stated = pinned(
+        name,
+        entry,
+        present.listing,
+        (&parsed.reference.shown(), typed),
+    )?;
+    let text = adding.text.as_deref().unwrap_or_default();
+    write(
+        work,
+        adding,
+        (text, manifest),
+        old,
+        stated,
+        (false, dry_run),
+    )
+}
+
+/// whether `lock` pins `name` as `entry` asks: by its bytes, which a changed `extract` leaves
+/// standing, or by what its source states.
+fn pins(lock: &Lock, name: &str, entry: &Entry) -> bool {
+    lock.get(name)
+        .is_some_and(|locked| locked.drift(entry) != Some(lock::Drift::Spec))
+        || lock
+            .stated
+            .iter()
+            .any(|stated| stated.name() == name && stated.pin.drift(entry).is_none())
 }
 
 /// the pin of `name`, which `listing` resolved and `entry` chooses files of, by what its source
@@ -195,7 +229,8 @@ fn facts(work: &Loop<'_>, stated: &Stated) -> String {
 }
 
 /// writes `updated`, data.toml with the new dataset, and data.lock with `stated`, or with
-/// `--dry-run` says it would. nothing downloads; a failure puts back what the add wrote.
+/// `--dry-run` says it would. data.toml that has the dataset already stays as it is. nothing
+/// downloads; a failure puts back what the add wrote.
 pub(super) fn write(
     work: &Loop<'_>,
     adding: &AddProject,
@@ -208,6 +243,12 @@ pub(super) fn write(
     let project = work.project;
     let name = stated.name().to_owned();
     let unchecked = md5_alone(&stated);
+    let again = adding.manifest.datasets.contains_key(&name);
+    let datasets = if again {
+        Vec::new()
+    } else {
+        vec![name.clone()]
+    };
     if dry_run {
         output.step("Would pin", &facts(work, &stated));
         if let Some(line) = unchecked {
@@ -217,14 +258,16 @@ pub(super) fn write(
             output.detail(&format!("{name}/{}", file.path));
         }
         super::super::project::preview_ignore(work, manifest)?;
-        output.step(
-            "Would add",
-            &format!("{name} to data.toml, downloading nothing"),
-        );
+        if !again {
+            output.step(
+                "Would add",
+                &format!("{name} to data.toml, downloading nothing"),
+            );
+        }
         dry_run_done(output, None);
         return Ok(Report {
             project: project.root.clone(),
-            datasets: vec![name],
+            datasets,
             lock_changed: true,
             dry_run: true,
             ..Report::default()
@@ -243,8 +286,10 @@ pub(super) fn write(
     )?;
     work.context.stop.keep_at_quit();
     let written = (|| -> Result<(), Error> {
-        saved.writing(manifest::FILE, updated.as_bytes());
-        project.write(manifest::FILE, updated.as_bytes())?;
+        if !again {
+            saved.writing(manifest::FILE, updated.as_bytes());
+            project.write(manifest::FILE, updated.as_bytes())?;
+        }
         if adding.differs(lock::FILE, adding.lock_text.as_deref()) {
             return Err(lock_changed_meanwhile());
         }
@@ -273,7 +318,14 @@ pub(super) fn write(
         output.item(line);
     }
     ignore_data(work, manifest, starting || adding.begins())?;
-    output.done("Added", &format!("{name} to data.toml, nothing downloaded"));
+    if again {
+        output.done(
+            "Ok",
+            &format!("{name} is already in data.toml, nothing downloaded"),
+        );
+    } else {
+        output.done("Added", &format!("{name} to data.toml, nothing downloaded"));
+    }
     output.next(&format!(
         "commit {}; where the data can download, `{}` downloads and checks it",
         committed(project),
@@ -281,7 +333,7 @@ pub(super) fn write(
     ));
     Ok(Report {
         project: project.root.clone(),
-        datasets: vec![name],
+        datasets,
         lock_changed: true,
         ..Report::default()
     })
