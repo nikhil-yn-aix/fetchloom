@@ -471,7 +471,13 @@ fn unknown(topic: &[String]) -> Error {
         Kind::Usage,
         format!("there is no help topic called \"{shown}\""),
     );
-    match name::closest(&asked, topics.iter().map(String::as_str)) {
+    // a short form, as `env` for environment, is too far from the whole name to be a typo
+    let begun = |topic: &&str| asked.len() >= 3 && topic.starts_with(asked.as_str());
+    let shortened = || {
+        let mut begun = topics.iter().map(String::as_str).filter(begun);
+        begun.next().filter(|_| begun.next().is_none())
+    };
+    match name::closest(&asked, topics.iter().map(String::as_str)).or_else(shortened) {
         Some(best) => {
             let typed: Vec<&str> = topic.iter().map(String::as_str).collect();
             let meant: Vec<&str> = best.split(' ').collect();
@@ -904,6 +910,24 @@ mod tests {
         for line in lines.chain(unknown.help.as_deref()) {
             assert!(line.chars().count() <= 56, "{line}");
         }
+    }
+
+    /// a topic is found from a short form of its name, as `env`, when only one starts so.
+    #[test]
+    fn a_shortened_topic_is_suggested_whole() {
+        for (asked, meant) in [("env", "environment"), ("exit", "exit-codes")] {
+            let error = super::unknown(&[asked.to_owned()]);
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("did you mean `fetchloom help {meant}`?").as_str()),
+                "{asked}"
+            );
+        }
+        // `co` starts concepts, completions and more; too short and too many to choose from
+        assert_eq!(
+            super::unknown(&["co".to_owned()]).help.as_deref(),
+            Some("`fetchloom --help` lists the commands")
+        );
     }
 
     /// moving the examples up keeps every line the help had, its arguments named as its usage

@@ -185,6 +185,15 @@ fn habit(command: &str) -> Option<&'static str> {
             "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`"
         }
         "delete" | "uninstall" => "`fetchloom remove <name>` removes a dataset from the project",
+        "config" | "configure" => {
+            "`fetchloom settings` shows each setting; `fetchloom settings set <key> <value>` changes one"
+        }
+        "clean" | "clear" => {
+            "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here"
+        }
+        "show" | "info" => {
+            "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one"
+        }
         _ => return None,
     })
 }
@@ -367,6 +376,10 @@ fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
 /// the command `parent` and those every command takes.
 fn option_meant(typed: &str, parent: Option<&str>) -> Option<String> {
     let long = typed.strip_prefix("--")?.to_lowercase();
+    // what other tools call it, which no spelling reaches
+    if parent == Some("add") && long == "name" {
+        return Some(super::meant(&[typed], &["--as"], "--as".to_owned()));
+    }
     let root = args::Args::command();
     let command = parent.map_or(Some(&root), |parent| {
         parent
@@ -811,6 +824,7 @@ mod tests {
             (&["fetchloom", "--ofline", "sync"], "--offline"),
             (&["fetchloom", "sync", "--Dry-Run"], "--dry-run"),
             (&["fetchloom", "--verison"], "--version"),
+            (&["fetchloom", "add", "--name", "x", "iris"], "--as"),
         ] {
             let error = problem(arguments)?;
             assert_eq!(
@@ -902,6 +916,22 @@ mod tests {
             (
                 "uninstall",
                 "`fetchloom remove <name>` removes a dataset from the project",
+            ),
+            (
+                "config",
+                "`fetchloom settings` shows each setting; `fetchloom settings set <key> <value>` changes one",
+            ),
+            (
+                "clean",
+                "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here",
+            ),
+            (
+                "show",
+                "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one",
+            ),
+            (
+                "info",
+                "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one",
             ),
         ] {
             let error = problem(&["fetchloom", word])?;
