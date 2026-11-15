@@ -996,15 +996,23 @@ impl Net {
             return Ok(Answer::NotModified);
         }
         if let Some((received, kept)) = &earlier
-            && let Some(size) = confirmed(status, &head, (*received, kept), length, &validators)
+            && let Some(size) = confirmed(
+                status,
+                &head,
+                (*received, kept),
+                length,
+                (&validators, fetch.expect.proves()),
+            )
         {
             // a refusal's headers tell of the refusal, not of the file
+            let describes = status != StatusCode::RANGE_NOT_SATISFIABLE;
             let told = Told {
-                name: match status {
-                    StatusCode::PARTIAL_CONTENT => describe_response(&response, &fetch.url, on)?,
-                    _ => None,
+                name: if describes {
+                    describe_response(&response, &fetch.url, on)?
+                } else {
+                    None
                 },
-                page: status == StatusCode::PARTIAL_CONTENT && headers::is_html(&head),
+                page: describes && headers::is_html(&head),
             };
             refuse_other_length(fetch, Some(size))?;
             // the bytes are all here, so the slots go to other files before the check
@@ -1661,15 +1669,24 @@ fn answered(
 
 /// the size of the file when an answer says the bytes kept, `received` of them under validators
 /// `kept`, still are all of it: the last of them sent alone, as asked for when the record's stated
-/// `length` says they are all of it, or a refusal of the range past bytes of no stated length
-/// that states their size. either of the same version.
+/// `length` says they are all of it, a refusal of the range past bytes of no stated length that
+/// states their size, either of the same version, or the whole file as long as the bytes kept from
+/// a server that ignored the range: of the version `If-Range` named, or under hashes that check
+/// the bytes once they are in, as `hashed` says.
 fn confirmed(
     status: StatusCode,
     head: &header::HeaderMap,
     (received, kept): (u64, &Validators),
     length: Option<u64>,
-    validators: &Validators,
+    (validators, hashed): (&Validators, bool),
 ) -> Option<u64> {
+    if status == StatusCode::OK {
+        let total =
+            headers::total_length(head, status).filter(|total| *total == received && *total > 0)?;
+        let named = if_range(validators).is_some_and(|named| if_range(kept) == Some(named))
+            && !headers::changed(kept, validators);
+        return ((hashed || named) && length.is_none_or(|length| length == total)).then_some(total);
+    }
     // a refused range states the size as a part does
     let total = headers::total_length(head, StatusCode::PARTIAL_CONTENT)
         .filter(|total| *total == received && *total > 0)?;
@@ -1930,7 +1947,8 @@ fn kept_before(
         bytes: received,
         resumable: Resumable::kept(proven),
     })?;
-    let whole = fetch.expect.pins() && received > 0 && partial.length() == Some(received);
+    let stated = partial.length().or(fetch.expect.size);
+    let whole = fetch.expect.pins() && received > 0 && stated == Some(received);
     Ok(whole.then_some((received, validators)))
 }
 

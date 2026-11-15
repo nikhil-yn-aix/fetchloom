@@ -595,6 +595,61 @@ fn kept_whole(cache: &Cache, url: &Url, body: &[u8], length: Option<u64>, sealed
     }
 }
 
+/// a server that ignores the range answers the request for the rest of a part kept whole with the
+/// whole file. one of the version the part is, as long as it, says the part is all of it, as a
+/// pin that checks it once it is in does with no request at all when it states the size; the
+/// part is put in place with no byte fetched again. a whole file of another version is the file
+/// now.
+#[test]
+fn a_whole_answer_as_long_as_a_part_kept_whole_finishes_it() {
+    let body = pattern(0, (1 << 20) + 7);
+    let other = pattern(1, (1 << 20) + 7);
+    let total = body.len() as u64;
+    let digest = crate::digest::sha256(&body);
+    let sized = Expect {
+        sha256: Some(digest),
+        size: Some(total),
+        ..Expect::default()
+    };
+    let hashed = Expect {
+        sha256: Some(digest),
+        ..Expect::default()
+    };
+    let tagged = [("ETag", "\"v1\"")];
+    for (expect, length, answer, stored, requests) in [
+        (Expect::default(), Some(total), &tagged[..], &body, 1),
+        (Expect::default(), None, &tagged[..], &body, 1),
+        (hashed, None, &[][..], &body, 1),
+        (sized, None, &[][..], &body, 0),
+        (
+            Expect::default(),
+            Some(total),
+            &[("ETag", "\"v2\"")][..],
+            &other,
+            1,
+        ),
+    ] {
+        for sealed in [false, true] {
+            let sent = if *stored == body { &body } else { &other };
+            let (url, asked) = serve(vec![reply("200 OK", answer, sent)]);
+            let folder = tempfile::tempdir().unwrap();
+            let cache = Cache::open(folder.path().join("cache")).unwrap();
+            kept_whole(&cache, &url, &body, length, sealed);
+            let mut fetch = Fetch::new(url.clone());
+            fetch.expect = expect;
+            let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+            let case = format!("{expect:?}, length {length:?}, {answer:?}, sealed: {sealed}");
+            assert_eq!(fetched.digest, crate::digest::sha256(stored), "{case}");
+            let moved = if *stored == body { 0 } else { total };
+            assert_eq!(
+                (fetched.moved, lines(&asked).len()),
+                (moved, requests),
+                "{case}"
+            );
+        }
+    }
+}
+
 /// a pinned file whose every byte an earlier run kept is checked and put in place with no
 /// request, whether that run was killed before or after it sealed the file to publish it.
 #[test]
