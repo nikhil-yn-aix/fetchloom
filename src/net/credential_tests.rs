@@ -217,17 +217,14 @@ fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
         "https://zenodo.org/not-the-first-origin",
         "https://archive.example/granule?code=1",
     ];
-    trust_all(&net, hops);
-    let start = Url::parse("https://archive.example/granule").unwrap();
-    let (local, asked) = server(&hops.map(str::to_owned));
-    let client = transport();
-    let answer = block_on(net.send(&start, |request| {
-        let request = request.build().unwrap();
-        client.get(local.clone()).headers(request.headers().clone())
-    }));
-    assert!(answer.is_ok());
+    let hops = hops.map(str::to_owned);
     assert_eq!(
-        sent(&asked, "authorization"),
+        redirect_headers(
+            &net,
+            "https://archive.example/granule",
+            &hops,
+            "authorization"
+        ),
         [None, None, Some("Basic YWRhOnB3".to_owned()), None, None],
         "the login goes over https to its host only; the token stays on its first origin"
     );
@@ -387,16 +384,16 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
         "https://api.figshare.com/file",
         "https://example.org/back",
     ];
-    trust_all(&net, hops);
-    let start = Url::parse("https://example.org/shared-file").unwrap();
-    let (local, asked) = server(&hops.map(str::to_owned));
-    let client = transport();
-    let answer = block_on(net.send(&start, |request| {
-        let request = request.build().unwrap();
-        client.get(local.clone()).headers(request.headers().clone())
-    }));
-    assert!(answer.is_ok());
-    assert_eq!(sent(&asked, "authorization"), [None, None, None, None]);
+    let hops = hops.map(str::to_owned);
+    assert_eq!(
+        redirect_headers(
+            &net,
+            "https://example.org/shared-file",
+            &hops,
+            "authorization"
+        ),
+        [None, None, None, None]
+    );
 }
 
 fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Vec<Option<String>> {
