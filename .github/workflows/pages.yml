@@ -33,17 +33,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pages:
+  # the docs toolchain runs here, with no secret and no right to deploy
+  site:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     permissions:
       contents: read
-      attestations: read
-      pages: write
-      id-token: write
     steps:
       # the site always shows the default branch, even when a release tag starts the run
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,6 +56,36 @@ jobs:
         run: uv run --locked --project docs-site python python/build_site.py
       - name: check the addresses fetchloom prints, heading ids and requests
         run: python3 python/check_site.py site
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: site/
+          if-no-files-found: error
+          retention-days: 1
+
+  # adds the signed apt repository to the built site and deploys it; nothing the site's toolchain
+  # installed runs beside the apt key
+  pages:
+    needs: site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      attestations: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site
       - name: find the latest published release
         id: release
         env:
@@ -82,7 +107,8 @@ jobs:
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern '*.deb' --pattern SHA256SUMS
           python3 python/check_release.py dist --suffix .deb --count 2 --repo "$GITHUB_REPOSITORY" --tag "$TAG"
-      # a flat repository: `deb [signed-by=...] https://nikhil-yn-aix.github.io/fetchloom/apt ./`
+      # a flat repository: `deb [signed-by=...] https://nikhil-yn-aix.github.io/fetchloom/apt ./`.
+      # the signed Release lists every .deb under apt/, so the folder must start empty here
       - name: build the signed apt repository
         if: steps.release.outputs.tag != ''
         env:
@@ -91,7 +117,7 @@ jobs:
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           install -d -m 700 "$GNUPGHOME"
           printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --quiet --import
-          mkdir -p site/apt
+          mkdir site/apt
           cp dist/*.deb site/apt/
           cd site/apt
           apt-ftparchive packages . > Packages

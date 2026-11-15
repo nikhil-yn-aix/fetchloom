@@ -467,6 +467,26 @@ class BuiltSite(Folder):
             "index.html loads https://unpkg.com/mermaid@12/dist/mermaid.min.js",
         ])
 
+    def test_a_site_that_takes_the_apt_folder_is_refused(self):
+        site = self.folder()
+        self.page(site, "index.html")
+        self.assertEqual(check_site.apt_folder(site), [])
+        for case in ["folder", "file", "link"]:
+            with self.subTest(case):
+                apt = site / "apt"
+                if case == "folder":
+                    self.write(apt / "fetchloom_0.1.0_amd64.deb")
+                elif case == "file":
+                    shutil.rmtree(apt)
+                    self.write(apt)
+                else:
+                    apt.unlink()
+                    if sys.platform == "win32":
+                        self.skipTest("makes a symlink")
+                    apt.symlink_to(site / "elsewhere")
+                self.assertEqual(check_site.apt_folder(site),
+                                 ["apt/ is made by the job that signs the apt repository, not the site build"])
+
 
 if __name__ == "__main__":
     unittest.main()

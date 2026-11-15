@@ -1,6 +1,6 @@
 """check a built site: every docs address fetchloom prints reaches a page and its heading with no
-redirect, every heading keeps the id github gives it, no link names a markdown file, and no page
-loads anything from another host."""
+redirect, every heading keeps the id github gives it, no link names a markdown file, no page
+loads anything from another host, and nothing takes the apt repository's folder."""
 
 import argparse
 import html.parser
@@ -150,13 +150,21 @@ def external(site):
     return found
 
 
+def apt_folder(site):
+    """the site's apt/ folder, which pages.yml's signing job alone makes, or none: its signed
+    Release lists every package found there."""
+    folder = site / "apt"
+    return [f"{folder.name}/ is made by the job that signs the apt repository, not the site build"] \
+        if folder.exists() or folder.is_symlink() else []
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("site", type=Path, nargs="?", default=ROOT / "site")
     site = parser.parse_args().site.resolve()
     addresses = sorted(printed(ROOT))
     problems = [problem for problem in (unreached(site, url) for url in addresses) if problem]
-    problems += markdown_links(site) + github_ids(ROOT, site) + external(site)
+    problems += markdown_links(site) + github_ids(ROOT, site) + external(site) + apt_folder(site)
     for problem in problems:
         print(problem)
     if problems:

@@ -46,9 +46,11 @@ both environments deploy only from tags matching `v*.*.*`, and each waits for th
 
 github pages serves one site per repository, and a deployment replaces the whole site. `.github/workflows/pages.yml` is therefore the only workflow that deploys it: the documentation at the root and the apt repository under `/apt`. it runs when a release is published and when documentation changes on main, and each run rebuilds `/apt` from the latest published release.
 
-the apt part downloads that release's `.deb` files and `SHA256SUMS`, checks them, then writes a flat repository signed with the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase. it serves `https://nikhil-yn-aix.github.io/fetchloom/apt` with `Packages`, `Release`, `Release.gpg`, `InRelease` and the public key `fetchloom.gpg`. when no release is published, the run logs a notice and deploys the documentation without `/apt`.
+it has two jobs, so the documentation toolchain never runs beside the signing key. `site` builds and checks the documentation with the toolchain from `docs-site/uv.lock`, with contents-read permission and no secret, and keeps `site/` as a run artifact. `pages` alone has the `github-pages` environment, the key, pages-write and OIDC permission; it adds `/apt` to that artifact and deploys it. it makes `site/apt` itself and fails when the site already has one, since the signed `Release` lists every package in that folder. `python/check_site.py` refuses such a folder sooner, in CI as well.
 
-the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and pages must deploy from github actions. losing the signing key means generating a new one, replacing the secret and asking apt users to fetch `fetchloom.gpg` again. [CI](ci.md#documentation-site) describes the documentation half.
+the apt part downloads that release's `.deb` files and `SHA256SUMS`, checks their checksums and attestations with `python/check_release.py`, then writes a flat repository signed with the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase. it serves `https://nikhil-yn-aix.github.io/fetchloom/apt` with `Packages`, `Release`, `Release.gpg`, `InRelease` and the public key `fetchloom.gpg`. when no release is published, the run logs a notice and deploys the documentation without `/apt`.
+
+the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and pages must deploy from github actions. keep the key as a secret of the `github-pages` environment, not among the repository's secrets, which a workflow on any branch can read. losing the signing key means generating a new one, replacing the secret and asking apt users to fetch `fetchloom.gpg` again. [CI](ci.md#documentation-site) describes the documentation half.
 
 ## artifacts
 

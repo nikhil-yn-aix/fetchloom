@@ -65,6 +65,19 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("\n      attestations: read\n", text)
                 self.assertLess(text.index("python3 python/check_release.py "), text.index(then))
 
+    def test_the_apt_key_never_shares_a_job_with_the_docs_toolchain(self):
+        """the site's toolchain comes from pypi and runs with the runner's sudo, so its job holds no
+        secret and no right to deploy; the signing job makes apt/ afresh, since its signed Release
+        lists every package found there."""
+        site, pages = jobs("pages.yml")["site"], jobs("pages.yml")["pages"]
+        self.assertIn("python python/build_site.py", site)
+        self.assertNotRegex(site, r"secrets\.|environment:|: write\b")
+        self.assertIn("secrets.APT_SIGNING_KEY", pages)
+        for toolchain in ["setup-uv", "docs-site", "build_site.py"]:
+            with self.subTest(toolchain=toolchain):
+                self.assertNotIn(toolchain, pages)
+        self.assertRegex(pages, r"\n +mkdir site/apt\n")
+
 
 if __name__ == "__main__":
     unittest.main()
