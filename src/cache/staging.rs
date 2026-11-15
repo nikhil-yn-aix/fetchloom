@@ -381,8 +381,11 @@ fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
     clear_at(&parent, name)
 }
 
-#[cfg(not(unix))]
-fn clear_below(_: &Path, folder: &Path) -> io::Result<()> {
+/// [`clear_tree`] for `folder`, with the folders from `root` down to it held so none is a link or
+/// becomes one meanwhile.
+#[cfg(windows)]
+fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
+    let _held = crate::place::hold_below(root, folder)?;
     clear_tree(folder)
 }
 

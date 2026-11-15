@@ -305,7 +305,6 @@ fn a_build_folder_reached_through_a_swapped_tmp_keeps_its_files() {
 
 /// a sweep clears a build folder through handles that never follow a link, so a folder in it
 /// swapped for a link to someone's folder keeps what that folder holds.
-#[cfg(unix)]
 #[test]
 fn clearing_a_build_folder_never_follows_a_link_inside_it() {
     let (dir, cache) = super::tests::cache();
@@ -316,7 +315,9 @@ fn clearing_a_build_folder_never_follows_a_link_inside_it() {
     let build = cache.root.join("tmp/0123456789abcdef.build");
     fs::create_dir_all(build.join("out")).unwrap();
     fs::write(build.join("lock"), b"").unwrap();
-    std::os::unix::fs::symlink(&outside, build.join("linked")).unwrap();
+    if crate::test_links::link_folder(&outside, &build.join("linked")).is_err() {
+        return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
+    }
 
     cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
 

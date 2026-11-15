@@ -1159,6 +1159,19 @@ pub(crate) fn remove_below(root: &Path, path: &Path) -> io::Result<()> {
         .remove_file()
 }
 
+/// the folders between `root` and `path`, held until the result is dropped so none can be
+/// replaced meanwhile, though `root` itself may be a link; a link among them is refused.
+#[cfg(windows)]
+pub(crate) fn hold_below(root: &Path, path: &Path) -> io::Result<impl Sized> {
+    let below = path.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not inside {}", path.display(), root.display()),
+        )
+    })?;
+    Parents::default().locate(root, below, false, false)
+}
+
 /// refuses links and files where a caller needs a real folder.
 pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     let found = match usage {
