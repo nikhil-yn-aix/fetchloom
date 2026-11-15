@@ -130,7 +130,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 warn_unsendable(output, &account, found);
                 (None, None, None)
             }
-            Some(found) => asked_about(context, &account, found).await,
+            Some(found) => asked_about(context, &account, found, true).await,
             None => (None, None, None),
         };
         let name = login_name(&account);
@@ -421,7 +421,8 @@ async fn sign_in(
         secret: secret.clone(),
         login: user_name.clone(),
     };
-    let (user, valid, unanswered) = asked_about(context, account, &found).await;
+    // a host only a refusal named, as a project's data.toml can, is not trusted as one typed
+    let (user, valid, unanswered) = asked_about(context, account, &found, !rerun).await;
     if valid == Some(false) {
         return Err(refused(account));
     }
@@ -648,11 +649,12 @@ async fn asked_about(
     context: &Arc<Context>,
     account: &Account,
     found: &Found,
+    chosen: bool,
 ) -> (Option<String>, Option<bool>, Option<String>) {
     if context.offline.enabled() || context.mirrors.mirrors.only {
         return (None, None, None);
     }
-    let (user, valid) = check(context, account, found).await;
+    let (user, valid) = check(context, account, found, chosen).await;
     let unanswered = valid
         .is_none()
         .then(|| {
@@ -666,11 +668,13 @@ async fn asked_about(
 }
 
 /// asks the source who the key belongs to: the name and whether it was accepted, or nothing
-/// when the source has no such check or could not be reached.
+/// when the source has no such check or could not be reached. `chosen` says the person named the
+/// account's host, as `--host` does, rather than a refusal.
 async fn check(
     context: &Arc<Context>,
     account: &Account,
     found: &Found,
+    chosen: bool,
 ) -> (Option<String>, Option<bool>) {
     let Some(check) = account.check() else {
         return (None, None);
@@ -679,9 +683,9 @@ async fn check(
         return (None, None);
     };
     let net = context.net_with(vec![credential]);
-    // a dataverse host came from the person, through --host or their own earlier sign-in, so it
-    // may be on a private network, as `add` allows. the origin asked is trusted, and no other
-    if let Account::Dataverse(_) = account {
+    // a dataverse host the person named, through --host or their own earlier sign-in, may be on
+    // a private network, as `add` allows. the origin asked is trusted, and no other
+    if chosen && let Account::Dataverse(_) = account {
         net.trust([check.url.origin()]);
     }
     match net.get(&check.url).await {
@@ -1240,10 +1244,45 @@ mod tests {
             secret: "key".to_owned(),
             login: None,
         };
-        assert_eq!(block_on(check(&context, &account, &found)), (None, None));
+        assert_eq!(
+            block_on(check(&context, &account, &found, true)),
+            (None, None)
+        );
         assert!(
             heard.recv_timeout(Duration::from_secs(5)).is_ok(),
             "the key was never checked on the host the person typed"
+        );
+    }
+
+    /// a dataverse host only a refusal named, as one a project's data.toml names, is no host the
+    /// person chose, so a sign-in offered after it never checks the key on a private address.
+    #[test]
+    fn an_offered_dataverse_sign_in_never_trusts_a_private_host() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let context = context();
+        let stop = context.stop.clone();
+        let reached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let heard = Arc::clone(&reached);
+        std::thread::spawn(move || {
+            if listener.accept().is_ok() {
+                heard.store(true, std::sync::atomic::Ordering::SeqCst);
+                stop.ask();
+            }
+        });
+        let account = Account::parse("dataverse", Some(&format!("127.0.0.1:{port}"))).unwrap();
+        let found = Found {
+            origin: Origin::Keyring,
+            secret: "key".to_owned(),
+            login: None,
+        };
+        assert_eq!(
+            block_on(check(&context, &account, &found, false)),
+            (None, None)
+        );
+        assert!(
+            !reached.load(std::sync::atomic::Ordering::SeqCst),
+            "the key went to a private host the person never named"
         );
     }
 
