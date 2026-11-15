@@ -1139,6 +1139,7 @@ fn write_atomically_with(
         parent
     };
     let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let kept = kept_permissions(path);
     let (temporary, file) = loop {
         let temporary = folder.join(format!(".{name}.{:08x}.tmp", fastrand::u32(..)));
         match OpenOptions::new()
@@ -1153,8 +1154,9 @@ fn write_atomically_with(
     };
     // std's rename hands windows a long path in its `\\?\` form. tempfile's persist does not,
     // and fails once a project's metadata passes 260 characters
-    let written = write(file)
-        .and_then(|()| fs::rename(&temporary, path))
+    let written = keep_mode(&file, kept.as_ref())
+        .and_then(|()| write(file))
+        .and_then(|()| replace(&temporary, path, kept.as_ref()))
         .and_then(|()| {
             let flushed = sync_directory(parent).and_then(|()| {
                 if folder == parent {
@@ -1177,6 +1179,66 @@ fn write_atomically_with(
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+/// what a rewrite of `path` keeps of the file there: its mode on unix, without the bits that run
+/// it as another user, and elsewhere its read-only attribute. none for no file, or a link.
+fn kept_permissions(path: &Path) -> Option<fs::Permissions> {
+    let found = fs::symlink_metadata(path)
+        .ok()
+        .filter(fs::Metadata::is_file)?;
+    let permissions = found.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        Some(fs::Permissions::from_mode(permissions.mode() & 0o777))
+    }
+    #[cfg(not(unix))]
+    permissions.readonly().then_some(permissions)
+}
+
+/// gives the new file, open as `file`, the mode `kept`, flushed with its bytes.
+#[cfg(unix)]
+fn keep_mode(file: &File, kept: Option<&fs::Permissions>) -> io::Result<()> {
+    kept.map_or(Ok(()), |kept| file.set_permissions(kept.clone()))
+}
+
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "windows keeps the read-only attribute once the new file is in place"
+)]
+fn keep_mode(_: &File, _: Option<&fs::Permissions>) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace(temporary: &Path, path: &Path, _: Option<&fs::Permissions>) -> io::Result<()> {
+    fs::rename(temporary, path)
+}
+
+/// renames `temporary` onto `path`, which windows refuses while `path` is read-only: one that is
+/// gets the attribute back on the new file.
+#[cfg(not(unix))]
+#[expect(
+    clippy::permissions_set_readonly_false,
+    reason = "windows has no mode bits, so this clears the read-only attribute alone"
+)]
+fn replace(temporary: &Path, path: &Path, kept: Option<&fs::Permissions>) -> io::Result<()> {
+    let Some(kept) = kept else {
+        return fs::rename(temporary, path);
+    };
+    let mut writable = kept.clone();
+    writable.set_readonly(false);
+    fs::set_permissions(path, writable)?;
+    if let Err(err) = fs::rename(temporary, path) {
+        let _ = fs::set_permissions(path, kept.clone());
+        return Err(err);
+    }
+    if let Err(err) = fs::set_permissions(path, kept.clone()) {
+        tracing::debug!(%err, path = %path.display(), "could not make a rewritten file read-only again");
+    }
+    Ok(())
 }
 
 /// flushes the entries of the folder `path`, as [`crate::volume::sync_directory`] does, where
@@ -2245,6 +2307,55 @@ mod tests {
             b"untouched"
         );
         assert_eq!(fs::read_dir(&project.root).unwrap().count(), 1);
+    }
+
+    /// a rewrite keeps the mode a person gave the file, read-only too, but never a link's mode
+    /// or a mode that runs as someone else.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_keeps_the_mode_of_the_file_it_replaces() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_dir, project) = project(&[]);
+        let path = project.root.join(manifest::FILE);
+        for (mode, kept) in [(0o444, 0o444), (0o640, 0o640), (0o4755, 0o755)] {
+            let _ = fs::remove_file(&path);
+            fs::write(&path, "# before\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            project.write(manifest::FILE, b"# after\n").unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "# after\n");
+            let now = fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+            assert_eq!(format!("{now:o}"), format!("{kept:o}"), "{mode:o}");
+        }
+        fs::remove_file(&path).unwrap();
+        let target = project.root.join("elsewhere");
+        fs::write(&target, "# linked\n").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        project.write(manifest::FILE, b"# after\n").unwrap();
+        let now = fs::symlink_metadata(&path).unwrap();
+        assert!(now.is_file());
+        assert_eq!(
+            now.permissions().mode() & 0o111,
+            0,
+            "{:o}",
+            now.permissions().mode()
+        );
+    }
+
+    /// a read-only file is replaced and stays read-only, as on unix.
+    #[cfg(windows)]
+    #[test]
+    fn a_rewrite_keeps_a_read_only_file_read_only() {
+        let (_dir, project) = project(&[("data.toml", "# before\n")]);
+        let path = project.root.join(manifest::FILE);
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        project.write(manifest::FILE, b"# after\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# after\n");
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+        project.write(manifest::FILE, b"# again\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# again\n");
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
     }
 
     #[test]
