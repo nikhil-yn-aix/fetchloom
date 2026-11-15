@@ -111,7 +111,7 @@ def main():
 
     def listing(arguments):
         listed = subprocess.run([*arguments, '--list', '--json'], cwd=ROOT,
-                                capture_output=True, text=True, check=True, timeout=120)
+                                capture_output=True, text=True, encoding='utf-8', check=True, timeout=120)
         document = json.loads(listed.stdout)
         require(all(mutant['file'] == file for mutant in document), 'mutation listing escaped the requested file')
         return [mutant['name'] for mutant in document]
