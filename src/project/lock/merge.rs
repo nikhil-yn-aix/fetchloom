@@ -882,6 +882,7 @@ fn kept(
         })?;
         lock.datasets.extend(read.datasets);
         lock.derived.extend(read.derived);
+        lock.stated.extend(read.stated);
     }
     Ok(lock)
 }
@@ -1009,10 +1010,15 @@ fn find<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
         .map(|at| &records[at])
 }
 
-/// `name`'s entry in `records` when it pins a fetched dataset for `wanted`, the spec it has now.
+/// `name`'s entry in `records` when it pins a fetched dataset for `wanted`, the spec it has now,
+/// downloaded or not.
 fn answering<'a>(records: &'a [Parsed], name: &str, wanted: &str) -> Option<&'a Parsed> {
-    find(records, name)
-        .filter(|record| matches!(record, Parsed::Source(locked, _) if locked.spec == wanted))
+    find(records, name).filter(|record| match record {
+        Parsed::Source(locked, _) | Parsed::Stated(super::Stated { pin: locked, .. }) => {
+            locked.spec == wanted
+        }
+        Parsed::Derived(..) => false,
+    })
 }
 
 /// the entry of `records` for `name`, a recipe's result.
@@ -1216,6 +1222,9 @@ fn alike(a: &Parsed, b: &Parsed) -> bool {
         }
         (Parsed::Derived(a, a_listed), Parsed::Derived(b, b_listed)) => {
             a_listed == b_listed && untimed_result(a) == untimed_result(b)
+        }
+        (Parsed::Stated(a), Parsed::Stated(b)) => {
+            a.files == b.files && untimed(&a.pin) == untimed(&b.pin)
         }
         _ => false,
     }

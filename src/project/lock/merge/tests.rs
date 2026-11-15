@@ -1084,3 +1084,67 @@ fn a_merge_reads_data_toml_as_often_for_many_datasets_as_for_few() {
         "data.toml is read again for each dataset"
     );
 }
+
+/// a pin by its source's digests merges as any pin: the side that downloaded it wins over the side
+/// that left it as the base had it, and one only a side added stays as it is.
+#[test]
+fn a_pin_not_downloaded_yet_merges_as_any_pin() {
+    let stated = |name: &str, reference: &str| {
+        let whole = pin(name, reference, name.as_bytes());
+        super::super::Stated {
+            files: whole
+                .files
+                .iter()
+                .map(|file| super::super::StatedFile {
+                    path: file.path.clone(),
+                    size: file.size,
+                    sha256: None,
+                    md5: crate::digest::Md5::from_hex("0cc175b9c0f1b6a831c399e269772661"),
+                    url: file.url.clone(),
+                })
+                .collect(),
+            pin: Locked {
+                files: Vec::new(),
+                ..whole
+            },
+        }
+    };
+    let text = |datasets: Vec<Locked>, stated: Vec<super::super::Stated>| {
+        Lock {
+            datasets,
+            stated,
+            ..Lock::default()
+        }
+        .render()
+    };
+    let core = stated("core", "zenodo:3");
+    let manifest = sides(
+        toml(&[("core", "zenodo:3")]),
+        toml(&[("beta", "zenodo:2"), ("core", "zenodo:3")]),
+        Some(toml(&[("core", "zenodo:3")])),
+    );
+    let locks = sides(
+        text(vec![pin("core", "zenodo:3", b"core")], Vec::new()),
+        text(Vec::new(), vec![stated("beta", "zenodo:2"), core.clone()]),
+        Some(text(Vec::new(), vec![core.clone()])),
+    );
+    let lock = merged(&manifest, &locks, &[]).unwrap().lock.unwrap();
+    assert_eq!(
+        names(&lock),
+        ["core"],
+        "our download wins over the base's pin"
+    );
+    assert_eq!(lock.stated, [stated("beta", "zenodo:2")]);
+    let unchanged = sides(
+        text(Vec::new(), vec![core.clone()]),
+        text(Vec::new(), vec![core.clone()]),
+        None,
+    );
+    let manifest = sides(
+        toml(&[("core", "zenodo:3")]),
+        toml(&[("core", "zenodo:3")]),
+        None,
+    );
+    let kept = merged(&manifest, &unchanged, &[]).unwrap().lock.unwrap();
+    assert_eq!(kept.stated, [core]);
+}
