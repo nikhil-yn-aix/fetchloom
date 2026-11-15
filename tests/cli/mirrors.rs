@@ -511,6 +511,22 @@ fn mirror_only_mode_needs_a_mirror() -> Result {
         document["errors"][0]["message"],
         "FETCHLOOM_MIRRORS_ONLY asks for mirrors alone, but no mirror is set"
     );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "name one with `fetchloom settings set mirrors <folder>` or FETCHLOOM_MIRRORS, give --mirror, or unset FETCHLOOM_MIRRORS_ONLY"
+    );
+    let settings = sandbox.work().join("only.toml");
+    std::fs::write(&settings, "mirrors_only = true\n")?;
+    let filed = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_SETTINGS", &settings)
+            .output()?,
+    )?;
+    assert_eq!(
+        filed["errors"][0]["help"],
+        "name one with `fetchloom settings set mirrors <folder>` or FETCHLOOM_MIRRORS, give --mirror, or turn it off with `fetchloom settings unset mirrors_only`"
+    );
     let output = sandbox
         .command(&["settings", "--mirror", "elsewhere"])
         .env("FETCHLOOM_MIRRORS_ONLY", "1")

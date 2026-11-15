@@ -1633,15 +1633,9 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
         );
     }
     output.done("Ok", &everything(&planned.datasets));
-    let mirrors = toml_edit::Value::from(target.to_string());
-    let here = context
-        .settings
-        .file
-        .path
-        .as_deref()
-        .map_or_else(String::new, |path| format!(", here {}", units::path(path)));
     output.next(&format!(
-        "teammates add mirrors = [{mirrors}] to their settings file{here}; `fetchloom settings` shows where"
+        "teammates run `fetchloom settings set mirrors {}`, naming any mirrors they use already too",
+        crate::suggested::shell_word(&target.to_string())
     ));
 }
 

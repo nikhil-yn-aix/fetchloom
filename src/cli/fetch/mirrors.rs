@@ -336,7 +336,7 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
         let (named, undo) = if only.origin == Origin::File {
             (
                 "mirrors_only in the settings file".to_owned(),
-                "remove mirrors_only from the settings file".to_owned(),
+                "turn it off with `fetchloom settings unset mirrors_only`".to_owned(),
             )
         } else {
             (variable.to_owned(), format!("unset {variable}"))
@@ -346,7 +346,7 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
             format!("{named} asks for mirrors alone, but no mirror is set"),
         )
         .help(format!(
-            "list mirrors in the settings file or FETCHLOOM_MIRRORS, give --mirror, or {undo}"
+            "name one with `fetchloom settings set mirrors <folder>` or FETCHLOOM_MIRRORS, give --mirror, or {undo}"
         )));
     }
     Ok(mirrors)
@@ -391,7 +391,7 @@ pub(in crate::cli) fn refused(context: &Context, what: &str) -> Error {
 /// [`refused`], with `remedy` as what to do short of asking sources too.
 fn refusal(context: &Context, what: &str, remedy: &str) -> Error {
     let off = if context.settings.mirrors_only.origin == Origin::File {
-        "set mirrors_only = false in the settings file"
+        "run `fetchloom settings unset mirrors_only`"
     } else {
         "unset FETCHLOOM_MIRRORS_ONLY"
     };
@@ -958,6 +958,15 @@ mod tests {
                 "iris/iris.csv: not asked on /mnt/lab",
                 "iris2/iris.csv: new, so no mirror can be asked for it"
             ]
+        );
+        // mirrors_only set in the settings file is turned off with the command that edits it
+        context.settings.mirrors_only.origin = Origin::File;
+        let error = refused(&context, "1 file is on no mirror");
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "ask whoever keeps the mirrors to add what is missing, or run `fetchloom settings unset mirrors_only` to ask sources too"
+            )
         );
     }
 }

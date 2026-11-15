@@ -84,10 +84,10 @@ fn push_to_is_shown_with_where_it_came_from() -> Result {
     Ok(())
 }
 
-/// the closing `next:` line says where the settings file that names the mirror is.
+/// the closing `next:` line gives teammates the command that names the mirror in their settings.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_push_says_where_the_settings_file_is() -> Result {
+fn a_push_says_how_teammates_name_the_mirror() -> Result {
     let sandbox = Sandbox::new()?;
     project(&sandbox)?;
     let root = sandbox.folder("lab")?.join("mirror");
@@ -97,9 +97,9 @@ fn a_push_says_where_the_settings_file_is() -> Result {
     };
     assert!(
         screen.contains(&format!(
-            "next: teammates add mirrors = [\"{}\"] to their settings file, here ~/",
+            "next: teammates run `fetchloom settings set mirrors {}`, naming any mirrors they use already too\n",
             root.display()
-        )) && screen.contains("settings.toml; `fetchloom settings` shows where\n"),
+        )),
         "{screen}"
     );
     Ok(())
