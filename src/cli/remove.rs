@@ -10,6 +10,7 @@ use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::plan;
 use crate::project::Project;
 use crate::project::lock;
 use crate::project::manifest::{self, Entry, Manifest};
@@ -32,9 +33,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         Some(hold(context, &project, "remove").await?)
     };
     let (text, manifest) = project.manifest()?;
-    for name in &names {
-        known(&manifest, name, "remove")?;
-    }
+    named(&manifest, &names)?;
     unread(&manifest, &names)?;
     // one edit of data.toml for every name, which a stop between names ends with nothing written
     let updated = manifest::without_datasets(&text, &names, |at| {
@@ -127,6 +126,40 @@ fn distinct(asked: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter(|name| seen.insert(name.clone()))
         .collect()
+}
+
+/// refuses the first of `names` data.toml does not have; a path in the data folder is answered
+/// with the dataset it names or with `exclude`.
+fn named(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
+    for name in names {
+        known(manifest, name, "remove").map_err(|error| match exclusion(manifest, name) {
+            Some(help) => error.help(help),
+            None => error,
+        })?;
+    }
+    Ok(())
+}
+
+/// the help for a path given where remove takes a dataset's name: a dataset's own folder names
+/// the dataset, and `exclude` leaves out files below it.
+fn exclusion(manifest: &Manifest, typed: &str) -> Option<String> {
+    let path = typed.trim_start_matches("./").trim_end_matches('/');
+    path.strip_prefix(&format!("{}/", manifest.data_dir))?;
+    let command = super::project::command;
+    if let Some(name) = manifest
+        .datasets
+        .keys()
+        .find(|name| plan::folder(manifest, name) == path)
+    {
+        return Some(format!(
+            "did you mean `{}`?",
+            command(&format!("remove {name}"))
+        ));
+    }
+    Some(format!(
+        "exclude leaves out files by their paths, as in `{}`",
+        command(&format!("exclude {}", crate::suggested::shell_word(typed)))
+    ))
 }
 
 /// refuses to remove the first of `removed` that a recipe in `manifest` is made from, unless that

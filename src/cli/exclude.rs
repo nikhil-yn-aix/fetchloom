@@ -138,11 +138,7 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     };
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let paths = args
-        .paths
-        .iter()
-        .map(|path| in_data_folder(&project.root, &here, &manifest.data_dir, path))
-        .collect::<Result<Vec<_>, _>>()?;
+    let paths = data_paths(&manifest, (&project.root, &here), &args.paths)?;
     let poll = || unchanged_by_a_stop(&context.stop);
     let mut pace = Pace::new(&poll);
     let progress = context.output.wait("Planning", planning(&paths));
@@ -331,6 +327,39 @@ fn planning(paths: &[String]) -> String {
             units::count(many.len() as u64, "path", "paths")
         ),
     }
+}
+
+/// each of `paths`, typed in `here`, as a path in the data folder of the project at `root`; a
+/// dataset's name among them is answered with `remove`.
+fn data_paths(
+    manifest: &Manifest,
+    (root, here): (&Path, &Path),
+    paths: &[PathBuf],
+) -> Result<Vec<String>, Error> {
+    paths
+        .iter()
+        .map(|path| {
+            in_data_folder(root, here, &manifest.data_dir, path).map_err(|error| {
+                match removal(manifest, path) {
+                    Some(help) => error.help(help),
+                    None => error,
+                }
+            })
+        })
+        .collect()
+}
+
+/// the help for a dataset's name given where exclude takes a path: `remove` takes the dataset
+/// out, and exclude its files by their paths.
+fn removal(manifest: &Manifest, arg: &Path) -> Option<String> {
+    let name = arg
+        .to_str()
+        .filter(|name| manifest.datasets.contains_key(*name))?;
+    Some(format!(
+        "to take {name} out, run `{}`; to leave out some of its files, name them as {}/<file>",
+        super::project::command(&format!("remove {name}")),
+        plan::folder(manifest, name)
+    ))
 }
 
 /// `arg`, relative to `here` and maybe naming a file already deleted, as a project path with `/`

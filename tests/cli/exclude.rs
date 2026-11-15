@@ -495,6 +495,33 @@ fn exclude_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     Ok(())
 }
 
+/// a dataset's name given to exclude, or a path in the data folder given to remove, is answered
+/// with the other command.
+#[test]
+fn exclude_and_remove_point_at_each_other() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    for (arguments, help) in [
+        (
+            &["exclude", "pets"][..],
+            "to take pets out, run `fetchloom remove pets`; to leave out some of its files, name them as data/pets/<file>",
+        ),
+        (
+            &["remove", "data/pets/images/cat_001.png"],
+            "exclude leaves out files by their paths, as in `fetchloom exclude data/pets/images/cat_001.png`",
+        ),
+        (
+            &["remove", "./data/pets/"],
+            "did you mean `fetchloom remove pets`?",
+        ),
+    ] {
+        let output = sandbox.run(&[&["--json"][..], arguments].concat())?;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert_eq!(json(&output)?["errors"][0]["help"], help, "{arguments:?}");
+    }
+    Ok(())
+}
+
 /// the file goes by the path it would have in the data folder; one left out already names its
 /// pattern, and a path naming no file gets neither.
 #[test]
