@@ -1,0 +1,210 @@
+// churns files on a refs volume as fetchloom does, one way per run, to find which way deadlocks
+// refs. usage: refs-stress <arm> <root> <threads> <seconds> <progress file>
+// arms: plain (write, delete), link (write, hard link, delete), rename (write, rename without
+// replacing), clone (write, block clone, delete), fix (publish by rename, place by clone and rename)
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
+
+static class RefsStress
+{
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateHardLinkW(string link, string existing, IntPtr security);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool MoveFileExW(string from, string to, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DeviceIoControl(SafeFileHandle device, uint code, IntPtr input, int inputSize,
+        IntPtr output, int outputSize, out int returned, IntPtr overlapped);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct DuplicateExtents
+    {
+        public IntPtr FileHandle;
+        public long SourceFileOffset;
+        public long TargetFileOffset;
+        public long ByteCount;
+    }
+
+    const uint FSCTL_SET_SPARSE = 0x000900c4;
+    const uint FSCTL_GET_INTEGRITY_INFORMATION = 0x0009027c;
+    const uint FSCTL_SET_INTEGRITY_INFORMATION = 0x0009c280;
+    const uint FSCTL_DUPLICATE_EXTENTS_TO_FILE = 0x00098344;
+    const int Folders = 4;
+    const int Kept = 64;
+
+    static string arm;
+    static string root;
+    static volatile bool stop;
+    static long[] last;
+    static long ops;
+    static string failure;
+
+    static void Check(bool ok, string what)
+    {
+        if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error(), what);
+    }
+
+    static void Control(SafeFileHandle file, uint code, byte[] input, byte[] output, string what)
+    {
+        GCHandle inPin = GCHandle.Alloc(input ?? new byte[0], GCHandleType.Pinned);
+        GCHandle outPin = GCHandle.Alloc(output ?? new byte[0], GCHandleType.Pinned);
+        try
+        {
+            int returned;
+            Check(DeviceIoControl(file, code, input == null ? IntPtr.Zero : inPin.AddrOfPinnedObject(), input == null ? 0 : input.Length,
+                output == null ? IntPtr.Zero : outPin.AddrOfPinnedObject(), output == null ? 0 : output.Length, out returned, IntPtr.Zero), what);
+        }
+        finally
+        {
+            inPin.Free();
+            outPin.Free();
+        }
+    }
+
+    // as reflink-copy does it: a sparse new file the source's length, its integrity copied, the
+    // extents duplicated, then not sparse again
+    static void Clone(string from, string to, long size)
+    {
+        using (FileStream source = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (FileStream target = new FileStream(to, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+        {
+            Control(target.SafeFileHandle, FSCTL_SET_SPARSE, null, null, "set sparse");
+            byte[] integrity = new byte[16];
+            Control(source.SafeFileHandle, FSCTL_GET_INTEGRITY_INFORMATION, null, integrity, "get integrity");
+            byte[] set = new byte[8];
+            Array.Copy(integrity, 0, set, 0, 8);
+            try { Control(target.SafeFileHandle, FSCTL_SET_INTEGRITY_INFORMATION, set, null, "set integrity"); } catch (Win32Exception) { }
+            target.SetLength(size);
+            DuplicateExtents extents = new DuplicateExtents();
+            extents.FileHandle = source.SafeFileHandle.DangerousGetHandle();
+            extents.ByteCount = size;
+            int length = Marshal.SizeOf(typeof(DuplicateExtents));
+            byte[] input = new byte[length];
+            GCHandle pin = GCHandle.Alloc(input, GCHandleType.Pinned);
+            try { Marshal.StructureToPtr(extents, pin.AddrOfPinnedObject(), false); } finally { pin.Free(); }
+            Control(target.SafeFileHandle, FSCTL_DUPLICATE_EXTENTS_TO_FILE, input, null, "duplicate extents");
+            Control(target.SafeFileHandle, FSCTL_SET_SPARSE, new byte[] { 0 }, null, "unset sparse");
+        }
+    }
+
+    static void Rename(string from, string to)
+    {
+        Check(MoveFileExW(from, to, 0), "rename " + from);
+    }
+
+    static void Work(object state)
+    {
+        int index = (int)state;
+        Random random = new Random(index);
+        Queue<string> kept = new Queue<string>();
+        long size = 4096 * (1 + index % 4);
+        byte[] bytes = new byte[size];
+        random.NextBytes(bytes);
+        long count = 0;
+        try
+        {
+            while (!stop)
+            {
+                string name = index + "-" + count++;
+                string a = Path.Combine(root, "a" + random.Next(Folders));
+                string b = Path.Combine(root, "b" + random.Next(Folders));
+                string c = Path.Combine(root, "c" + random.Next(Folders));
+                string written = Path.Combine(a, name + ".part");
+                string named = Path.Combine(b, name + ".obj");
+                File.WriteAllBytes(written, bytes);
+                switch (arm)
+                {
+                    case "plain":
+                        File.Delete(written);
+                        break;
+                    case "link":
+                        Check(CreateHardLinkW(named, written, IntPtr.Zero), "link " + named);
+                        File.Delete(written);
+                        kept.Enqueue(named);
+                        break;
+                    case "rename":
+                        Rename(written, named);
+                        kept.Enqueue(named);
+                        break;
+                    case "clone":
+                        Clone(written, named, size);
+                        File.Delete(written);
+                        kept.Enqueue(named);
+                        break;
+                    case "fix":
+                        Rename(written, named);
+                        string staged = Path.Combine(c, "." + name + ".copy");
+                        string placed = Path.Combine(c, name + ".csv");
+                        Clone(named, staged, size);
+                        Rename(staged, placed);
+                        kept.Enqueue(named);
+                        kept.Enqueue(placed);
+                        break;
+                    default:
+                        throw new ArgumentException("no arm " + arm);
+                }
+                while (kept.Count > Kept) File.Delete(kept.Dequeue());
+                Interlocked.Increment(ref ops);
+                Interlocked.Exchange(ref last[index], Stopwatch.GetTimestamp());
+            }
+        }
+        catch (Exception error)
+        {
+            failure = "thread " + index + ": " + error.Message;
+            stop = true;
+        }
+    }
+
+    static int Main(string[] args)
+    {
+        arm = args[0];
+        root = args[1];
+        int threads = int.Parse(args[2]);
+        int seconds = int.Parse(args[3]);
+        string progress = args[4];
+        foreach (string prefix in new[] { "a", "b", "c" })
+            for (int folder = 0; folder < Folders; folder++)
+                Directory.CreateDirectory(Path.Combine(root, prefix + folder));
+        last = new long[threads];
+        Thread[] workers = new Thread[threads];
+        long started = Stopwatch.GetTimestamp();
+        for (int index = 0; index < threads; index++)
+        {
+            last[index] = started;
+            workers[index] = new Thread(Work);
+            workers[index].IsBackground = true;
+            workers[index].Start(index);
+        }
+        using (StreamWriter writer = new StreamWriter(new FileStream(progress, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)))
+        {
+            writer.AutoFlush = true;
+            while (true)
+            {
+                Thread.Sleep(500);
+                long now = Stopwatch.GetTimestamp();
+                double stalled = 0;
+                for (int index = 0; index < threads; index++)
+                    stalled = Math.Max(stalled, (now - Interlocked.Read(ref last[index])) / (double)Stopwatch.Frequency);
+                double elapsed = (now - started) / (double)Stopwatch.Frequency;
+                writer.WriteLine("{0:F1} {1} {2:F1}", elapsed, Interlocked.Read(ref ops), stalled);
+                if (failure != null)
+                {
+                    writer.WriteLine("failed " + failure);
+                    return 2;
+                }
+                if (elapsed >= seconds) break;
+            }
+            stop = true;
+            foreach (Thread worker in workers) worker.Join(15000);
+            writer.WriteLine("end {0}", Interlocked.Read(ref ops));
+        }
+        return 0;
+    }
+}

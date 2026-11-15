@@ -1,0 +1,77 @@
+name: refs stress
+
+# churns files on new refs volumes, made as the windows refs lane makes them, one way per run: hard
+# links, block clones, renames that never replace, and the way fetchloom would place without links.
+# a push that changes .github/refs-stress.json runs it as that file says.
+
+on:
+  push:
+    branches: [exp/refs-stress]
+    paths: [.github/refs-stress.json]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+      parallel: ${{ steps.plan.outputs.parallel }}
+      minutes: ${{ steps.plan.outputs.minutes }}
+      arms: ${{ steps.plan.outputs.arms }}
+      seconds: ${{ steps.plan.outputs.seconds }}
+      threads: ${{ steps.plan.outputs.threads }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os
+          plan = json.load(open(".github/refs-stress.json"))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              for key in ("jobs", "parallel", "minutes", "arms", "seconds", "threads"):
+                  value = plan[key]
+                  value = value if isinstance(value, str) else json.dumps(value)
+                  print(f"{key}: {value}")
+                  out.write(f"{key}={value}\n")
+          PY
+
+  stress:
+    needs: plan
+    name: stress ${{ matrix.job }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.parallel) }}
+      matrix:
+        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: churn files on new refs volumes
+        shell: pwsh
+        timeout-minutes: 80
+        env:
+          ARMS: ${{ needs.plan.outputs.arms }}
+          SECONDS_EACH: ${{ needs.plan.outputs.seconds }}
+          THREADS: ${{ needs.plan.outputs.threads }}
+          MINUTES: ${{ needs.plan.outputs.minutes }}
+          JOB: ${{ matrix.job }}
+        run: >-
+          .github/scripts/refs-stress.ps1 -Arms $env:ARMS -Seconds $env:SECONDS_EACH -Threads $env:THREADS
+          -Minutes $env:MINUTES -Job $env:JOB -Out (Join-Path $env:RUNNER_TEMP 'refs-stress-out')
+      - name: keep what the runs saw
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: refs-stress-${{ matrix.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/refs-stress-out/
+          if-no-files-found: warn
+          compression-level: 1
+          retention-days: 5
