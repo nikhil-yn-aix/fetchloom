@@ -174,6 +174,9 @@ impl Building<'_> {
     }
 }
 
+/// how a person lets steps leave less free than the `build_floor` setting asks.
+pub(super) const LOWER_FLOOR: &str = "lower the floor with `fetchloom settings set build_floor <size>`, or for one run with FETCHLOOM_BUILD_FLOOR";
+
 /// how the room steps may take, `peak`, fits on a disk with `free` bytes free, above `floor`, the
 /// least a step may leave free.
 #[derive(Debug, PartialEq, Eq)]
@@ -208,7 +211,7 @@ fn below(floor: u64, free: u64, cache: &Path) -> Error {
         ),
     )
     .detail(format!("the cache is at {}", cache.display()))
-    .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR")
+    .help(format!("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, {LOWER_FLOOR}"))
 }
 
 /// what the `Needs` line says the steps take: up to `peak` bytes, besides what the steps `unknown`

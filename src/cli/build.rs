@@ -880,7 +880,8 @@ impl<'a> Building<'a> {
                 cache.display()
             ))
             .help(format!(
-                "free space on that disk, or lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR; data.lock and {folder} are as they were"
+                "free space on that disk, or {}; data.lock and {folder} are as they were",
+                room::LOWER_FLOOR
             ))),
             ended @ Ended::Exited(_) => Err(failed(name, program, ended, &ran, &folder)),
             #[cfg(unix)]
@@ -1372,7 +1373,7 @@ fn taken(name: &str, fault: Fault) -> Error {
                 "{name} wrote more than {}",
                 units::count(most as u64, "file", "files")
             ),
-            "pack small files into archives in the step, or raise most_files in the settings file or FETCHLOOM_MOST_FILES",
+            "pack small files into archives in the step, or raise the limit with `fetchloom settings set most_files <number>`, or for one run with FETCHLOOM_MOST_FILES",
         ),
         Refused::Changed(path) => (
             format!("{name} wrote {path}, which changed while fetchloom read it"),
@@ -1467,6 +1468,20 @@ mod tests {
         assert_eq!(shown("two words"), "'two words'");
         assert_eq!(shown("it's"), "'it'\\''s'");
         assert_eq!(shown(""), "''");
+    }
+
+    /// a result of more files than a run takes names the command that raises the limit for good,
+    /// and the variable that raises it for one run.
+    #[test]
+    fn too_many_files_name_the_setting_to_raise() {
+        let error = taken("clean", Fault::Refused(Refused::TooMany(3)));
+        assert_eq!(error.message, "clean wrote more than 3 files");
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "pack small files into archives in the step, or raise the limit with `fetchloom settings set most_files <number>`, or for one run with FETCHLOOM_MOST_FILES"
+            )
+        );
     }
 
     /// one file, pinned or matching, takes the singular.

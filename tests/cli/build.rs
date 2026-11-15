@@ -1712,7 +1712,10 @@ fn a_build_below_the_floor_stops_before_any_step() -> Result {
             message,
             "the disk holding the cache has 1000 B free, less than the 1.0 MiB build_floor keeps free, so no step can run"
         );
-        assert!(help.contains("lower build_floor"), "{help}");
+        assert!(
+            help.ends_with("to let steps leave less free, lower the floor with `fetchloom settings set build_floor <size>`, or for one run with FETCHLOOM_BUILD_FLOOR"),
+            "{help}"
+        );
         assert!(!help.contains("--yes"), "{help}");
         assert_eq!(runs(&sandbox.work())?, 0, "{args:?}");
     }

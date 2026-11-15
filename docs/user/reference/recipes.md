@@ -90,7 +90,7 @@ while the step runs, fetchloom watches the free space on the disk holding the ca
 ```text
       Needs up to 122 B on the disk holding the cache, which has 321.1 GiB free
 error: the disk holding the cache has 321.1 GiB free, less than the 100.0 TiB build_floor keeps free, so no step can run
-  help: free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR
+  help: free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, lower the floor with `fetchloom settings set build_floor <size>`, or for one run with FETCHLOOM_BUILD_FLOOR
 ```
 
 the step's output goes to `.fetchloom/builds/<name>.log`, made anew for each run, which only you may read on linux and macos and which keeps the latest 16 MiB. it also shows under the step, except with `-q` or `--json`.
