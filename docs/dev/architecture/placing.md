@@ -118,6 +118,8 @@ when a recorded spelling is absent, scans consider exactly one folded alias and 
 
 apfs and hfs+ see `café` written with one character and with an `e` and a combining accent as one name. apfs lists a name in the composition that made it, while hfs+ lists every name decomposed, so a file the lock names composed can be listed decomposed. retargeting carries such a listed file to the wanted spelling even without a placement record, when the two spellings differ only in composition and resolve to the same file, so status never reports it both missing and extra. a name differing in case is joined only through a record. `get` compares the names in its output folder composed on macos for the same reason. see `same_composed` and `as_disk_sees` in `src/name.rs`.
 
+exfat on macos lists every name decomposed too and finds a name by either composition, yet removes a file or folder only by the spelling that made it. a removal goes by the listed spelling, so on macos a name that is not found to remove but still leads to its entry is removed by its other composition when that leads to the same entry: `other_composition` in `src/place/parents.rs`.
+
 ### verification workers
 
 `Survey::verify` first selects only the files that still need reading. a same-survey `Placed::racy_intact` proof still skips a file unless it is in `damaged`; files outside the requested datasets and already edited or vouched files keep their existing exclusions. scheduling counts the bytes of this filtered list, not every record in the state.

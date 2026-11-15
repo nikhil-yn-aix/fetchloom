@@ -14,7 +14,7 @@ put that line in `~/.zshrc` to keep it in later sessions. changing the variable 
 
 ## clones and links
 
-apfs supports copy-on-write clones: a clone shares its blocks with the cached file until either file is written. `copy = true` requests writable clones. hfs+ cannot clone, so fetchloom tries hardlinks there. exFAT and FAT32 drives make neither, so every file is copied, and FAT32 holds no file of 4 GiB or more, which fetchloom refuses before copying, as [limits](../reference/limits.md#scale) lists. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
+apfs supports copy-on-write clones: a clone shares its blocks with the cached file until either file is written. `copy = true` requests writable clones. hfs+ cannot clone, so fetchloom tries hardlinks there. exFAT and FAT32 drives make neither, so every file is copied, and FAT32 holds no file of 4 GiB or more, which fetchloom refuses before copying, as [limits](../reference/limits.md#scale) lists. exFAT on macos keeps no permissions either, so files placed there stay writable; `status` still finds an edit by size and time, and `sync` keeps it as it keeps any edit. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
 
 stderr excerpt when the project and cache share an apfs disk:
 
@@ -37,7 +37,7 @@ the client prefixes above and names under `~/Library` compare without case, as a
 
 ## names
 
-apfs and hfs+ ignore case by default, and both see `café` written with one character and with an `e` and a combining accent as one name. apfs keeps a name in the form that created it, while hfs+ lists every name in the decomposed form. a file fetchloom placed under one form and listed under the other is the same file: `status` does not report it missing and extra, `sync` does not place it again, and `get` does not count it as a foreign file in its output folder.
+apfs and hfs+ ignore case by default, as exFAT does, and all three see `café` written with one character and with an `e` and a combining accent as one name. apfs keeps a name in the form that created it, while hfs+ and exFAT list every name in the decomposed form. a file fetchloom placed under one form and listed under the other is the same file: `status` does not report it missing and extra, `sync` does not place it again, and `get` does not count it as a foreign file in its output folder.
 
 two files in a dataset whose paths differ only in case would be one file on such a disk. fetchloom refuses to place them on every platform, so a project works the same on each, and its message names both paths and suggests how to leave one out.
 
