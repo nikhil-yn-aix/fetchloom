@@ -95,7 +95,21 @@ fn a_size_reads_as_fetchloom_prints_it() {
         error.message,
         "FETCHLOOM_CACHE_BUDGET is \"10\", and a size needs its unit, as 10M or 10G"
     );
-    for text in ["lots", "10 G B", "1e3", "-1", "+1", ".5G", "10XB"] {
+    for (variable, text) in [
+        ("FETCHLOOM_ASK_ABOVE", "10.5"),
+        ("FETCHLOOM_CACHE_BUDGET", "2.5"),
+        ("FETCHLOOM_BUILD_FLOOR", "1.5"),
+        ("FETCHLOOM_MEMORY", "0.5"),
+    ] {
+        let error = read(&[(variable, text)], None).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("{variable} is \"{text}\", and a size needs its unit, as {text}M or {text}G")
+        );
+    }
+    for text in [
+        "lots", "10 G B", "1e3", "-1", "+1", ".5G", "10XB", "1.5.", "1.",
+    ] {
         let error = read(&[("FETCHLOOM_ASK_ABOVE", text)], None).unwrap_err();
         assert_eq!(
             error.message,

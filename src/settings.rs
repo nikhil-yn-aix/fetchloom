@@ -909,10 +909,15 @@ fn bytes_in(text: &str) -> Option<u64> {
 }
 
 /// the bytes `text` gives `named`, or the message for what is no size, or a size of none. a
-/// number with no unit is refused, as 10 meant as 10G would budget 10 bytes; 0 needs none.
+/// whole or decimal number with no unit is refused, as 10 meant as 10G would budget 10 bytes;
+/// 0 needs none.
 fn sized(named: &str, text: &str) -> Result<u64, String> {
     let number = text.trim();
-    if number.bytes().all(|byte| byte.is_ascii_digit()) && number.bytes().any(|byte| byte != b'0') {
+    let unitless = number
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && bytes_in(number).is_some();
+    if unitless && number.bytes().any(|byte| !matches!(byte, b'0' | b'.')) {
         return Err(format!(
             "{named} is \"{text}\", and a size needs its unit, as {number}M or {number}G"
         ));
