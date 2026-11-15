@@ -266,6 +266,30 @@ fn a_handle_answer_that_cannot_be_used_says_why() {
     }
 }
 
+/// a doi record's web link to a bucket or a drive folder is no repository: fetchloom goes there,
+/// with a listed bucket's keys or the drive token, only from a link the person gives.
+#[test]
+fn a_handle_cannot_route_to_a_bucket_or_a_drive_folder() {
+    for location in [
+        "https://lab-private.s3.amazonaws.com/scans/",
+        "https://storage.googleapis.com/lab-private/scans/",
+        "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    ] {
+        let body = changed(|value| value["values"][1]["data"]["value"] = location.into());
+        let recorded = Recorded::default().on(HANDLE, 200, body);
+        let error = block_on(Doi::parse(DOI).unwrap().locate(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceUnresolved, "{location}");
+        assert!(
+            error
+                .message
+                .ends_with("which fetchloom follows only from a link you give it"),
+            "{}",
+            error.message
+        );
+        assert_eq!(recorded.asked(), [HANDLE], "{location}");
+    }
+}
+
 #[test]
 fn a_handle_cannot_route_back_to_a_doi() {
     let body = changed(|value| {

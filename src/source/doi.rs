@@ -131,6 +131,11 @@ impl Doi {
             Reference::Doi(_) => Err(Self::unresolved(&format!(
                 "{self} points to another DOI rather than a repository"
             ))),
+            // a listed bucket is asked with its keys, a drive folder with the drive token
+            Reference::Bucket(_) | Reference::Drive(_) => Err(Self::unresolved(&format!(
+                "{self} points to {}, which fetchloom follows only from a link you give it",
+                crate::shown::mask_query(location)
+            ))),
             reference => Ok(reference),
         }
     }
