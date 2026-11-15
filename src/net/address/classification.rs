@@ -377,14 +377,18 @@ async fn public_numeric_proxy_targets_are_not_refused() {
         "::ffff:8.8.8.8",
         "64:ff9b::8.8.8.8",
     ] {
-        assert_eq!(look_up(address, 443).await, Looked::Public, "{address}");
+        assert_eq!(
+            system_lookup(address, 443).await,
+            Looked::Public,
+            "{address}"
+        );
     }
 }
 
 #[tokio::test]
 async fn private_numeric_proxy_targets_name_the_refused_address() {
     for address in ["127.0.0.1", "169.254.169.254", "::1"] {
-        let Looked::Private(reason) = look_up(address, 443).await else {
+        let Looked::Private(reason) = system_lookup(address, 443).await else {
             panic!("{address} was not refused");
         };
         assert!(reason.contains(address), "{reason}");

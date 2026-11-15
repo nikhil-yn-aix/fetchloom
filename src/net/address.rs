@@ -576,7 +576,7 @@ impl Proxies {
                 .await
                 .map_or(Looked::Public, Looked::Private);
         }
-        look_up(name, port).await
+        system_lookup(name, port).await
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Looked>> {
@@ -626,7 +626,7 @@ fn looks_internal(name: &str) -> bool {
 }
 
 /// what this machine's lookup of `name` at `port` finds.
-async fn look_up(name: &str, port: u16) -> Looked {
+async fn system_lookup(name: &str, port: u16) -> Looked {
     let found = tokio::net::lookup_host((name, port)).await;
     looked(name, found.map(Iterator::collect))
 }
