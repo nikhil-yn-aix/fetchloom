@@ -19,7 +19,7 @@ use crate::project::manifest::recipes::{Slot, Template};
 use crate::stop::Stop;
 
 /// the most of a step's output its log keeps: the latest, once there is more.
-pub(crate) const LOG_MOST: u64 = 16 << 20;
+const LOG_MOST: u64 = 16 << 20;
 
 /// how much of the latest output stays in memory for an error.
 const TAIL_BYTES: usize = 64 << 10;

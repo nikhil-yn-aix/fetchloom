@@ -1683,7 +1683,7 @@ fn inline(what: &str) -> Error {
 /// without its comments: an archive's own table wins over a glob, so the archive keeps what the
 /// glob chose. select patterns in `unmatched` match nothing there, which an own table refuses, so
 /// they are left out. fails as [`with_exclusions`] does on a part written inline.
-pub(crate) fn with_members_copied(
+fn with_members_copied(
     text: &str,
     name: &str,
     from: &str,
@@ -1811,7 +1811,7 @@ fn one_per_line(list: &mut Array) {
 
 /// data.toml's text without the members table of the dataset `name` for `archive`, as when the
 /// whole archive is left out, and without `members` once it is empty.
-pub(crate) fn without_members(text: &str, name: &str, archive: &str) -> Result<String, Error> {
+fn without_members(text: &str, name: &str, archive: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
     members_out(&mut document, name, archive);
     Ok(document.to_string())
@@ -1971,7 +1971,7 @@ fn remove(document: &mut DocumentMut, name: &str) {
 
 /// data.toml's text with the dataset `name` as the data.toml `other` writes it, with the comments
 /// touching its header: in place of `text`'s, under any note above it, or before its successor.
-pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Error> {
+fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
     let table = copied(&editable(other)?, name)?;
     if !copy_in(&mut document, name, table) {
