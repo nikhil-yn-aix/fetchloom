@@ -58,44 +58,35 @@ pub(crate) struct State {
     pub(crate) folder: Option<Folder>,
 }
 
-/// which folder a state was written for: on unix its inode, which a rename keeps, without the
-/// device, which network disks number apart on each machine; on windows its creation time and its
-/// path. a clone or a copy of a project is another folder, so the records of a state that came
-/// with it, which anyone could have written, are not used.
+/// which folder a state was written for: its file number, the inode on unix and the file index
+/// on windows, which a rename or a move within its disk keeps and a copy does not. the disk's own
+/// number is left out, since network disks number it apart on each machine. a clone or a copy of a
+/// project is another folder, so the records of a state that came with it, which anyone could have
+/// written, are not used.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Folder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inode: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    created: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
 }
 
 impl Folder {
     /// the folder at `root`, none when the system cannot say.
     pub(crate) fn of(root: &std::path::Path) -> Option<Folder> {
-        let metadata = std::fs::metadata(root).ok()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            Some(Folder {
-                inode: Some(metadata.ino()),
-                ..Folder::default()
-            })
+            let inode = std::fs::metadata(root).ok()?.ino();
+            Some(Folder { inode: Some(inode) })
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt;
-            Some(Folder {
-                created: Some(metadata.creation_time()),
-                path: Some(root.to_string_lossy().into_owned()),
-                ..Folder::default()
-            })
+            let handle = winapi_util::Handle::from_path_any(root).ok()?;
+            let index = winapi_util::file::information(&handle).ok()?.file_index();
+            Some(Folder { inode: Some(index) })
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = (metadata, root);
+            let _ = root;
             None
         }
     }

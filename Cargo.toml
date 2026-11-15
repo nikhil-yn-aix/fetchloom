@@ -109,7 +109,8 @@ webpki-root-certs = "1"
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 mimalloc = { version = "0.1.52", default-features = false, features = ["override"] }
 
-# std keeps a windows file's link count unstable, and same-file already depends on this crate.
+# std keeps a windows file's link count and file index unstable, and same-file already depends on
+# this crate. the index names a project folder, as the inode does on unix.
 # anstyle-query, already under anstream, turns on escape codes for the picker without unsafe.
 # reflink-copy clones blocks on ReFS; linux and macos clone through rustix.
 [target.'cfg(windows)'.dependencies]

@@ -2337,7 +2337,6 @@ fn remove_in_a_copy_says_what_it_keeps_and_why() -> Result {
 
 /// a renamed folder is the same folder, so its state is still used: remove deletes the file
 /// fetchloom placed, with no sync first, which would write the state again.
-#[cfg(unix)]
 #[test]
 fn a_renamed_project_folder_keeps_its_state() -> Result {
     let sandbox = Sandbox::new()?;
