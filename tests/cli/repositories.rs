@@ -1711,3 +1711,24 @@ fn path_downloads_a_pin_not_downloaded_yet_and_answers() -> Result {
     assert!(!lock.contains("downloaded = false"), "{lock}");
     Ok(())
 }
+
+/// `status --check` fails while a dataset is not downloaded yet, naming it and the sync that
+/// downloads it, as it fails for a file not in place.
+#[test]
+fn status_check_fails_while_a_pin_is_not_downloaded_yet() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    added_unsynced(&sandbox, &routes)?;
+    let output = sandbox.run(&["--json", "status", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "data.not_ready");
+    assert_eq!(
+        error["details"][0],
+        "archiving is pinned by its source's MD5, not downloaded yet: `fetchloom sync archiving` downloads and checks it"
+    );
+    assert_eq!(error["fix"], "fetchloom sync");
+    ok(&command(&sandbox, &routes, &["sync"]).output()?)?;
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}

@@ -36,6 +36,8 @@ pub(in crate::cli) enum Unready {
     /// a fetched dataset data.lock does not pin as data.toml asks, or every dataset when there
     /// is no data.lock.
     Unpinned(Option<String>),
+    /// a dataset its source's digests pin, `by` naming them, that no sync has downloaded yet.
+    NotDownloaded { name: String, by: &'static str },
 }
 
 impl Unready {
@@ -82,6 +84,10 @@ impl Unready {
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command("sync")
             ),
+            Unready::NotDownloaded { name, by } => format!(
+                "{name} is pinned by its source's {by}, not downloaded yet: `{}` downloads and checks it",
+                command(&format!("sync {name}"))
+            ),
             Unready::Unpinned(None) => format!(
                 "there is no data.lock, so nothing pins the files yet: ask whoever shares the project to commit it, or `{}` pins what the sources serve today",
                 command("sync")
@@ -97,6 +103,7 @@ impl Unready {
                 | Unready::Outdated(_)
                 | Unready::Damaged { hashed: false, .. }
                 | Unready::Unpacked(_)
+                | Unready::NotDownloaded { .. }
         )
     }
 }
@@ -172,6 +179,15 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
                 .map(|name| Unready::Unpinned(Some(name.clone()))),
         );
     }
+    unready.extend(
+        status
+            .not_downloaded
+            .iter()
+            .map(|name| Unready::NotDownloaded {
+                name: name.clone(),
+                by: status.pinned_by.get(name).copied().unwrap_or("digests"),
+            }),
+    );
     unready.extend(status.building.iter().map(|(name, moved)| Unready::Stale {
         name: name.clone(),
         moved: crate::cli::project::said(moved),
