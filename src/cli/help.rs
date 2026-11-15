@@ -768,19 +768,44 @@ mod tests {
         }
     }
 
-    /// build may still change, which its help, short or long, and the recipes topic say in one
-    /// line, rather than a warning on every run.
+    /// build may still change, which the command list, its help, short or long, and the recipes
+    /// topic say, rather than a warning on every run.
     #[test]
     fn build_and_recipes_are_labelled_experimental() {
         let line =
             "`fetchloom build` and recipes are experimental: later versions may change them.";
-        let short = super::short(&["build".to_owned()]).unwrap_or_default();
         for (asked, text) in [
             ("build --help", full_help("build")),
-            ("build -h", short),
             ("help recipes", RECIPES.to_owned()),
         ] {
             assert_eq!(text.matches(line).count(), 1, "{asked}: {text}");
+        }
+        let label = "run recipes and record their results in data.lock (experimental)";
+        for (asked, text) in [
+            ("--help", args::command().render_long_help().to_string()),
+            (
+                "build -h",
+                super::short(&["build".to_owned()]).unwrap_or_default(),
+            ),
+        ] {
+            assert!(text.contains(label), "{asked}: {text}");
+        }
+    }
+
+    /// a second paragraph in a command's about made clap put each option's text on a line of
+    /// its own in `-h`, unlike every other command.
+    #[test]
+    fn every_short_help_puts_the_text_beside_each_option() {
+        let root = args::Args::command();
+        for command in root.get_subcommands() {
+            let name = command.get_name();
+            let text = super::short(&[name.to_owned()]).unwrap_or_default();
+            for line in text
+                .lines()
+                .filter(|line| line.trim_start().starts_with('-'))
+            {
+                assert!(line.trim().contains("  "), "{name} -h: {line}");
+            }
         }
     }
 

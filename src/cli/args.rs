@@ -62,6 +62,7 @@ on disk: writes data.lock and may add files to the cache. after a git merge, it 
   fetchloom build --check --json    # run every step again and compare
   fetchloom build --accept clean    # record the rebuild of clean a check kept
 
+`fetchloom build` and recipes are experimental: later versions may change them.
 to write a recipe in data.toml, see `fetchloom help recipes`
 
 on disk: runs each step that needs it in a folder of its own in the cache, writes data.lock and data.lock.d and places the results in data/. --dry-run writes nothing";
@@ -580,9 +581,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
-    /// run the recipes and record their results in data.lock
-    ///
-    /// `fetchloom build` and recipes are experimental: later versions may change them.
+    /// run recipes and record their results in data.lock (experimental)
     #[command(override_usage = "fetchloom build [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(BUILD_DRY_RUN)), after_help = examples::BUILD)]
     Build(Build),
 
