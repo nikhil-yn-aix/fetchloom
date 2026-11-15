@@ -1718,7 +1718,12 @@ fn projects_below(here: &Path) -> Vec<String> {
                 let Ok(name) = entry.file_name().into_string() else {
                     continue;
                 };
-                if name.starts_with('.') || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                // a name a shell would need quoted, as one with a backtick, never reaches a help
+                let plain = matches!(super::shell_word(&name), std::borrow::Cow::Borrowed(_));
+                if name.starts_with('.')
+                    || !plain
+                    || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+                {
                     continue;
                 }
                 let inner = if shown.is_empty() {
@@ -1895,6 +1900,19 @@ pub(super) fn known_with_rest(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// a folder whose name a shell would need quoted is passed by, so no clone's folder name
+    /// steers the help, or the `fix` taken from it.
+    #[test]
+    fn projects_below_pass_by_names_a_shell_would_need_quoted() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["analysis", "x`fetchloom remove y`", "two words"] {
+            let folder = root.path().join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("data.toml"), "").unwrap();
+        }
+        assert_eq!(super::projects_below(root.path()), ["analysis"]);
+    }
+
     use super::*;
     use crate::cache::Cache;
     use crate::output::{Level, Output, Style};
