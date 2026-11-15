@@ -147,6 +147,45 @@ fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result
     Ok(())
 }
 
+/// a source that lists files it does not serve fails the add, and since the other files are
+/// fine and nothing moved, the help leaves the missing ones out by their exact patterns.
+#[test]
+fn an_add_missing_some_listed_files_offers_to_leave_them_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (rows, notes) = (md5_hex(ROWS), md5_hex(NOTES));
+    let routes = dryad(&[
+        ("rows.csv", ROWS, &rows),
+        ("notes.txt", NOTES, &notes),
+        ("raw/[draft] a.csv", ROWS, &rows),
+        ("raw/b.csv", ROWS, &rows),
+    ])?;
+    let gone = || reply("404 Not Found", &[("Content-Length", "0")], b"");
+    routes.change(vec![
+        (format!("{DRYAD}/files/103/download"), gone()),
+        (format!("{DRYAD}/files/104/download"), gone()),
+    ]);
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let add = |extra: &[&str]| {
+        let args = [&["--json", "add", page, "--as", "archiving"][..], extra].concat();
+        command(&sandbox, &routes, &args).output()
+    };
+    let output = add(&[])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["help"],
+        "the other files are in the cache. to add archiving without them, run the add again with --exclude \"raw/[[]draft] a.csv\" --exclude \"raw/b.csv\""
+    );
+    let served = file(ROWS, "\"b\"");
+    routes.change(vec![(format!("{DRYAD}/files/104/download"), served)]);
+    assert_eq!(
+        json(&add(&[])?)?["errors"][0]["help"],
+        "the other files are in the cache. to add archiving without it, run the add again with --exclude \"raw/[[]draft] a.csv\""
+    );
+    let output = add(&["--exclude", "raw/[[]draft] a.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
 /// `get` takes a dryad id as `add` does, into a folder of its own.
 #[test]
 fn get_downloads_a_dryad_version_into_a_folder() -> Result {

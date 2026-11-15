@@ -644,6 +644,7 @@ async fn add_held(
         shown: parsed.reference.shown(),
         dataset: Some(names[0].clone()),
     };
+    let kept = kept_files(&new_manifest, &names[0], &addition.listing);
     let outcome = sync_add(
         &work,
         adding,
@@ -657,6 +658,7 @@ async fn add_held(
         &[],
     )
     .await
+    .map_err(|error| some_missing(error, &names[0], kept))
     .map_err(|error| on_lines(error, None, std::slice::from_ref(&typed_line)))?;
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
@@ -718,6 +720,59 @@ fn on_line(error: Error, at: Option<&str>, several: bool) -> Error {
 fn moved_on(at: &str) -> String {
     format!("check the link on {at} in a browser. if it moved, put the new link there")
 }
+
+/// how many files of `listing` the new dataset `name` keeps, after its select and exclude.
+fn kept_files(manifest: &Manifest, name: &str, listing: &Listing) -> usize {
+    let Some(manifest::Origin::Source(source)) =
+        manifest.datasets.get(name).map(|entry| &entry.origin)
+    else {
+        return listing.files.len();
+    };
+    listing
+        .files
+        .iter()
+        .filter(|file| {
+            (source.select.is_empty() || source.select.iter().any(|glob| glob.matches(&file.path)))
+                && !source.exclude.iter().any(|glob| glob.matches(&file.path))
+        })
+        .count()
+}
+
+/// `error` from adding `name`, which keeps `kept` files. when some but not all of them had nothing
+/// at their links, the link did not move: the help leaves those files out, each by its pattern.
+fn some_missing(mut error: Error, name: &str, kept: usize) -> Error {
+    let prefix = format!("{name}/");
+    let missing: Vec<&str> = error
+        .failures
+        .iter()
+        .filter(|failure| failure.help.as_deref() == Some(crate::net::MOVED_HELP))
+        .filter_map(|failure| failure.file.strip_prefix(&prefix))
+        .collect();
+    if missing.is_empty() || missing.len() < error.failures.len() || missing.len() >= kept {
+        return error;
+    }
+    let flags: Vec<String> = missing
+        .iter()
+        .take(MOST_FLAGS)
+        .map(|path| crate::glob::exclusion_flag(path))
+        .collect();
+    let flags = if missing.len() > MOST_FLAGS {
+        format!("an --exclude for each, such as {}", flags[0])
+    } else {
+        flags.join(" ")
+    };
+    let them = if missing.len() == 1 { "it" } else { "them" };
+    let help = format!(
+        "the other files are in the cache. to add {name} without {them}, run the add again with {flags}"
+    );
+    for failure in &mut error.failures {
+        failure.help = Some(help.clone());
+    }
+    error.help(help)
+}
+
+/// the most `--exclude` flags a help spells out.
+const MOST_FLAGS: usize = 5;
 
 /// the help for links of the list `list_name` that moved, each fixed on its own line of it.
 fn moved_in(list_name: &str) -> String {
