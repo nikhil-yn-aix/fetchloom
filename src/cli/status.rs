@@ -659,7 +659,14 @@ fn check(
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &manifest, &survey, &planned)?;
-    let unplaced: HashSet<&str> = status.unplaced.iter().map(String::as_str).collect();
+    // a dataset dropped here whose files a drop cut short left is told in one line, as one with
+    // place = false is
+    let unplaced: HashSet<&str> = status
+        .unplaced
+        .iter()
+        .chain(&status.dropped)
+        .map(String::as_str)
+        .collect();
     for path in &status.unneeded {
         if let Some(placed) = survey.state.files.get(path)
             && unplaced.contains(placed.dataset.as_str())
@@ -1207,6 +1214,20 @@ impl Status {
 /// a faint line on stderr for each dataset dropped on this machine.
 fn tell_dropped(output: &Output, status: &Status) {
     for name in &status.dropped {
+        if let Some((folder, paths)) = status.retiring.get(name) {
+            let left = match paths.len() {
+                1 => "its file".to_owned(),
+                count => format!("{} of its files", units::grouped(count as u64)),
+            };
+            output.report(
+                "Dropped",
+                &format!(
+                    "{name} · a drop cut short left {left} in {folder}; `{}` finishes it",
+                    super::project::command(&format!("drop {name}"))
+                ),
+            );
+            continue;
+        }
         let back = match status.dropped_owned.get(name) {
             None => format!(
                 "`{}` brings it back",

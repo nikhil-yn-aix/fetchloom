@@ -375,6 +375,60 @@ fn a_drop_in_a_copied_project_frees_the_files_in_place() -> Result {
     Ok(())
 }
 
+/// a drop that could not finish, cut short as a kill or a file that will not go cuts it, leaves its
+/// dataset dropped with files in the data folder: status says so in the dataset's line, with the
+/// drop that finishes it, and the sync that removes them says why, never that it has place = false.
+#[test]
+fn a_drop_cut_short_is_told_as_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let folder = sandbox.work().join("data").join("iris");
+    #[cfg(windows)]
+    let holder = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(folder.join("iris.csv"))?
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::support::skipped("unprivileged", "root ignores file permissions");
+        }
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555))?;
+    }
+    let output = sandbox.run(&["--yes", "drop", "iris"])?;
+    #[cfg(windows)]
+    drop(holder);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755))?;
+    }
+    assert_ne!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let status = sandbox.run(&["status"])?;
+    ok(&status)?;
+    assert_eq!(
+        text(&status.stdout)?,
+        "    Dropped iris · a drop cut short left its file in data/iris; `fetchloom drop iris` finishes it\n"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    ok(&synced)?;
+    let told = text(&synced.stderr)?;
+    assert!(
+        told.contains("Retired data/iris · 1 file a drop cut short left\n"),
+        "{told}"
+    );
+    assert!(!told.contains("place = false"), "{told}");
+    assert!(
+        told.contains("`fetchloom drop iris` frees what the cache still holds of it"),
+        "{told}"
+    );
+    Ok(())
+}
+
 /// a dataset dropped before whose bytes came back into the cache, as a build or a push brings
 /// them, is freed again rather than called dropped already.
 #[test]

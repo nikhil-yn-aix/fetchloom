@@ -560,9 +560,28 @@ fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placemen
             ),
         );
     }
+    for (dataset, files) in &placement.cut_short {
+        output.step(
+            verbs[0],
+            &format!(
+                "{} · {} a drop cut short left",
+                plan::folder(manifest, dataset),
+                units::count(*files, "file", "files")
+            ),
+        );
+    }
+    if !placement.cut_short.is_empty() {
+        let names: Vec<&str> = placement.cut_short.keys().map(String::as_str).collect();
+        output.hint(&format!(
+            "`{}` frees what the cache still holds of {}",
+            crate::cli::project::command(&format!("drop {}", names.join(" "))),
+            if names.len() == 1 { "it" } else { "them" }
+        ));
+    }
     let unneeded = placement
         .removed
-        .saturating_sub(placement.unplaced.values().sum());
+        .saturating_sub(placement.unplaced.values().sum())
+        .saturating_sub(placement.cut_short.values().sum());
     if unneeded > 0 {
         output.step(
             verbs[1],

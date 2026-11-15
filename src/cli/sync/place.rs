@@ -93,6 +93,9 @@ pub(crate) struct Placement {
     /// of `removed`, the files of each dataset `place = false` keeps out of the data folder now.
     #[serde(skip)]
     pub(crate) unplaced: BTreeMap<String, u64>,
+    /// of `removed`, the files of each dataset dropped here that a drop cut short left.
+    #[serde(skip)]
+    pub(crate) cut_short: BTreeMap<String, u64>,
     /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
@@ -912,11 +915,12 @@ impl<'a> Placing<'a> {
                     preview.placement.removed += 1;
                     let placed = self.survey.state.files.get(&path);
                     if let Some(placed) = placed.filter(|placed| unplaced(self.manifest, placed)) {
-                        *preview
-                            .placement
-                            .unplaced
-                            .entry(placed.dataset.clone())
-                            .or_default() += 1;
+                        let counts = if self.survey.state.dropped.contains(&placed.dataset) {
+                            &mut preview.placement.cut_short
+                        } else {
+                            &mut preview.placement.unplaced
+                        };
+                        *counts.entry(placed.dataset.clone()).or_default() += 1;
                     }
                     if placed.is_some_and(|placed| placed.adopted) {
                         preview.placement.removed_adopted.push(path.clone());
@@ -1242,6 +1246,8 @@ pub(crate) fn untouched(
         || !state.aside.is_empty()
         || state.files.iter().any(|(path, placed)| {
             survey.disk.get(path) != Some(&placed.look)
+                // a drop cut short left the files of a dataset dropped here
+                || state.dropped.contains(&placed.dataset)
                 // a link made writable leaves the cache's copy open to edits until sealed again
                 || (placed.method == Method::Hardlink
                     && !placed.writable
@@ -1949,7 +1955,12 @@ fn remove_unwanted(
                             })?;
                         placement.removed += 1;
                         if unplaced(manifest, &before) {
-                            *placement.unplaced.entry(before.dataset).or_default() += 1;
+                            let counts = if survey.state.dropped.contains(&before.dataset) {
+                                &mut placement.cut_short
+                            } else {
+                                &mut placement.unplaced
+                            };
+                            *counts.entry(before.dataset).or_default() += 1;
                         }
                         if before.adopted {
                             placement.removed_adopted.push(path);
