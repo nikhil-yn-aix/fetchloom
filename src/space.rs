@@ -91,7 +91,7 @@ impl Filesystem {
     /// whether fetchloom makes hardlinks here where the disk takes them. refs can deadlock until a
     /// restart when a link is made while it writes the folder back, so there files are cloned.
     pub(crate) fn makes_hardlinks(self) -> bool {
-        self != Filesystem::Refs
+        self != Filesystem::Refs || links_on_refs()
     }
 
     /// the most bytes one file holds on this filesystem, when that is less than any disk holds.
@@ -134,6 +134,13 @@ pub(crate) fn too_large(place: impl std::fmt::Display, what: &str, size: u64) ->
         "{place} is on a FAT32 disk, which holds no file of 4 GiB or more, and {what} is {}",
         crate::units::size(size)
     )
+}
+
+/// an experiment build's switch, read once: with `FETCHLOOM_EXP_REFS_LINKS` set, refs gets links as
+/// before.
+fn links_on_refs() -> bool {
+    static LINKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LINKS.get_or_init(|| std::env::var_os("FETCHLOOM_EXP_REFS_LINKS").is_some())
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

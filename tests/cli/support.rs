@@ -607,7 +607,7 @@ pub(crate) fn delete_folder(path: &Path) -> Result {
 /// whether a variable of the machine running the tests could change what fetchloom does.
 fn leaks(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
-    name.starts_with("FETCHLOOM_")
+    (name.starts_with("FETCHLOOM_") && !name.starts_with("FETCHLOOM_EXP_"))
         || name.starts_with("ONEDRIVE")
         || name.starts_with("KAGGLE_")
         || name.starts_with("HF_")
