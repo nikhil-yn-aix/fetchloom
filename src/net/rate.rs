@@ -55,13 +55,14 @@ impl Rate {
         self.per_second
     }
 
+    /// a cap of `per_second` from the first byte on, which lets through at most a second's
+    /// bytes at once after a pause.
     fn new(per_second: u64) -> Rate {
-        let capacity = per_second.max(1024 * 1024);
         Rate {
             per_second,
-            capacity,
+            capacity: per_second,
             bucket: Mutex::new(Bucket {
-                credit: u128::from(capacity) * NANOS,
+                credit: 0,
                 updated: Instant::now(),
             }),
         }
@@ -199,10 +200,29 @@ mod tests {
         future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
     }
 
+    /// the first bytes wait their share too, so a cap holds from the start rather than after a
+    /// free first MiB, and a pause saves up no more than a second's bytes.
+    #[tokio::test(start_paused = true)]
+    async fn the_cap_holds_from_the_first_byte() {
+        let rate = Rate::new(2048);
+        let stop = Stop::default();
+        let mut first = std::pin::pin!(rate.take(1024, &stop));
+        assert!(poll(first.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(499)).await;
+        assert!(poll(first.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(poll(first.as_mut()), std::task::Poll::Ready(true));
+        tokio::time::advance(Duration::from_mins(10)).await;
+        assert!(rate.take(2048, &stop).await);
+        let mut after = std::pin::pin!(rate.take(1, &stop));
+        assert!(poll(after.as_mut()).is_pending());
+    }
+
     #[tokio::test(start_paused = true)]
     async fn concurrent_chunks_share_one_rate() {
         let rate = Rate::new(4 * 1024 * 1024);
         let stop = Stop::default();
+        tokio::time::advance(Duration::from_secs(1)).await;
         assert!(rate.take(4 * 1024 * 1024, &stop).await);
         let mut first = std::pin::pin!(rate.take(1024 * 1024, &stop));
         let mut second = std::pin::pin!(rate.take(1024 * 1024, &stop));
@@ -222,6 +242,7 @@ mod tests {
     async fn a_chunk_larger_than_the_burst_is_paced() {
         let rate = Rate::new(4 * 1024 * 1024);
         let stop = Stop::default();
+        tokio::time::advance(Duration::from_secs(1)).await;
         let mut chunk = std::pin::pin!(rate.take(5 * 1024 * 1024, &stop));
         assert!(poll(chunk.as_mut()).is_pending());
         tokio::time::advance(Duration::from_millis(249)).await;
@@ -234,7 +255,6 @@ mod tests {
     async fn stopping_interrupts_sleepers_and_queued_chunks() {
         let rate = Rate::new(1);
         let stop = Stop::default();
-        assert!(rate.take(1024 * 1024, &stop).await);
         let mut waiting =
             std::pin::pin!(async { tokio::join!(rate.take(100, &stop), rate.take(100, &stop)) });
         assert!(poll(waiting.as_mut()).is_pending());

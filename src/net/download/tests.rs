@@ -1276,25 +1276,24 @@ async fn waiting_for_the_rate_cap_is_no_network_silence() {
     let mut net = net(&url).with_rate(rate);
     net.idle = std::time::Duration::from_millis(100);
     let (source, mut chunks) = tokio::sync::mpsc::channel(16);
-    source
-        .send(Bytes::from(vec![b'x'; 1024 * 1024]))
-        .await
-        .unwrap();
+    source.send(Bytes::from(vec![b'x'; 2048])).await.unwrap();
     source.send(Bytes::from(vec![b'y'; 2048])).await.unwrap();
     let (sender, mut written) = tokio::sync::mpsc::channel(16);
     let listener = |_| Ok(());
     let mut reading =
         std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
-    assert!(poll(reading.as_mut()).is_pending());
-    tokio::time::advance(std::time::Duration::from_millis(250)).await;
-    assert!(poll(reading.as_mut()).is_pending());
+    // each chunk waits 250 ms for the cap, longer than the server may stay silent
+    for _ in 0..2 {
+        assert!(poll(reading.as_mut()).is_pending());
+        tokio::time::advance(std::time::Duration::from_millis(250)).await;
+    }
     drop(source);
     assert!(matches!(
         poll(reading.as_mut()),
         std::task::Poll::Ready(Ok(None))
     ));
-    assert_eq!(written.try_recv().unwrap()[0].len(), 1024 * 1024);
-    assert_eq!(written.try_recv().unwrap()[0].len(), 2048);
+    let lengths: Vec<usize> = written.try_recv().unwrap().iter().map(Bytes::len).collect();
+    assert_eq!(lengths, [2048, 2048]);
 }
 
 #[tokio::test(start_paused = true)]
