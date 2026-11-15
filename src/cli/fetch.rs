@@ -1067,6 +1067,20 @@ pub(super) fn tell_would_fetch<D: std::borrow::Borrow<super::sync::place::Downlo
     tell_would(output, &what, total);
 }
 
+/// what a download is called before it starts: its label, or for a file that takes the name its
+/// server gives where its link names no file, as a drive link's `download` does, its folder and
+/// that its server names it, since only the download learns how.
+pub(super) fn foreseen(job: &Job) -> String {
+    let named_by_link = std::path::Path::new(&job.label).extension().is_some();
+    if !job.fetch.named || named_by_link {
+        return job.label.clone();
+    }
+    match job.label.rsplit_once('/') {
+        Some((folder, _)) => format!("{folder}/ · named by its server"),
+        None => "a file its server names".to_owned(),
+    }
+}
+
 /// `live` says a bar will show the time once the downloads start.
 fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total, live: bool) {
     if is_told(total) {
@@ -2533,6 +2547,29 @@ mod tests {
             assert_eq!(watch.bar().told().as_deref(), Some(shown), "named: {named}");
             assert_eq!(overall.told_as(&watch.label()), shown, "named: {named}");
         }
+    }
+
+    /// before it starts, a file its server names is told by its folder alone, since only the
+    /// download learns its name, as a dry run of `add --as` shows it.
+    #[test]
+    fn a_download_its_server_names_is_foreseen_by_its_folder() {
+        let job = |named, label: &str| Job {
+            fetch: Fetch {
+                named,
+                ..Fetch::new(Url::parse("https://drive.google.com/uc?id=0B9P1L").unwrap())
+            },
+            label: label.to_owned(),
+            dataset: None,
+            again: None,
+        };
+        assert_eq!(
+            foreseen(&job(true, "notes2/download")),
+            "notes2/ · named by its server"
+        );
+        assert_eq!(foreseen(&job(true, "download")), "a file its server names");
+        assert_eq!(foreseen(&job(false, "notes2/download")), "notes2/download");
+        // a link that names its file is the likely name, which a server seldom changes
+        assert_eq!(foreseen(&job(true, "iris/iris.csv")), "iris/iris.csv");
     }
 
     /// a lone download's bar shows the kept bytes before the server answers, not an empty bar.

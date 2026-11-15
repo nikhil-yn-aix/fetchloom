@@ -320,6 +320,7 @@ impl Draft {
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 unpack: whole[index],
                 page: self.web_page,
+                named: learn && remote.named_by_server,
                 ..source::fetch_plan(&remote.url)
             };
             let job = Job {
@@ -1268,6 +1269,51 @@ mod tests {
             ]
         );
         assert_eq!(archives(paths.into_iter(), false), Archives::default());
+    }
+
+    /// a file its server names keeps that name on its way down, so its progress line shows it
+    /// once the server answers, as with --as, which skips the add's own naming download.
+    #[test]
+    fn a_download_of_a_file_its_server_names_says_so() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let link = "https://drive.google.com/uc?export=download&id=0B9P1L";
+        let manifest = Manifest::parse(&format!("[datasets.notes]\nref = \"{link}\"\n")).unwrap();
+        let entry = &manifest.datasets["notes"];
+        for named_by_server in [true, false] {
+            let listing = Listing {
+                within: Vec::new(),
+                access: Access::Public,
+                unavailable: Vec::new(),
+                warnings: Vec::new(),
+                resolved: Reference::Url(Url::parse(link).unwrap()),
+                title: None,
+                license: None,
+                doi: None,
+                files: vec![Remote {
+                    path: "download".to_owned(),
+                    size: None,
+                    sha256: None,
+                    md5: None,
+                    url: Url::parse(link).unwrap(),
+                    named_by_server,
+                    etag: None,
+                }],
+            };
+            let draft = Draft::new(
+                "notes",
+                entry,
+                entry.source().unwrap(),
+                listing,
+                None,
+                false,
+                &cache,
+            )
+            .unwrap();
+            let jobs = draft.jobs(&cache);
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].1.fetch.named, named_by_server);
+        }
     }
 
     /// a split archive unpacks once from all of its parts, recorded at its first part; a part that

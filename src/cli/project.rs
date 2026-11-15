@@ -1054,7 +1054,7 @@ async fn preview_lock(
         .jobs
         .iter()
         .map(|job| Download {
-            path: job.label.clone(),
+            path: super::fetch::foreseen(job),
             size: job.fetch.expect.size,
         })
         .collect();

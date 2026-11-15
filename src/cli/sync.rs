@@ -1043,7 +1043,7 @@ impl<'a> Loop<'a> {
         preview.changes.download = jobs
             .into_iter()
             .map(|job| Download {
-                path: job.label,
+                path: fetch::foreseen(&job),
                 size: job.fetch.expect.size,
             })
             .collect();
