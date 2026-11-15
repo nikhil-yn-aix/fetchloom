@@ -137,11 +137,11 @@ const ENVIRONMENT: &str = "fetchloom environment
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
-a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
-memory, most_files, the archive_ settings, allowed_origins, s3_buckets,
-gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to,
-build_floor and cache_budget for every run, one per line, as jobs = 16. a
-variable wins over the file.
+a settings file keeps cache, resources, jobs, host_jobs, retries, timeout,
+ask_above, memory, most_files, the archive_ settings, allowed_origins,
+s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors,
+mirrors_only, push_to, build_floor and cache_budget for every run, one per
+line, as jobs = 16. a variable wins over the file.
 fetchloom settings shows each value and where it came from, and
 fetchloom settings set jobs 16 saves one.
 
@@ -657,6 +657,23 @@ mod tests {
             .unwrap();
         assert_eq!(links.short, None);
         assert_eq!(links.value, None);
+    }
+
+    /// the environment topic names every key the settings file takes, the archive_ ones as a
+    /// group.
+    #[test]
+    fn the_environment_topic_names_every_settings_file_key() {
+        let paragraph = ENVIRONMENT
+            .split("\n\n")
+            .find(|part| part.starts_with("a settings file keeps"))
+            .unwrap();
+        let words: Vec<&str> = paragraph
+            .split([' ', ',', '\n'])
+            .filter(|word| !word.is_empty())
+            .collect();
+        for key in crate::settings::keys().filter(|key| !key.starts_with("archive_")) {
+            assert!(words.contains(&key), "{key} is not in: {paragraph}");
+        }
     }
 
     #[test]

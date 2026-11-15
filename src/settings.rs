@@ -780,6 +780,12 @@ fn split(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// every key the settings file takes.
+#[cfg(test)]
+pub(crate) fn keys() -> impl Iterator<Item = &'static str> {
+    KEYS.iter().map(|(key, _)| *key)
+}
+
 /// the variable that sets `key`.
 pub(crate) fn variable(key: &str) -> &'static str {
     KEYS.iter()
