@@ -69,6 +69,41 @@ fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
 }
 
 /// no budget unless one is set, and a size the budget cannot read says how to have none.
+/// a size reads as fetchloom prints it, in either kind of unit and any case, with a space or
+/// not, and a bare number is bytes; 0 is told as too small, not as no size.
+#[test]
+fn a_size_reads_as_fetchloom_prints_it() {
+    let gib = 1 << 30;
+    for (text, bytes) in [
+        ("10G", 10 * gib),
+        ("10GiB", 10 * gib),
+        ("10 GiB", 10 * gib),
+        ("10.0 GiB", 10 * gib),
+        ("10g", 10 * gib),
+        ("10GB", 10_000_000_000),
+        ("512MiB", 512 << 20),
+        ("4 KiB", 4096),
+        ("2.5M", 2_621_440),
+        ("10", 10),
+        ("512 B", 512),
+    ] {
+        let settings = read(&[("FETCHLOOM_CACHE_BUDGET", text)], None).unwrap();
+        assert_eq!(settings.cache_budget.value, Some(bytes), "{text}");
+    }
+    for text in ["lots", "10 G B", "1e3", "-1", "+1", ".5G", "10XB"] {
+        let error = read(&[("FETCHLOOM_ASK_ABOVE", text)], None).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("FETCHLOOM_ASK_ABOVE is \"{text}\", which is not a size such as 512M or 4G")
+        );
+    }
+    let error = read(&[("FETCHLOOM_ASK_ABOVE", "0")], None).unwrap_err();
+    assert_eq!(
+        error.message,
+        "FETCHLOOM_ASK_ABOVE is \"0\", and a size is at least 1 byte"
+    );
+}
+
 #[test]
 fn the_cache_budget_is_a_size_or_none() {
     assert_eq!(read(&[], None).unwrap().cache_budget, Set::default(None));
@@ -81,11 +116,11 @@ fn the_cache_budget_is_a_size_or_none() {
             origin: Origin::Environment
         }
     );
-    let error = read(&[("FETCHLOOM_CACHE_BUDGET", "200 GiB")], None).unwrap_err();
+    let error = read(&[("FETCHLOOM_CACHE_BUDGET", "200 gigs")], None).unwrap_err();
     assert_eq!(error.kind, Kind::Usage);
     assert_eq!(
         error.message,
-        "FETCHLOOM_CACHE_BUDGET is \"200 GiB\", which is not a size such as 512M or 4G"
+        "FETCHLOOM_CACHE_BUDGET is \"200 gigs\", which is not a size such as 512M or 4G"
     );
     assert_eq!(
         error.help.as_deref(),
@@ -455,8 +490,8 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
         ),
         (
             "FETCHLOOM_MEMORY",
-            "4gb",
-            "FETCHLOOM_MEMORY is \"4gb\", which is not a size such as 512M or 4G",
+            "4 gigs",
+            "FETCHLOOM_MEMORY is \"4 gigs\", which is not a size such as 512M or 4G",
             "unset FETCHLOOM_MEMORY to use the default of 256.0 MiB, or set it to a size such as 512M or 4G",
         ),
         (

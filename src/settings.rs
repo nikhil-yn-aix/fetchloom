@@ -859,19 +859,65 @@ fn count<T: FromStr + PartialOrd + fmt::Display + Copy>(
         })
 }
 
+/// a byte size as a person writes it or fetchloom prints it: a whole or decimal number, then
+/// maybe a unit, in any case and after a space or not: `B`; `K`, `M`, `G`, `T` or `KiB` to `TiB`
+/// for powers of 1024; `KB` to `TB` for powers of 1000. a bare number is bytes, so `10G`,
+/// `10GiB` and `10.0 GiB` are the same and `10GB` is 10 000 000 000 bytes. none for what is no
+/// size.
+fn bytes_in(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let end = text
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(text.len());
+    let (number, unit) = (&text[..end], text[end..].trim_start());
+    let (base, power): (u64, u32) = match unit.to_ascii_lowercase().as_str() {
+        "" | "b" => (1, 0),
+        "k" | "kib" => (1024, 1),
+        "m" | "mib" => (1024, 2),
+        "g" | "gib" => (1024, 3),
+        "t" | "tib" => (1024, 4),
+        "kb" => (1000, 1),
+        "mb" => (1000, 2),
+        "gb" => (1000, 3),
+        "tb" => (1000, 4),
+        _ => return None,
+    };
+    let multiplier = base.pow(power);
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if !digits(whole) || (number.contains('.') && !digits(fraction)) {
+        return None;
+    }
+    let whole = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
+    // carry decimal digits from the right so rounding needs no precision-sized integer
+    let fraction = fraction.bytes().rev().fold(0, |tail, digit| {
+        (tail + u64::from(digit - b'0') * multiplier) / 10
+    });
+    whole.checked_add(fraction)
+}
+
+/// the bytes `text` gives `named`, or the message for what is no size, or a size of none.
+fn sized(named: &str, text: &str) -> Result<u64, String> {
+    match bytes_in(text) {
+        Some(0) => Err(format!(
+            "{named} is \"{text}\", and a size is at least 1 byte"
+        )),
+        Some(bytes) => Ok(bytes),
+        None => Err(format!(
+            "{named} is \"{text}\", which is not a size such as 512M or 4G"
+        )),
+    }
+}
+
 /// the byte size `key` holds, such as `512M` or `4G`, or `default`.
 fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Error> {
     let Some((text, origin, named)) = given.get(key) else {
         return Ok(default);
     };
-    units::bytes(&text)
+    sized(&named, &text)
         .map(|value| Set { value, origin })
-        .ok_or_else(|| {
-            Error::new(
-                Kind::Usage,
-                format!("{named} is \"{text}\", which is not a size such as 512M or 4G"),
-            )
-            .help(format!(
+        .map_err(|message| {
+            Error::new(Kind::Usage, message).help(format!(
                 "{} to use the default of {}, or set it to a size such as 512M or 4G",
                 undo(origin, key),
                 units::size(default.value)
@@ -885,17 +931,13 @@ fn optional_size(given: &Given<'_>, key: &str, unset: &str) -> Result<Set<Option
     let Some((text, origin, named)) = given.get(key) else {
         return Ok(Set::default(None));
     };
-    units::bytes(&text)
+    sized(&named, &text)
         .map(|value| Set {
             value: Some(value),
             origin,
         })
-        .ok_or_else(|| {
-            Error::new(
-                Kind::Usage,
-                format!("{named} is \"{text}\", which is not a size such as 512M or 4G"),
-            )
-            .help(format!(
+        .map_err(|message| {
+            Error::new(Kind::Usage, message).help(format!(
                 "{} {unset}, or set it to a size such as 512M or 4G",
                 undo(origin, key)
             ))
