@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use super::super::project::{Report, committed, dry_run_done, ignore_data, register};
 use super::super::sync::{self as engine, Loop};
-use super::{AddProject, BeforeAdd, changed_meanwhile, lock_changed_meanwhile, restore};
+use super::{AddProject, BeforeAdd, changed_meanwhile, manifest_changed_meanwhile, restore};
 use crate::error::{Error, Kind};
 use crate::project::lock::{self, Lock, Locked, Stated, StatedFile, Words};
 use crate::project::manifest::{self, Entry, Manifest};
@@ -254,6 +254,59 @@ fn facts(work: &Loop<'_>, stated: &Stated) -> String {
     )
 }
 
+/// writes data.lock with `lock`, then data.toml as `updated` when the add changes it, once
+/// neither changed since the add read them. data.lock goes first, as any add writes it: a stop
+/// between leaves a pin data.toml does not name yet, never a dataset in data.toml without its
+/// pin. a failure puts back what the add wrote.
+fn commit(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    lock: &Lock,
+    updated: Option<&str>,
+    name: &str,
+) -> Result<(), Error> {
+    let project = work.project;
+    let text = lock.render();
+    let changed = adding.changed();
+    if !changed.is_empty() {
+        return Err(changed_meanwhile(&changed));
+    }
+    let mut saved = BeforeAdd::save(
+        project,
+        (adding.text.as_deref(), adding.lock_text.as_deref()),
+    )?;
+    // the recovery copies are flushed to disk, which takes a while, so it looks again right
+    // before the first write
+    let changed = adding.changed();
+    if !changed.is_empty() {
+        return Err(changed_meanwhile(&changed));
+    }
+    work.context.stop.keep_at_quit();
+    let written = (|| -> Result<(), Error> {
+        saved.writing(lock::FILE, text.as_bytes());
+        work.context
+            .wrote_lists(&project.root, project.write_lists(lock)?);
+        project.write(lock::FILE, text.as_bytes())?;
+        if let Some(updated) = updated {
+            if adding.differs(manifest::FILE, adding.text.as_deref()) {
+                return Err(manifest_changed_meanwhile());
+            }
+            saved.writing(manifest::FILE, updated.as_bytes());
+            project.write(manifest::FILE, updated.as_bytes())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let error = restore(project, &mut saved, &[name.to_owned()], error);
+        super::unwrite_lists(work.context, project);
+        if saved.keep {
+            adding.unrestored.store(true, Ordering::Relaxed);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// writes `updated`, data.toml with the new dataset, and data.lock with `stated`, or with
 /// `--dry-run` says it would. data.toml that has the dataset already stays as it is. nothing
 /// downloads; a failure puts back what the add wrote.
@@ -301,37 +354,7 @@ pub(super) fn write(
     }
     let said = facts(work, &stated);
     let lock = with(old, stated);
-    let text = lock.render();
-    let changed = adding.changed();
-    if !changed.is_empty() {
-        return Err(changed_meanwhile(&changed));
-    }
-    let mut saved = BeforeAdd::save(
-        project,
-        (adding.text.as_deref(), adding.lock_text.as_deref()),
-    )?;
-    work.context.stop.keep_at_quit();
-    let written = (|| -> Result<(), Error> {
-        if !again {
-            saved.writing(manifest::FILE, updated.as_bytes());
-            project.write(manifest::FILE, updated.as_bytes())?;
-        }
-        if adding.differs(lock::FILE, adding.lock_text.as_deref()) {
-            return Err(lock_changed_meanwhile());
-        }
-        saved.writing(lock::FILE, text.as_bytes());
-        work.context
-            .wrote_lists(&project.root, project.write_lists(&lock)?);
-        project.write(lock::FILE, text.as_bytes())
-    })();
-    if let Err(error) = written {
-        let error = restore(project, &mut saved, std::slice::from_ref(&name), error);
-        super::unwrite_lists(work.context, project);
-        if saved.keep {
-            adding.unrestored.store(true, Ordering::Relaxed);
-        }
-        return Err(error);
-    }
+    commit(work, adding, &lock, (!again).then_some(updated), &name)?;
     work.context.stop.finish();
     // the list of a pin this one replaced goes, as with any write of data.lock
     project.sweep_lists(&lock);

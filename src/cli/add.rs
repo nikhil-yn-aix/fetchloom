@@ -1282,20 +1282,10 @@ pub(super) async fn sync_add(
     let manifest_text = updated.or(adding.text.as_deref()).unwrap_or_default();
     // from the first write on, a project folder the add started stays, even if it quits at once
     work.context.stop.keep_at_quit();
+    // data.lock goes first: a stop between the two writes, as a kill or a second ctrl-c makes,
+    // leaves a pin data.toml does not name yet, which the next sync drops, never a dataset in
+    // data.toml without its pin, which no sync can make again for an import
     let committed = (|| -> Result<Outcome<Placement>, Error> {
-        if let Some(updated) = updated {
-            if let Some(saved) = saved.as_mut() {
-                saved.writing(manifest::FILE, updated.as_bytes());
-            }
-            project.write(manifest::FILE, updated.as_bytes())?;
-            #[cfg(test)]
-            tests::reached("wrote data.toml", &project.root);
-            // writing data.lock would lose a change made to it meanwhile, so the add stops
-            // instead, and its failure puts data.toml back
-            if relocked.is_some() && adding.differs(lock::FILE, adding.lock_text.as_deref()) {
-                return Err(lock_changed_meanwhile());
-            }
-        }
         let written = match relocked {
             Some(text) => {
                 if let Some(saved) = saved.as_mut() {
@@ -1305,6 +1295,19 @@ pub(super) async fn sync_add(
             }
             None => None,
         };
+        if let Some(updated) = updated {
+            #[cfg(test)]
+            tests::reached("between its writes", &project.root);
+            // writing data.toml would lose a change made to it meanwhile, as while a big list
+            // was written, so the add stops instead, and its failure puts data.lock back
+            if adding.differs(manifest::FILE, adding.text.as_deref()) {
+                return Err(manifest_changed_meanwhile());
+            }
+            if let Some(saved) = saved.as_mut() {
+                saved.writing(manifest::FILE, updated.as_bytes());
+            }
+            project.write(manifest::FILE, updated.as_bytes())?;
+        }
         // placing tells its own line
         drop(pinning);
         let lock_text = written.as_deref().or(adding.lock_text.as_deref());
@@ -1401,10 +1404,10 @@ fn changed_meanwhile(changed: &[&str]) -> Error {
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
-fn lock_changed_meanwhile() -> Error {
+fn manifest_changed_meanwhile() -> Error {
     Error::new(
         Kind::ProjectChanged,
-        "data.lock changed while the add wrote data.toml, so the add stopped before writing data.lock",
+        "data.toml changed while the add wrote data.lock, so the add stopped before writing data.toml",
     )
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
@@ -2483,30 +2486,54 @@ mod tests {
         assert!(!root.join("data").join("b").exists());
     }
 
-    /// the add does not write data.lock, and its failure puts data.toml back as it found it.
+    /// the add does not write data.toml, and its failure puts data.lock back as it found it.
     #[test]
-    fn an_add_keeps_an_edit_to_data_lock_made_after_it_wrote_data_toml() {
+    fn an_add_keeps_an_edit_to_data_toml_made_after_it_wrote_data_lock() {
         let dir = tempfile::tempdir().unwrap();
-        let (adding, error) = add_b_editing(dir.path(), "wrote data.toml", |root| {
-            std::fs::write(root.join(lock::FILE), "# a note made meanwhile\n").unwrap();
+        let (adding, error) = add_b_editing(dir.path(), BETWEEN, |root| {
+            std::fs::write(root.join(manifest::FILE), "# a note made meanwhile\n").unwrap();
         });
         let root = &adding.project.root;
         assert_eq!(
-            std::fs::read_to_string(root.join(lock::FILE)).unwrap(),
+            std::fs::read_to_string(root.join(manifest::FILE)).unwrap(),
             "# a note made meanwhile\n"
         );
         assert_eq!(
-            std::fs::read_to_string(root.join(manifest::FILE)).unwrap(),
-            adding.text.clone().unwrap()
+            std::fs::read_to_string(root.join(lock::FILE)).unwrap(),
+            adding.lock_text.clone().unwrap()
         );
         assert_eq!(error.kind, Kind::ProjectChanged, "{error:?}");
         assert!(
             error
                 .details
-                .contains(&"restored data.toml to its state before add".to_owned()),
+                .contains(&"restored data.lock to its state before add".to_owned()),
             "{error:?}"
         );
         assert!(!root.join("data").join("b").exists());
+    }
+
+    /// the point of an add between its writes of data.lock and data.toml.
+    const BETWEEN: &str = "between its writes";
+
+    /// a run killed between its two writes, as a kill or a second ctrl-c ends it, leaves no
+    /// dataset in data.toml that data.lock does not pin: an import's pin could not be made again.
+    #[test]
+    fn an_add_killed_between_its_writes_leaves_no_entry_without_its_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            add_b_editing(dir.path(), BETWEEN, |_| panic!("killed"))
+        }));
+        assert!(
+            killed.is_err(),
+            "the add was not stopped between its writes"
+        );
+        let root = dir.path().join("project");
+        let read = |name| std::fs::read_to_string(root.join(name)).unwrap();
+        let manifest = Manifest::parse(&read(manifest::FILE)).unwrap();
+        let lock = Lock::parse(&read(lock::FILE)).unwrap();
+        for name in manifest.datasets.keys() {
+            assert!(lock.get(name).is_some(), "data.toml names {name} unpinned");
+        }
     }
 
     thread_local! {
