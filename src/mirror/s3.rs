@@ -282,21 +282,14 @@ pub(crate) enum Fault {
 enum Body {
     Empty,
     Bytes(Bytes, Sha256),
-    File {
-        path: PathBuf,
-        /// where the part starts, its length, and the whole file's length.
-        offset: u64,
-        len: u64,
-        whole: u64,
-        sha256: Sha256,
-    },
+    File(Part),
 }
 
 impl Body {
     fn sha256(&self) -> String {
         match self {
             Body::Empty => EMPTY.to_owned(),
-            Body::Bytes(_, sha256) | Body::File { sha256, .. } => sha256.hex(),
+            Body::Bytes(_, sha256) | Body::File(Part { sha256, .. }) => sha256.hex(),
         }
     }
 }
@@ -564,13 +557,13 @@ impl Pusher {
                 self.put_parts(&key, path, item, sent).await?;
                 return Ok(put);
             }
-            Source::Cached(path) => Body::File {
+            Source::Cached(path) => Body::File(Part {
                 path: path.clone(),
                 offset: 0,
                 len: item.size,
                 whole: item.size,
                 sha256: item.digest,
-            },
+            }),
             Source::Made(bytes) => {
                 if bytes.len() as u64 != item.size || crate::digest::sha256(bytes) != item.digest {
                     return Err(Fault::OtherBytes);
@@ -670,13 +663,13 @@ impl Pusher {
                 "partNumber={number}&uploadId={}",
                 utf8_percent_encode(upload, UNRESERVED)
             );
-            let body = Body::File {
+            let body = Body::File(Part {
                 path: path.to_path_buf(),
                 offset,
                 len,
                 whole: item.size,
                 sha256: *sha256,
-            };
+            });
             let answer = self
                 .send(Method::PUT, key, Some(&query), body, true)
                 .await?;
@@ -847,28 +840,16 @@ impl Pusher {
             Body::Bytes(bytes, _) => request
                 .header(reqwest::header::CONTENT_LENGTH, bytes.len())
                 .body(bytes.clone()),
-            Body::File {
-                path,
-                offset,
-                len,
-                whole,
-                sha256,
-            } => {
-                let part = Part {
-                    path: path.clone(),
-                    offset: *offset,
-                    len: *len,
-                    whole: *whole,
-                    sha256: *sha256,
-                };
+            Body::File(part) => {
+                let len = part.len;
                 let reading = Reading::start(
-                    part,
+                    part.clone(),
                     Arc::clone(&self.stop),
                     Arc::clone(sending.other_bytes),
                     Arc::clone(sending.moved),
                 );
                 request
-                    .header(reqwest::header::CONTENT_LENGTH, *len)
+                    .header(reqwest::header::CONTENT_LENGTH, len)
                     .body(reqwest::Body::wrap(reading))
             }
         })
@@ -1072,8 +1053,10 @@ where
 }
 
 /// a part of a file in the cache, as a request's body sends it.
+#[derive(Clone)]
 struct Part {
     path: PathBuf,
+    /// where the part starts, and its length.
     offset: u64,
     len: u64,
     /// the whole file's length, which it must have, and the part's SHA-256.
