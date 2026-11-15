@@ -1990,12 +1990,15 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
 }
 
 /// the record of a file at `path` holding the target's bytes, a hardlink when it is the cached
-/// object, as a cut-off run leaves it, so the audit covers it and its read-only flag stays.
+/// object, as a cut-off run leaves it, so the audit covers it and its read-only flag stays. a copy
+/// is recorded writable only for `copy = true`, so [`fits`] never replaces a file taken as placed
+/// for being writable.
 fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u64) -> Placed {
     if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
         placed(target, Method::Hardlink, look, false, checked)
     } else {
-        placed(target, Method::Copy, look, now_writable(path), checked)
+        let writable = target.copy && now_writable(path);
+        placed(target, Method::Copy, look, writable, checked)
     }
 }
 
@@ -2011,12 +2014,15 @@ pub(crate) fn now_writable(path: &Path) -> bool {
 }
 
 /// whether a file placed as `placed` has its dataset's mode: writable for `copy = true`, else no
-/// cache link someone made writable, which opens the copy every project shares to edits.
+/// cache link someone made writable, which opens the copy every project shares to edits, and no
+/// writable copy fetchloom made while the dataset asked for copies. a person's own file stays.
 pub(crate) fn fits(target: &Target, placed: &Placed, survey: &Survey) -> bool {
     if target.copy {
         placed.writable
+    } else if placed.method == Method::Hardlink {
+        !survey.writable.contains(&target.path)
     } else {
-        placed.method != Method::Hardlink || !survey.writable.contains(&target.path)
+        !placed.writable || placed.adopted
     }
 }
 
@@ -2204,6 +2210,37 @@ mod tests {
             &crate::stop::Stop::default(),
         )
         .unwrap()
+    }
+
+    /// a writable file sync takes as placed is recorded writable only for a dataset that asks for
+    /// copies, so a dataset without them never replaces it for being writable.
+    #[test]
+    fn a_file_taken_as_placed_is_writable_only_where_copies_are_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: crate::digest::sha256(bytes),
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let path = dir.path().join("weather.csv");
+        fs::write(&path, bytes).unwrap();
+        for copy in [false, true] {
+            let target = Target {
+                dataset: "weather",
+                path: "data/weather.csv".to_owned(),
+                sha256: locked.sha256,
+                size: locked.size,
+                copy,
+                holder: crate::plan::Holder::File(&locked),
+            };
+            let record = adoption(&target, now(&path).unwrap(), &path, &cache, 0);
+            assert_eq!((record.method, record.writable), (Method::Copy, copy));
+        }
     }
 
     /// two datasets in one folder can trade a file, and its removal then follows its new dataset.

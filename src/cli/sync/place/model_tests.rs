@@ -114,7 +114,7 @@ fn reference(observed: Observation, copy: bool, force: bool) -> Choice {
     match observed.ownership {
         CheckedDamaged => Replace,
         Clean | CheckedIntact => {
-            if !observed.same_pin || (copy && !observed.writable) {
+            if !observed.same_pin || copy != observed.writable {
                 Replace
             } else if matches!(observed.ownership, CheckedIntact) {
                 Vouch
@@ -300,6 +300,51 @@ fn a_damaged_file_is_replaced_without_force() {
         };
         let actual = decide(&target, &survey, false, &destination).unwrap();
         assert_eq!(choice(&actual), Choice::Replace, "copy {copy}");
+    }
+}
+
+/// a writable copy fetchloom made while its dataset asked for copies is replaced once it no
+/// longer does; a person's own file sync took as placed stays, which the cache may not hold.
+#[test]
+fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
+    let run = tempfile::tempdir().unwrap();
+    let project = Project {
+        root: run.path().join("project"),
+    };
+    let destination = project.root.join(PATH);
+    write_file(&destination, 0, true, 1_000_000_000);
+    let file = locked(0);
+    for (adopted, expected) in [(false, Choice::Replace), (true, Choice::Keep)] {
+        let mut survey = Survey::read(
+            &project,
+            "data",
+            Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
+        survey.state.files.insert(
+            PATH.to_owned(),
+            Placed {
+                dataset: "set".to_owned(),
+                sha256: file.sha256,
+                method: Method::Copy,
+                look: survey.disk[PATH],
+                writable: true,
+                checked: 1,
+                adopted,
+                racy_intact: std::sync::OnceLock::new(),
+            },
+        );
+        let target = Target {
+            dataset: "set",
+            path: PATH.to_owned(),
+            sha256: file.sha256,
+            size: 16,
+            copy: false,
+            holder: Holder::File(&file),
+        };
+        let actual = decide(&target, &survey, false, &destination).unwrap();
+        assert_eq!(choice(&actual), expected, "adopted {adopted}");
     }
 }
 

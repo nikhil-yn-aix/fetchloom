@@ -1442,6 +1442,71 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     Ok(())
 }
 
+/// once data.toml no longer asks for copies, the copies no one changed are placed as any
+/// dataset's files again, read-only and linked to the cache where the disk links, and an edit stays.
+#[test]
+fn copies_no_dataset_asks_for_go_back_to_read_only_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        ("/amazon.csv".to_owned(), file(V1, "\"a\"")),
+        ("/yelp.csv".to_owned(), file(V2, "\"y\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!(
+            "[datasets.amazon]\nref = \"{0}/amazon.csv\"\ncopy = true\n\n[datasets.yelp]\nref = \"{0}/yelp.csv\"\ncopy = true\n",
+            routes.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let asked = routes.requests().len();
+    let data = sandbox.work().join("data");
+    let (untouched, edited) = (data.join("amazon/amazon.csv"), data.join("yelp/yelp.csv"));
+    fs::write(&edited, b"sepal_length,species\n9.9,fixed\n")?;
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest)?.replace("copy = true\n", ""),
+    )?;
+
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        document["result"]["outdated"],
+        serde_json::json!(["data/amazon/amazon.csv"]),
+        "{document}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        fs::metadata(&untouched)?.permissions().readonly(),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&untouched)?, V1);
+    if sandbox.links()?.hardlinks_read_only() {
+        let hex = crate::support::sha256_hex(V1);
+        let object = sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]);
+        assert!(same_file::is_same_file(&untouched, object)?, "{stderr}");
+    }
+    assert_eq!(fs::read(&edited)?, b"sepal_length,species\n9.9,fixed\n");
+    assert!(
+        stderr.contains("data/yelp/yelp.csv has changed, so it stays"),
+        "{stderr}"
+    );
+    assert_eq!(
+        routes.requests().len(),
+        asked,
+        "the cache still holds amazon"
+    );
+    Ok(())
+}
+
 #[test]
 fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     let sandbox = Sandbox::new()?;

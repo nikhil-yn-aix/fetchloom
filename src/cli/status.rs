@@ -815,7 +815,7 @@ fn compare(
                         status.holding.insert(target.sha256);
                         continue;
                     }
-                    if !target.copy {
+                    if !target.copy && record.method == crate::place::Method::Hardlink {
                         status.unsealed.insert(target.path.clone());
                     }
                 }
