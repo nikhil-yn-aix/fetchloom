@@ -1348,6 +1348,13 @@ async fn each(
     run_each(context, net, cache, count, overall, queue, apart).await
 }
 
+/// the job at `index`, its fetch carrying the name its progress line shows, which retry lines
+/// then name the file by.
+fn labelled((index, mut job): (usize, Job)) -> (usize, Job) {
+    job.fetch.label = Some(job.label.clone());
+    (index, job)
+}
+
 async fn run_each(
     context: &Context,
     net: &Arc<Net>,
@@ -1373,7 +1380,7 @@ async fn run_each(
     let mut labels = vec![String::new(); count];
     loop {
         while tasks.len() < in_flight
-            && let Some((index, job)) = queue.next()
+            && let Some((index, job)) = queue.next().map(labelled)
         {
             labels[index].clone_from(&job.label);
             let (net, cache, output, overall, approval, listings, held) = (

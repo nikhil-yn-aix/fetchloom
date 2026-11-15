@@ -96,6 +96,7 @@ pub(super) async fn recover(
         expect: job.fetch.expect,
         revalidate: false,
         unpack: false,
+        label: job.fetch.label.clone(),
         ..source::fetch_plan(&remote.url)
     };
     let fetched = net.download(&fetch, cache, on).await.map_err(|err| {

@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap};
 use url::Url;
 
-use super::download::{Event, Listener};
+use super::download::{Event, Fetch, Listener};
 use super::{Net, Notice, Offline, address, host, pace};
 use crate::error::{Error, Kind};
 use crate::shown::Shown;
@@ -85,6 +85,8 @@ pub(super) struct Retry<'a> {
     lost: u32,
     /// told of each wait for another try, as a download's bar shows it.
     on: Option<Listener<'a>>,
+    /// what retry lines call the request, when its caller names it.
+    named: Option<&'a str>,
 }
 
 impl<'a> Retry<'a> {
@@ -101,6 +103,7 @@ impl<'a> Retry<'a> {
             heard: net.heard(),
             lost: 0,
             on: None,
+            named: None,
         }
     }
 
@@ -108,6 +111,15 @@ impl<'a> Retry<'a> {
     pub(super) fn telling(mut self, on: Listener<'a>) -> Retry<'a> {
         self.on = Some(on);
         self
+    }
+
+    /// the tries of the download `fetch`, told to `on`, whose retry lines name the file by its
+    /// label, as its progress line does.
+    pub(super) fn downloading(net: &'a Net, fetch: &'a Fetch, on: Listener<'a>) -> Retry<'a> {
+        Retry {
+            named: fetch.label.as_deref(),
+            ..Retry::new(net, &fetch.url).telling(on)
+        }
     }
 
     /// which try comes next, of how many it may get while none makes progress: the retries
@@ -282,7 +294,7 @@ impl<'a> Retry<'a> {
         let (next, of) = self.numbered();
         (self.net.notify)(Notice::Retrying {
             host: host(self.url).to_owned(),
-            what: tried(self.url),
+            what: self.named.map_or_else(|| tried(self.url), str::to_owned),
             reason,
             wait,
             next,
@@ -367,8 +379,9 @@ impl Net {
     }
 }
 
-/// what a retry line names a request by: its link's last part, as a file's name or an api's
-/// endpoint, so lines for several requests to one host tell their counts apart.
+/// what a retry line names a request by when its caller names none: its link's last part, as a
+/// file's name or an api's endpoint, so lines for several requests to one host tell their counts
+/// apart.
 fn tried(url: &Url) -> String {
     url.path_segments()
         .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))

@@ -82,9 +82,9 @@ static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 /// something the person watching should hear about while the network works.
 pub(crate) enum Notice {
-    /// a request to `host` for `what`, its link's last part, failed for `reason` and goes out
-    /// again after `wait`, as try `next` of `of`, `waited` of the tries before it having waited
-    /// for the host's rate limit.
+    /// a request to `host` for `what`, the name a file's progress line shows when the caller gave
+    /// one, else its link's last part, failed for `reason` and goes out again after `wait`, as try
+    /// `next` of `of`, `waited` of the tries before it having waited for the host's rate limit.
     Retrying {
         host: String,
         what: String,

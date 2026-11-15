@@ -98,6 +98,9 @@ pub(crate) struct Fetch {
     /// the file takes the name its server gives, as a drive link's does, so its progress line
     /// shows that name once the server answers.
     pub(crate) named: bool,
+    /// what retry lines call the file: the name its progress line shows. without one they name
+    /// the link's last part, which may be an id, a hash or `content`.
+    pub(crate) label: Option<String>,
 }
 
 impl Fetch {
@@ -148,6 +151,7 @@ impl Fetch {
             mirror: false,
             page: false,
             named: false,
+            label: None,
         }
     }
 
@@ -654,6 +658,7 @@ impl Net {
             mirror: fetch.mirror,
             page: fetch.page,
             named: fetch.named,
+            label: fetch.label.clone(),
         };
         let bucket = super::s3::Bucket::holding(&fetch.from);
         if bucket
@@ -764,7 +769,7 @@ impl Net {
             sent_whole: false,
         };
         let began = Instant::now();
-        let mut retry = Retry::new(self, &fetch.url).telling(on);
+        let mut retry = Retry::downloading(self, fetch, on);
         let reach = Reach::default();
         let watched = |event: Event| {
             reach.hear(&event);

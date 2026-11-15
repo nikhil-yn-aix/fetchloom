@@ -653,6 +653,40 @@ fn a_reviewer_restores_from_a_web_mirror_when_the_source_is_gone() -> Result {
     Ok(())
 }
 
+/// a mirror's links end in a hash, so a retry line names the file as the mirror's other warnings
+/// do.
+#[test]
+fn a_retry_from_a_web_mirror_names_the_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let mirror = web_mirror_of(&sandbox)?;
+    drop(source);
+    let hex = sha256_hex(IRIS);
+    mirror.turns(
+        &format!("/m/objects/{}/{}", &hex[..2], &hex[2..]),
+        vec![reply(
+            "503 Service Unavailable",
+            &[("Content-Length", "0"), ("Retry-After", "0")],
+            b"",
+        )],
+    );
+    let base = format!("{}/m", mirror.url);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["sync", "--mirror", &base])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("warning: 127.0.0.1 answered 503. trying data/iris/iris.csv again in "),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&hex[2..]), "{stderr}");
+    Ok(())
+}
+
 /// a web mirror on this machine, named in the settings, is reached as a typed link is.
 #[test]
 fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
