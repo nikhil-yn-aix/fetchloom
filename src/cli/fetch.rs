@@ -632,6 +632,11 @@ impl<'a> Watch<'a> {
         let lost = if resumed >= held {
             return;
         } else if held <= earlier {
+            // a resume goes on from the prefix, fetching again any kept range that no longer
+            // hashes as recorded: no start over
+            if resumed > 0 {
+                return;
+            }
             format!(
                 "the {} an earlier run kept cannot be continued",
                 units::size(earlier)
@@ -2822,6 +2827,61 @@ mod tests {
             watch.bar().told().as_deref(),
             Some("big/big.bin · 900 B kept from an earlier run")
         );
+    }
+
+    /// a resume that drops a kept range that no longer hashes as recorded still goes on from the
+    /// bytes before it, so it says no start over; one from the first byte does.
+    #[test]
+    fn only_a_start_from_the_first_byte_over_kept_bytes_says_restarting() {
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big/big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        for (resumed, said) in [
+            (1000, Vec::<String>::new()),
+            (
+                0,
+                vec![
+                    " Restarting big/big.bin - the 1.7 KiB an earlier run kept cannot be continued"
+                        .to_owned(),
+                ],
+            ),
+        ] {
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                Level::Normal,
+                false,
+                false,
+            );
+            let (overall, approval, held) = (overall(), Approval::new(u64::MAX), Held::default());
+            let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
+            let kept = Event::Kept {
+                bytes: 1700,
+                resumable: Resumable::Maybe,
+            };
+            watch.on(&kept).unwrap();
+            let started = Event::Started {
+                total: Some(3000),
+                resumed,
+                resumable: Resumable::Yes,
+            };
+            watch.on(&started).unwrap();
+            let restarting: Vec<String> = output
+                .said()
+                .into_iter()
+                .filter(|line| line.contains("Restarting"))
+                .collect();
+            assert_eq!(restarting, said, "resumed at {resumed}");
+        }
     }
 
     /// output that tells nothing, for tests of what a download decides.

@@ -278,6 +278,33 @@ impl Partial {
         self.kept()?.length
     }
 
+    /// the bytes an earlier run kept past the prefix [`Partial::resumable`] counts, in the ranges
+    /// a split download finished there that the part still reaches. a resume checks each one
+    /// again before it keeps it.
+    pub(crate) fn kept_past(&self) -> u64 {
+        let Some(record) = self.kept() else {
+            return 0;
+        };
+        let held = self
+            .folder
+            .read_file(name_of(&self.bytes))
+            .and_then(|file| file.metadata())
+            .map_or(0, |metadata| metadata.len());
+        let mut at = record.received;
+        let mut past = 0;
+        for range in &record.ranges {
+            let fits = range.start >= at
+                && range.end > range.start
+                && range.end <= held
+                && record.length.is_none_or(|length| range.end <= length);
+            if fits {
+                past += range.end - range.start;
+                at = range.end;
+            }
+        }
+        past
+    }
+
     /// the record of the bytes an earlier run kept, when a run may go on from them: a part it
     /// may write on, or one sealed to publish that holds every byte the record names.
     fn kept(&self) -> Option<Record> {

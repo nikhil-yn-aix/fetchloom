@@ -1067,6 +1067,35 @@ fn kept_split(cache: &Cache, url: &Url, total: u64, prefix: u64, kept: (u64, u64
     writer.save().unwrap();
 }
 
+/// a stop before the server answers a resume counts every byte an earlier run kept, the range a
+/// split finished past the prefix too, as the stop that left them did: they all stay for the next
+/// run.
+#[test]
+fn a_stop_before_an_answer_counts_the_ranges_kept_past_the_prefix() {
+    let total = 3000;
+    let (prefix, kept) = (1000, (1500, 2200));
+    let (url, _) = ranged(total, true);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    kept_split(&cache, &url, total, prefix, kept);
+    let heard = Mutex::new(Vec::new());
+    let stop = |event: Event| match event {
+        Event::Kept { bytes, resumable } => {
+            heard.lock().unwrap().push((bytes, resumable));
+            Err(Error::new(Kind::Interrupted, "stopped"))
+        }
+        _ => Ok(()),
+    };
+    let stopped = block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &stop));
+    assert_eq!(stopped.unwrap_err().kind, Kind::Interrupted);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [(prefix + (kept.1 - kept.0), Resumable::Maybe)]
+    );
+    let fetched = block_on(net(&url).download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.moved, total - (prefix + (kept.1 - kept.0)));
+}
+
 /// a part answering an `If-Range` that leaves off the `ETag` its whole answer sent continues the
 /// version the request named, as `starting_offset` takes it, so the range a split kept past the
 /// prefix is kept too and only the gaps come: one answer, one verdict.

@@ -1957,7 +1957,7 @@ fn kept_before(
         return Ok(None);
     };
     on(Event::Kept {
-        bytes: received,
+        bytes: received + partial.kept_past(),
         resumable: Resumable::kept(unproven(&fetch.expect, &validators)),
     })?;
     let stated = partial.length().or(fetch.expect.size);
