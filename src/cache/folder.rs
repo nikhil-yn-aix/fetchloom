@@ -193,11 +193,13 @@ impl Folder {
 
     #[cfg(unix)]
     fn open_plain(&self, name: &str, flags: rustix::fs::OFlags) -> io::Result<File> {
+        use std::os::unix::fs::MetadataExt;
+
         use rustix::fs::{Mode, OFlags};
         // a fifo must not block opening before its handle can be refused
-        let flags = flags | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let open = flags | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
         let mode = Mode::from_bits_truncate(0o666);
-        let file = File::from(rustix::fs::openat(&self.handle, name, flags, mode).map_err(
+        let file = File::from(rustix::fs::openat(&self.handle, name, open, mode).map_err(
             |err| {
                 if err == rustix::io::Errno::LOOP {
                     refused(&self.join(name))
@@ -206,11 +208,21 @@ impl Folder {
                 }
             },
         )?);
-        if file.metadata()?.is_file() {
-            Ok(file)
-        } else {
-            Err(refused(&self.join(name)))
+        let found = file.metadata()?;
+        if !found.is_file() {
+            return Err(refused(&self.join(name)));
         }
+        // where anyone may link any file, a co-user's hardlink would take the writes elsewhere
+        if flags.contains(OFlags::RDWR) && found.nlink() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} has another name, as a hardlink to a file elsewhere does, so fetchloom never writes it",
+                    self.join(name).display()
+                ),
+            ));
+        }
+        Ok(file)
     }
 }
 
@@ -320,6 +332,28 @@ mod tests {
     use std::io::{Seek, SeekFrom};
 
     use super::*;
+
+    /// a record file with a second name, as a co-user's hardlink to someone's own file would give
+    /// where the system lets anyone link any file, is never opened to write, so no record lands in
+    /// that file; reading it is harmless.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_with_a_second_name_is_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let theirs = dir.path().join(".bashrc");
+        std::fs::write(&theirs, b"someone's own file\n").unwrap();
+        std::fs::hard_link(&theirs, urls.join("0.log")).unwrap();
+
+        let opened = urls.open_or_make("0.log");
+
+        assert_eq!(
+            opened.err().map(|err| err.kind()),
+            Some(io::ErrorKind::InvalidInput)
+        );
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"someone's own file\n");
+        assert!(urls.read_file("0.log").is_ok());
+    }
 
     /// a writer that finds the file missing, and is refused making it because another writer made
     /// it in between, opens that writer's file, so what both write lands in one file.
