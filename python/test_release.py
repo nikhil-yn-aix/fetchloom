@@ -3,9 +3,11 @@
 import hashlib
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -150,6 +152,49 @@ class ThirdPartyLicenses(unittest.TestCase):
         allowed = tomllib.loads((ROOT / "deny.toml").read_text(encoding="utf-8"))["licenses"]["allow"]
         accepted = tomllib.loads((ROOT / "about.toml").read_text(encoding="utf-8"))["accepted"]
         self.assertEqual(sorted(accepted), sorted(allowed))
+
+
+@unittest.skipUnless(shutil.which("sha256sum") and sys.platform != "win32", "runs the documented check with sh and sha256sum")
+class ProvenanceDocumentation(unittest.TestCase):
+    """the check releasing.md has the owner run on a draft, against a stand-in gh."""
+
+    NAMES = ["fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz", "fetchloom-0.1.0-x86_64-pc-windows-msvc.zip",
+             "fetchloom_0.1.0_amd64.deb", "fetchloom-0.1.0-py3-none-win_amd64.whl", "fetchloom-0.1.0.cdx.json",
+             "install.sh", "install.ps1"]
+
+    def run_documented(self, refuse=""):
+        text = (ROOT / "docs/dev/engineering/releasing.md").read_text(encoding="utf-8")
+        blocks = [block.split("```", 1)[0] for block in text.split("```sh\n")[1:] if "gh attestation verify \"$file\"" in block]
+        self.assertEqual(len(blocks), 1, "releasing.md must have one release provenance check")
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / "check").mkdir()
+        for name in self.NAMES:
+            (root / "check" / name).write_bytes(name.encode())
+        (root / "check/SHA256SUMS").write_text("".join(f"{hashlib.sha256(name.encode()).hexdigest()}  {name}\n"
+                                                       for name in self.NAMES), encoding="utf-8")
+        (root / "gh").write_text(GH, encoding="utf-8")
+        (root / "gh").chmod(0o755)
+        env = dict(os.environ, PATH=os.pathsep.join([folder.name, os.environ.get("PATH", "")]),
+                   GH_LOG=str(root / "gh.log"), GH_REFUSE=refuse)
+        result = subprocess.run(["sh", "-c", textwrap.dedent(blocks[0])], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout, (root / "gh.log").read_text(encoding="utf-8").splitlines()
+
+    def test_every_file_of_the_draft_is_checked_against_the_release_workflow(self):
+        printed, called = self.run_documented()
+        self.assertEqual(called[0], "release download v0.1.0 --repo nikhil-yn-aix/fetchloom --dir check")
+        self.assertEqual(sorted(called[1:]), sorted(
+            f"attestation verify check/{name} --repo nikhil-yn-aix/fetchloom --source-ref refs/tags/v0.1.0 "
+            "--signer-workflow nikhil-yn-aix/fetchloom/.github/workflows/release.yml --deny-self-hosted-runners"
+            for name in self.NAMES))
+        self.assertNotIn("not verified", printed)
+
+    def test_a_file_without_that_attestation_is_named(self):
+        printed, _ = self.run_documented(refuse="fetchloom_0.1.0_amd64.deb")
+        self.assertIn("not verified: check/fetchloom_0.1.0_amd64.deb\n", printed)
 
 
 class GateDocumentation(unittest.TestCase):

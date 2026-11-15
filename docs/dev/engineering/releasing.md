@@ -95,12 +95,20 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 1. set the Cargo version and refresh `Cargo.lock` through cargo. in the same commit, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/start/install.md), [macos](../../user/start/install.md#macos) and the [python helper](../../user/reference/python-helper.md). pypi and crates.io show README.md as each version's description as it was when that version was published, so a rewrite after the tag would leave those pages saying there is no release. commit on main and wait for [CI](ci.md) on that commit.
 2. create the matching tag and publish it. for version 0.1.0, the commands are `git tag v0.1.0` and `git push origin v0.1.0`.
 3. watch the workflow with `gh run watch`. if it fails, fix the cause before retrying. a failed prerequisite does not create a release. retag only an unpublished failed release; published version tags must remain stable.
-4. inspect the draft's archives, debian packages, wheels, installers and checksums. download and check provenance:
+4. inspect the draft's archives, debian packages, wheels, installers and checksums. download every file, check it against `SHA256SUMS` and check that `release.yml` built it from the tag on a github-hosted runner:
 
     ```sh
-    gh release download v0.1.0 --pattern '*.tar.gz' --dir check
-    gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
+    gh release download v0.1.0 --repo nikhil-yn-aix/fetchloom --dir check
+    (cd check && sha256sum --check SHA256SUMS)
+    for file in check/*; do
+        [ "$file" = check/SHA256SUMS ] && continue
+        gh attestation verify "$file" --repo nikhil-yn-aix/fetchloom --source-ref refs/tags/v0.1.0 \
+            --signer-workflow nikhil-yn-aix/fetchloom/.github/workflows/release.yml --deny-self-hosted-runners ||
+            echo "not verified: $file"
+    done
     ```
+
+    every file but `SHA256SUMS` must verify; `SHA256SUMS` itself has no attestation, since the attestation names each file it lists.
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
 6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version`, `fl --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
