@@ -586,12 +586,11 @@ fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
     let filed = SETTINGS_FILE
         .get()
         .filter(|file| !chosen && file.cache().is_some())
-        .and_then(|file| file.path.as_deref());
-    if let Some(file) = filed {
-        error.or_help(format!(
-            "change cache in the settings file {}, or set FETCHLOOM_CACHE to a folder fetchloom may write to",
-            file.display()
-        ))
+        .is_some_and(|file| file.path.is_some());
+    if filed {
+        error.or_help(
+            "choose a folder fetchloom may write to with `fetchloom settings set cache <folder>`, or set FETCHLOOM_CACHE to one",
+        )
     } else if !chosen && err.kind() == std::io::ErrorKind::PermissionDenied {
         error.help("check its permissions, or set FETCHLOOM_CACHE to a folder fetchloom may write to, then run the command again")
     } else {
