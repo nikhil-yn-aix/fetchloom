@@ -250,8 +250,8 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
 /// is quoted, as is one holding `~` after an `=`, which bash expands as in an assignment. on
 /// windows a word [`safe_on_windows`] is double-quoted, which powershell and cmd both read as
 /// written, and so is one holding a comma, which powershell 5.1 reads as a list and joins again
-/// with its numbers rewritten; a backslash ending it is doubled inside the quotes, since a program
-/// reads `\"` as a quote.
+/// with its numbers rewritten, or starting with one `-` and holding a dot, where powershell splits
+/// it; a backslash ending it is doubled inside the quotes, since a program reads `\"` as a quote.
 /// any other is withheld between marks for [`withheld`]. elsewhere double
 /// quotes keep a word literal unless it holds `$`, a backtick, a double quote, `!` (history) or a
 /// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
@@ -271,9 +271,11 @@ pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     let assigned_home = word
         .split_once('=')
         .is_some_and(|(_, value)| value.contains('~'));
-    if !word.is_empty()
-        && !word.starts_with(['~', '=', '@', '%'])
-        && !assigned_home
+    let quoted_anyway = word.is_empty()
+        || word.starts_with(['~', '=', '@', '%'])
+        || assigned_home
+        || (windows && splits_in_powershell(word));
+    if !quoted_anyway
         && word.chars().all(|c| {
             c.is_ascii_alphanumeric() || "-_./:@%+=~".contains(c) || (c == ',' && !windows)
         })
@@ -309,6 +311,12 @@ pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     Cow::Owned(quoted)
 }
 
+/// whether powershell would pass a program the bare `word` as two: one starting with one `-`
+/// ends at its first dot, as `-ox.part1` does, which reaches 7-Zip as `-ox` and `.part1`.
+pub(crate) fn splits_in_powershell(word: &str) -> bool {
+    word.starts_with('-') && !word.starts_with("--") && word.contains('.')
+}
+
 /// whether powershell reads `c` as a single quote, as it reads the curly ones.
 fn is_single_quote(c: char) -> bool {
     matches!(c, '\'' | '\u{2018}'..='\u{201b}')
@@ -334,7 +342,7 @@ pub(crate) mod tests {
     /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell
     /// and cmd on windows: double quotes, which both read as written, or none for a word holding
     /// what cmd acts on or powershell's quoting cannot keep, which a command never holds there.
-    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 19] = [
+    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 20] = [
         ("hi!.csv", "'hi!.csv'", None),
         ("$notes", "'$notes'", None),
         ("a`b`", "'a`b`'", None),
@@ -364,6 +372,8 @@ pub(crate) mod tests {
         // bash expands `~` after the `=` of a word shaped like an assignment, fish expands %self
         ("k=~", "\"k=~\"", Some("\"k=~\"")),
         ("%self", "\"%self\"", None),
+        // powershell splits a bare word starting with one `-` at its first dot
+        ("-ox.part1.rar", "-ox.part1.rar", Some("\"-ox.part1.rar\"")),
     ];
 
     #[test]

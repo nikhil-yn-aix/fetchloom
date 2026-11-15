@@ -596,6 +596,26 @@ fn a_spanned_zip_left_packed_has_a_next_step_for_each_system() {
     );
 }
 
+/// powershell splits a bare word starting with one `-` at its first dot, so 7-Zip would get
+/// `-ox` and a stray `.part1-unpacked`: the `-o` word is quoted whenever it holds a dot.
+#[test]
+fn a_seven_zip_folder_with_a_dot_stays_one_word() {
+    assert_eq!(
+        super::unpack_elsewhere(System::Windows, "data/x/x.part1.rar", "", "extract = false"),
+        r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x data\x\x.part1.rar "-ox.part1-unpacked"`. extract = false stops this warning"#
+    );
+    let line = r#"7z x data\x\x.part1.rar "-ox.part1-unpacked""#;
+    assert_eq!(
+        crate::suggested::command_words(line, true),
+        Some(vec![
+            "7z".to_owned(),
+            "x".to_owned(),
+            r"data\x\x.part1.rar".to_owned(),
+            "-ox.part1-unpacked".to_owned()
+        ])
+    );
+}
+
 /// run below the project's folder, the command reaches the archive and the project's folder from
 /// there, and quotes what its shell would split or expand as that shell reads it.
 #[test]

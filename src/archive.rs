@@ -121,12 +121,14 @@ impl System {
 
     /// `text` as one word for this system's usual shell, a unix shell or powershell, quoted as
     /// [`shell_word_for`] quotes it, with `\` between folders on windows, where a word of letters,
-    /// digits, `\` and `-_.:+=` stays bare.
+    /// digits, `\` and `-_.:+=` stays bare unless powershell would split it, as a 7-Zip `-o` word
+    /// holding a dot.
     fn word(self, text: &str) -> String {
         match self {
             System::Windows => {
                 let text = text.replace('/', "\\");
                 if !text.is_empty()
+                    && !crate::suggested::splits_in_powershell(&text)
                     && text
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || "-_.:+=\\".contains(c))
