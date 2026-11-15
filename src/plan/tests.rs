@@ -919,17 +919,49 @@ fn a_name_longer_than_the_255_bytes_a_disk_allows_is_refused() {
     }
 }
 
+/// repository metadata inside an archive is the source's, so it is refused as `source.invalid`
+/// with help that leaves it out, and a members table that excludes it places the rest.
 #[test]
 fn metadata_archive_targets_are_refused() {
-    let manifest = manifest(ONE);
     let mut locked = lock(&[("a", &["x.zip"])]);
     locked.datasets[0].files[0].unpacks_to = Some(digest::sha256(b"tree"));
-    let members = vec![member(".git/hooks/x"), member("readme.txt")];
-    let result = plan(&manifest, &locked, &|_| Some(members.clone()));
-    assert!(result.is_err(), "accepted metadata from archive members");
-    let error = result.unwrap_err();
-    assert!(error.message.contains(".git/hooks/x"), "{}", error.message);
-    assert!(error.message.contains("metadata"), "{}", error.message);
+    let members = vec![member(".git/config"), member("plain.txt")];
+    let error = plan(&manifest(ONE), &locked, &|_| Some(members.clone())).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "data/a/.git/config is refused because it names repository metadata"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "leave it out with exclude in [datasets.a.members.\"x.zip\"] in data.toml, or set extract = false on datasets.a to keep its archives packed"
+        )
+    );
+    let mut planned = Plan::default();
+    let files = &locked.datasets[0].files;
+    expand(
+        &mut planned,
+        "a",
+        "data/a",
+        false,
+        files,
+        &Members::new(),
+        &|_| Some(members.clone()),
+    )
+    .unwrap();
+    let added = check(&planned.targets, Patterns::OnCommandLine).unwrap_err();
+    assert_eq!(added.kind, Kind::SourceInvalid);
+    assert_eq!(
+        added.help.as_deref(),
+        Some("pass --no-extract to keep archives packed")
+    );
+    let excluded = manifest(&format!(
+        "{ONE}[datasets.a.members.\"x.zip\"]\nexclude = [\".git/**\"]\n"
+    ));
+    let placed = plan(&excluded, &locked, &|_| Some(members.clone())).unwrap();
+    let paths: Vec<&str> = placed.targets.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths, ["data/a/plain.txt"]);
 }
 
 #[test]

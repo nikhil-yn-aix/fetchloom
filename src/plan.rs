@@ -846,11 +846,17 @@ fn check_by(targets: &[Target], patterns: &dyn Fn(&str) -> Patterns) -> Result<(
     let mut folders: HashMap<String, &Target> = HashMap::new();
     for target in targets {
         if let Some(reason) = name::metadata(&target.path) {
-            return Err(Error::new(
-                Kind::ProjectInvalid,
-                format!("{} is refused because {reason}", target.path),
-            )
-            .help(leave_out("it", target, patterns(target.dataset))));
+            // inside an archive, the name is the source's, as other refused member names are
+            let unpacked = target.file().is_some_and(|file| file.unpacks_to.is_some());
+            let kind = if unpacked {
+                Kind::SourceInvalid
+            } else {
+                Kind::ProjectInvalid
+            };
+            return Err(
+                Error::new(kind, format!("{} is refused because {reason}", target.path))
+                    .help(leave_out("it", target, patterns(target.dataset))),
+            );
         }
         if let Some(reason) = name::unstorable(&target.path) {
             return Err(Error::new(
