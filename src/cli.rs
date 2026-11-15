@@ -643,6 +643,17 @@ fn moved_by_variable(error: Error, err: &std::io::Error, root: &std::path::Path)
         .filter(|file| !chosen && file.cache().is_some())
         .is_some_and(|file| file.path.is_some());
     if crate::cache::is_foreign(err) {
+        // a new cache inside a cache whose tag is gone would download everything again and leave
+        // the old files where gc never frees them
+        if let Some(put_back) = crate::cache::tag_back(root) {
+            return error.or_help(if filed {
+                format!(
+                    "{put_back}; if not, choose an empty folder outside it with `fetchloom settings set cache <folder>`, or set FETCHLOOM_CACHE to one"
+                )
+            } else {
+                format!("{put_back}; if not, set FETCHLOOM_CACHE to an empty folder outside it")
+            });
+        }
         let inside = root.join("fetchloom-cache");
         let inside = inside.to_string_lossy();
         return error.or_help(if filed {

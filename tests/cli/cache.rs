@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, partial_files, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, ok, partial_files, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -559,6 +559,77 @@ fn gc_refuses_a_folder_with_a_caches_names_and_no_tag() -> Result {
         }
     }
     Ok(())
+}
+
+/// a cache whose tag was deleted is refused as any folder without the tag is, but said to look like
+/// a cache whose tag is gone, with a command that puts the tag back, which works, and never a new
+/// cache inside it, which would download everything again and strand the old files.
+#[test]
+fn a_cache_whose_tag_was_deleted_says_how_to_put_it_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    // a space, as a windows profile folder may hold, which the command must quote
+    let cache = sandbox.folder("lab cache")?;
+    sandbox.make_cache(&cache)?;
+    fs::remove_file(cache.join("CACHEDIR.TAG"))?;
+    let gc = || {
+        sandbox
+            .command(&["cache", "gc"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let output = gc()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: could not open the cache at {}: it looks like a fetchloom cache whose tag is gone: it holds only what a cache holds, but no CACHEDIR.TAG, the file fetchloom knows its cache by\n",
+            cache.display()
+        )),
+        "{stderr}"
+    );
+    let help = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("  help: "))
+        .ok_or("no help")?;
+    assert!(
+        help.starts_with("if it is your fetchloom cache, put its tag back with `")
+            && help.ends_with(
+                "` and run `fetchloom cache gc` again; if not, set FETCHLOOM_CACHE to an empty folder outside it"
+            )
+            && !help.contains("fetchloom-cache"),
+        "{help}"
+    );
+    let command = help.split('`').nth(1).ok_or("the help gives no command")?;
+    let put_back = put_back_with(command)?;
+    assert!(put_back.status.success(), "{command}: {put_back:?}");
+    ok(&gc()?)?;
+    // a second time the tag is there, and the command refuses to write over it
+    assert!(!put_back_with(command)?.status.success(), "{command}");
+    Ok(())
+}
+
+/// runs `command` as a person pastes it into the system's usual shell.
+fn put_back_with(command: &str) -> Result<std::process::Output> {
+    #[cfg(unix)]
+    let output = std::process::Command::new("sh")
+        .args(["-c", command])
+        .output()?;
+    #[cfg(windows)]
+    let output = {
+        use std::io::Write as _;
+        let mut shell = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let mut stdin = shell.stdin.take().ok_or("no stdin")?;
+        writeln!(stdin, "{command}")?;
+        writeln!(stdin, "exit $(if ($?) {{ 0 }} else {{ 1 }})")?;
+        drop(stdin);
+        shell.wait_with_output()?
+    };
+    Ok(output)
 }
 
 /// every file and folder below `root`, by its path there.

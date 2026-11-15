@@ -92,22 +92,32 @@ fn adoptable(root: &Path) -> io::Result<()> {
         // a run making the cache at the same time writes its whole tag before any folder of it,
         // so a folder that has the tag by now is that cache
         if !left_before_tag(root, &entry?.file_name()) && !is_cache(root) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
+            let untagged = lost_its_tag(root);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                Foreign { untagged },
+            ));
         }
     }
     Ok(())
 }
 
 /// the refusal of a folder of other files as the cache, which an empty or a new folder avoids.
+/// `untagged` is a folder that looks like a cache whose tag is gone, as [`lost_its_tag`] says.
 #[derive(Debug)]
-struct Foreign;
+struct Foreign {
+    untagged: bool,
+}
 
 impl std::fmt::Display for Foreign {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(
+        formatter.write_str(if self.untagged {
+            "it looks like a fetchloom cache whose tag is gone: it holds only what a cache holds, \
+             but no CACHEDIR.TAG, the file fetchloom knows its cache by"
+        } else {
             "it holds other files and is not a fetchloom cache, and fetchloom makes its cache only \
-             in an empty folder or a new one",
-        )
+             in an empty folder or a new one"
+        })
     }
 }
 
@@ -116,6 +126,79 @@ impl std::error::Error for Foreign {}
 /// whether `err` refuses a folder of other files as the cache.
 pub(crate) fn is_foreign(err: &io::Error) -> bool {
     matches!(err.get_ref(), Some(inner) if inner.is::<Foreign>())
+}
+
+/// whether `root`, a folder without the tag, holds only what a cache holds, so it looks like a
+/// cache whose tag is gone: a cleaner leaves one, and so does a build that made a cache's folders
+/// before its tag, stopped between them. gc removes old files from tmp/, and the tag makes backup
+/// tools skip the folder, so a folder whose objects/, tmp/ or projects/ holds a name fetchloom
+/// never gives a file there, as a person's notes, is no such cache.
+fn lost_its_tag(root: &Path) -> bool {
+    let entries = |folder: &Path| -> Option<Vec<(String, fs::Metadata)>> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(folder).ok()? {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            found.push((entry.file_name().into_string().ok()?, metadata));
+        }
+        Some(found)
+    };
+    let system = |name: &str| SYSTEM_NAMES.contains(&name);
+    let within = |folder: &str, holds: &dyn Fn(&str, &fs::Metadata) -> bool| {
+        let folder = root.join(folder);
+        match entries(&folder) {
+            Some(found) => found
+                .iter()
+                .all(|(name, metadata)| system(name) || holds(name, metadata)),
+            None => fs::symlink_metadata(&folder)
+                .is_err_and(|err| err.kind() == io::ErrorKind::NotFound),
+        }
+    };
+    let hex = |text: &str, digits: usize| {
+        text.len() == digits && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    let Some(top) = entries(root) else {
+        return false;
+    };
+    top.iter().all(|(name, found)| {
+        system(name)
+            || (FOLDERS.contains(&name.as_str()) && found.is_dir())
+            || (["gc.lock", "reminded", NEVER_INDEX].contains(&name.as_str()) && found.is_file())
+    }) && fs::symlink_metadata(root.join("objects")).is_ok_and(|found| found.is_dir())
+        && within("objects", &|name, found| found.is_dir() && hex(name, 2))
+        && within("projects", &|name, found| {
+            found.is_file() && name.strip_suffix(".json").is_some_and(|stem| hex(stem, 64))
+        })
+        && within("tmp", &|name, _| {
+            let name = name.strip_prefix(".fetchloom-").unwrap_or(name);
+            name.split_once('.').is_some_and(|(stem, ending)| {
+                hex(stem, 16)
+                    && !ending.is_empty()
+                    && ending.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            })
+        })
+}
+
+/// how to put the tag back in `root` when it looks like a cache whose tag is gone, as
+/// [`lost_its_tag`] says: a command for the system's usual shell that makes the tag, and refuses a
+/// file already at its name, a link included, so it never writes where a link leads.
+pub(crate) fn tag_back(root: &Path) -> Option<String> {
+    if !lost_its_tag(root) {
+        return None;
+    }
+    let tag = root.join("CACHEDIR.TAG");
+    let tag = crate::suggested::shell_word(&tag.to_string_lossy()).into_owned();
+    let signature = TAG.lines().next().unwrap_or_default();
+    let command = if cfg!(windows) {
+        format!(
+            "New-Item -ItemType File -Path {tag} -Value ('{signature}', '# a cache made by fetchloom' -join [char]10)"
+        )
+    } else {
+        format!("(set -C; printf '{signature}\\n# a cache made by fetchloom\\n' > {tag})")
+    };
+    Some(format!(
+        "if it is your fetchloom cache, put its tag back with `{command}` and run the command again"
+    ))
 }
 
 /// whether `root` is a fetchloom cache: it holds fetchloom's tag, never only a cache's folder names.
@@ -319,10 +402,13 @@ fn tag_text(root: &Path) -> Option<String> {
     Some(text)
 }
 
-/// whether `root` holds the tag fetchloom writes in its cache.
+/// whether `root` holds the tag fetchloom writes in its cache, perhaps after the byte order mark
+/// some windows tools start a file with.
 fn tagged(root: &Path) -> bool {
-    tag_text(root)
-        .is_some_and(|text| text.lines().next() == TAG.lines().next() && text.contains("fetchloom"))
+    tag_text(root).is_some_and(|text| {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        text.lines().next() == TAG.lines().next() && text.contains("fetchloom")
+    })
 }
 
 /// whether `root` holds the start of fetchloom's tag, as a run stopped while writing it leaves.
@@ -1867,6 +1953,41 @@ pub(crate) mod tests {
         assert_eq!(entries(&root), [PathBuf::from("CACHEDIR.TAG")]);
         Cache::open(root.clone()).unwrap();
         assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
+    }
+
+    /// a folder holding only what a cache holds but no tag looks like a cache whose tag is gone,
+    /// as a cleaner leaves one, or as a build that made a cache's folders before its tag left one
+    /// when stopped between them; a scratch folder with a cache's names and files of its own does
+    /// not.
+    #[test]
+    fn a_cache_whose_tag_was_deleted_is_told_apart() {
+        let (_dir, cache) = cache();
+        store(&cache, b"abc");
+        fs::remove_file(cache.root.join("CACHEDIR.TAG")).unwrap();
+        let stopped = tempfile::tempdir().unwrap();
+        for folder in FOLDERS {
+            fs::create_dir(stopped.path().join(folder)).unwrap();
+        }
+        let gone = "it looks like a fetchloom cache whose tag is gone: it holds only what a cache \
+                    holds, but no CACHEDIR.TAG, the file fetchloom knows its cache by";
+        for root in [cache.root.clone(), stopped.path().to_path_buf()] {
+            let error = Cache::open(root.clone()).unwrap_err();
+            assert_eq!(error.to_string(), gone, "{}", root.display());
+            let error = Cache::unopened(root.clone()).unwrap_err();
+            assert_eq!(error.to_string(), gone, "{}", root.display());
+            assert!(!root.join("CACHEDIR.TAG").exists());
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        for file in ["tmp/notes.txt", "objects/pack1"] {
+            let path = scratch.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"mine").unwrap();
+        }
+        let error = Cache::open(scratch.path().to_path_buf()).unwrap_err();
+        assert!(
+            error.to_string().starts_with("it holds other files"),
+            "{error}"
+        );
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner

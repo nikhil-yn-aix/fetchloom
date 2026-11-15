@@ -181,16 +181,18 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Err
             Kind::Usage,
             format!("cache cannot take the folder {}: {why}", folder.display()),
         );
-        return Err(
-            if folder.is_dir() && crate::cache::in_the_way(&folder).is_none() {
-                error.help(format!(
-                    "choose an empty folder or a new one, such as {}",
-                    folder.join("fetchloom-cache").display()
-                ))
-            } else {
-                error.help("choose an empty folder or a new one")
-            },
-        );
+        return Err(if let Some(put_back) = crate::cache::tag_back(&folder) {
+            error.help(format!(
+                "{put_back}; if not, choose an empty folder outside it"
+            ))
+        } else if folder.is_dir() && crate::cache::in_the_way(&folder).is_none() {
+            error.help(format!(
+                "choose an empty folder or a new one, such as {}",
+                folder.join("fetchloom-cache").display()
+            ))
+        } else {
+            error.help("choose an empty folder or a new one")
+        });
     }
     let help = if sets_it {
         "keep a mirror in `mirrors` first, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one"
