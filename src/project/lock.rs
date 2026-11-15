@@ -1076,11 +1076,7 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     let stored = match toml::from_str::<Stored>(text) {
         Ok(stored) if stored.version == VERSION => stored,
         Ok(stored) => return Err(other_version(stored.version.into())),
-        Err(err) => {
-            return Err(unread_version(text).unwrap_or_else(|| {
-                broken(format!("data.lock cannot be read: {}", err.message()))
-            }));
-        }
+        Err(err) => return Err(unread_version(text).unwrap_or_else(|| unreadable(text, &err))),
     };
     let mut parsed = stored
         .dataset
@@ -1276,6 +1272,26 @@ fn other_version(version: i64) -> Error {
     } else {
         error.help(BROKEN)
     }
+}
+
+/// the error for a data.lock the toml reader refused: the line it stopped at, in plain words, with
+/// the reader's own reason after them.
+fn unreadable(text: &str, err: &toml::de::Error) -> Error {
+    let reason = err.message();
+    // serde names the integer type it could not fill, as "as i128, expected u64"
+    let what = if reason.starts_with("invalid type: integer") || reason.contains("out of range") {
+        "holds a number too large for fetchloom to store"
+    } else {
+        "is damaged"
+    };
+    let message = match err.span() {
+        Some(span) => {
+            let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
+            format!("data.lock cannot be read: line {line} {what}")
+        }
+        None => format!("data.lock cannot be read: it {what}"),
+    };
+    broken(message).detail(format!("the toml reader says: {reason}"))
 }
 
 fn broken(message: String) -> Error {
@@ -1834,6 +1850,40 @@ mod tests {
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
 
+    /// a lock the toml reader refuses names the line it stopped at in plain words, as data.toml's
+    /// errors do, and keeps the reader's own words as a detail.
+    #[test]
+    fn an_unreadable_lock_names_its_line() {
+        let text = sample().render();
+        let cut = &text[..text.rfind('}').unwrap()];
+        let error = Lock::parse(cut).unwrap_err();
+        let line = cut.lines().count();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            format!("data.lock cannot be read: line {line} is damaged")
+        );
+        assert_eq!(error.help.as_deref(), Some(BROKEN));
+        assert!(
+            error.details[0].starts_with("the toml reader says: "),
+            "{:?}",
+            error.details
+        );
+        let (before, after) = text.split_once("size = ").unwrap();
+        let digits = after.find(|c: char| !c.is_ascii_digit()).unwrap();
+        let huge = format!(
+            "{before}size = 99999999999999999999999999{}",
+            &after[digits..]
+        );
+        let line = before.lines().count();
+        assert_eq!(
+            Lock::parse(&huge).unwrap_err().message,
+            format!(
+                "data.lock cannot be read: line {line} holds a number too large for fetchloom to store"
+            )
+        );
+    }
+
     /// a version error says what the field holds and leaves the rest of the lock out.
     #[test]
     fn a_version_that_is_no_whole_number_says_what_it_takes() {
@@ -2189,7 +2239,9 @@ mod tests {
         ] {
             let error = Lock::read(&changed, root.path()).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid, "{changed}");
-            assert!(error.message.contains(says), "{says}: {}", error.message);
+            // the toml reader's own words follow as a detail
+            let said = format!("{} {}", error.message, error.details.join(" "));
+            assert!(said.contains(says), "{says}: {said}");
             assert_eq!(canonical::read(&changed, false), None, "{changed}");
         }
         let unlisted = text
