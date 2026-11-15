@@ -861,12 +861,7 @@ pub(in crate::cli) fn needed_for_drop(
     threads: Threads,
     stop: &Stop,
 ) -> Result<Needed, Error> {
-    let focus = Focus {
-        candidates: candidates.iter().copied().collect(),
-        present: RefCell::new(HashMap::new()),
-        threads,
-        here: None,
-    };
+    let focus = Focus::new(candidates, threads, None);
     Ok(needed_focused(cache, current, stop, false, Uses::Untold, Some(&focus))?.needed)
 }
 
@@ -879,12 +874,7 @@ pub(in crate::cli) fn needed_besides(
     threads: Threads,
     stop: &Stop,
 ) -> Result<Needed, Error> {
-    let focus = Focus {
-        candidates: candidates.iter().copied().collect(),
-        present: RefCell::new(HashMap::new()),
-        threads,
-        here: Some(here.to_path_buf()),
-    };
+    let focus = Focus::new(candidates, threads, Some(here));
     Ok(needed_focused(
         cache,
         Some(current),
@@ -906,6 +896,15 @@ struct Focus {
 }
 
 impl Focus {
+    fn new(candidates: &[Sha256], threads: Threads, here: Option<&Path>) -> Focus {
+        Focus {
+            candidates: candidates.iter().copied().collect(),
+            present: RefCell::new(HashMap::new()),
+            threads,
+            here: here.map(Path::to_path_buf),
+        }
+    }
+
     /// whether the walk's `current` lock stands for the project at `root`.
     fn stands_for(&self, root: &Path) -> bool {
         self.here.as_deref().is_some_and(|here| {
