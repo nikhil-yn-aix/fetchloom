@@ -61,13 +61,15 @@ pub(super) async fn recover(
     if failed.kind != Kind::ReferenceUnresolved {
         return Err(failed);
     }
+    // data.lock's link may hold a token, so messages show it masked
+    let resolved = crate::shown::mask_query(&again.resolved);
     let listing = match listings.get(net, &again.resolved).await {
         Ok(listing) => listing,
         Err(error) if error.kind == Kind::Interrupted => return Err(error),
         Err(error) => {
             return Err(error.detail(format!(
-                "asking {} again failed after: {}",
-                again.resolved, failed.message
+                "asking {resolved} again failed after: {}",
+                failed.message
             )));
         }
     };
@@ -80,14 +82,14 @@ pub(super) async fn recover(
             _ => None,
         });
     let Some(remote) = found else {
-        return Err(failed.detail(format!("{} no longer lists it", again.resolved)));
+        return Err(failed.detail(format!("{resolved} no longer lists it")));
     };
     if remote.url == job.fetch.url {
         // a plain link is its own source, so asking it again says nothing new
         if matches!(listing.resolved, Reference::Url(_)) {
             return Err(failed);
         }
-        return Err(failed.detail(format!("{} still lists the same link", again.resolved)));
+        return Err(failed.detail(format!("{resolved} still lists the same link")));
     }
 
     let fetch = Fetch {
@@ -101,16 +103,14 @@ pub(super) async fn recover(
             return err;
         }
         err.detail(format!(
-            "its link in data.lock is gone, so this came from where {} lists it now",
-            again.resolved
+            "its link in data.lock is gone, so this came from where {resolved} lists it now"
         ))
     })?;
     output.warn(
         Warning::SourceMoved,
         &format!(
-            "{} is gone from its link in data.lock. {} still lists it, so it came from {}",
+            "{} is gone from its link in data.lock. {resolved} still lists it, so it came from {}",
             job.label,
-            again.resolved,
             net::host(&remote.url)
         ),
     );
@@ -150,6 +150,48 @@ mod tests {
         ));
         context.offline = net::Offline::Flag;
         context
+    }
+
+    /// data.lock's resolved reference, which a clone may fill with a token, shows masked in what
+    /// a failed lookup says.
+    #[test]
+    fn a_secret_in_the_recorded_reference_never_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let net = context.net();
+        let job = Job {
+            fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
+            label: "iris/data.csv".to_owned(),
+            dataset: Some("iris".to_owned()),
+            again: Some(Again {
+                resolved: "zenodo:3608990?access=s3cr3t".to_owned(),
+                path: "data.csv".to_owned(),
+                alone: true,
+            }),
+        };
+        let error = block_on(recover(
+            &net,
+            &cache,
+            &context.output,
+            &Listings::default(),
+            &job,
+            Error::new(Kind::ReferenceUnresolved, "recorded URL returned 404"),
+            &|_| Ok(()),
+        ))
+        .unwrap_err();
+        assert!(
+            error
+                .details
+                .iter()
+                .any(|line| line.starts_with("asking zenodo:3608990?access=*** again failed")),
+            "{:?}",
+            error.details
+        );
+        assert!(
+            !format!("{} {:?}", error.message, error.details).contains("s3cr3t"),
+            "{error:?}"
+        );
     }
 
     #[test]
