@@ -498,8 +498,12 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
             let _ = write!(example, " <{value}>");
         }
     }
-    // after a command that lacks it, the place was right and the command was not
+    // after a command that lacks it, the place was right and the command was not, unless the
+    // command has an option of a near spelling, as status has --sources for --source
     if let Some(parent) = parent.filter(|parent| !names.contains(parent)) {
+        if let Some(meant) = option_meant(argument, Some(parent)) {
+            return Some(format!("did you mean `{meant}`?"));
+        }
         return Some(format!(
             "{parent} has no --{long}; it is an option of {commands}, as in {example}"
         ));
@@ -640,6 +644,11 @@ mod tests {
                 "--force",
                 vec!["fetchloom", "--force"],
                 "--force is an option of sync, export and get, so it goes after the command, as in fetchloom sync --force",
+            ),
+            (
+                "--select",
+                vec!["fetchloom", "status", "--select", "*.csv"],
+                "status has no --select; it is an option of add and get, as in fetchloom add <link> --select \"*.csv\"",
             ),
         ] {
             let error = problem(&arguments)?;
@@ -825,6 +834,7 @@ mod tests {
             (&["fetchloom", "sync", "--Dry-Run"], "--dry-run"),
             (&["fetchloom", "--verison"], "--version"),
             (&["fetchloom", "add", "--name", "x", "iris"], "--as"),
+            (&["fetchloom", "status", "--source"], "--sources"),
         ] {
             let error = problem(arguments)?;
             assert_eq!(
