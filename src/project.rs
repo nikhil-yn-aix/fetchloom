@@ -46,8 +46,8 @@ pub(crate) enum Ignore {
     /// rule a person adds to it by hand.
     ByHand { rule: String, why: String },
     /// git tracks files in the data folder, the project's own work, which the rule would hide
-    /// from git as soon as it changed, so the rule is left for a person to add.
-    Tracked { rule: String },
+    /// from git as soon as it changed, so a person adds the datasets' own folders instead.
+    Tracked,
 }
 
 pub(crate) struct Project {
@@ -1026,16 +1026,7 @@ impl Project {
         if !begins && Project::repository(&self.root).is_none() {
             return Ok(Ignore::Done);
         }
-        // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
-        // escaped to be ignored itself
-        let literal: String = data_dir
-            .chars()
-            .flat_map(|c| {
-                let escape = matches!(c, '[' | ']' | '*' | '?' | '\\').then_some('\\');
-                escape.into_iter().chain([c])
-            })
-            .collect();
-        let entry = format!("/{literal}/");
+        let entry = ignore_rule(data_dir);
         let path = self.root.join(".gitignore");
         let text = match read_gitignore(&path) {
             Ok(text) => text,
@@ -1071,7 +1062,7 @@ impl Project {
         if let Some(git) = git
             && git::tracked(&git, &self.root, data_dir).is_some_and(|files| !files.is_empty())
         {
-            return Ok(Ignore::Tracked { rule: entry });
+            return Ok(Ignore::Tracked);
         }
         let mut updated = text;
         if !updated.is_empty() && !updated.ends_with('\n') {
@@ -1154,6 +1145,20 @@ pub(crate) fn native(root: &Path, path: &str) -> PathBuf {
 /// a submodule or worktree has.
 fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
+}
+
+/// the .gitignore line that ignores `folder`, a path from the project root, and nothing else.
+pub(crate) fn ignore_rule(folder: &str) -> String {
+    // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
+    // escaped to be ignored itself
+    let literal: String = folder
+        .chars()
+        .flat_map(|c| {
+            let escape = matches!(c, '[' | ']' | '*' | '?' | '\\').then_some('\\');
+            escape.into_iter().chain([c])
+        })
+        .collect();
+    format!("/{literal}/")
 }
 
 /// .gitignore's text, read without following a link and only up to [`GITIGNORE_CAP`]: a link a

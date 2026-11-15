@@ -116,16 +116,34 @@ fn by_hand(output: &Output, manifest: &Manifest, ignore: &Ignore) {
             &format!(".gitignore is {why}, which fetchloom never edits"),
             &format!("to keep {data_dir}/ out of git, add the line {rule} to it by hand"),
         ),
-        Ignore::Tracked { rule } => output.warn_with(
+        Ignore::Tracked => output.warn_with(
             Warning::GitIgnoreUnedited,
             &format!(
                 "git tracks files in {data_dir}/, so fetchloom leaves it out of .gitignore, which would hide new files there from git"
             ),
-            &format!(
-                "set data_dir in [project] in data.toml to a folder that holds only data, or add the line {rule} to .gitignore yourself"
-            ),
+            &tracked_help(manifest),
         ),
         Ignore::Done | Ignore::Add(_) => {}
+    }
+}
+
+/// what a person can do about a data folder git tracks files in: give the data a folder of its
+/// own, or ignore each dataset's folder, which holds only data where the data folder does not.
+fn tracked_help(manifest: &Manifest) -> String {
+    let own = "set data_dir in [project] in data.toml to a folder that holds only data";
+    let rules: Vec<String> = manifest
+        .datasets
+        .keys()
+        .filter(|name| plan::subfolder(manifest, name).is_some())
+        .map(|name| crate::project::ignore_rule(&plan::folder(manifest, name)))
+        .collect();
+    match rules.as_slice() {
+        [] => own.to_owned(),
+        [rule] => format!("{own}, or add the line {rule} to .gitignore yourself"),
+        [first, ..] => format!(
+            "{own}, or add a line for each of the {} dataset folders to .gitignore yourself, such as {first}",
+            units::grouped(rules.len() as u64)
+        ),
     }
 }
 
@@ -1785,6 +1803,37 @@ pub(super) fn known_with_rest(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// a data folder git tracks files in names each dataset folder's own line, escaped as git
+    /// reads it, as the data folder's own line is; a dataset placed in the data folder itself has
+    /// no folder of its own to name.
+    #[test]
+    fn a_tracked_data_folder_names_each_datasets_own_line() {
+        let parsed = |datasets: &str| {
+            Manifest::parse(&format!("[project]\ndata_dir = \"src\"\n\n{datasets}")).unwrap()
+        };
+        let own = "set data_dir in [project] in data.toml to a folder that holds only data";
+        assert_eq!(
+            super::tracked_help(&parsed(
+                "[datasets.scans]\nref = \"zenodo:1\"\npath = \"scans[1]\"\n"
+            )),
+            format!("{own}, or add the line /src/scans\\[1\\]/ to .gitignore yourself")
+        );
+        assert_eq!(
+            super::tracked_help(&parsed(
+                "[datasets.iris]\nref = \"zenodo:1\"\n\n[datasets.wine]\nref = \"zenodo:2\"\n"
+            )),
+            format!(
+                "{own}, or add a line for each of the 2 dataset folders to .gitignore yourself, such as /src/iris/"
+            )
+        );
+        assert_eq!(
+            super::tracked_help(&parsed(
+                "[datasets.iris]\nref = \"zenodo:1\"\npath = \".\"\n"
+            )),
+            own
+        );
+    }
+
     /// a folder whose name a shell would need quoted is passed by, so no clone's folder name
     /// steers the help, or the `fix` taken from it.
     #[test]

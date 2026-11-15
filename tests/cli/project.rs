@@ -1300,7 +1300,7 @@ fn a_data_folder_git_tracks_files_in_is_not_ignored() -> Result {
     assert_eq!(
         crate::support::warned(&document),
         [
-            "git tracks files in src/, so fetchloom leaves it out of .gitignore, which would hide new files there from git; set data_dir in [project] in data.toml to a folder that holds only data, or add the line /src/ to .gitignore yourself"
+            "git tracks files in src/, so fetchloom leaves it out of .gitignore, which would hide new files there from git; set data_dir in [project] in data.toml to a folder that holds only data, or add the line /src/iris/ to .gitignore yourself"
         ],
         "{document}"
     );

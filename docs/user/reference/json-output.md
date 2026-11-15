@@ -123,7 +123,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `download.web_page` | a link meant for a data file answered with a web page |
 | `export.incomplete` | a citation `export` wrote is built from data.lock alone, marked incomplete in the file: offline, doi.org was not asked; doi.org gave no record for its DOI; or the dataset has no DOI |
 | `export.left_out` | the list `export` wrote leaves out files no link holds, as `result.left_out` says |
-| `git.ignore_unedited` | fetchloom left the data folder's line out of `.gitignore`: the file is a link, a special file or larger than 1 MiB, which fetchloom never reads or edits, or git tracks files in the data folder, which the line would hide; `help` names the line to add by hand |
+| `git.ignore_unedited` | fetchloom left the data folder's line out of `.gitignore`: the file is a link, a special file or larger than 1 MiB, which fetchloom never reads or edits, or git tracks files in the data folder, which the line would hide; `help` names the line to add by hand, or in a data folder git tracks, the line of a dataset's own folder |
 | `git.import_in_tree` | files an import read are in the git work tree, where `git add .` takes them, or git tracks them already; `help` names the commands that keep them out |
 | `git.lock_part_untracked` | git does not have lists in `data.lock.d` that data.lock names, so a clone cannot read data.lock; `details` names them |
 | `import.skipped` | an import left out links or special files, which fetchloom never follows; `details` names them |
