@@ -79,6 +79,37 @@ fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
     Ok(())
 }
 
+/// a file named in a dataset is ready on its own: a sibling gone from the data folder is left for
+/// sync, which naming the whole dataset runs.
+#[test]
+fn path_of_a_file_checks_that_file_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = crate::support::workspace()
+        .join("tests")
+        .join("fixtures")
+        .join("archives")
+        .join("python.zip");
+    let server = Server::start("/files/dataset.zip", vec![file(&fs::read(zip)?, "\"z1\"")])?;
+    added(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("dataset");
+    let sibling = folder.join("README.md");
+    crate::support::delete(&sibling)?;
+    let output = sandbox.run(&["path", "dataset/data/train.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        text(&output.stdout)?.trim_end(),
+        folder.join("data").join("train.csv").display().to_string()
+    );
+    assert!(
+        !sibling.exists(),
+        "path put back a file it was not asked for"
+    );
+    let output = sandbox.run(&["path", "dataset"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(sibling.exists());
+    Ok(())
+}
+
 #[test]
 fn path_syncs_first_when_the_files_are_not_there() -> Result {
     let sandbox = Sandbox::new()?;

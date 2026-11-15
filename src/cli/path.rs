@@ -361,10 +361,15 @@ fn ready_path(
     }
     // reject a known impossible member before a missing file can trigger downloads
     let answer = planned_path(project, manifest, &planned, name, file)?;
+    // a file or folder named inside the dataset is all that has to be ready
+    let wanted = match file.filter(|file| !file.is_empty()) {
+        Some(file) => format!("{}/{file}", plan::folder(manifest, name)),
+        None => plan::folder(manifest, name),
+    };
     let survey = Survey::read_within(
         project,
         &manifest.data_dir,
-        &[plan::folder(manifest, name)],
+        std::slice::from_ref(&wanted),
         context.threads,
         &context.stop,
     )?;
@@ -372,7 +377,7 @@ fn ready_path(
     let ready = planned
         .targets
         .iter()
-        .filter(|target| target.dataset == name)
+        .filter(|target| target.dataset == name && is_inside(&target.path, &wanted))
         .all(|target| {
             let placed = survey.state.files.get(&target.path);
             let ready = !doubted.contains(&target.path)
