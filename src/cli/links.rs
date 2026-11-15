@@ -77,7 +77,8 @@ fn read_text(path: &Path) -> Result<(String, String), Error> {
     Ok((name, text))
 }
 
-/// a line of search words is refused here, since its second word is no hash.
+/// the links the list `name` holds in `text`, each with the SHA-256 its line gives. a line of
+/// search words is refused here, since its second word is no hash.
 pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
     let mut lines = Vec::new();
     for (index, written) in text.trim_start_matches('\u{feff}').lines().enumerate() {

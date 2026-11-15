@@ -125,7 +125,8 @@ impl Unready {
 }
 
 /// fails with `data.not_ready` naming each of `unready` with what to do; only when a plain sync
-/// makes all of it ready does `fix` name it, so it never replaces an edit, repins or builds.
+/// makes all of it ready does the help name sync, so it never points at replacing an edit,
+/// repinning or building.
 pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
     if unready.is_empty() {
         return Ok(());
@@ -250,8 +251,8 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
 mod tests {
     use super::*;
 
-    /// a file a sync keeps is no fix for a script to run, since replacing it is the person's
-    /// call, and neither is a build, while what a plain sync puts in place is.
+    /// the help names sync alone only for what a plain sync puts in place: replacing a file a
+    /// sync keeps is the person's call, and a build runs their code.
     #[test]
     fn only_what_a_plain_sync_puts_in_place_gets_it_as_the_next_step() {
         let missing = || Unready::Missing("data/iris/iris.csv".to_owned());

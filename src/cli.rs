@@ -1556,7 +1556,8 @@ mod tests {
         ))
     }
 
-    /// a stop asked before the command marks its work finished ends it as stopped.
+    /// a stop asked after the command marked its work finished leaves it finished, and one asked
+    /// before ends it as stopped.
     #[test]
     fn a_stop_after_a_command_finished_its_work_leaves_it_finished() {
         let runtime = tokio::runtime::Builder::new_current_thread()

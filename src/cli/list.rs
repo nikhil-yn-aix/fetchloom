@@ -408,7 +408,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
     Report { datasets }
 }
 
-/// the files `--pinned` lists for a dataset: a source's with the links they download from, a
+/// the files `--json` lists for a dataset: a source's with the links they download from, a
 /// recipe's result's without.
 fn locked_files(locked: Option<&Locked>, result: Option<&Derived>) -> Option<Vec<ListedFile>> {
     match (locked, result) {

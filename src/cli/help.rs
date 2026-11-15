@@ -1154,7 +1154,8 @@ mod tests {
         );
     }
 
-    /// `build --help` points at `help recipes`.
+    /// the topic's example reads as data.toml, a recipe made from a fetched dataset, and
+    /// `build --help` points at the topic.
     #[test]
     fn the_recipes_topic_shows_a_recipe_that_reads() {
         let recipes = super::topic_text(&["recipes".to_owned()]).unwrap_or_default();

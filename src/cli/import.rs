@@ -1093,7 +1093,8 @@ pub(super) fn walk(
     Ok(walked)
 }
 
-/// a select pattern that keeps nothing is a mistake worth stopping for.
+/// keeps the files `source`'s select and exclude patterns choose. a select pattern that keeps
+/// nothing is a mistake worth stopping for.
 fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> {
     let matches = |globs: &[Glob], path: &str| globs.iter().any(|glob| glob.matches(path));
     if let Some(glob) = source
