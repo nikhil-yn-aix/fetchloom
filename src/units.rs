@@ -134,8 +134,9 @@ pub(crate) fn speed(per_second: f64) -> String {
     format!("{value:.1} {}/s", UNITS[unit])
 }
 
-/// a duration: `41 ms` below a second, `3.2 s` below a minute, `4 min 05 s` above. a time that
-/// rounds to a whole minute is told in minutes.
+/// a duration: `41 ms` below a second, `3.2 s` below a minute, `4 min 05 s` below an hour, and
+/// `1 h 05 min` or `24 h` above, without its seconds. a time that rounds to a whole minute is
+/// told in minutes.
 pub(crate) fn duration(elapsed: Duration) -> String {
     let millis = elapsed.as_millis();
     if millis < 1000 {
@@ -146,7 +147,14 @@ pub(crate) fn duration(elapsed: Duration) -> String {
         return format!("{seconds:.1} s");
     }
     let whole = elapsed.as_secs().max(60);
-    format!("{} min {:02} s", whole / 60, whole % 60)
+    if whole < 3600 {
+        return format!("{} min {:02} s", whole / 60, whole % 60);
+    }
+    let minutes = whole / 60;
+    match minutes % 60 {
+        0 => format!("{} h", minutes / 60),
+        rest => format!("{} h {rest:02} min", minutes / 60),
+    }
 }
 
 /// an estimate as a person plans around it, rounded to what it can claim: `under 10 s`,
@@ -474,10 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn durations_go_from_ms_to_tenths_of_a_second_to_minutes() {
+    fn durations_go_from_ms_to_tenths_of_a_second_to_minutes_to_hours() {
         assert_eq!(duration(Duration::from_millis(41)), "41 ms");
         assert_eq!(duration(Duration::from_millis(3240)), "3.2 s");
         assert_eq!(duration(Duration::from_secs(245)), "4 min 05 s");
+        assert_eq!(duration(Duration::from_secs(3599)), "59 min 59 s");
+        assert_eq!(duration(Duration::from_hours(1)), "1 h");
+        assert_eq!(duration(Duration::from_secs(3959)), "1 h 05 min");
+        assert_eq!(duration(Duration::from_hours(24)), "24 h");
         assert_eq!(duration(Duration::from_millis(59_949)), "59.9 s");
         for rounded_up in [59_950, 59_999] {
             assert_eq!(
