@@ -623,6 +623,8 @@ fn check(
     let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
     let manifest = dropped_here(&mut status, &manifest, &survey);
     status.unfinished = survey.leftovers().count();
+    // a renamed recipe's kept rebuild is shown under the name data.toml gives it now
+    survey.state.carry_candidates(&manifest, &lock);
     status.candidates = survey
         .state
         .candidates

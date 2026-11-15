@@ -3290,6 +3290,47 @@ fn a_kept_rebuild_goes_with_its_recipe() -> Result {
     Ok(())
 }
 
+/// a kept rebuild follows its recipe's rename to the new name, whichever command meets the
+/// rename first, so `--accept` of the new name pins it.
+#[test]
+fn a_kept_rebuild_follows_its_renamed_recipe() -> Result {
+    for first in [
+        &["lock"][..],
+        &["build"],
+        &["build", "--accept", "tidy"],
+        &["sync"],
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        kept_rebuild(&sandbox, &server, &recipe(&["random"]))?;
+        let manifest = sandbox.work().join("data.toml");
+        fs::write(
+            &manifest,
+            fs::read_to_string(&manifest)?.replace("[datasets.clean]", "[datasets.tidy]"),
+        )?;
+        let output = build(&sandbox, first)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{first:?}: {}",
+            text(&output.stderr)?
+        );
+        if first.contains(&"--accept") {
+            continue;
+        }
+        let status = json(&sandbox.run(&["--json", "status"])?)?;
+        assert_eq!(kept_names(&status), ["tidy"], "{first:?}: {status}");
+        let accepted = build(&sandbox, &["build", "--accept", "tidy"])?;
+        assert_eq!(
+            accepted.status.code(),
+            Some(0),
+            "{first:?}: {}",
+            text(&accepted.stderr)?
+        );
+    }
+    Ok(())
+}
+
 /// with the result in no cache, sync names a mirror that holds it and then the build, unless
 /// its own downloads bring the bytes.
 #[test]

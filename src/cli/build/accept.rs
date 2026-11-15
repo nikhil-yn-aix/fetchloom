@@ -28,12 +28,16 @@ pub(super) async fn accept(
 ) -> Result<Built, Error> {
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
-    let (state, _) = project.state();
+    // as relocking will leave data.lock, a renamed recipe's pin and kept rebuild under its new name
+    let (old, _) = crate::cli::sync::rename::forecast(
+        &manifest,
+        read.as_ref()
+            .map(|(lock, _)| lock.clone())
+            .unwrap_or_default(),
+    );
+    let (mut state, _) = project.state();
+    state.carry_candidates(&manifest, &old);
     let wanted = wanted(&manifest, &state, names)?;
-    let old = read
-        .as_ref()
-        .map(|(lock, _)| lock.clone())
-        .unwrap_or_default();
     let cache = open_cache()?;
     let mut accepted = Vec::new();
     for name in &wanted {

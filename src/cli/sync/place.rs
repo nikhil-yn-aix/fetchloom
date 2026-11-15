@@ -446,19 +446,24 @@ impl<'a> Placing<'a> {
         survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
-        Self::from_plan(project, manifest, plan, force, scope, survey)
+        Self::from_plan(project, manifest, lock, plan, force, scope, survey)
     }
 
-    /// compares an already validated plan without reading archive member records again.
+    /// compares an already validated plan of `lock` without reading archive member records
+    /// again. a rebuild kept of a recipe `lock` pins under another name now moves to that name.
     pub(crate) fn from_plan(
         project: &'a Project,
         manifest: &'a Manifest,
+        lock: &Lock,
         plan: plan::Plan<'a>,
         force: bool,
         scope: &Scope,
         mut survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         project.planned_data_dir(manifest)?;
+        if survey.state.carry_candidates(manifest, lock) {
+            survey.needs_writing = true;
+        }
         survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();
         let mut actions = plan
@@ -3005,6 +3010,7 @@ mod tests {
         let all = Placing::from_plan(
             &project,
             &manifest,
+            &Lock::default(),
             plan(),
             true,
             &Scope::All,
@@ -3015,6 +3021,7 @@ mod tests {
         let placing = Placing::from_plan(
             &project,
             &manifest,
+            &Lock::default(),
             plan(),
             true,
             &named,

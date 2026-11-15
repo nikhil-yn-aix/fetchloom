@@ -262,6 +262,50 @@ impl State {
         Ok((State::parse(&bytes), reading.bytes))
     }
 
+    /// moves the kept rebuild of each recipe `manifest` no longer has to the one recipe it has
+    /// now whose result `lock` pins as the rebuild was kept beside, by its key and tree, and that
+    /// has no kept rebuild of its own: a renamed recipe keeps its result, since its key never held
+    /// its name, so its kept rebuild follows, whichever command moved the pin. says whether any
+    /// moved.
+    pub(crate) fn carry_candidates(
+        &mut self,
+        manifest: &Manifest,
+        lock: &crate::project::lock::Lock,
+    ) -> bool {
+        let is_recipe = |name: &str| {
+            manifest
+                .datasets
+                .get(name)
+                .is_some_and(|entry| entry.recipe().is_some())
+        };
+        let gone: Vec<String> = self
+            .candidates
+            .keys()
+            .filter(|name| !is_recipe(name))
+            .cloned()
+            .collect();
+        let mut moved = false;
+        for old in gone {
+            let kept = &self.candidates[&old];
+            let mut takers = manifest.datasets.keys().filter(|name| {
+                is_recipe(name)
+                    && !self.candidates.contains_key(*name)
+                    && lock
+                        .result(name)
+                        .is_some_and(|pinned| pinned.key == kept.key && pinned.tree == kept.pinned)
+            });
+            let (Some(new), None) = (takers.next(), takers.next()) else {
+                continue;
+            };
+            let new = new.clone();
+            if let Some(kept) = self.candidates.remove(&old) {
+                self.candidates.insert(new, kept);
+                moved = true;
+            }
+        }
+        moved
+    }
+
     /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
     /// recipe's pin, and the mark of each dataset it no longer has, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {

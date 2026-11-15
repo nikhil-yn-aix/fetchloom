@@ -333,7 +333,15 @@ impl<'a> Loop<'a> {
         survey.damaged.extend(damaged);
         survey.elsewhere.extend(elsewhere);
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
-        let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+        let placing = Placing::from_plan(
+            self.project,
+            manifest,
+            lock,
+            plan,
+            force,
+            &self.scope,
+            survey,
+        )?;
         // a result whose bytes a download that failed was to bring waits with it
         let waiting: BTreeSet<String> = placing
             .short(|digest, size| self.cache.find(digest, Some(size)).is_some())
@@ -354,7 +362,8 @@ impl<'a> Loop<'a> {
         let survey = placing.into_survey();
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
-        let placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
+        let placing =
+            Placing::from_plan(self.project, manifest, lock, plan, force, &scope, survey)?;
         let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
@@ -374,8 +383,15 @@ impl<'a> Loop<'a> {
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
         self.warn_doubtful_paths(manifest, &plan);
-        let mut placing =
-            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+        let mut placing = Placing::from_plan(
+            self.project,
+            manifest,
+            lock,
+            plan,
+            force,
+            &self.scope,
+            survey,
+        )?;
         placing.listed(self.unlisted());
         if self.verifies {
             placing.check_cached(&self.cache, &self.context.output)?;
@@ -1045,8 +1061,15 @@ impl<'a> Loop<'a> {
     ) -> Result<Preview, Error> {
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         self.warn_doubtful_paths(manifest, &plan);
-        let mut placing =
-            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+        let mut placing = Placing::from_plan(
+            self.project,
+            manifest,
+            lock,
+            plan,
+            force,
+            &self.scope,
+            survey,
+        )?;
         placing.listed(self.unlisted());
         // what the data folder holds a sync takes from there; only that sync hashes it
         let held: HashSet<Sha256> = placing
