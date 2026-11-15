@@ -64,12 +64,22 @@ fn made(name: &str, seed: &str, files: &[(&str, &[u8])]) -> Derived {
     }
 }
 
+/// the datasets that differ from `before` to `after`, each lock whole, with every list.
+fn diffed(before: &Lock, after: &Lock) -> Vec<Dataset> {
+    let whole = |lock: &Lock| Read {
+        lock: lock.clone(),
+        found: true,
+        unlisted: Vec::new(),
+    };
+    compared(&whole(before), &whole(after))
+}
+
 /// what a person reads for each dataset: its summary, then a line for each file.
 fn told(datasets: &[Dataset]) -> Vec<String> {
     datasets
         .iter()
         .flat_map(|dataset| {
-            std::iter::once(summary(dataset))
+            std::iter::once(summary(dataset, "A", "B"))
                 .chain(dataset.files.iter().map(|file| line(&dataset.name, file)))
         })
         .collect()
@@ -117,7 +127,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
         derived: vec![made("sim", "8", &[("draws.csv", b"3\n4\n")])],
         stated: Vec::new(),
     };
-    let datasets = compared(&before, &after);
+    let datasets = diffed(&before, &after);
     assert_eq!(
         told(&datasets),
         [
@@ -130,11 +140,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
             "A  new/new.csv  5 B",
             "old removed: zenodo:old@1; 1 file removed, 9 B",
             "D  old/old.csv  9 B",
-            &format!(
-                "sim changed: env changed; key sha256:{} \u{2192} sha256:{}; 1 file changed",
-                &digest::sha256(b"7").hex()[..12],
-                &digest::sha256(b"8").hex()[..12]
-            ),
+            "sim changed: env SEED=7 \u{2192} SEED=8; 1 file changed",
             "M  sim/draws.csv  4 B, other bytes",
         ]
     );
@@ -150,7 +156,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     );
     assert_eq!(datasets[1].kind, "fetched");
     assert_eq!(datasets[3].kind, "recipe");
-    assert!(compared(&after, &after).is_empty());
+    assert!(diffed(&after, &after).is_empty());
 }
 
 /// a spec is a hash of what data.toml asks; with `ref` and `web_page` the same, select or
@@ -175,7 +181,7 @@ fn a_spec_tells_select_and_a_kind_is_said_alone() {
         stated: Vec::new(),
     };
     assert_eq!(
-        told(&compared(&before, &after)),
+        told(&diffed(&before, &after)),
         [
             "iris changed: select or exclude changed in data.toml; extract true \u{2192} false; the same files",
             "swap changed: kind fetched \u{2192} recipe; the same files",
@@ -191,7 +197,7 @@ fn a_control_character_in_a_path_is_shown_escaped() {
         datasets: vec![fetched("iris", 1, vec![file("a\u{1b}[2J.csv", b"a")])],
         ..Lock::default()
     };
-    let told = told(&compared(&before, &after));
+    let told = told(&diffed(&before, &after));
     assert!(!told.iter().any(|line| line.contains('\u{1b}')), "{told:?}");
 }
 
@@ -224,7 +230,7 @@ fn a_dataset_not_downloaded_yet_is_said_and_compared_by_its_stated_digests() {
         ..Lock::default()
     };
     assert_eq!(
-        told(&compared(&Lock::default(), &not_yet)),
+        told(&diffed(&Lock::default(), &not_yet)),
         [
             "zen added: zenodo:zen@1, not downloaded yet; 2 files added, 5 B",
             "A  zen/a.csv  2 B",
@@ -244,10 +250,105 @@ fn a_dataset_not_downloaded_yet_is_said_and_compared_by_its_stated_digests() {
         ..Lock::default()
     };
     assert_eq!(
-        told(&compared(&not_yet, &downloaded)),
+        told(&diffed(&not_yet, &downloaded)),
         [
             "zen changed: now downloaded; 1 file changed",
             "M  zen/b.csv  3 B, other bytes",
         ]
     );
+}
+
+/// a recipe's change is said by what changed in it: an input whose bytes changed by its name,
+/// "from" only when the inputs it names do, each file of its code, and each variable with its
+/// values; a version that is the link itself is not said twice.
+#[test]
+fn a_recipe_change_names_what_changed_in_it() {
+    let was = made("sim", "7", &[("draws.csv", b"1\n")]);
+    let mut now = made("sim", "7", &[("draws.csv", b"1\n")]);
+    now.from[0].content = digest::sha256(b"iris, other bytes");
+    now.code[0].sha256 = digest::sha256(b"sim, edited");
+    now.env.insert("RUNS".to_owned(), "3".to_owned());
+    now.key = digest::sha256(b"other");
+    let before = Lock {
+        derived: vec![was.clone()],
+        ..Lock::default()
+    };
+    let after = Lock {
+        derived: vec![now.clone()],
+        ..Lock::default()
+    };
+    assert_eq!(
+        told(&diffed(&before, &after)),
+        ["sim changed: iris changed; sim.py changed; env RUNS=3 added; the same files"]
+    );
+    now.from.push(Input {
+        name: "penguins".to_owned(),
+        content: digest::sha256(b"penguins"),
+    });
+    now.from[0].content = was.from[0].content;
+    now.code = was.code.clone();
+    now.env = was.env.clone();
+    let after = Lock {
+        derived: vec![now],
+        ..Lock::default()
+    };
+    assert_eq!(
+        told(&diffed(&before, &after)),
+        ["sim changed: from iris \u{2192} iris, penguins; the same files"]
+    );
+    let mut link = fetched("raw", 1, vec![file("a.csv", b"a")]);
+    link.reference = "https://lab.example/a.csv".to_owned();
+    link.resolved = link.reference.clone();
+    let mut moved = link.clone();
+    moved.reference = "https://lab.example/b.csv".to_owned();
+    moved.resolved = moved.reference.clone();
+    let (before, after) = (
+        Lock {
+            datasets: vec![link],
+            ..Lock::default()
+        },
+        Lock {
+            datasets: vec![moved],
+            ..Lock::default()
+        },
+    );
+    assert_eq!(
+        told(&diffed(&before, &after)),
+        [
+            "raw changed: ref https://lab.example/a.csv \u{2192} https://lab.example/b.csv; the same files"
+        ]
+    );
+}
+
+/// a dataset whose file list a side's commit lacks is told with what else changed, its files
+/// left uncompared rather than all counted as added or removed.
+#[test]
+fn a_dataset_whose_list_a_commit_lacks_is_said_so() {
+    let before = Read {
+        lock: Lock {
+            derived: vec![made("sim", "7", &[("draws.csv", b"1\n")])],
+            ..Lock::default()
+        },
+        found: true,
+        unlisted: Vec::new(),
+    };
+    let mut kept = made("sim", "8", &[]);
+    kept.files.clear();
+    let after = Read {
+        lock: Lock {
+            derived: vec![kept],
+            ..Lock::default()
+        },
+        found: true,
+        unlisted: vec!["sim".to_owned()],
+    };
+    let datasets = compared(&before, &after);
+    assert_eq!(
+        told(&datasets),
+        [
+            "sim changed: env SEED=7 \u{2192} SEED=8; its file list is not in B, so its files were not compared"
+        ]
+    );
+    assert_eq!(datasets[0].unlisted, ["to"]);
+    assert_eq!(datasets[0].files, []);
 }

@@ -29,11 +29,20 @@ pub(super) struct Report {
 }
 
 /// a side of the diff: a revision as it was named and the commit it names, both null for the
-/// project folder as it is now.
+/// project folder as it is now, and whether data.lock is there.
 #[derive(Serialize)]
 struct Side {
     revision: Option<String>,
     commit: Option<String>,
+    has_lock: bool,
+}
+
+/// data.lock as one side has it: none there reads as an empty lock.
+struct Read {
+    lock: Lock,
+    found: bool,
+    /// the datasets whose file list the side's commit lacks, kept with no files.
+    unlisted: Vec<String>,
 }
 
 /// a dataset whose pin differs between the two sides.
@@ -51,6 +60,13 @@ struct Dataset {
     changed: u64,
     /// each file added, removed or changed, by its path in the dataset, sorted.
     files: Vec<File>,
+    /// the sides, `from` or `to`, whose commit lacks the dataset's file list, so its files were
+    /// not compared.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unlisted: Vec<&'static str>,
+    /// what changed, in words, for the line that tells it.
+    #[serde(skip)]
+    said: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -123,14 +139,26 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
         })?;
     let from = args.from.as_deref().unwrap_or("HEAD");
     let from_commit = commit(&git, root, from)?;
-    let before = at(&git, root, &from_commit, from)?;
-    let (to_commit, after) = match args.to.as_deref() {
-        Some(to) => {
-            let named = commit(&git, root, to)?;
-            let lock = at(&git, root, &named, to)?;
-            (Some(named), lock)
-        }
-        None => (None, project.lock()?.unwrap_or_default()),
+    let to_commit = match args.to.as_deref() {
+        Some(to) => Some(commit(&git, root, to)?),
+        None => None,
+    };
+    // the two locks are held at once, so the second is read within what the first leaves
+    let (before, after) = if let (Some(to), Some(named)) = (args.to.as_deref(), &to_commit) {
+        let before = at(&git, root, &from_commit, from, 0)?;
+        let after = at(&git, root, named, to, before.lock.taken())?;
+        (before, after)
+    } else {
+        let now = project.lock()?;
+        let after = Read {
+            found: now.is_some(),
+            lock: now.unwrap_or_default(),
+            unlisted: Vec::new(),
+        };
+        (
+            at(&git, root, &from_commit, from, after.lock.taken())?,
+            after,
+        )
     };
     let datasets = compared(&before, &after);
     let to_shown = args.to.as_deref().map_or_else(
@@ -138,18 +166,88 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
         |to| plain(to).into_owned(),
     );
     tell(context, &datasets, &plain(from), &to_shown);
+    tell_sides(context, &before, &after, &plain(from), &to_shown);
+    if to_commit.is_none() {
+        tell_unpinned(context, &project, &after.lock);
+    }
     Ok(Report {
         project: root.clone(),
         from: Side {
             revision: Some(from.to_owned()),
             commit: Some(from_commit),
+            has_lock: before.found,
         },
         to: Side {
             revision: args.to.clone(),
             commit: to_commit,
+            has_lock: after.found,
         },
         datasets,
     })
+}
+
+/// says when a side has no data.lock, so every dataset counts as added or removed, and when a
+/// commit lacks the file list of a dataset, which a commit made with `git commit -a` leaves out.
+fn tell_sides(context: &Context, before: &Read, after: &Read, from: &str, to: &str) {
+    let output = &context.output;
+    let lock = lock::FILE;
+    if !before.found && after.found {
+        output.hint(&format!(
+            "{from} has no {lock} in this project's folder, so every dataset counts as added"
+        ));
+    }
+    if before.found && !after.found {
+        let to = if to == "the project folder" {
+            format!("the project folder has no {lock}")
+        } else {
+            format!("{to} has no {lock} in this project's folder")
+        };
+        output.hint(&format!("{to}, so every dataset counts as removed"));
+    }
+    if !(before.unlisted.is_empty() && after.unlisted.is_empty()) {
+        output.hint(&format!(
+            "`git commit -a` leaves out new files, as the lists in {}: `git add {}` before committing keeps them",
+            lists::FOLDER,
+            lists::FOLDER
+        ));
+    }
+}
+
+/// says which datasets data.toml names that data.lock in the project folder does not pin yet,
+/// which diff cannot show until `fetchloom lock` pins them.
+fn tell_unpinned(context: &Context, project: &crate::project::Project, now: &Lock) {
+    let Ok((_, manifest)) = project.manifest() else {
+        return;
+    };
+    let pinned = |name: &str| {
+        now.get(name).is_some() || now.stated(name).is_some() || now.result(name).is_some()
+    };
+    // a source's pin comes from lock, a recipe's from build
+    for (made, command) in [(false, "fetchloom lock"), (true, "fetchloom build")] {
+        let unpinned: Vec<&str> = manifest
+            .datasets
+            .iter()
+            .filter(|(name, entry)| {
+                matches!(entry.origin, crate::project::manifest::Origin::Derived(_)) == made
+                    && !pinned(name)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let Some(first) = unpinned.first() else {
+            continue;
+        };
+        let (named, them) = if unpinned.len() == 1 {
+            (plain(first).into_owned(), "it")
+        } else {
+            (
+                units::count(unpinned.len() as u64, "dataset", "datasets"),
+                "them",
+            )
+        };
+        context.output.hint(&format!(
+            "data.toml names {named} that data.lock does not pin yet, so diff cannot show {them}: `{command}` pins {them}"
+        ));
+    }
 }
 
 /// the commit `revision` names in the repository holding the project at `root`.
@@ -158,22 +256,38 @@ fn commit(git: &Path, root: &Path, revision: &str) -> Result<String, Error> {
         Unnamed::NoRepository => Error::new(
             Kind::Usage,
             format!(
-                "{} is in no git repository git reads, so it has no commits to compare",
+                "this project, {}, is not in a git repository, and diff compares its commits",
                 root.display()
             ),
         )
-        .help("run fetchloom diff in the project's git repository. git also refuses one another user owns until you trust it: `git status` there says so"),
-        Unnamed::NoCommit => Error::new(
-            Kind::Usage,
-            format!("{} names no commit in this repository", plain(revision)),
-        )
-        .help("name a commit, a branch or a tag, such as HEAD~1 or main; a repository with no commit yet has no HEAD"),
+        .help("run it in a project git keeps; `git status` there says whether git reads the repository, which it refuses to while another user owns it"),
+        Unnamed::NoCommit => {
+            let error = Error::new(
+                Kind::Usage,
+                format!("\"{}\" names no commit in this repository", plain(revision)),
+            );
+            if let Some((from, to)) = revision.split_once("..") {
+                let (from, to) = (from.trim_start_matches('.'), to.trim_start_matches('.'));
+                let from = if from.is_empty() { "HEAD" } else { from };
+                let to = if to.is_empty() { "HEAD" } else { to };
+                return error.help(format!(
+                    "diff takes two commits, not a range: `fetchloom diff {} {}`",
+                    shell_word(from),
+                    shell_word(to)
+                ));
+            }
+            if git::shallow(git, root) {
+                return error.help("this clone is shallow, so it has only the latest commits: `git fetch --deepen=1` brings in one more, `git fetch --unshallow` all of them");
+            }
+            error.help("name a commit, a branch or a tag, such as HEAD~1 or main; a repository with no commit yet has no HEAD")
+        }
     })
 }
 
 /// data.lock as `commit`, which `revision` names, has it, and the lists it names as the commit
-/// has them, read within the limits of any lock; an empty lock where the commit has none.
-fn at(git: &Path, root: &Path, commit: &str, revision: &str) -> Result<Lock, Error> {
+/// has them, read within the limits of any lock beside one that takes `taken` bytes; an empty
+/// lock where the commit has none.
+fn at(git: &Path, root: &Path, commit: &str, revision: &str, taken: u64) -> Result<Read, Error> {
     let shown = plain(revision);
     let unread = || {
         Error::new(
@@ -187,7 +301,11 @@ fn at(git: &Path, root: &Path, commit: &str, revision: &str) -> Result<Lock, Err
     };
     let blobs = git::blobs(git, root, commit, &[lock::FILE, lists::FOLDER]).ok_or_else(unread)?;
     let Some(object) = blobs.get(lock::FILE) else {
-        return Ok(Lock::default());
+        return Ok(Read {
+            lock: Lock::default(),
+            found: false,
+            unlisted: Vec::new(),
+        });
     };
     let text = git::blob(git, root, object).ok_or_else(unread)?;
     let text = String::from_utf8(text).map_err(|_| {
@@ -197,23 +315,23 @@ fn at(git: &Path, root: &Path, commit: &str, revision: &str) -> Result<Lock, Err
         )
     })?;
     let part = |path: &str| -> Result<Vec<u8>, Error> {
-        let object = blobs.get(path).ok_or_else(|| {
-            Error::new(
-                Kind::ProjectInvalid,
-                format!(
-                    "data.lock as {shown} has it names {}, which that commit does not have",
-                    plain(path)
-                ),
-            )
-            .help(format!(
-                "{} was probably not committed with data.lock there; compare other commits",
-                lists::FOLDER
-            ))
-        })?;
+        let object = blobs.get(path).ok_or_else(unread)?;
         git::blob(git, root, object).ok_or_else(unread)
     };
-    Lock::read_with(&text, &part)
-        .map_err(|error| error.detail(format!("in data.lock as {shown} has it")))
+    let has = |path: &str| blobs.contains_key(path);
+    let (lock, unlisted) = Lock::read_with(&text, &part, &has, taken).map_err(|error| {
+        let error = error.detail(format!("in data.lock as {shown} has it"));
+        if error.kind != Kind::ProjectInvalid {
+            return error;
+        }
+        // history keeps the commit as it is, so the help for the project's own data.lock is no way on
+        error.help("that commit's data.lock stays as it was committed, so compare other commits")
+    })?;
+    Ok(Read {
+        lock,
+        found: true,
+        unlisted,
+    })
 }
 
 /// a dataset as one side pins it.
@@ -333,8 +451,8 @@ fn recipe(derived: &Derived) -> Vec<(&'static str, Option<String>)> {
 }
 
 /// each dataset `after` pins otherwise than `before`, by name.
-fn compared(before: &Lock, after: &Lock) -> Vec<Dataset> {
-    let mut names: Vec<&str> = [before, after]
+fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
+    let mut names: Vec<&str> = [&before.lock, &after.lock]
         .iter()
         .flat_map(|lock| {
             lock.datasets
@@ -348,12 +466,30 @@ fn compared(before: &Lock, after: &Lock) -> Vec<Dataset> {
     names.dedup();
     names
         .into_iter()
-        .filter_map(|name| dataset(name, Pin::of(before, name), Pin::of(after, name)))
+        .filter_map(|name| {
+            let unlisted = [("from", before), ("to", after)]
+                .into_iter()
+                .filter(|(_, side)| side.unlisted.iter().any(|unlisted| unlisted == name))
+                .map(|(side, _)| side)
+                .collect();
+            dataset(
+                name,
+                Pin::of(&before.lock, name),
+                Pin::of(&after.lock, name),
+                unlisted,
+            )
+        })
         .collect()
 }
 
-/// how the pin of `name` differs from `before` to `after`, none when it does not.
-fn dataset(name: &str, before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Option<Dataset> {
+/// how the pin of `name` differs from `before` to `after`, none when it does not. the files of a
+/// dataset whose list a side's commit lacks, as `unlisted` names the sides, are not compared.
+fn dataset(
+    name: &str,
+    before: Option<Pin<'_>>,
+    after: Option<Pin<'_>>,
+    unlisted: Vec<&'static str>,
+) -> Option<Dataset> {
     let (change, kind) = match (before, after) {
         (None, None) => return None,
         (None, Some(after)) => (Change::Added, after.kind()),
@@ -361,13 +497,21 @@ fn dataset(name: &str, before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Optio
         (Some(_), Some(after)) => (Change::Changed, after.kind()),
     };
     let fields = fields(before, after);
-    let files = files(
-        before.map(Pin::files).unwrap_or_default(),
-        after.map(Pin::files).unwrap_or_default(),
-    );
-    if change == Change::Changed && fields.is_empty() && files.is_empty() {
+    let files = if unlisted.is_empty() {
+        files(
+            before.map(Pin::files).unwrap_or_default(),
+            after.map(Pin::files).unwrap_or_default(),
+        )
+    } else {
+        Vec::new()
+    };
+    if change == Change::Changed && fields.is_empty() && files.is_empty() && unlisted.is_empty() {
         return None;
     }
+    let said = match (before, after) {
+        (Some(Pin::Made(was)), Some(Pin::Made(now))) => recipe_said(was, now),
+        _ => fields_said(&fields),
+    };
     let count = |change: Change| files.iter().filter(|file| file.change == change).count() as u64;
     Some(Dataset {
         name: name.to_owned(),
@@ -378,7 +522,123 @@ fn dataset(name: &str, before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Optio
         changed: count(Change::Changed),
         fields,
         files,
+        unlisted,
+        said,
     })
+}
+
+/// each field that differs, in words: a version that is its link again is left to the link's
+/// line, and a spec, a hash of what data.toml asks, is said as what it stands for.
+fn fields_said(fields: &[Field]) -> Vec<String> {
+    let field = |name: &str| fields.iter().find(|field| field.name == name);
+    let value = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map_or_else(|| "none".to_owned(), |value| plain(value).into_owned())
+    };
+    let mut said = Vec::new();
+    for changed in fields {
+        said.push(match changed.name {
+            "spec" if field("ref").is_some() || field("web_page").is_some() => continue,
+            "spec" => "select or exclude changed in data.toml".to_owned(),
+            "resolved"
+                if field("ref").is_some_and(|reference| {
+                    reference.before == changed.before && reference.after == changed.after
+                }) =>
+            {
+                continue;
+            }
+            "resolved" => format!(
+                "version {} \u{2192} {}",
+                value(&changed.before),
+                value(&changed.after)
+            ),
+            "downloaded" if changed.after.as_deref() == Some("true") => "now downloaded".to_owned(),
+            "downloaded" => "not downloaded yet".to_owned(),
+            name => format!(
+                "{name} {} \u{2192} {}",
+                value(&changed.before),
+                value(&changed.after)
+            ),
+        });
+    }
+    said
+}
+
+/// what changed in how a recipe made its result, in words: the inputs it names, or each input
+/// whose bytes changed, its command, each file of its code and each variable, with its values.
+fn recipe_said(was: &Derived, now: &Derived) -> Vec<String> {
+    let mut said = Vec::new();
+    let names = |derived: &Derived| -> Vec<String> {
+        derived
+            .from
+            .iter()
+            .map(|input| plain(&input.name).into_owned())
+            .collect()
+    };
+    let listed = |names: Vec<String>| {
+        if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names.join(", ")
+        }
+    };
+    if names(was) != names(now) {
+        said.push(format!(
+            "from {} \u{2192} {}",
+            listed(names(was)),
+            listed(names(now))
+        ));
+    }
+    for input in &now.from {
+        if was
+            .from
+            .iter()
+            .any(|old| old.name == input.name && old.content != input.content)
+        {
+            said.push(format!("{} changed", plain(&input.name)));
+        }
+    }
+    if was.run != now.run {
+        said.push("run changed".to_owned());
+    }
+    for code in &now.code {
+        match was.code.iter().find(|old| old.path == code.path) {
+            Some(old) if old.sha256 != code.sha256 => {
+                said.push(format!("{} changed", plain(&code.path)));
+            }
+            None => said.push(format!("{} added to code", plain(&code.path))),
+            Some(_) => {}
+        }
+    }
+    for old in &was.code {
+        if !now.code.iter().any(|code| code.path == old.path) {
+            said.push(format!("{} taken out of code", plain(&old.path)));
+        }
+    }
+    let variables: std::collections::BTreeSet<&String> =
+        was.env.keys().chain(now.env.keys()).collect();
+    for name in variables {
+        let name_shown = plain(name);
+        match (was.env.get(name), now.env.get(name)) {
+            (Some(before), Some(after)) if before != after => said.push(format!(
+                "env {name_shown}={} \u{2192} {name_shown}={}",
+                plain(before),
+                plain(after)
+            )),
+            (None, Some(after)) => {
+                said.push(format!("env {name_shown}={} added", plain(after)));
+            }
+            (Some(before), None) => {
+                said.push(format!("env {name_shown}={} taken out", plain(before)));
+            }
+            _ => {}
+        }
+    }
+    if said.is_empty() && was.key != now.key {
+        said.push("how it is built changed".to_owned());
+    }
+    said
 }
 
 /// the fields that differ: every field of a dataset added or removed, the kind alone of one now
@@ -460,7 +720,7 @@ fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
 fn tell(context: &Context, datasets: &[Dataset], from: &str, to: &str) {
     let output = &context.output;
     for dataset in datasets {
-        let mut text = summary(dataset);
+        let mut text = summary(dataset, from, to);
         if output.shows_items() {
             for file in &dataset.files {
                 let _ = write!(text, "\n{}", line(&dataset.name, file));
@@ -489,10 +749,18 @@ fn tell(context: &Context, datasets: &[Dataset], from: &str, to: &str) {
     }
 }
 
-/// the line that says what changed in `dataset`: its fields, then how many files changed.
-fn summary(dataset: &Dataset) -> String {
+/// the line that says what changed in `dataset`: its fields, then how many files changed, or
+/// which of the sides, `from` and `to` as shown, lack its file list.
+fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
     let name = plain(&dataset.name);
-    let files = files_counted(dataset);
+    let files = match dataset.unlisted.as_slice() {
+        [] => files_counted(dataset),
+        [side] => format!(
+            "its file list is not in {}, so its files were not compared",
+            if *side == "from" { from } else { to }
+        ),
+        _ => format!("its file list is in neither {from} nor {to}, so its files were not compared"),
+    };
     match dataset.change {
         Change::Added | Change::Removed => {
             let shown = |name: &str| {
@@ -519,40 +787,7 @@ fn summary(dataset: &Dataset) -> String {
             format!("{name} {change}: {what}; {files}")
         }
         Change::Changed => {
-            let mut said: Vec<String> = Vec::new();
-            let named = |name: &str| dataset.fields.iter().any(|field| field.name == name);
-            for field in &dataset.fields {
-                let value = |value: &Option<String>| {
-                    value
-                        .as_deref()
-                        .map_or_else(|| "none".to_owned(), |value| plain(value).into_owned())
-                };
-                said.push(match field.name {
-                    // a spec is a hash of ref, select, exclude and web_page in data.toml
-                    "spec" if named("ref") || named("web_page") => continue,
-                    "spec" => "select or exclude changed in data.toml".to_owned(),
-                    "resolved" => format!(
-                        "version {} \u{2192} {}",
-                        value(&field.before),
-                        value(&field.after)
-                    ),
-                    "key" => format!(
-                        "key {} \u{2192} {}",
-                        short(field.before.as_deref()),
-                        short(field.after.as_deref())
-                    ),
-                    "from" | "run" | "code" | "env" => format!("{} changed", field.name),
-                    "downloaded" if field.after.as_deref() == Some("true") => {
-                        "now downloaded".to_owned()
-                    }
-                    "downloaded" => "not downloaded yet".to_owned(),
-                    name => format!(
-                        "{name} {} \u{2192} {}",
-                        value(&field.before),
-                        value(&field.after)
-                    ),
-                });
-            }
+            let mut said = dataset.said.clone();
             said.push(files);
             format!("{name} changed: {}", said.join("; "))
         }
@@ -612,14 +847,6 @@ fn line(dataset: &str, file: &File) -> String {
         (_, Some(before), _) => format!("D  {dataset}/{path}  {}", units::size(before.size)),
         _ => format!("?  {dataset}/{path}"),
     }
-}
-
-/// a key as `sha256:` and its first 12 hex digits, enough to tell two apart in a line.
-fn short(key: Option<&str>) -> String {
-    key.map_or_else(
-        || "none".to_owned(),
-        |key| key.chars().take("sha256:".len() + 12).collect(),
-    )
 }
 
 #[cfg(test)]

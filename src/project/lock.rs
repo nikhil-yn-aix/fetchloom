@@ -265,6 +265,15 @@ impl Parsed {
         }
     }
 
+    /// the list beside data.lock that holds its files, if one does.
+    fn listed(&self) -> Option<&lists::Listed> {
+        match self {
+            Parsed::Source(_, listed) => listed.as_ref(),
+            Parsed::Derived(_, listed) => Some(listed),
+            Parsed::Stated(_) => None,
+        }
+    }
+
     fn name(&self) -> &str {
         match self {
             Parsed::Source(locked, _) => &locked.name,
@@ -597,12 +606,69 @@ impl Lock {
 
     /// [`Lock::read`] of a lock kept elsewhere, as in a git commit, within the same limits: `part`
     /// gives a part of a list by its path below the project, once the path is one fetchloom
-    /// writes for the list data.lock names.
+    /// writes for the list data.lock names. a dataset with a part `has` lacks, as a commit made
+    /// without data.lock.d lacks it, is kept with no files and named in what comes back. `taken`
+    /// is the memory a lock read before and still held takes, which this one fits beside.
     pub(crate) fn read_with(
         text: &str,
         part: &dyn Fn(&str) -> Result<Vec<u8>, Error>,
-    ) -> Result<Lock, Error> {
-        resolve_from(parse(text)?, Some(lists::Parts::Given(part)))
+        has: &dyn Fn(&str) -> bool,
+        taken: u64,
+    ) -> Result<(Lock, Vec<String>), Error> {
+        let parsed = parse(text)?;
+        let room = ROOM.get().copied().unwrap_or(u64::MAX);
+        fits(&parsed, room.saturating_sub(taken)).map_err(|error| {
+            if taken == 0 {
+                return error;
+            }
+            error.detail(format!(
+                "the other data.lock, read already, takes about {} of it",
+                crate::units::size(taken)
+            ))
+        })?;
+        // a part fetchloom would not write is refused as a read refuses it, never passed over
+        let (listed, unlisted): (Vec<Parsed>, Vec<Parsed>) =
+            parsed.into_iter().partition(|entry| {
+                entry.listed().is_none_or(|listed| {
+                    !lists::named_as_written(entry.name(), listed)
+                        || listed.parts.iter().all(|part| has(part))
+                })
+            });
+        let mut lock = resolve_from(listed, Some(lists::Parts::Given(part)))?;
+        let mut names = Vec::with_capacity(unlisted.len());
+        for entry in unlisted {
+            names.push(entry.name().to_owned());
+            match entry {
+                Parsed::Source(dataset, _) => {
+                    check_resolved(&dataset)?;
+                    let at = lock
+                        .datasets
+                        .partition_point(|known| known.name < dataset.name);
+                    lock.datasets.insert(at, dataset);
+                }
+                Parsed::Derived(derived, _) => {
+                    let at = lock
+                        .derived
+                        .partition_point(|known| known.name < derived.name);
+                    lock.derived.insert(at, derived);
+                }
+                Parsed::Stated(_) => {}
+            }
+        }
+        Ok((lock, names))
+    }
+
+    /// the memory a lock with as many files as this one takes as it is read.
+    pub(crate) fn taken(&self) -> u64 {
+        let files = self
+            .datasets
+            .iter()
+            .map(|locked| locked.files.len())
+            .chain(self.derived.iter().map(|derived| derived.files.len()))
+            .chain(self.stated.iter().map(|stated| stated.files.len()))
+            .map(|count| count as u64)
+            .fold(0, u64::saturating_add);
+        BASE.saturating_add(files.saturating_mul(PER_FILE))
     }
 
     /// [`Lock::read`] of only the datasets `keep` accepts by name: the others are left out, and
@@ -1806,11 +1872,14 @@ mod tests {
             let (_, part) = parts.iter().find(|(part, _)| part == path).unwrap();
             Ok(lists::compress(part).unwrap())
         };
-        assert_eq!(Lock::read_with(&text, &given).unwrap(), lock);
+        let (read, unlisted) = Lock::read_with(&text, &given, &|_| true, 0).unwrap();
+        assert_eq!((read, unlisted), (lock.clone(), Vec::new()));
         assert_eq!(*asked.borrow(), [parts[0].0.clone()]);
         asked.borrow_mut().clear();
         for elsewhere in ["data.toml", "data.lock.d/../../secret.tsv.zst"] {
-            let error = Lock::read_with(&text.replace(&parts[0].0, elsewhere), &given).unwrap_err();
+            let error =
+                Lock::read_with(&text.replace(&parts[0].0, elsewhere), &given, &|_| false, 0)
+                    .unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid, "{elsewhere}");
             assert!(
                 error.message.ends_with("in files fetchloom does not write"),
@@ -1819,6 +1888,34 @@ mod tests {
             );
         }
         assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+    }
+
+    /// a commit made without the list of a dataset keeps that dataset, with no files, named as
+    /// such, and the rest of the lock is read; a lock read beside another fits the room with it.
+    #[test]
+    fn a_lock_read_elsewhere_keeps_a_dataset_whose_list_is_missing() {
+        let lock = Lock {
+            derived: vec![clean()],
+            ..sample()
+        };
+        let text = lock.render();
+        let parts = lock.lists();
+        let given = |path: &str| -> Result<Vec<u8>, Error> {
+            let (_, part) = parts.iter().find(|(part, _)| part == path).unwrap();
+            Ok(lists::compress(part).unwrap())
+        };
+        let (whole, _) = Lock::read_with(&text, &given, &|_| true, 0).unwrap();
+        let (read, unlisted) = Lock::read_with(&text, &given, &|_| false, 0).unwrap();
+        assert_eq!(unlisted, ["clean"]);
+        let kept = read.result("clean").unwrap();
+        assert_eq!(kept.files, []);
+        assert_eq!(kept.key, clean().key);
+        assert_eq!(read.datasets, whole.datasets);
+        let error = Lock::read_with(&text, &given, &|_| true, u64::MAX).unwrap_err();
+        assert!(
+            error.details[0].starts_with("the other data.lock, read already, takes about "),
+            "{error:?}"
+        );
     }
 
     /// the datasets left out have their file lines passed over unread where no string among them

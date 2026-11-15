@@ -82,24 +82,14 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
     let output = run(&sandbox, &study, &["diff"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let told = text(&output.stdout)?;
-    let key = |seed: &str| {
-        let key = format!(
-            "{{\"scheme\":\"fetchloom-recipe-1\",\"from\":[],\"run\":[\"recipe-step\",\"seeded\",\"draws.csv\",\"{{out}}\"],\"code\":[],\"env\":[[\"SEED\",\"{seed}\"]]}}"
-        );
-        sha256_hex(key.as_bytes())[..12].to_owned()
-    };
     assert_eq!(
         told,
-        format!(
-            "extra added: made by a recipe; 1 file added, 1 B\n\
-             A  extra/extra.csv  1 B\n\
-             notes removed: made by a recipe; 1 file removed, 5 B\n\
-             D  notes/notes.txt  5 B\n\
-             sim changed: env changed; key sha256:{} \u{2192} sha256:{}; 1 file changed\n\
-             M  sim/draws.csv  20 B \u{2192} 19 B\n",
-            key("7"),
-            key("8")
-        )
+        "extra added: made by a recipe; 1 file added, 1 B\n\
+         A  extra/extra.csv  1 B\n\
+         notes removed: made by a recipe; 1 file removed, 5 B\n\
+         D  notes/notes.txt  5 B\n\
+         sim changed: env SEED=7 \u{2192} SEED=8; 1 file changed\n\
+         M  sim/draws.csv  20 B \u{2192} 19 B\n"
     );
     let quiet = text(&run(&sandbox, &study, &["-q", "diff"])?.stdout)?;
     assert_eq!(
@@ -168,7 +158,7 @@ fn diff_reads_a_revision_as_one_and_needs_a_repository() -> Result {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
     assert_eq!(
         json(&output)?["errors"][0]["message"],
-        "--output=planted names no commit in this repository"
+        "\"--output=planted\" names no commit in this repository"
     );
     assert!(!sandbox.work().join("planted").exists());
 
@@ -181,8 +171,144 @@ fn diff_reads_a_revision_as_one_and_needs_a_repository() -> Result {
     assert_eq!(outside.status.code(), Some(2));
     let stderr = text(&outside.stderr)?;
     assert!(
-        stderr.contains("is in no git repository git reads, so it has no commits to compare"),
+        stderr.contains("is not in a git repository, and diff compares its commits"),
         "{stderr}"
+    );
+    Ok(())
+}
+
+/// a commit made with `git commit -a` lacks the new list of a recipe it pins: diff says so for
+/// that dataset and goes on. a side with no data.lock and a dataset data.toml names that
+/// data.lock does not pin are each said.
+#[test]
+fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
+    let sandbox = Sandbox::new()?;
+    let study = sandbox.work().join("study");
+    fs::create_dir_all(&study)?;
+    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "7")])?;
+    built(&sandbox, &study)?;
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "seven"])?;
+    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "8")])?;
+    built(&sandbox, &study)?;
+    ok(
+        &sandbox,
+        &["commit", "-qam", "eight, its new list left out"],
+    )?;
+    let output = run(&sandbox, &study, &["diff", "HEAD~1", "HEAD"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        text(&output.stdout)?,
+        "sim changed: env SEED=7 \u{2192} SEED=8; its file list is not in HEAD, so its files were not compared\n"
+    );
+    assert!(stderr.contains("`git add data.lock.d`"), "{stderr}");
+    let document = json(&run(
+        &sandbox,
+        &study,
+        &["--json", "diff", "HEAD~1", "HEAD"],
+    )?)?;
+    assert_eq!(document["result"]["datasets"][0]["unlisted"], json!(["to"]));
+
+    let mut tables = fs::read_to_string(study.join("data.toml"))?;
+    tables.push_str(
+        "\n[datasets.more]\nrun = [\"recipe-step\", \"write\", \"more.txt\", \"m\", \"{out}\"]\n",
+    );
+    fs::write(study.join("data.toml"), tables)?;
+    fs::remove_file(study.join("data.lock"))?;
+    let output = run(&sandbox, &study, &["diff"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("the project folder has no data.lock, so every dataset counts as removed"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("data.toml names 2 datasets that data.lock does not pin yet, so diff cannot show them: `fetchloom build` pins them"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a range, an empty name, a commit whose data.lock cannot be read and a shallow clone are each
+/// told plainly, with what to do instead.
+#[test]
+fn diff_tells_a_revision_it_cannot_compare() -> Result {
+    let sandbox = Sandbox::new()?;
+    let study = sandbox.work().join("study");
+    fs::create_dir_all(&study)?;
+    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "7")])?;
+    built(&sandbox, &study)?;
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "seven"])?;
+    for (revision, said, help) in [
+        (
+            "HEAD~1..HEAD",
+            "\"HEAD~1..HEAD\" names no commit in this repository",
+            "diff takes two commits, not a range: `fetchloom diff HEAD~1 HEAD`",
+        ),
+        (
+            "",
+            "\"\" names no commit in this repository",
+            "name a commit, a branch or a tag",
+        ),
+    ] {
+        let document = json(&run(&sandbox, &study, &["--json", "diff", revision])?)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["message"], said, "{document}");
+        assert!(
+            error["help"].as_str().unwrap_or_default().starts_with(help),
+            "{document}"
+        );
+    }
+
+    let kept = fs::read_to_string(study.join("data.lock"))?;
+    fs::write(study.join("data.lock"), "version = \"one\"\n")?;
+    ok(&sandbox, &["commit", "-qam", "a broken data.lock"])?;
+    fs::write(study.join("data.lock"), &kept)?;
+    let document = json(&run(&sandbox, &study, &["--json", "diff", "HEAD"])?)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["details"],
+        json!(["in data.lock as HEAD has it"]),
+        "{document}"
+    );
+    assert_eq!(
+        error["help"],
+        "that commit's data.lock stays as it was committed, so compare other commits"
+    );
+
+    let origin = sandbox.work().display().to_string().replace('\\', "/");
+    let shallow = sandbox.folder("shallow")?;
+    let into = shallow.join("clone").display().to_string();
+    ok(
+        &sandbox,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &format!("file://{origin}"),
+            &into,
+        ],
+    )?;
+    let document = json(&run(
+        &sandbox,
+        &shallow.join("clone").join("study"),
+        &["--json", "diff", "HEAD~1"],
+    )?)?;
+    assert!(
+        document["errors"][0]["help"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("this clone is shallow"),
+        "{document}"
     );
     Ok(())
 }

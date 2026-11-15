@@ -242,6 +242,15 @@ pub(crate) fn resolve(git: &Path, root: &Path, revision: &str) -> Result<String,
         .ok_or(Unnamed::NoCommit)
 }
 
+/// whether the repository holding `root` is a shallow clone, which lacks the commits before the
+/// ones it was cloned with. false where git cannot tell.
+pub(crate) fn shallow(git: &Path, root: &Path) -> bool {
+    run(git, root, &["rev-parse", "--is-shallow-repository"])
+        .ok()
+        .and_then(text)
+        .is_some_and(|said| said.trim() == "true")
+}
+
 /// the plain files `commit` holds at `paths` and below them, each by its path from `root` with
 /// `/` between folders, with the name of its blob. a link, a submodule or a folder is left out.
 /// none when git cannot list them.
