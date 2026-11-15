@@ -79,11 +79,20 @@ fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(
     if need <= room {
         return Ok(());
     }
-    Err(Error::new(
+    Err(too_big(
+        &crate::units::count(files, "file", "files"),
+        need,
+        room,
+    ))
+}
+
+/// the error for reading `what` of the project, which takes about `need` bytes of memory, more
+/// than the `room` its container leaves.
+fn too_big(what: &str, need: u64, room: u64) -> Error {
+    Error::new(
         Kind::LocalIo,
         format!(
-            "reading this project's {} takes about {} of memory, more than the {} this container leaves fetchloom",
-            crate::units::count(files, "file", "files"),
+            "reading this project's {what} takes about {} of memory, more than the {} this container leaves fetchloom",
             crate::units::size(need),
             crate::units::size(room)
         ),
@@ -91,7 +100,7 @@ fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(
     .help(format!(
         "raise the container's memory limit by {} or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files",
         crate::units::size(need - room)
-    )))
+    ))
 }
 
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
@@ -976,6 +985,22 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
 
 /// the datasets a lock's text gives in name order, by the narrow reader when it is the writer's.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
+    parse_within(text, ROOM.get().copied().unwrap_or(u64::MAX))
+}
+
+/// [`parse`] within `room`: the text and what it parses into take twice its size at least, so a
+/// text too big for the room is refused before it is parsed, and [`fits`] weighs the rest once
+/// it is. a read of some datasets may parse less, so only a whole read is held to this.
+fn parse_within(text: &str, room: u64) -> Result<Vec<Parsed>, Error> {
+    let bytes = text.len() as u64;
+    let need = bytes.saturating_mul(2);
+    if need > room {
+        return Err(too_big(
+            &format!("data.lock, which is {},", crate::units::size(bytes)),
+            need,
+            room,
+        ));
+    }
     parse_only(text, &|_| true)
 }
 
@@ -996,6 +1021,22 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
             "data.lock names a dataset \"{}\", which is not a valid dataset name",
             entry.name()
         )));
+    }
+    // a part holds one file at least, but the one part of an empty list, so more parts are no
+    // list fetchloom wrote, and comparing their names would first make as many again
+    for entry in &parsed {
+        let (Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed)) = entry else {
+            continue;
+        };
+        let most = listed.count.max(1).min(most_files() as u64);
+        if listed.parts.len() as u64 > most {
+            return Err(broken(format!(
+                "data.lock keeps the files of {} in {} parts, more than fetchloom writes for {}",
+                entry.name(),
+                crate::units::grouped(listed.parts.len() as u64),
+                crate::units::count(listed.count, "file", "files")
+            )));
+        }
     }
     // a downloaded dataset's words stay as written, which writing data.lock again keeps, and the
     // output shows escaped; a dataset not downloaded keeps its words as written apart
@@ -2167,6 +2208,45 @@ mod tests {
         assert_eq!(
             Lock::read(&unread, root.path()).unwrap().derived[0].from,
             []
+        );
+    }
+
+    /// a lock's text is held against the room before it is parsed, since the text and what it
+    /// parses into take twice its size at least: one too big says so before any parsing, which
+    /// text that does not read as a lock shows.
+    #[test]
+    fn a_lock_text_too_big_for_its_room_is_refused_before_it_is_parsed() {
+        let text = sample_sorted().render_with(1);
+        let need = 2 * text.len() as u64;
+        assert!(parse_within(&text, need).is_ok());
+        let garbage = "x".repeat(text.len());
+        let error = parse_within(&garbage, need - 1).unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(
+            error
+                .message
+                .starts_with("reading this project's data.lock, which is "),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            parse_within(&garbage, need).unwrap_err().kind,
+            Kind::ProjectInvalid
+        );
+    }
+
+    /// a list's part holds one file at least, so a lock naming more parts than its files fill is
+    /// refused as it is read, before the names fetchloom would write are made to compare.
+    #[test]
+    fn a_list_of_more_parts_than_files_is_refused_as_it_is_read() {
+        let text = sample_sorted().render_with(1);
+        let named = parts(&text);
+        let many = format!("{0}\", \"{0}\", \"{0}", named[0]);
+        let error = parse(&text.replace(&named[0], &many)).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "data.lock keeps the files of iris in 3 parts, more than fetchloom writes for 2 files"
         );
     }
 
