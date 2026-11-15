@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
 use std::io;
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -263,7 +263,6 @@ fn lock_folder(path: &Path, make: bool, allow_link: bool) -> io::Result<File> {
     const FILE_SHARE_READ_WRITE: u32 = 3;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     let open = || {
         fs::OpenOptions::new()
             .access_mode(FILE_READ_ATTRIBUTES)
@@ -283,7 +282,8 @@ fn lock_folder(path: &Path, make: bool, allow_link: bool) -> io::Result<File> {
         result => result?,
     };
     let metadata = file.metadata()?;
-    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    // a link names another path; a folder a cloud drive keeps is a reparse point that does not
+    if metadata.file_type().is_symlink() {
         if !allow_link {
             return Err(invalid(
                 "a placement parent is a link, and fetchloom only places files in real folders",

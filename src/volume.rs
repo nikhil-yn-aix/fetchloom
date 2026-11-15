@@ -421,16 +421,10 @@ fn open_attributes(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-/// whether `metadata` describes a plain file, not a link, a folder or a device.
+/// whether `metadata` describes a plain file, not a link, a folder or a device. on windows a
+/// reparse point is a link only when it names another path; a file a cloud drive, compression or
+/// deduplication keeps as one reads as any file does.
 pub(crate) fn is_plain(metadata: &Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return false;
-        }
-    }
     metadata.file_type().is_file()
 }
 
@@ -874,5 +868,34 @@ mod tests {
         assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
         assert!(!syncfs_reports_errors(""));
         assert!(!syncfs_reports_errors("unknown"));
+    }
+
+    /// windows marks a file it keeps compressed, as `compact /exe` leaves it, or one a cloud
+    /// drive keeps, as a reparse point that names no other path: it reads as any file does.
+    #[cfg(windows)]
+    #[test]
+    fn a_reparse_point_that_is_no_link_is_a_plain_file() {
+        use std::io::Read as _;
+        use std::os::windows::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kept.csv");
+        let text = "a line windows can compress\n".repeat(4096);
+        fs::write(&path, &text).unwrap();
+        let compacted = std::process::Command::new("compact")
+            .args(["/c", "/exe:xpress4k"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let found = fs::symlink_metadata(&path).unwrap();
+        if !compacted.status.success() || found.file_attributes() & 0x400 == 0 {
+            return crate::test_skips::skip("compression", "this disk keeps no compressed files");
+        }
+        assert!(is_plain(&found));
+        let mut read = String::new();
+        read_unfollowed(&path)
+            .unwrap()
+            .read_to_string(&mut read)
+            .unwrap();
+        assert_eq!(read, text);
     }
 }
