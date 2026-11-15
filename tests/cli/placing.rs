@@ -13,12 +13,14 @@ use crate::support::{
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
 
-/// whether this disk takes `other` for `original`, as macos and windows do.
+/// whether this disk takes `other` for `original`, as macos and windows do. the probe goes by the
+/// name that made it: exfat on macos lists it decomposed, yet removes it by that name alone.
 fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
     let probe = sandbox.folder(".names")?;
     fs::write(probe.join(original), b"names")?;
     let aliases = probe.join(other).try_exists()?;
-    fs::remove_dir_all(probe)?;
+    fs::remove_file(probe.join(original))?;
+    fs::remove_dir(probe)?;
     Ok(aliases)
 }
 
@@ -235,6 +237,32 @@ fn remove_deletes_a_placed_file_spelled_in_another_case() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert!(!folder.join("Iris.csv").try_exists()?);
     assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// exfat on macos lists a name made composed as decomposed, yet removes it only by the spelling
+/// that made it, so this takes such files and the folders they leave empty there too.
+#[test]
+fn remove_deletes_files_and_folders_with_accented_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let bytes = zip_of(&[
+        ("caf\u{e9}.csv", b"first"),
+        ("dossier \u{e9}/na\u{ef}ve.csv", b"other"),
+    ])?;
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url, "--as", "accents"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data").join("accents");
+    assert_eq!(
+        fs::read(folder.join("dossier \u{e9}").join("na\u{ef}ve.csv"))?,
+        b"other"
+    );
+
+    let removed = sandbox.run(&["remove", "accents"])?;
+
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(!folder.try_exists()?, "{stderr}");
     Ok(())
 }
 

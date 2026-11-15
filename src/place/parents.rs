@@ -209,7 +209,7 @@ impl Location {
     }
 
     pub(super) fn remove_file(&self) -> io::Result<()> {
-        native::unlinkat(&self.parent.file, &self.name, AtFlags::empty()).map_err(Into::into)
+        self.unlink(AtFlags::empty())
     }
 
     pub(super) fn can_hardlink(&self) -> Option<bool> {
@@ -330,8 +330,43 @@ impl Location {
     }
 
     pub(super) fn remove_dir(&self) -> io::Result<()> {
-        native::unlinkat(&self.parent.file, &self.name, AtFlags::REMOVEDIR).map_err(Into::into)
+        self.unlink(AtFlags::REMOVEDIR)
     }
+
+    /// removes the name, a folder's with `REMOVEDIR`. exfat on macos lists a name made composed
+    /// as decomposed and finds it by either spelling, yet removes it only by the one that made it,
+    /// so a name still found is removed by its other composition when that names the same entry.
+    fn unlink(&self, flags: AtFlags) -> io::Result<()> {
+        let removed = native::unlinkat(&self.parent.file, &self.name, flags);
+        #[cfg(target_os = "macos")]
+        if removed == Err(Errno::NOENT)
+            && let Some(made) = other_composition(&self.parent.file, &self.name)
+        {
+            return native::unlinkat(&self.parent.file, made.as_str(), flags).map_err(Into::into);
+        }
+        removed.map_err(Into::into)
+    }
+}
+
+/// `name` composed or decomposed, as it is not, when that spelling finds the entry in `parent`
+/// that `name` finds.
+#[cfg(target_os = "macos")]
+fn other_composition(parent: &File, name: &OsStr) -> Option<String> {
+    use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
+    let name = name.to_str().filter(|name| !name.is_ascii())?;
+    let entry = |name: &str| native::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).ok();
+    let found = entry(name)?;
+    [
+        ComposingNormalizerBorrowed::new_nfc().normalize(name),
+        DecomposingNormalizerBorrowed::new_nfd().normalize(name),
+    ]
+    .into_iter()
+    .find(|other| {
+        other != name
+            && entry(other)
+                .is_some_and(|other| (other.st_dev, other.st_ino) == (found.st_dev, found.st_ino))
+    })
+    .map(std::borrow::Cow::into_owned)
 }
 
 pub(super) struct Staged {
