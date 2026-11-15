@@ -275,6 +275,19 @@ mod tests {
         assert_eq!(recorded.asked(), [at_commit, tree]);
     }
 
+    /// a kind the hub does not have, as `model/` for `models/`, is shown both forms a person may mean.
+    #[test]
+    fn an_unknown_kind_is_shown_the_dataset_and_model_forms() {
+        let err = Reference::parse("hf:model/prajjwal1/bert-tiny").unwrap_err();
+        assert_eq!(err.kind, Kind::ReferenceInvalid);
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "write it as hf:datasets/org/name or hf:models/org/name, with @revision to pin one"
+            )
+        );
+    }
+
     #[test]
     fn commit_page_links_keep_repository_kinds() {
         for (page, reference) in [
@@ -327,13 +340,19 @@ mod tests {
 
     #[test]
     fn a_repository_hidden_from_this_machine_names_the_token() {
-        let recorded = Recorded::default().on(
-            &api(&format!(
-                "datasets/stanfordnlp/no-such-dataset/revision/main?{EXPAND}"
-            )),
-            401,
-            fixture_bytes("hf/hidden.json"),
-        );
+        let recorded = Recorded::default()
+            .on(
+                &api(&format!(
+                    "datasets/stanfordnlp/no-such-dataset/revision/main?{EXPAND}"
+                )),
+                401,
+                fixture_bytes("hf/hidden.json"),
+            )
+            .on(
+                &api("models/stanfordnlp/no-such-dataset"),
+                401,
+                fixture_bytes("hf/hidden.json"),
+            );
         let err = block_on(repo("datasets/stanfordnlp/no-such-dataset").resolve(&recorded, None))
             .unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
@@ -355,7 +374,49 @@ mod tests {
             )),
             "the offer to sign in says first that the name may be wrong, and where to check it"
         );
-        assert_eq!(recorded.asked().len(), 1, "a dataset needs no other look");
+        assert_eq!(
+            recorded.asked().len(),
+            2,
+            "a dataset the hub hides looks once for a model of its name"
+        );
+    }
+
+    /// `hf:org/name` names a dataset, so a model of that name is pointed at by its own id, whether
+    /// the hub hid the dataset from nobody (401) or from a key (404).
+    #[test]
+    fn a_dataset_the_hub_does_not_show_points_to_a_model_of_its_name() {
+        let revision = format!("datasets/prajjwal1/bert-tiny/revision/main?{EXPAND}");
+        for status in [401, 404] {
+            let recorded = Recorded::default()
+                .on(&api(&revision), status, fixture_bytes("hf/hidden.json"))
+                .on(&api("models/prajjwal1/bert-tiny"), 200, b"{}".to_vec());
+            let typed = [
+                ("prajjwal1/bert-tiny", "hf:models/prajjwal1/bert-tiny"),
+                (
+                    "prajjwal1/bert-tiny@main",
+                    "hf:models/prajjwal1/bert-tiny@main",
+                ),
+            ];
+            // with a revision, a 404 is told as a revision the hub does not show
+            let typed = if status == 401 {
+                &typed[..]
+            } else {
+                &typed[..1]
+            };
+            for &(typed, instead) in typed {
+                let err = block_on(repo(typed).resolve(&recorded, None)).unwrap_err();
+                assert_eq!(err.kind, Kind::ReferenceUnresolved, "{status}");
+                assert_eq!(
+                    err.message,
+                    "huggingface.co has no public dataset prajjwal1/bert-tiny, but it has a model of that name"
+                );
+                assert_eq!(
+                    err.help.as_deref(),
+                    Some(format!("for the model, use {instead}").as_str())
+                );
+                assert!(err.need.is_none() && !err.unseen, "signing in cannot help");
+            }
+        }
     }
 
     /// a link without `/datasets/` names a model, which then points to the dataset rather than a

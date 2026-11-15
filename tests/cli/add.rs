@@ -1751,7 +1751,8 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
             "{stderr}"
         );
     }
-    assert_eq!(hub.requests().len(), 2);
+    // the hub is asked for the dataset, a model of its name, then the owner's list
+    assert_eq!(hub.requests().len(), 3);
     assert_eq!(kaggle.requests().len(), 2);
     let output = add(&["--json", "add", "hf:datasets/scikit-learn/irsi"])?;
     assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
@@ -1762,7 +1763,7 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
         "{error}"
     );
     assert!(error["fix"].is_null(), "{error}");
-    assert_eq!(hub.requests().len(), 4);
+    assert_eq!(hub.requests().len(), 6);
     Ok(())
 }
 

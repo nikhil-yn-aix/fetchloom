@@ -69,9 +69,16 @@ impl Repo {
         }
         let info: Info = match crate::source::json(self, &response) {
             Ok(info) => info,
-            Err(err) if err.kind == Kind::AuthRequired => return Err(self.unseen(api, err).await),
             // with a key it takes, the hub answers 404 for a repository it does not show
-            Err(err) if err.kind == Kind::ReferenceUnresolved => return Err(err.unseen()),
+            Err(err) if matches!(err.kind, Kind::AuthRequired | Kind::ReferenceUnresolved) => {
+                if let Some(other) = self.same_named_other(api).await {
+                    return Err(self.other_kind(&other));
+                }
+                return Err(match err.kind {
+                    Kind::AuthRequired => self.unseen(&err),
+                    _ => err.unseen(),
+                });
+            }
             Err(err) => return Err(err),
         };
         if !is_commit(&info.sha) || !is_id(&info.id) {
@@ -121,19 +128,27 @@ impl Repo {
         ))
     }
 
-    /// the error for a repository the hub refused to show, alike for a private one and a typo. a
-    /// model whose name a dataset has points to it, since a link without `/datasets/` is a model.
-    async fn unseen(&self, api: &impl Api, refused: Error) -> Error {
-        if let Some(dataset) = self.same_named_dataset(api).await {
-            return Error::new(
-                Kind::ReferenceUnresolved,
-                format!(
-                    "huggingface.co has no public model {}, but it has a dataset of that name",
-                    self.id
-                ),
-            )
-            .help(format!("for the dataset, use {}", dataset.page()));
-        }
+    /// the error for a repository the hub would not show while one of the other kind has its name:
+    /// a link without `/datasets/` names a model, and `hf:org/name` a dataset.
+    fn other_kind(&self, other: &Repo) -> Error {
+        let (asked, found) = (kind_word(self.kind), kind_word(other.kind));
+        // the dataset's link, as a pasted link names a model, and the model's id, as one is typed
+        let instead = match other.kind {
+            RepoKind::Dataset => other.page(),
+            _ => other.to_string(),
+        };
+        Error::new(
+            Kind::ReferenceUnresolved,
+            format!(
+                "huggingface.co has no public {asked} {}, but it has a {found} of that name",
+                self.id
+            ),
+        )
+        .help(format!("for the {found}, use {instead}"))
+    }
+
+    /// the error for a repository the hub refused to show, alike for a private one and a typo.
+    fn unseen(&self, refused: &Error) -> Error {
         let kind = kind_word(self.kind);
         let error = Error::new(
             refused.kind,
@@ -162,18 +177,22 @@ impl Repo {
         }
     }
 
-    /// the dataset with this model's name, when the hub shows one.
-    async fn same_named_dataset(&self, api: &impl Api) -> Option<Repo> {
-        if self.kind != RepoKind::Model {
-            return None;
-        }
-        let dataset = Repo {
-            kind: RepoKind::Dataset,
-            id: self.id.clone(),
-            revision: None,
+    /// the dataset with this model's name, or the model with this dataset's, at the same revision,
+    /// when the hub shows one.
+    async fn same_named_other(&self, api: &impl Api) -> Option<Repo> {
+        let kind = match self.kind {
+            RepoKind::Dataset => RepoKind::Model,
+            RepoKind::Model => RepoKind::Dataset,
+            RepoKind::Space => return None,
         };
-        let response = api.get(&dataset.api(&[]).ok()?).await.ok()?;
-        (response.status == 200).then_some(dataset)
+        let other = Repo {
+            kind,
+            id: self.id.clone(),
+            revision: self.revision.clone(),
+        };
+        // a hint, so a rate limit the hub asked for fails it at once rather than waits
+        let response = api.get_once(&other.api(&[]).ok()?).await.ok()?;
+        (response.status == 200).then_some(other)
     }
 
     /// stops at a gated repository whose terms the token on this machine has not accepted.

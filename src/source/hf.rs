@@ -75,7 +75,7 @@ impl Repo {
         let bad = || {
             malformed(
                 &format!("hf:{text}"),
-                "hf:datasets/org/name, with @revision to pin one",
+                "hf:datasets/org/name or hf:models/org/name, with @revision to pin one",
             )
         };
         let text = text.trim();
