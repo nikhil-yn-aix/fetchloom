@@ -191,6 +191,7 @@ fn habit(command: &str) -> Option<&'static str> {
         "clean" | "clear" => {
             "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here"
         }
+        "import" => "`fetchloom add <path>` adds files on this machine to the project",
         "show" | "info" => {
             "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one"
         }
@@ -934,6 +935,10 @@ mod tests {
             (
                 "clean",
                 "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here",
+            ),
+            (
+                "import",
+                "`fetchloom add <path>` adds files on this machine to the project",
             ),
             (
                 "show",
