@@ -165,7 +165,17 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
         || "the project folder".to_owned(),
         |to| plain(to).into_owned(),
     );
-    tell(context, &datasets, &plain(from), &to_shown);
+    // the same comparison with -v, which lists every file a terminal leaves out
+    let mut again = vec!["diff".to_owned()];
+    again.extend(
+        [args.from.as_deref(), args.to.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(|revision| super::shell_word(revision).into_owned()),
+    );
+    again.push("-v".to_owned());
+    let again = super::project::command(&again.join(" "));
+    tell(context, &datasets, (&plain(from), &to_shown), &again);
     tell_sides(context, &before, &after, &plain(from), &to_shown);
     if to_commit.is_none() {
         tell_unpinned(context, &project, &after.lock);
@@ -732,16 +742,22 @@ fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
     found
 }
 
+/// the most file lines a terminal shows of one dataset; a pipe, or `-v`, has each.
+const SHOWN: usize = 20;
+
 /// tells each dataset that differs on stdout: a line of what changed in it, then, unless `-q`
-/// asked for those lines alone, a line for each file as `git diff --name-status` gives one.
-fn tell(context: &Context, datasets: &[Dataset], from: &str, to: &str) {
+/// asked for those lines alone, a line for each file as `git diff --name-status` gives one, at a
+/// terminal at most [`SHOWN`] of them, with `again`, the command that lists every one.
+fn tell(context: &Context, datasets: &[Dataset], (from, to): (&str, &str), again: &str) {
     let output = &context.output;
+    let most = output
+        .answer_width()
+        .filter(|_| !output.shows_details())
+        .map_or(usize::MAX, |_| SHOWN);
     for dataset in datasets {
         let mut text = summary(dataset, from, to);
         if output.shows_items() {
-            for file in &dataset.files {
-                let _ = write!(text, "\n{}", line(&dataset.name, file));
-            }
+            text.push_str(&file_lines(dataset, most, again));
         }
         output.answer(&text);
     }
@@ -764,6 +780,24 @@ fn tell(context: &Context, datasets: &[Dataset], from: &str, to: &str) {
             ),
         );
     }
+}
+
+/// a line for each of `dataset`'s files, at most `most` of them, then one counting the rest that
+/// names `again`, which lists them all.
+fn file_lines(dataset: &Dataset, most: usize, again: &str) -> String {
+    let mut text = String::new();
+    for file in dataset.files.iter().take(most) {
+        let _ = write!(text, "\n{}", line(&dataset.name, file));
+    }
+    let hidden = dataset.files.len().saturating_sub(most);
+    if hidden > 0 {
+        let _ = write!(
+            text,
+            "\nand {} more \u{b7} `{again}` names each",
+            units::grouped(hidden as u64)
+        );
+    }
+    text
 }
 
 /// the line that says what changed in `dataset`: its fields, then how many files changed, or

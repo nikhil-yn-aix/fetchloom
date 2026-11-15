@@ -165,6 +165,34 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     assert!(diffed(&after, &after).is_empty());
 }
 
+/// a terminal shows a dataset's first file lines and counts the rest, naming the command that
+/// lists them all; a pipe has every line.
+#[test]
+fn a_terminal_shows_the_first_files_and_counts_the_rest() {
+    let before = Lock {
+        datasets: vec![fetched("iris", 1, Vec::new())],
+        ..Lock::default()
+    };
+    let files: Vec<LockedFile> = ["a.csv", "b.csv", "c.csv", "d.csv"]
+        .into_iter()
+        .map(|path| file(path, path.as_bytes()))
+        .collect();
+    let after = Lock {
+        datasets: vec![fetched("iris", 1, files)],
+        ..Lock::default()
+    };
+    let datasets = diffed(&before, &after);
+    let again = "fetchloom diff HEAD~1 -v";
+    assert_eq!(
+        file_lines(&datasets[0], 2, again),
+        "\nA  iris/a.csv  5 B\nA  iris/b.csv  5 B\nand 2 more \u{b7} `fetchloom diff HEAD~1 -v` names each"
+    );
+    assert_eq!(
+        file_lines(&datasets[0], usize::MAX, again).lines().count(),
+        5
+    );
+}
+
 /// a spec is a hash of what data.toml asks; with `ref` and `web_page` the same, select or
 /// exclude changed, while a dataset now made where it was fetched changes its kind alone.
 #[test]
