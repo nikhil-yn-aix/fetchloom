@@ -119,8 +119,7 @@ pub(super) async fn import_held(
     {
         // the same files imported again under their own name change nothing, as the same link does
         let work = Loop::new(context, project, net, cache).telling(&own);
-        context.output.step("Imported", &format!("{own} · {told}"));
-        already_imported(&work, adding, old, &own, here).await
+        already_imported(&work, adding, old, (&own, &told), here).await
     } else {
         if let Some(entry) = retaken {
             let difference = current(old.as_ref(), &own, entry)
@@ -128,14 +127,13 @@ pub(super) async fn import_held(
             return Err(other_import(manifest, &own, shown, difference));
         }
         let name = new_name(&context.output, manifest, args, own)?;
-        context.output.step("Imported", &format!("{name} · {told}"));
         let work = Loop::new(context, project, net, cache).telling(&name);
         let imported = Imported {
             name: &name,
             source: &source,
             files: copied.files,
         };
-        import_new(&work, adding, old, imported, here, starting).await
+        import_new(&work, adding, old, (imported, &told), here, starting).await
     }?;
     warn_in_git(&context.output, &project.root, (&start, shown));
     Ok(report)
@@ -354,12 +352,15 @@ async fn already_imported(
     work: &Loop<'_>,
     adding: &AddProject,
     old: Option<Lock>,
-    name: &str,
+    (name, told): (&str, &str),
     here: &Path,
 ) -> Result<Report, Error> {
     let manifest = &adding.manifest;
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
+    work.context
+        .output
+        .step("Imported", &format!("{name} · {told}"));
     ignore_data(work, manifest, false)?;
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     work.context.output.done(
@@ -380,7 +381,7 @@ async fn import_new(
     work: &Loop<'_>,
     adding: &AddProject,
     old: Option<Lock>,
-    imported: Imported<'_>,
+    (imported, told): (Imported<'_>, &str),
     here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
@@ -414,6 +415,10 @@ async fn import_new(
         &[],
     )
     .await?;
+    // said once the files are in place, so an add that fails never claims them
+    work.context
+        .output
+        .step("Imported", &format!("{name} · {told}"));
     let has_files = outcome.placed.planned.contains(name);
     render_add(work, &manifest, (name, has_files), here, starting, &[])?;
     Ok(Report {
@@ -480,9 +485,10 @@ async fn supply(
     };
     let pins = !given.is_empty();
     let output = &work.context.output;
-    output.step("Supplied", &format!("{name} · {told}"));
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, given), &[]).await?;
+    // said once the files are in place, so a sync that fails never claims them
+    output.step("Supplied", &format!("{name} · {told}"));
     ignore_data(work, manifest, false)?;
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     if pins {

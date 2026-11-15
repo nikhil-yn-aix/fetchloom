@@ -80,6 +80,24 @@ fn adding_a_folder_pins_bytes_not_its_path() -> Result {
     Ok(())
 }
 
+/// an add that fails after the copy, as a zip cut short does, never says it imported the files:
+/// the import line shows only once the add succeeds.
+#[test]
+fn a_failed_import_never_says_it_imported() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zips = sandbox.folder("zips")?;
+    fs::write(zips.join("case.zip"), b"PK\x03\x04cut short")?;
+    let output = sandbox.run(&["add", "../zips/case.zip"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("error: the archive is cut short"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Imported"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn an_import_tells_what_it_copied_and_that_the_folder_is_unchanged() -> Result {
     let sandbox = Sandbox::new()?;
