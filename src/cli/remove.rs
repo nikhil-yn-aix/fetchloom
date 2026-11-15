@@ -1,6 +1,8 @@
 //! `fetchloom remove`: a dataset out of data.toml and data.lock, and its unchanged files out of the
 //! data folder. it downloads nothing.
 
+use std::collections::{HashMap, HashSet};
+
 use super::args::Remove;
 use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known};
 use super::sync::disk::Survey;
@@ -11,6 +13,7 @@ use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock;
 use crate::project::manifest::{self, Entry, Manifest};
+use crate::stop::Stop;
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
     if args.names.is_empty() {
@@ -32,12 +35,12 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     for name in &names {
         known(&manifest, name, "remove")?;
     }
-    for name in &names {
-        unread(&manifest, name, &names)?;
-    }
-    let updated = names
-        .iter()
-        .try_fold(text, |text, name| manifest::without_dataset(&text, name))?;
+    unread(&manifest, &names)?;
+    // one edit of data.toml for every name, which a stop between names ends with nothing written
+    let updated = manifest::without_datasets(&text, &names, |at| {
+        stop_for_tests(&context.stop, at);
+        context.stop.check()
+    })?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
     let imported: Vec<Sha256> = names
@@ -46,9 +49,11 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         .filter_map(|name| lock.get(name))
         .flat_map(|locked| locked.files.iter().map(|file| file.sha256))
         .collect();
+    let going: HashSet<&str> = names.iter().map(String::as_str).collect();
     lock.datasets
-        .retain(|dataset| !names.contains(&dataset.name));
-    lock.derived.retain(|result| !names.contains(&result.name));
+        .retain(|dataset| !going.contains(dataset.name.as_str()));
+    lock.derived
+        .retain(|result| !going.contains(result.name.as_str()));
     lock.stated
         .retain(|stated| !names.iter().any(|name| name == stated.name()));
     let listed = crate::units::listed(&names, "and");
@@ -117,32 +122,39 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
 
 /// `asked` without the names given twice, in the order given.
 fn distinct(asked: Vec<String>) -> Vec<String> {
-    let mut names: Vec<String> = Vec::with_capacity(asked.len());
-    for name in asked {
-        if !names.contains(&name) {
-            names.push(name);
-        }
-    }
-    names
+    let mut seen = HashSet::with_capacity(asked.len());
+    asked
+        .into_iter()
+        .filter(|name| seen.insert(name.clone()))
+        .collect()
 }
 
-/// refuses to remove `name` while a recipe in `manifest` other than those `removed` is made from it.
-fn unread(manifest: &Manifest, name: &str, removed: &[String]) -> Result<(), Error> {
-    let readers: Vec<&str> = manifest
-        .datasets
-        .iter()
-        .filter(|(reader, entry)| {
-            !removed.contains(reader)
-                && entry
-                    .recipe()
-                    .is_some_and(|recipe| recipe.from.iter().any(|from| from == name))
-        })
-        .map(|(name, _)| name.as_str())
-        .collect();
-    if readers.is_empty() {
-        return Ok(());
+/// refuses to remove the first of `removed` that a recipe in `manifest` is made from, unless that
+/// recipe is removed too.
+fn unread(manifest: &Manifest, removed: &[String]) -> Result<(), Error> {
+    let going: HashSet<&str> = removed.iter().map(String::as_str).collect();
+    let mut readers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (reader, entry) in &manifest.datasets {
+        let Some(recipe) = entry.recipe() else {
+            continue;
+        };
+        if going.contains(reader.as_str()) {
+            continue;
+        }
+        for from in &recipe.from {
+            let of = readers.entry(from.as_str()).or_default();
+            if of.last() != Some(&reader.as_str()) {
+                of.push(reader.as_str());
+            }
+        }
     }
-    let them = crate::units::listed(&readers, "and");
+    let Some((name, readers)) = removed
+        .iter()
+        .find_map(|name| Some((name, readers.get(name.as_str())?)))
+    else {
+        return Ok(());
+    };
+    let them = crate::units::listed(readers, "and");
     let (are, their) = if readers.len() == 1 {
         ("is", "its")
     } else {
@@ -155,9 +167,28 @@ fn unread(manifest: &Manifest, name: &str, removed: &[String]) -> Result<(), Err
     )
 }
 
+/// a debug build's tests ask `stop` before the name at the index `FETCHLOOM_TEST_STOP_AFTER`
+/// gives, as a ctrl-c then would.
+#[cfg(debug_assertions)]
+fn stop_for_tests(stop: &Stop, at: usize) {
+    if std::env::var("FETCHLOOM_TEST_STOP_AFTER")
+        .ok()
+        .and_then(|after| after.parse::<usize>().ok())
+        == Some(at)
+    {
+        stop.ask();
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn stop_for_tests(_: &Stop, _: usize) {}
+
 /// asks before removing the imports among `names`, whose files no source can give back once gc
 /// frees them from the cache; with nobody to ask it refuses, unless `--yes`.
 fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<(), Error> {
+    if context.yes {
+        return Ok(());
+    }
     let Ok((_, manifest)) = project.manifest() else {
         return Ok(());
     };
@@ -171,7 +202,7 @@ fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<
         })
         .map(String::as_str)
         .collect();
-    if context.yes || imports.is_empty() {
+    if imports.is_empty() {
         return Ok(());
     }
     let name = crate::units::listed(&imports, "and");

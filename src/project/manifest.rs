@@ -1911,6 +1911,22 @@ fn narrowed_one_at_a_time(text: &str, changes: &[Narrowing<'_>]) -> Result<Strin
     Ok(text)
 }
 
+/// data.toml's text without the datasets `names`, read and written once however many there are.
+/// `between` runs before each name with its index, and an error from it ends the edit, so a stop
+/// it reports leaves nothing half written.
+pub(crate) fn without_datasets(
+    text: &str,
+    names: &[String],
+    mut between: impl FnMut(usize) -> Result<(), Error>,
+) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    for (at, name) in names.iter().enumerate() {
+        between(at)?;
+        remove(&mut document, name);
+    }
+    Ok(document.to_string().trim_start_matches('\n').to_owned())
+}
+
 /// the edit [`without_dataset`] makes, on `document`.
 fn remove(document: &mut DocumentMut, name: &str) {
     let Some(datasets) = document

@@ -25,6 +25,40 @@ fn remove_without_a_name_lists_the_datasets() -> Result {
     Ok(())
 }
 
+/// a stop between the names of one remove, as a ctrl-c gives, leaves data.toml, data.lock and the
+/// data folder as they were; the same remove then runs to its end.
+#[test]
+fn a_remove_stopped_between_names_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut servers = Vec::new();
+    for path in ["/a.csv", "/b.csv", "/c.csv"] {
+        let server = Server::start(path, vec![file(path.as_bytes(), "\"v\"")])?;
+        added(&sandbox, &server)?;
+        servers.push(server);
+    }
+    let work = sandbox.work();
+    let placed =
+        ["a", "b", "c"].map(|name| work.join("data").join(name).join(format!("{name}.csv")));
+    let before = (
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    );
+    let output = sandbox
+        .command(&["remove", "a", "b", "c"])
+        .env("FETCHLOOM_TEST_STOP_AFTER", "2")
+        .output()?;
+    assert_eq!(output.status.code(), Some(130), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(work.join("data.toml"))?, before.0);
+    assert_eq!(fs::read(work.join("data.lock"))?, before.1);
+    for file in &placed {
+        assert!(file.exists(), "{}", file.display());
+    }
+    let output = sandbox.run(&["remove", "a", "b", "c"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(placed.iter().all(|file| !file.exists()));
+    Ok(())
+}
+
 #[test]
 fn remove_drops_the_dataset_and_only_its_files() -> Result {
     let sandbox = Sandbox::new()?;

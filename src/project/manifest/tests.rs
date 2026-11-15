@@ -630,6 +630,49 @@ fn removing_keeps_everything_else() {
     );
 }
 
+/// taking several datasets out at once reads data.toml once and leaves what taking them out one by
+/// one leaves, notes above a removed table included.
+#[test]
+fn removing_many_reads_once_as_removing_each_would() {
+    let text = "# my thesis data\n\n# the classic one\n[datasets.a]\nref = \"zenodo:1\" # first\n\n# kept for b\n\n[datasets.b]\nref = \"zenodo:2\"\n\n[datasets.c]\nref = \"zenodo:3\"\n\n# the last\n[datasets.d]\nref = \"zenodo:4\"\n";
+    for names in [
+        vec!["a", "b"],
+        vec!["b", "a", "d"],
+        vec!["d", "c"],
+        vec!["a", "b", "c", "d"],
+    ] {
+        let names: Vec<String> = names.into_iter().map(str::to_owned).collect();
+        let one_by_one = names
+            .iter()
+            .try_fold(text.to_owned(), |text, name| without_dataset(&text, name))
+            .unwrap();
+        let before = reads();
+        let at_once = without_datasets(text, &names, |_| Ok(())).unwrap();
+        assert_eq!(reads() - before, 1, "{names:?}");
+        assert_eq!(at_once, one_by_one, "{names:?}");
+    }
+}
+
+/// an error between names, as a stop gives, ends the edit at that name with no text.
+#[test]
+fn a_stop_between_names_ends_the_edit_there() {
+    let text =
+        "[datasets.a]\nref = \"x\"\n\n[datasets.b]\nref = \"y\"\n\n[datasets.c]\nref = \"z\"\n";
+    let names = ["a", "b", "c"].map(str::to_owned);
+    let mut asked = Vec::new();
+    let error = without_datasets(text, &names, |at| {
+        asked.push(at);
+        if at == 1 {
+            Err(crate::stop::Stop::stopped())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
+    assert_eq!(error.kind, Kind::Interrupted);
+    assert_eq!(asked, [0, 1]);
+}
+
 /// what data.toml states: the data folder, and each dataset's values without their lines.
 type Stated = (String, BTreeMap<String, Values>);
 type Values = (Option<Fetched>, Option<Made>, bool, Option<String>);
