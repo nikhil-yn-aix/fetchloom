@@ -382,7 +382,8 @@ impl<'a> Building<'a> {
     }
 
     /// runs the step of `name` again from the inputs data.lock pins: a rebuild that matches enters
-    /// the cache as the pinned result, and one that differs is kept for `--accept`.
+    /// the cache as the pinned result, leaving one kept before for `--accept`, whose pin is the
+    /// same, and one that differs is kept for `--accept` in its place.
     async fn check_step(&self, name: &str) -> Result<Done, Error> {
         let output = &self.context.output;
         let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, name)?
@@ -424,7 +425,6 @@ impl<'a> Building<'a> {
                 "Checked",
                 &format!("{name} · {} data.lock", matched(&compared)),
             );
-            forget(self.work.project, &[name.to_owned()])?;
         } else {
             output.mark(
                 "Differs",

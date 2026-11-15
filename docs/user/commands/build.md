@@ -139,7 +139,7 @@ a cache file is read-only and others may share it, so copy one before you change
          Ok pinned emb's kept rebuild in data.lock
 ```
 
-without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, when the recipe or `data.lock` changed since the rebuild was kept, as after a checkout of another commit, or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild, and so does dropping the recipe from `data.toml`; `cache gc` then frees its files. `--accept` cannot be combined with `--dry-run` or `--locked`.
+without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, when the recipe or `data.lock` changed since the rebuild was kept, as after a checkout of another commit, or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild, and so does dropping the recipe from `data.toml`; `cache gc` then frees its files. a `build --check` that makes the pinned files again leaves it kept, since the pin it differs from is the same. `--accept` cannot be combined with `--dry-run` or `--locked`.
 
 ## dry run
 

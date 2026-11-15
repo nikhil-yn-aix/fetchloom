@@ -2715,6 +2715,40 @@ fn check_reproduces_a_deterministic_step() -> Result {
     Ok(())
 }
 
+/// a check that makes the pinned files again keeps the rebuild an earlier check kept, whose pin
+/// did not change, so `--accept` still pins it.
+#[test]
+fn a_matching_check_keeps_the_rebuild_kept_before() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["seeded", "draws.bin"]))?;
+    // the step reads SEED from the run's own variables, which are no part of its key
+    let seeded = |seed: &str, args: &[&str]| -> Result<std::process::Output> {
+        let mut command = building_in(&sandbox, &sandbox.work(), args)?;
+        command.env("SEED", seed);
+        Ok(command.output()?)
+    };
+    assert_eq!(seeded("1", &["build"])?.status.code(), Some(0));
+    assert_eq!(seeded("2", &["build", "--check"])?.status.code(), Some(60));
+    let matched = seeded("1", &["build", "--check"])?;
+    let told = text(&matched.stderr)?;
+    assert_eq!(matched.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("    Checked clean · 1 of 1 file matches data.lock\n"),
+        "{told}"
+    );
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(kept_names(&status), ["clean"]);
+    let accepted = build(&sandbox, &["build", "--accept", "clean"])?;
+    assert_eq!(
+        accepted.status.code(),
+        Some(0),
+        "{}",
+        text(&accepted.stderr)?
+    );
+    Ok(())
+}
+
 #[test]
 fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
     let sandbox = Sandbox::new()?;
