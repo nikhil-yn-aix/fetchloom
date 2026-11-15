@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub(crate) mod edit;
 mod resources;
 
 pub(crate) use resources::Level;
@@ -276,16 +277,17 @@ enum Value {
     List(Vec<String>),
 }
 
-/// the settings file's values, refusing a key it does not take, so a typo is told, not ignored. an
-/// error names where the file stops being TOML but never quotes it, since a value may hold a login.
-fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
-    let invalid = |message: String| {
-        Error::new(Kind::Usage, message).help(format!(
-            "the settings file takes {}, each a number or text",
-            KEYS.map(|(key, _)| key).join(", ")
-        ))
-    };
-    let table: toml::Table = toml::from_str(text).map_err(|err| {
+/// a mistake in the settings file, with the keys it takes.
+fn invalid(message: String) -> Error {
+    Error::new(Kind::Usage, message).help(format!(
+        "the settings file takes {}, each a number or text",
+        KEYS.map(|(key, _)| key).join(", ")
+    ))
+}
+
+/// the settings file's text as TOML, or where it stops being TOML.
+fn table(path: &Path, text: &str) -> Result<toml::Table, Error> {
+    toml::from_str(text).map_err(|err| {
         let at = err.span().map_or_else(String::new, |span| {
             let (line, column) = line_and_column(text, span.start);
             format!(" at line {line}, column {column}")
@@ -295,8 +297,13 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
             path.display(),
             err.message()
         ))
-    })?;
-    table
+    })
+}
+
+/// the settings file's values, refusing a key it does not take, so a typo is told, not ignored. an
+/// error names where the file stops being TOML but never quotes it, since a value may hold a login.
+fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
+    table(path, text)?
         .into_iter()
         .map(|(key, value)| {
             if !KEYS.iter().any(|(known, _)| *known == key) {

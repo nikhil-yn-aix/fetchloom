@@ -142,7 +142,8 @@ memory, most_files, the archive_ settings, allowed_origins, s3_buckets,
 gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to,
 build_floor and cache_budget for every run, one per line, as jobs = 16. a
 variable wins over the file.
-fetchloom settings shows each value and where it came from.
+fetchloom settings shows each value and where it came from, and
+fetchloom settings set jobs 16 saves one.
 
 keys are read as each source's own tools read them, and a variable wins over
 a key fetchloom auth login saved:

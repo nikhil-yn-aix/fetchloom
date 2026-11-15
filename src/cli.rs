@@ -742,6 +742,14 @@ pub(crate) fn run() -> ExitCode {
     };
     settings::warn_misnamed(&context.output, std::env::vars_os().map(|(name, _)| name));
     settings::warn_unread(&context.output, &var);
+    // set and unset read the settings file themselves, so one that would stop a run can be fixed
+    if let args::Command::Settings(args::Settings {
+        action: Some(action),
+    }) = &command
+    {
+        let outcome = settings::change(&context, action, global.no_config, &var);
+        return finish(&context, name, outcome, started);
+    }
     if let Err(error) = read_switches(&mut context, global.offline, &var) {
         return finish::<()>(&context, name, Err(error), started);
     }
@@ -954,6 +962,8 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = cache::verify(context);
             finish(context, name, outcome, started)
         }
+        // `run` takes `settings set` and `unset` before reading the settings file, so only the
+        // report comes here
         args::Command::Settings(_) => {
             let outcome = Ok(settings::run(context));
             finish(context, name, outcome, started)

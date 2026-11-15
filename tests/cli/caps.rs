@@ -679,3 +679,123 @@ fn settings_show_the_rate_cap() -> Result {
     assert!(row.contains(" 2.0 MiB/s "), "{row}");
     Ok(())
 }
+
+/// `settings set` saves a value the next run reads, says what it was and where, and does nothing
+/// for a value that is there already; `settings unset` takes it out, so the default holds again.
+#[test]
+fn settings_set_and_unset_change_the_file_the_next_run_reads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(&path, "# the lab's\ntimeout = 90\n")?;
+    let set = sandbox.run(&["settings", "set", "jobs", "16"])?;
+    let told = text(&set.stderr)?;
+    assert_eq!(set.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("      Saved jobs · not set → 16 · "),
+        "{told}"
+    );
+    let document = json(&sandbox.run(&["--json", "settings"])?)?;
+    assert_eq!(shown(&document, "jobs")["value"], 16, "{document}");
+    assert_eq!(shown(&document, "jobs")["origin"], "file");
+    assert_eq!(shown(&document, "timeout")["value"], 90);
+    let again = json(&sandbox.run(&["--json", "settings", "set", "jobs", "16"])?)?;
+    assert_eq!(again["result"]["changed"], false, "{again}");
+    let unset = sandbox.run(&["--json", "settings", "unset", "jobs"])?;
+    assert_eq!(unset.status.code(), Some(0), "{}", text(&unset.stdout)?);
+    let document = json(&unset)?;
+    assert_eq!(document["result"]["before"], 16, "{document}");
+    assert_eq!(document["result"]["after"], serde_json::Value::Null);
+    assert_eq!(document["result"]["file"], path.display().to_string());
+    assert_eq!(
+        std::fs::read_to_string(&path)?,
+        "# the lab's\ntimeout = 90\n"
+    );
+    let document = json(&sandbox.run(&["--json", "settings"])?)?;
+    assert_eq!(shown(&document, "jobs")["origin"], "default");
+    Ok(())
+}
+
+/// a mistake that stops every other command can be taken out with `settings unset`, which reads
+/// the file itself, and a bad value is refused with the words the run uses, writing nothing.
+#[test]
+fn settings_unset_fixes_a_file_that_stops_every_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(&path, "jobs = 0\n")?;
+    assert_eq!(sandbox.run(&["cache"])?.status.code(), Some(2));
+    let refused = json(&sandbox.run(&["--json", "settings", "set", "jobs", "300"])?)?;
+    assert_eq!(
+        refused["errors"][0]["message"],
+        format!(
+            "jobs in the settings file {} is \"300\", which is not a number from 1 to 256",
+            path.display()
+        )
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "jobs = 0\n");
+    let unset = sandbox.run(&["settings", "unset", "jobs"])?;
+    assert_eq!(unset.status.code(), Some(0), "{}", text(&unset.stderr)?);
+    assert!(sandbox.run(&["cache"])?.status.success());
+    Ok(())
+}
+
+/// a variable set here still wins, which the change says; `--no-config` and `FETCHLOOM_NO_CONFIG`
+/// leave the file alone, so they refuse a change; a file `FETCHLOOM_SETTINGS` names is made, with
+/// its folder, when missing.
+#[test]
+fn settings_set_says_a_variable_wins_and_refuses_no_config() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox
+        .command(&["--json", "settings", "set", "jobs", "16"])
+        .env("FETCHLOOM_JOBS", "4")
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["result"]["overridden_by"], "FETCHLOOM_JOBS");
+    let warned = crate::support::warned(&document);
+    assert!(
+        warned.contains(&"FETCHLOOM_JOBS is set here, and a variable wins over the settings file, so runs where it is set keep its value for jobs; unset FETCHLOOM_JOBS where the saved value should hold".to_owned()),
+        "{warned:?}"
+    );
+    for (refused, by) in [
+        (
+            sandbox.run(&["--no-config", "settings", "set", "jobs", "8"])?,
+            "--no-config",
+        ),
+        (
+            sandbox
+                .command(&["settings", "unset", "jobs"])
+                .env("FETCHLOOM_NO_CONFIG", "1")
+                .output()?,
+            "FETCHLOOM_NO_CONFIG",
+        ),
+    ] {
+        assert_eq!(refused.status.code(), Some(2), "{by}");
+        let stderr = text(&refused.stderr)?;
+        assert!(
+            stderr.contains(&format!(
+                "changes the settings file, which {by} leaves alone"
+            )),
+            "{stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(settings_file(&sandbox)?)?,
+        "jobs = 16\n"
+    );
+    let named = sandbox.work().join("lab").join("fetchloom.toml");
+    let output = sandbox
+        .command(&["--json", "settings", "set", "push_to", "pushed"])
+        .env("FETCHLOOM_SETTINGS", &named)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["result"]["created"], true);
+    let pushed = sandbox.work().join("pushed").display().to_string();
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_SETTINGS", &named)
+            .output()?,
+    )?;
+    assert_eq!(shown(&document, "push_to")["value"], pushed, "{document}");
+    Ok(())
+}

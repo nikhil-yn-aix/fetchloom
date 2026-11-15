@@ -103,8 +103,23 @@ on disk: nothing when the dataset is ready. otherwise it syncs that dataset alon
     pub(super) const SETTINGS: &str = "examples:
   fetchloom settings
   fetchloom settings --json
+  fetchloom settings set push_to /mnt/lab/fetchloom
+  fetchloom settings unset jobs
 
-on disk: nothing. it reads the FETCHLOOM_* variables and the settings file";
+on disk: nothing. it reads the FETCHLOOM_* variables and the settings file. `settings set` and `settings unset` change the settings file";
+
+    pub(super) const SET: &str = "examples:
+  fetchloom settings set jobs 16
+  fetchloom settings set push_to /mnt/lab/fetchloom
+  fetchloom settings set mirrors /mnt/lab/fetchloom https://data.lab.example
+
+on disk: writes the one setting into the settings file, which FETCHLOOM_SETTINGS names, else settings.toml in fetchloom's folder, making both when missing. comments and other settings stay. a value runs would refuse writes nothing";
+
+    pub(super) const UNSET: &str = "examples:
+  fetchloom settings unset jobs
+  fetchloom settings unset mirrors
+
+on disk: takes the one setting out of the settings file. comments and other settings stay";
 
     pub(super) const CACHE: &str = "examples:
   fetchloom cache
@@ -397,6 +412,7 @@ fn linked(root: clap::Command) -> clap::Command {
         "cache gc" => format!("{SITE}user/commands/cache/#gc"),
         "cache verify" => format!("{SITE}user/commands/cache/#verify"),
         "auth login" | "auth logout" => format!("{SITE}user/commands/auth/"),
+        "settings set" | "settings unset" => format!("{SITE}user/commands/settings/"),
         _ => format!("{SITE}user/commands/{name}/"),
     };
     let append = |command: clap::Command, line: String| {
@@ -575,8 +591,8 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom cache [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::CACHE)]
     Cache(Cache),
 
-    /// show each setting, its value and where it came from
-    #[command(override_usage = "fetchloom settings [options]", help_template = TEMPLATE, after_help = examples::SETTINGS)]
+    /// show each setting, or change one in the settings file
+    #[command(override_usage = "fetchloom settings [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::SETTINGS)]
     Settings(Settings),
 
     /// fetch something once, without a project
@@ -621,7 +637,13 @@ impl Command {
             Command::Cache(Cache {
                 action: Some(CacheAction::Verify),
             }) => "cache verify",
-            Command::Settings(_) => "settings",
+            Command::Settings(Settings { action: None }) => "settings",
+            Command::Settings(Settings {
+                action: Some(SettingsAction::Set(_)),
+            }) => "settings set",
+            Command::Settings(Settings {
+                action: Some(SettingsAction::Unset(_)),
+            }) => "settings unset",
             Command::Get(_) => "get",
             Command::Search(_) => "search",
             Command::Auth(Auth { action: None }) => "auth",
@@ -671,7 +693,7 @@ impl Command {
             | Command::List(_)
             | Command::Path(_)
             | Command::Push(_)
-            | Command::Settings(_)
+            | Command::Settings(Settings { action: None })
             | Command::Search(_)
             | Command::Completions(_)
             | Command::Help(_)
@@ -694,7 +716,8 @@ impl Command {
             }) => dry.dry_run,
             Command::Auth(Auth {
                 action: Some(AuthAction::Login(_) | AuthAction::Logout(_)),
-            }) => false,
+            })
+            | Command::Settings(Settings { action: Some(_) }) => false,
         }
     }
 }
@@ -1061,9 +1084,44 @@ pub(crate) struct Build {
     pub(crate) dry: DryRun,
 }
 
-/// show each setting, its value and where it came from
+/// show each setting, its value and where it came from, or change one in the settings file
 #[derive(Clone, Debug, clap::Args)]
-pub(crate) struct Settings {}
+pub(crate) struct Settings {
+    #[command(subcommand)]
+    pub(crate) action: Option<SettingsAction>,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub(crate) enum SettingsAction {
+    /// save a setting in the settings file, for every run on this machine
+    #[command(override_usage = "fetchloom settings set [options] <key> <value>...", help_template = TEMPLATE, after_help = examples::SET)]
+    Set(SetSetting),
+
+    /// take a setting out of the settings file, so its default holds again
+    #[command(override_usage = "fetchloom settings unset [options] <key>", help_template = TEMPLATE, after_help = examples::UNSET)]
+    Unset(UnsetSetting),
+}
+
+/// options of `settings set`.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct SetSetting {
+    /// the setting, as `fetchloom settings` names it, such as `jobs` or `push_to`
+    #[arg(value_name = "key", help_heading = "arguments")]
+    pub(crate) key: String,
+
+    /// its value. a list, such as mirrors, takes several, separated by spaces or commas, and
+    /// they replace the whole list. a relative folder is taken from the current folder
+    #[arg(value_name = "value", required = true, num_args = 1.., help_heading = "arguments")]
+    pub(crate) values: Vec<String>,
+}
+
+/// options of `settings unset`.
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct UnsetSetting {
+    /// the setting, as `fetchloom settings` names it, such as `jobs` or `push_to`
+    #[arg(value_name = "key", help_heading = "arguments")]
+    pub(crate) key: String,
+}
 
 /// list the project's datasets, or the files of one
 #[derive(Clone, Debug, clap::Args)]

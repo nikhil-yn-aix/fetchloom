@@ -11,9 +11,11 @@ fetchloom settings --json
 
 ```sh
 fetchloom settings [options]
+fetchloom settings set <key> <value>...
+fetchloom settings unset <key>
 ```
 
-there are no command-specific options. [global options](global-options.md) apply; the mirrors `--mirror` names show in the `mirrors` row.
+there are no command-specific options. [global options](global-options.md) apply; the mirrors `--mirror` names show in the `mirrors` row. `settings set` saves one setting in the settings file and `settings unset` takes it out; `fetchloom help settings set` says how.
 
 ## what it shows
 

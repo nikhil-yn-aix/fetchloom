@@ -55,6 +55,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user`, `valid` and `kind`, which says how AWS keys, google credentials or azure credentials come, as `credential_process` or `az_cli`, or what a website's saved credential is, as `token` or `cookies`, with `expires` for cookies; [auth](../commands/auth.md#json) |
 | `auth login`, `auth logout` | `account` with `user` and `saved_to`, or `removed_from` |
 | `settings` | `settings`: one record for each setting, with `name`, `value`, `origin` (`environment`, `file`, `machine`, `default`, `flag`, or `resources` for a value the [resources level](../guides/speed-and-memory.md) set, and for mirrors that `--mirror` and a setting both give, `flag,environment` or `flag,file`) and `variable`; `machine`: `processors`, `memory`, the bytes available, null off linux, and `open_files`, null where the system sets no limit; `file`: `path` of the settings file, null when there is no folder for one, `found`, and `bypassed`, true when `--no-config` or `FETCHLOOM_NO_CONFIG` left it unread. [settings](../commands/settings.md#what-it-shows) |
+| `settings set`, `settings unset` | `key`; `file`, the settings file; `before` and `after`, the key's value there, null where it holds none, with text masked where it may carry a login or a key; `changed`, false when the file held that already; `created`, true when the change made the file; `overridden_by`, the `FETCHLOOM_` variable that gives the key its value in this run, or null |
 | `help` | `options`: the options fetchloom itself takes, which are those every command takes and `--version`; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: failure records for contents, metadata or directory entries that could not be read |
 
@@ -184,6 +185,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
 | `search.partial` | a search site did not answer in time, or its search failed |
 | `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |
+| `settings.overridden` | `settings set` or `settings unset` changed a setting that a `FETCHLOOM_` variable set here gives its own value, so runs where it is set keep that value |
 | `settings.switch_unread` | `FETCHLOOM_ACCESSIBLE` or `FETCHLOOM_NO_HINTS` holds neither true nor false, so it stays off rather than stopping the run |
 | `settings.unknown_variable` | a variable set is one typo from one fetchloom reads, so it changes nothing; `details` names it |
 | `space.short` | a run told `--yes` goes on though a disk may lack the room it needs, which the message measures |

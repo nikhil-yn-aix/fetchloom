@@ -1,12 +1,14 @@
 //! `fetchloom settings`: every setting a run would use, with its value and where it came from,
-//! what fetchloom read about this machine, and where the settings file is. it changes nothing.
+//! what fetchloom read about this machine, and where the settings file is. it changes nothing;
+//! `settings set` and `settings unset` change one key of the settings file.
 
 use std::fmt::Write as _;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::Context;
+use super::{Context, args};
+use crate::error::{Error, Kind};
 use crate::mirror::Mirrors;
 use crate::net::Splitting;
 use crate::output::{Output, Warning};
@@ -95,6 +97,138 @@ pub(super) fn run(context: &Context) -> Report {
             found: file.found,
             bypassed: file.bypassed.is_some(),
         },
+    }
+}
+
+/// what `settings set` or `settings unset` changed, as `--json` reports it.
+#[derive(Serialize)]
+pub(super) struct Edited {
+    key: String,
+    /// the settings file.
+    file: String,
+    /// the key's value in the settings file before and after, null where it held none, each text
+    /// masked where it may carry a login or a key.
+    before: Value,
+    after: Value,
+    /// whether the settings file changed, which it does not when it held the value already.
+    changed: bool,
+    /// whether the change made the settings file.
+    created: bool,
+    /// the variable that gives the key its value in this run, over the settings file.
+    overridden_by: Option<&'static str>,
+}
+
+/// `settings set` or `settings unset`, which `no_config`, `--no-config`, or `FETCHLOOM_NO_CONFIG`
+/// refuses, since the settings file is to be left alone then. it reads the settings file itself,
+/// so a file with a mistake in it can be fixed this way.
+pub(super) fn change(
+    context: &Context,
+    action: &args::SettingsAction,
+    no_config: bool,
+    var: crate::machine::Var<'_>,
+) -> Result<Edited, Error> {
+    let (command, key) = match action {
+        args::SettingsAction::Set(set) => ("settings set", &set.key),
+        args::SettingsAction::Unset(unset) => ("settings unset", &unset.key),
+    };
+    if let Some(by) = super::no_config(no_config, var("FETCHLOOM_NO_CONFIG").as_deref())? {
+        let help = if by == "--no-config" {
+            "run it again without --no-config".to_owned()
+        } else {
+            format!("unset {by}, then run it again")
+        };
+        return Err(Error::new(
+            Kind::Usage,
+            format!("`fetchloom {command}` changes the settings file, which {by} leaves alone"),
+        )
+        .help(help));
+    }
+    let changed = match action {
+        args::SettingsAction::Set(set) => {
+            let here = std::env::current_dir().ok();
+            crate::settings::edit::set(var, key, &set.values, here.as_deref())?
+        }
+        args::SettingsAction::Unset(_) => crate::settings::edit::unset(var, key)?,
+    };
+    let overridden_by = crate::settings::edit::overridden(var, &changed.key);
+    tell_changed(&context.output, &changed, overridden_by);
+    Ok(Edited {
+        file: changed.path.display().to_string(),
+        before: changed.before.as_ref().map_or(Value::Null, json_of),
+        after: changed.after.as_ref().map_or(Value::Null, json_of),
+        changed: changed.written,
+        created: changed.created,
+        key: changed.key,
+        overridden_by,
+    })
+}
+
+/// says what `changed` did: the key's value before and after, and in which file, then, when a
+/// variable gives the key its value in this run, that the variable wins.
+fn tell_changed(
+    output: &Output,
+    changed: &crate::settings::edit::Changed,
+    overridden_by: Option<&str>,
+) {
+    let key = &changed.key;
+    let file = units::path(&changed.path);
+    let said = |value: Option<&toml_edit::Value>| value.map_or_else(|| "not set".to_owned(), shown);
+    if let Some(variable) = overridden_by {
+        let help = if changed.after.is_some() {
+            format!("unset {variable} where the saved value should hold")
+        } else {
+            format!("unset {variable} too where the default should hold")
+        };
+        output.warn_with(
+            Warning::SettingsOverridden,
+            &format!(
+                "{variable} is set here, and a variable wins over the settings file, so runs where it is set keep its value for {key}"
+            ),
+            &help,
+        );
+    }
+    match (changed.written, &changed.after) {
+        (true, after) => output.done(
+            if after.is_some() { "Saved" } else { "Removed" },
+            &format!(
+                "{key} \u{b7} {} \u{2192} {} \u{b7} {file}",
+                said(changed.before.as_ref()),
+                said(after.as_ref())
+            ),
+        ),
+        (false, Some(after)) => output.done(
+            "Ok",
+            &format!(
+                "{file} holds {key} = {} already, so nothing changed",
+                shown(after)
+            ),
+        ),
+        (false, None) => output.done(
+            "Ok",
+            &format!("{file} does not set {key}, so nothing changed"),
+        ),
+    }
+}
+
+/// a value of the settings file as a person reads it: text as it is, a list's items separated by
+/// commas, each masked where it may carry a login or a key.
+fn shown(value: &toml_edit::Value) -> String {
+    match value {
+        toml_edit::Value::String(text) => crate::shown::mask_typed(text.value()),
+        toml_edit::Value::Array(items) if items.is_empty() => "none".to_owned(),
+        toml_edit::Value::Array(items) => items.iter().map(shown).collect::<Vec<_>>().join(", "),
+        other => other.clone().decorated("", "").to_string(),
+    }
+}
+
+/// a value of the settings file as `--json` gives it, text masked as [`shown`] masks it.
+fn json_of(value: &toml_edit::Value) -> Value {
+    match value {
+        toml_edit::Value::String(text) => json!(crate::shown::mask_typed(text.value())),
+        toml_edit::Value::Integer(number) => json!(number.value()),
+        toml_edit::Value::Boolean(on) => json!(on.value()),
+        toml_edit::Value::Array(items) => Value::Array(items.iter().map(json_of).collect()),
+        other => json!(other.clone().decorated("", "").to_string()),
     }
 }
 

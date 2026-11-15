@@ -531,6 +531,8 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("cache gc", false, &["--dry-run"]),
         ("cache verify", true, &[]),
         ("settings", true, &[]),
+        ("settings set", false, &[]),
+        ("settings unset", false, &[]),
         (
             "get",
             true,

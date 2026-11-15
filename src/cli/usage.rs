@@ -665,6 +665,8 @@ mod tests {
             ("completions", "completions needs <shell>"),
             ("auth login", "auth login needs <account>"),
             ("auth logout", "auth logout needs <account>"),
+            ("settings set", "settings set needs <key> <value>"),
+            ("settings unset", "settings unset needs <key>"),
         ];
         for (command, expected) in table {
             let arguments: Vec<&str> = std::iter::once("fetchloom")

@@ -1,0 +1,406 @@
+//! `fetchloom settings set` and `unset`: one key of the settings file changed in place. a value is
+//! read as a run reads it before anything is written, comments and the other keys stay, and the
+//! file is replaced in one step, keeping its permissions.
+
+use std::fs;
+use std::io::{self, Write as _};
+use std::path::{Component, Path, PathBuf};
+
+use toml_edit::{DocumentMut, Item};
+
+use super::{
+    BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Settings, Value, located, parse, split, table,
+};
+use crate::error::{Error, Kind};
+use crate::machine::{Machine, Var};
+
+/// the keys whose text stays text even when it is a whole number.
+const WORDS: [&str; 3] = ["cache", "push_to", "resources"];
+
+/// what `set` or `unset` did to the settings file.
+#[derive(Debug)]
+pub(crate) struct Changed {
+    pub(crate) key: String,
+    /// the settings file, past a link to it.
+    pub(crate) path: PathBuf,
+    /// the key's value as the file held it, and as it holds it now; none where it holds none.
+    pub(crate) before: Option<toml_edit::Value>,
+    pub(crate) after: Option<toml_edit::Value>,
+    /// whether the file was written, which it is not when it held the value already.
+    pub(crate) written: bool,
+    /// whether the change made the file.
+    pub(crate) created: bool,
+}
+
+/// sets `name` to `values` in the settings file `var` locates: for a list, every value, each split
+/// at commas as its variable is, else the one value, a relative folder taken from `here`. a value
+/// a run would refuse is refused with the reader's message, and nothing is written.
+pub(crate) fn set(
+    var: Var<'_>,
+    name: &str,
+    values: &[String],
+    here: Option<&Path>,
+) -> Result<Changed, Error> {
+    let key = known(name)?;
+    let value = given(key, values, here)?;
+    let (path, text, found) = open(var)?;
+    let mut document = document(&path, &text)?;
+    let after = written_as(key, &value);
+    check(key, &after, &path)?;
+    let before = document.get(key).and_then(Item::as_value).cloned();
+    let mut changed = Changed {
+        key: key.to_owned(),
+        path,
+        before: before.clone(),
+        after: Some(after.clone()),
+        written: false,
+        created: !found,
+    };
+    if before.is_some() && before.as_ref().and_then(read_as) == read_as(&after) {
+        return Ok(changed);
+    }
+    match document.get_mut(key) {
+        // in place, so the key keeps the comments above it, and the value the one after it
+        Some(Item::Value(held)) => {
+            let decor = held.decor().clone();
+            *held = after;
+            *held.decor_mut() = decor;
+        }
+        Some(item) => *item = Item::Value(after),
+        None => {
+            document.insert(key, Item::Value(after));
+        }
+    }
+    write(&changed.path, &document.to_string(), found)?;
+    changed.written = true;
+    Ok(changed)
+}
+
+/// takes `name` out of the settings file `var` locates: a setting, or a key the file holds that
+/// is none, so a mistake that stops every run can be taken out too. comments above it stay.
+pub(crate) fn unset(var: Var<'_>, name: &str) -> Result<Changed, Error> {
+    let (path, text, found) = open(var)?;
+    let mut document = document(&path, &text)?;
+    if !document.contains_key(name) {
+        known(name)?;
+    }
+    let before = document.get(name).and_then(Item::as_value).cloned();
+    let mut changed = Changed {
+        key: name.to_owned(),
+        path,
+        before,
+        after: None,
+        written: false,
+        created: false,
+    };
+    if removed(&mut document, name) {
+        write(&changed.path, &document.to_string(), found)?;
+        changed.written = true;
+    }
+    Ok(changed)
+}
+
+/// the variable that gives `key` a value for this run in place of the settings file, when one is
+/// set: a nonempty one, or an empty one for a key an empty variable clears.
+pub(crate) fn overridden(var: Var<'_>, key: &str) -> Option<&'static str> {
+    let (_, variable) = KEYS.iter().find(|(known, _)| *known == key)?;
+    var(variable)
+        .filter(|value| !value.is_empty() || CLEARED.contains(&key))
+        .map(|_| *variable)
+}
+
+/// `name` as a key the settings file takes, or a usage error naming the nearest one, or the
+/// variable that sets it when only a variable does.
+fn known(name: &str) -> Result<&'static str, Error> {
+    if let Some((key, _)) = KEYS.iter().find(|(key, _)| *key == name) {
+        return Ok(key);
+    }
+    let variable = format!("FETCHLOOM_{}", name.to_ascii_uppercase());
+    if OTHERS.contains(&variable.as_str()) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{name} is set by {variable}, not the settings file"),
+        )
+        .help(format!(
+            "set {variable} where fetchloom runs, as in your shell's profile"
+        )));
+    }
+    let error = Error::new(Kind::Usage, format!("{name} is not a setting"));
+    // a variable's name, as FETCHLOOM_JOBS, means its key
+    let meant = KEYS
+        .iter()
+        .find(|(_, variable)| variable.eq_ignore_ascii_case(name))
+        .map(|(key, _)| *key)
+        .or_else(|| crate::name::closest(name, KEYS.map(|(key, _)| key)));
+    Err(match meant {
+        Some(meant) => error.help(format!("did you mean `{meant}`?")),
+        None => error.help(format!(
+            "the settings are {}",
+            KEYS.map(|(key, _)| key).join(", ")
+        )),
+    })
+}
+
+/// what the command line gives `key`, as the settings file would hold it.
+fn given(key: &str, values: &[String], here: Option<&Path>) -> Result<Value, Error> {
+    if LISTS.contains(&key) {
+        let items = values
+            .iter()
+            .flat_map(|value| split(value))
+            .map(|item| from(key, item, here))
+            .collect::<Result<_, _>>()?;
+        return Ok(Value::List(items));
+    }
+    let [value] = values else {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{key} takes one value, and {} were given", values.len()),
+        )
+        .help("put quotes around a value with spaces in it, as \"my folder\""));
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(
+            Error::new(Kind::Usage, format!("{key} needs a value")).help(format!(
+                "`fetchloom settings unset {key}` takes it out of the settings file"
+            )),
+        );
+    }
+    Ok(Value::Text(from(key, value.to_owned(), here)?))
+}
+
+/// `text` from the command line, a relative folder for `key` taken from `here`, the current
+/// folder, since the settings file takes one from its own folder instead. a web address or a
+/// bucket stays as it is, told apart as a mirror is.
+fn from(key: &str, text: String, here: Option<&Path>) -> Result<String, Error> {
+    let names_folder = match key {
+        "cache" => true,
+        "push_to" | "mirrors" => matches!(
+            crate::mirror::Location::parse(&text, None),
+            Ok(crate::mirror::Location::Folder(_))
+        ),
+        _ => false,
+    };
+    if !names_folder || Path::new(&text).is_absolute() {
+        return Ok(text);
+    }
+    let refused = |reason: String| {
+        Error::new(
+            Kind::Usage,
+            format!("{key} cannot take the folder {text}: {reason}"),
+        )
+        .help("give the folder from the top, as /mnt/lab/fetchloom")
+    };
+    let Some(here) = here else {
+        return Err(refused(
+            "the current folder, which it is relative to, could not be read".to_owned(),
+        ));
+    };
+    // the current folder holds no links, as the system gives it, so a `..` leading the folder
+    // given is its parent
+    let mut parts = Path::new(&text).components().peekable();
+    let mut folder = here.to_path_buf();
+    while let Some(part) =
+        parts.next_if(|part| matches!(part, Component::CurDir | Component::ParentDir))
+    {
+        if part == Component::ParentDir {
+            folder.pop();
+        }
+    }
+    folder.extend(parts);
+    folder.into_os_string().into_string().map_err(|_| {
+        refused(format!(
+            "{} holds a name that is not text, which the settings file cannot hold",
+            here.display()
+        ))
+    })
+}
+
+/// the settings file `var` locates, past a link to it, with its text, empty while it is not
+/// there, and whether it is.
+fn open(var: Var<'_>) -> Result<(PathBuf, String, bool), Error> {
+    let (path, _) = located(var);
+    let path = path.ok_or_else(|| {
+        Error::new(
+            Kind::Usage,
+            "this machine has no folder for a settings file, as no home folder is set",
+        )
+        .help("set FETCHLOOM_SETTINGS to the file to keep the settings in")
+    })?;
+    // a link, as from a folder of dotfiles, stays a link, and the file it names changes
+    let path = match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(&path).map_err(|err| {
+            Error::io(
+                format_args!("could not follow the link at {}", path.display()),
+                &err,
+            )
+        })?,
+        _ => path,
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok((path, text, true)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((path, String::new(), false)),
+        Err(err) => Err(Error::io(
+            format_args!("could not read the settings file {}", path.display()),
+            &err,
+        )),
+    }
+}
+
+/// the settings file's text as a document to edit, or the error a run gives for text that is not
+/// TOML.
+fn document(path: &Path, text: &str) -> Result<DocumentMut, Error> {
+    table(path, text)?;
+    text.parse::<DocumentMut>().map_err(|err| {
+        Error::new(
+            Kind::Usage,
+            format!(
+                "the settings file {} is not valid TOML: {}",
+                path.display(),
+                err.message()
+            ),
+        )
+    })
+}
+
+/// refuses `value` for `key` as a run reading it from the settings file at `path` would: the
+/// reader takes the line that would be written and reads the setting from it.
+fn check(key: &str, value: &toml_edit::Value, path: &Path) -> Result<(), Error> {
+    let mut line = DocumentMut::new();
+    line.insert(key, Item::Value(value.clone()));
+    let file = File {
+        path: Some(path.to_owned()),
+        values: parse(path, &line.to_string())?,
+        found: true,
+        bypassed: None,
+    };
+    Settings::read(&|_| None, file, Machine::default())
+        .map(drop)
+        .map_err(|error| error.detail("the settings file is as it was"))
+}
+
+/// `value` for `key` as TOML writes it: a list as an array of text, a switch as true or false, a
+/// whole number as a number unless the key names a folder or a level, and other text, a switch
+/// the reader refuses among it, as text.
+fn written_as(key: &str, value: &Value) -> toml_edit::Value {
+    match value {
+        Value::List(items) => items.iter().collect::<toml_edit::Array>().into(),
+        Value::Text(text) if BOOLEANS.contains(&key) => {
+            match crate::machine::switched(key, Some(std::ffi::OsStr::new(text))) {
+                Ok(Some(on)) => on.into(),
+                _ => text.as_str().into(),
+            }
+        }
+        Value::Text(text)
+            if !WORDS.contains(&key) && text.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            text.parse::<i64>()
+                .map_or_else(|_| text.as_str().into(), Into::into)
+        }
+        Value::Text(text) => text.as_str().into(),
+    }
+}
+
+/// a TOML value as a run reads it from the settings file, none for one it refuses.
+fn read_as(value: &toml_edit::Value) -> Option<Value> {
+    match value {
+        toml_edit::Value::String(text) => Some(Value::Text(text.value().clone())),
+        toml_edit::Value::Integer(number) => Some(Value::Text(number.value().to_string())),
+        toml_edit::Value::Boolean(on) => Some(Value::Text(on.value().to_string())),
+        toml_edit::Value::Array(items) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned))
+            .collect::<Option<_>>()
+            .map(Value::List),
+        _ => None,
+    }
+}
+
+/// takes `key` out of `document`, moving the comments above it to what follows, so only the key
+/// and what trails it on its line go. false when the document has no such key.
+fn removed(document: &mut DocumentMut, key: &str) -> bool {
+    let keys: Vec<String> = document.iter().map(|(key, _)| key.to_owned()).collect();
+    let Some(at) = keys.iter().position(|known| known == key) else {
+        return false;
+    };
+    let Some((gone, _)) = document.remove_entry(key) else {
+        return false;
+    };
+    let above = gone
+        .leaf_decor()
+        .prefix()
+        .and_then(toml_edit::RawString::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if above.trim().is_empty() {
+        return true;
+    }
+    let Some(next) = keys.get(at + 1) else {
+        let trailing = document.trailing().as_str().unwrap_or_default();
+        let trailing = format!("{above}{trailing}");
+        document.set_trailing(trailing);
+        return true;
+    };
+    let decor = match document.get_key_value_mut(next) {
+        Some((_, Item::Table(table))) => table.decor_mut(),
+        Some((mut key, _)) => {
+            let decor = key.leaf_decor_mut();
+            let below = prefix(decor);
+            decor.set_prefix(format!("{above}{below}"));
+            return true;
+        }
+        None => return true,
+    };
+    let below = prefix(decor);
+    decor.set_prefix(format!("{above}{below}"));
+    true
+}
+
+fn prefix(decor: &toml_edit::Decor) -> String {
+    decor
+        .prefix()
+        .and_then(toml_edit::RawString::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// replaces the settings file at `path` with `text` in one step, through a new file beside it,
+/// with the old file's permissions when `found`, and on unix only its owner's otherwise.
+fn write(path: &Path, text: &str, found: bool) -> Result<(), Error> {
+    let failed = |err: &io::Error| {
+        Error::io(
+            format_args!("could not write the settings file {}", path.display()),
+            err,
+        )
+    };
+    let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(folder).map_err(|err| failed(&err))?;
+    let kept = if found {
+        Some(
+            fs::metadata(path)
+                .map_err(|err| failed(&err))?
+                .permissions(),
+        )
+    } else {
+        None
+    };
+    let mut staged = tempfile::Builder::new()
+        .prefix(".settings-")
+        .suffix(".tmp")
+        .tempfile_in(folder)
+        .map_err(|err| failed(&err))?;
+    staged
+        .write_all(text.as_bytes())
+        .and_then(|()| staged.as_file().sync_all())
+        .map_err(|err| failed(&err))?;
+    if let Some(permissions) = kept {
+        fs::set_permissions(staged.path(), permissions).map_err(|err| failed(&err))?;
+    }
+    staged.persist(path).map_err(|err| failed(&err.error))?;
+    // the rename is done; a folder that cannot be flushed leaves it to the system to write
+    let _ = crate::volume::sync_directory(folder);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

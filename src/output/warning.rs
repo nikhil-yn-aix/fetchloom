@@ -102,6 +102,9 @@ pub(crate) enum Warning {
     SearchPartial,
     /// `FETCHLOOM_COLORS` holds entries fetchloom cannot read.
     SettingsColorsUnread,
+    /// a variable set here holds a setting the settings file just changed, so runs where it is
+    /// set keep the variable's value.
+    SettingsOverridden,
     /// a run told `--yes` goes on though a disk may lack the room it needs.
     SpaceShort,
     /// a variable that changes only what a person sees holds neither true nor false.
@@ -168,6 +171,7 @@ impl Warning {
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::SearchPartial => "search.partial",
             Warning::SettingsColorsUnread => "settings.colors_unread",
+            Warning::SettingsOverridden => "settings.overridden",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
             Warning::SpaceShort => "space.short",
@@ -248,6 +252,7 @@ mod tests {
             ProjectNotRestored,
             SearchPartial,
             SettingsColorsUnread,
+            SettingsOverridden,
             SettingsSwitchUnread,
             SettingsUnknownVariable,
             SpaceShort,
