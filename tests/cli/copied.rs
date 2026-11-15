@@ -296,30 +296,38 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     assert_eq!(synced["work"]["data_folder_objects"], 1, "{synced}");
     assert_eq!(synced["work"]["mirror_objects"], 0, "{synced}");
     assert_eq!(fs::read(&made)?, IRIS);
-    unlinked(&two.join("inputs").join("iris").join("iris.csv"), &cache)?;
     Ok(())
 }
 
-/// a settled project of one zip copied to `two` with an empty cache, which knows neither the zip
-/// nor what it holds, and the server that serves the zip `downloads` times, the add's included.
-fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, PathBuf)> {
+/// a settled project of one zip in the work folder, and the server that serves the zip
+/// `downloads` times, the add's included.
+fn zipped(sandbox: &Sandbox, downloads: usize) -> Result<Server> {
     let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let responses = (0..downloads).map(|_| file(&zip, "\"z1\"")).collect();
     let server = Server::start("/files/dataset.zip", responses)?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    Ok(server)
+}
+
+/// [`zipped`] copied to `two` with an empty cache, which knows neither the zip nor what it holds.
+fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, PathBuf)> {
+    let server = zipped(sandbox, downloads)?;
     let (two, cache) = copied(sandbox, "two")?;
     Ok((server, two, cache))
 }
 
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
-/// writes nothing; a file of the person's own beside them is still extra.
+/// writes nothing; a file of the person's own beside them is still extra. the list is missing for
+/// a second person sharing the folder, whose cache never held the zip. a copy would not do: its
+/// state names the folder it came from, so it is not used, and no file has a record.
 #[test]
-fn status_of_a_copied_zip_says_its_files_are_not_checked() -> Result {
+fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Result {
     let sandbox = Sandbox::new()?;
-    let (_server, two, cache) = copied_zip(&sandbox, 1)?;
-    // an edit of data.toml unsettles the copy, so status compares each file
+    let _server = zipped(&sandbox, 1)?;
+    let (two, cache) = (sandbox.work(), sandbox.folder("their cache")?);
+    // an edit of data.toml unsettles the project, so status compares each file
     let manifest = two.join("data.toml");
     let written = fs::read_to_string(&manifest)?;
     fs::write(

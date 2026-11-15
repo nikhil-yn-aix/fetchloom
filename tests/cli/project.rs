@@ -2172,6 +2172,69 @@ fn status_reads_nothing_through_a_linked_data_folder() -> Result {
     Ok(())
 }
 
+/// a state written for another folder, as a copy or a clone brings it along, is not used, so its
+/// records cannot make sync, remove or exclude delete a file of this folder's own with the bytes
+/// they name; in its own folder the same state still lets remove delete the files it placed.
+#[test]
+fn a_state_from_another_folder_cannot_make_a_command_delete_a_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("shared")?;
+    for name in ["a.csv", "b.csv"] {
+        fs::write(source.join(name), name)?;
+    }
+    let added = sandbox.run(&["add", "../shared"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let state = fs::read(sandbox.work().join(".fetchloom").join("state"))?;
+    for (name, args) in [
+        ("synced", &["--offline", "sync"][..]),
+        ("removed", &["--offline", "--yes", "remove", "shared"]),
+        ("excluded", &["--offline", "exclude", "data/shared/a.csv"]),
+    ] {
+        let folder = clone(&sandbox, name)?;
+        if name == "synced" {
+            fs::write(folder.join("data.toml"), "")?;
+        }
+        fs::create_dir_all(folder.join(".fetchloom"))?;
+        fs::write(folder.join(".fetchloom").join("state"), &state)?;
+        let own = folder.join("data").join("shared");
+        fs::create_dir_all(&own)?;
+        for file in ["a.csv", "b.csv"] {
+            fs::write(own.join(file), file)?;
+        }
+        let output = sandbox.command_in(&folder, args).output()?;
+        let stderr = text(&output.stderr)?;
+        for file in ["a.csv", "b.csv"] {
+            assert_eq!(
+                fs::read(own.join(file))?,
+                file.as_bytes(),
+                "{name}: {stderr}"
+            );
+        }
+    }
+    let removed = sandbox.run(&["--offline", "--yes", "remove", "shared"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!sandbox.work().join("data/shared/a.csv").exists());
+    Ok(())
+}
+
+/// a renamed folder is the same folder, so its state is still used: remove deletes the file
+/// fetchloom placed, with no sync first, which would write the state again.
+#[cfg(unix)]
+#[test]
+fn a_renamed_project_folder_keeps_its_state() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let renamed = sandbox.folder("moved")?.join("work");
+    fs::rename(sandbox.work(), &renamed)?;
+    let removed = sandbox
+        .command_in(&renamed, &["--offline", "remove", "iris"])
+        .output()?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!renamed.join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 /// an owner file far larger than any fetchloom writes stands in for a damaged one.
 #[test]
 fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {

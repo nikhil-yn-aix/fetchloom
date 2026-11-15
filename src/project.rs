@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::{Look, State, Synced};
+use self::state::{Folder, Look, State, Synced};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 
@@ -367,7 +367,7 @@ impl Project {
     /// the state, and when it was written in nanoseconds since 1970, like the times it records. a
     /// missing or unreadable state is empty.
     pub(crate) fn state(&self) -> (State, u64) {
-        Self::read_opened(self.open_state(), State::read_whole)
+        self.read_opened(self.open_state(), State::read_whole)
     }
 
     /// [`Project::state`] with only the records at or below `folders` that `keep` accepts. `keep`
@@ -377,7 +377,7 @@ impl Project {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> (State, u64) {
-        Self::read_opened(self.open_state(), |file, _| {
+        self.read_opened(self.open_state(), |file, _| {
             State::read_within(file, folders, keep)
         })
     }
@@ -401,19 +401,29 @@ impl Project {
     }
 
     /// the state as `read` makes it from the opened file and its length, and when it was written.
-    /// a missing or unreadable state is empty.
+    /// a missing or unreadable state is empty, and so is one written for another folder, as a
+    /// clone or a copy of the project brings it: every file is then checked by its hash.
     pub(crate) fn read_opened(
+        &self,
         opened: io::Result<(fs::File, Look)>,
         read: impl FnOnce(&mut fs::File, u64) -> io::Result<(State, u64)>,
     ) -> (State, u64) {
+        static TOLD: std::sync::Once = std::sync::Once::new();
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        opened
+        let (state, written) = opened
             .and_then(|(mut file, found)| {
                 let (state, bytes) = read(&mut file, found.size)?;
                 span.record("bytes", bytes);
                 Ok((state, found.modified))
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if !state.was_read() || state.folder == Folder::of(&self.root) {
+            return (state, written);
+        }
+        TOLD.call_once(|| {
+            tracing::debug!(folder = %self.root.display(), "the state was written for another folder, so it is not used");
+        });
+        (State::default(), 0)
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.
@@ -563,7 +573,8 @@ impl Project {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
         let path = folder.join("state");
-        write_atomically(&path, &state.render()).map_err(|err| {
+        let folder = Folder::of(&self.root);
+        write_atomically(&path, &state.render_for(folder.as_ref())).map_err(|err| {
             let error = Error::io(
                 format_args!(
                     "could not save the list of placed files in {}",

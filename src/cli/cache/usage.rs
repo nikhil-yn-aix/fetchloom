@@ -331,7 +331,7 @@ mod tests {
             );
         }
         fs::create_dir_all(root.join(".fetchloom")).unwrap();
-        fs::write(root.join(".fetchloom").join("state"), state.render()).unwrap();
+        Project { root: root.clone() }.write_state(&state).unwrap();
         let usage = Usage::measure(
             &cache
                 .scan_objects(Threads::default(), &Stop::default())

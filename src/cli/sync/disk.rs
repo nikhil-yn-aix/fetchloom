@@ -239,14 +239,14 @@ impl Survey {
                 std::thread::scope(|scope| {
                     let reading = crate::threads::scoped(scope, move || {
                         opened.take().map_or_else(Default::default, |opened| {
-                            Project::read_opened(opened, State::read_whole)
+                            project.read_opened(opened, State::read_whole)
                         })
                     });
                     let scanned = walk();
                     (reading.join(), scanned)
                 })
             } else {
-                (Project::read_opened(opened, State::read_whole), walk())
+                (project.read_opened(opened, State::read_whole), walk())
             }
         };
         let Scanned {

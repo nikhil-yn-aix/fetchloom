@@ -19,14 +19,14 @@ use crate::place::Method;
 use crate::project::lock::derived::Derived;
 use crate::project::manifest::Manifest;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// a block of records ends once it holds this many bytes, so a read within a folder reads
 /// about this much beyond the records it keeps.
 const BLOCK: usize = 64 << 10;
 
 /// how every state starts, up to the number `at` holds: where the records end.
-const HEAD: &[u8] = br#"{"version":2,"at":"#;
+const HEAD: &[u8] = br#"{"version":3,"at":"#;
 
 /// room for `at`: the twenty digits of the largest 64-bit number. the writer pads a shorter one
 /// with spaces, which json allows after a number.
@@ -53,6 +53,54 @@ pub(crate) struct State {
     /// command that names one brings it back.
     #[serde(default)]
     pub(crate) dropped: BTreeSet<String>,
+    /// the project folder the state was written for, which a clone or a copy is not.
+    #[serde(default)]
+    pub(crate) folder: Option<Folder>,
+}
+
+/// which folder a state was written for: on unix its device and inode, which a rename keeps; on
+/// windows its creation time and its path. a clone or a copy of a project is another folder, so
+/// the records of a state that came with it, which anyone could have written, are not used.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Folder {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inode: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+}
+
+impl Folder {
+    /// the folder at `root`, none when the system cannot say.
+    pub(crate) fn of(root: &std::path::Path) -> Option<Folder> {
+        let metadata = std::fs::metadata(root).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some(Folder {
+                device: Some(metadata.dev()),
+                inode: Some(metadata.ino()),
+                ..Folder::default()
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            Some(Folder {
+                created: Some(metadata.creation_time()),
+                path: Some(root.to_string_lossy().into_owned()),
+                ..Folder::default()
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (metadata, root);
+            None
+        }
+    }
 }
 
 /// a rebuild of a recipe that made other files than data.lock pins for the same key. its files are
@@ -122,6 +170,11 @@ pub(crate) struct Look {
 }
 
 impl State {
+    /// whether this state was read from a file of this version, rather than standing for none.
+    pub(crate) fn was_read(&self) -> bool {
+        self.version == VERSION
+    }
+
     /// the state on disk. an unreadable state counts as empty: files then look unplaced, and
     /// fetchloom hashes them before it trusts or replaces any.
     pub(crate) fn parse(bytes: &[u8]) -> State {
@@ -213,24 +266,36 @@ impl State {
         (self.candidates.len(), self.dropped.len()) != before
     }
 
-    /// the state as one json document: the records in path order, then where each block of them
-    /// lies in the document, which [`State::read_within`] reads by.
+    /// [`State::render_for`] the folder the state records, for tests.
+    #[cfg(test)]
     pub(crate) fn render(&self) -> Vec<u8> {
-        self.render_in(BLOCK)
+        self.render_for(self.folder.as_ref())
     }
 
-    /// [`State::render`] with blocks of at least `block` bytes, the last one aside.
-    fn render_in(&self, block: usize) -> Vec<u8> {
+    /// the state as one json document, written for the project folder `folder`: the records in
+    /// path order, then where each block of them lies in the document, which
+    /// [`State::read_within`] reads by.
+    pub(crate) fn render_for(&self, folder: Option<&Folder>) -> Vec<u8> {
+        self.render_in(BLOCK, folder)
+    }
+
+    /// [`State::render_for`] with blocks of at least `block` bytes, the last one aside.
+    fn render_in(&self, block: usize, folder: Option<&Folder>) -> Vec<u8> {
         // where serde_json::to_vec starts: doubling from 128 ends a large state's buffer at a
         // power of two, as large as before the state had an index
         let mut bytes = Vec::with_capacity(128);
-        match self.encode(&mut bytes, block) {
+        match self.encode(&mut bytes, block, folder) {
             Ok(()) => bytes,
             Err(_) => Vec::new(),
         }
     }
 
-    fn encode(&self, out: &mut Vec<u8>, block: usize) -> serde_json::Result<()> {
+    fn encode(
+        &self,
+        out: &mut Vec<u8>,
+        block: usize,
+        folder: Option<&Folder>,
+    ) -> serde_json::Result<()> {
         out.extend_from_slice(HEAD);
         out.resize(out.len() + SLOT, b' ');
         out.extend_from_slice(FILES);
@@ -264,6 +329,10 @@ impl State {
             out.extend_from_slice(br#","dropped":"#);
             serde_json::to_writer(&mut *out, &self.dropped)?;
         }
+        if let Some(folder) = folder {
+            out.extend_from_slice(br#","folder":"#);
+            serde_json::to_writer(&mut *out, folder)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -294,7 +363,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
-        let mut dropped = false;
+        let (mut dropped, mut folder) = (false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -313,6 +382,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "dropped" => {
                     state.dropped = map.next_value()?;
                     std::mem::replace(&mut dropped, true)
+                }
+                "folder" => {
+                    state.folder = map.next_value()?;
+                    std::mem::replace(&mut folder, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -407,6 +480,8 @@ struct Tail {
     candidates: BTreeMap<String, Candidate>,
     #[serde(default)]
     dropped: BTreeSet<String>,
+    #[serde(default)]
+    folder: Option<Folder>,
     blocks: Vec<Block>,
 }
 
@@ -449,6 +524,7 @@ fn indexed(
         synced,
         candidates,
         dropped,
+        folder,
         blocks,
     } = index(reading)?;
     let mut files = BTreeMap::new();
@@ -468,6 +544,7 @@ fn indexed(
         synced,
         candidates,
         dropped,
+        folder,
     })
 }
 
@@ -478,6 +555,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         synced,
         candidates,
         dropped,
+        folder,
         blocks,
     } = index(reading)?;
     let mut records = Vec::new();
@@ -500,6 +578,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         synced,
         candidates,
         dropped,
+        folder,
     })
 }
 
@@ -1170,7 +1249,7 @@ mod tests {
         let empty = State::default();
         let crowded = crowded();
         for (state, block) in [(&empty, BLOCK), (&crowded, BLOCK), (&crowded, 300)] {
-            let bytes = state.render_in(block);
+            let bytes = state.render_in(block, None);
             let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let files = serde_json::to_vec(&state.files).unwrap();
             let at = START - 1 + files.len();
@@ -1202,7 +1281,7 @@ mod tests {
     fn a_read_within_folders_answers_as_a_whole_read() {
         let state = crowded();
         for block in [1, 300, 4096, usize::MAX] {
-            let bytes = state.render_in(block);
+            let bytes = state.render_in(block, None);
             let mut file = io::Cursor::new(&bytes);
             let mut reading = Reading {
                 file: &mut file,
@@ -1284,7 +1363,7 @@ mod tests {
     /// a changed `at` changes no answer either, since a whole read ignores it and the index.
     #[test]
     fn a_read_within_a_changed_index_answers_as_a_whole_read() {
-        let bytes = crowded().render_in(300);
+        let bytes = crowded().render_in(300, None);
         let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let blocks = document["blocks"].as_array().unwrap().clone();
         assert_eq!(with_index(&bytes, &blocks.clone().into()), bytes);

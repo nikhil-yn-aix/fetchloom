@@ -257,8 +257,10 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     Ok(())
 }
 
-/// a copy by `rsync -a` without -H holds files of its own where it had links to the cache, which
-/// the report counts as copies that were linked when placed.
+/// a data folder put back from a copy made by `rsync -a` without -H holds files of its own where it
+/// had links to the cache, which the report counts as copies that were linked when placed. a copy
+/// of the whole project would not stay so: its state names the folder it came from, so its first
+/// sync checks each file and links it again.
 #[test]
 fn a_project_copied_without_hardlinks_is_reported() -> Result {
     let sandbox = Sandbox::new()?;
@@ -272,24 +274,17 @@ fn a_project_copied_without_hardlinks_is_reported() -> Result {
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    let copy = sandbox.folder("copy")?;
-    let (project, cache) = (copy.join("work"), copy.join("cache"));
-    copy_apart(&sandbox.work(), &project)?;
-    copy_apart(&sandbox.cache(), &cache)?;
-    let in_copy = |args: &[&str]| {
-        sandbox
-            .command_in(&project, args)
-            .env("FETCHLOOM_CACHE", &cache)
-            .output()
-    };
-    let synced = in_copy(&["sync", "--offline"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    let report = json(&in_copy(&["--json", "cache"])?)?;
+    let data = sandbox.work().join("data");
+    let backup = sandbox.folder("backup")?;
+    copy_apart(&data, &backup)?;
+    crate::support::delete_folder(&data)?;
+    copy_apart(&backup, &data)?;
+    let report = json(&sandbox.run(&["--json", "cache"])?)?;
     let result = &report["result"];
     assert_eq!(result["linked"], 0, "{report}");
     assert_eq!(result["copies"], IRIS.len(), "{report}");
     assert_eq!(result["unlinked_copies"], IRIS.len(), "{report}");
-    let story = text(&in_copy(&["cache"])?.stderr)?;
+    let story = text(&sandbox.run(&["cache"])?.stderr)?;
     assert!(
         story.contains(
             "Copies 81 B in 1 project are separate copies of cached files; all of it was linked \
