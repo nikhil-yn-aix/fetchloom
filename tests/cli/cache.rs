@@ -383,7 +383,7 @@ fn gc_names_the_project_whose_merge_is_unfinished() -> Result {
             .is_some_and(|help| help.contains(&format!("`{lock}`"))),
         "{document}"
     );
-    assert_eq!(error["fix"], lock.as_str(), "{document}");
+    assert_eq!(error["fix"], serde_json::Value::Null, "{document}");
     Ok(())
 }
 

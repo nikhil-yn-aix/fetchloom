@@ -428,9 +428,14 @@ fn a_fix_is_the_first_runnable_command_in_the_help() {
     ] {
         assert_eq!(fix_in(help, true), fix, "{help}");
     }
+    // a lock may download a file to pin it, so only its check or dry run is a fix
     assert_eq!(
         fix_in("run `fetchloom lock` and commit data.lock", false),
-        Some("fetchloom lock")
+        None
+    );
+    assert_eq!(
+        fix_in("run `fetchloom lock --dry-run` to see what it pins", false),
+        Some("fetchloom lock --dry-run")
     );
 }
 
@@ -510,7 +515,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("exclude", false, &["--dry-run"]),
         ("drop", false, &["--dry-run"]),
         ("sync", false, &["--dry-run"]),
-        ("lock", true, &["--check", "--dry-run"]),
+        ("lock", false, &["--check", "--dry-run"]),
         ("build", false, &["--dry-run"]),
         ("status", true, &["--verify", "--check", "--sources"]),
         ("diff", true, &[]),

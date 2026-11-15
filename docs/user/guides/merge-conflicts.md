@@ -63,6 +63,6 @@ with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`,
 
 ## a git merge conflict
 
-a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. its help, and the JSON `fix`, name `fetchloom lock`, which [merges both files](#after-a-git-merge) one dataset at a time without downloading; each side of `data.lock` must read on its own.
+a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. its help names `fetchloom lock`, which [merges both files](#after-a-git-merge) one dataset at a time without downloading; each side of `data.lock` must read on its own. the JSON `fix` is null, since a lock may download a file to pin it.
 
 the lists in `data.lock.d` are named by their contents, so a merge brings each branch's new parts in beside the others without a conflict. the merge reads only the parts of the pins it keeps, which may be all git left of a side, and removes the parts no pin names once `data.lock` is written.

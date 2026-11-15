@@ -1599,7 +1599,14 @@ fn an_unfinished_merge_says_how_to_finish_it() -> Result {
             format!("{name} has an unfinished git merge conflict")
         );
         assert_eq!(error["details"], serde_json::json!([format!("{name}:1")]));
-        assert_eq!(error["fix"], "fetchloom lock", "{name}");
+        assert!(
+            error["help"]
+                .as_str()
+                .is_some_and(|help| help.contains("`fetchloom lock`")),
+            "{name}: {error}"
+        );
+        // a lock may download a file to pin it, so it is advice, no fix
+        assert_eq!(error["fix"], serde_json::Value::Null, "{name}");
         assert_eq!(report["work"]["requests"], 0);
         fs::write(&path, merged)?;
     }

@@ -727,10 +727,8 @@ impl Command {
                 action: None | Some(CacheAction::Verify),
             })
             | Command::Auth(Auth { action: None }) => true,
-            Command::Lock(lock) => {
-                (lock.upgrade.is_none() && lock.ours.is_empty() && lock.theirs.is_empty())
-                    || lock.dry.dry_run
-            }
+            // a lock may download a file to pin it; --check only compares
+            Command::Lock(lock) => lock.check || lock.dry.dry_run,
             Command::Export(export) => !export.force,
             Command::Add(Add { dry, .. })
             | Command::Get(Get { dry, .. })
