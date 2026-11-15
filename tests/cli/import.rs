@@ -901,6 +901,38 @@ fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
     Ok(())
 }
 
+/// an add that fails once it wrote data.lock and its file list, here as placing finds the data
+/// folder read-only, takes the list back with data.toml and data.lock: the folder is as it was.
+#[cfg(unix)]
+#[test]
+fn a_failed_first_add_takes_back_the_file_lists_it_wrote() -> Result {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    let work = sandbox.work();
+    let data = work.join("data");
+    fs::create_dir(&data)?;
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o555))?;
+    let output = sandbox
+        .command(&["add", "../flowers"])
+        .env("FETCHLOOM_TEST_INLINE", "1")
+        .output()?;
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o755))?;
+    let stderr = text(&output.stderr)?;
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("restored data.toml and data.lock to their state before add"),
+        "{stderr}"
+    );
+    for name in ["data.toml", "data.lock", "data.lock.d"] {
+        assert!(!work.join(name).exists(), "{name}: {stderr}");
+    }
+    Ok(())
+}
+
 /// a mac and a linux machine may write café two ways, and the refusal says so rather than call
 /// them a file and a folder.
 #[cfg(not(target_os = "macos"))]

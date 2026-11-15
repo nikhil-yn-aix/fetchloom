@@ -1317,6 +1317,7 @@ pub(super) async fn sync_add(
         Err(error) => Err(match saved.as_mut() {
             Some(saved) => {
                 let error = restore(project, saved, names, error);
+                unwrite_lists(work.context, project);
                 if saved.keep {
                     adding.unrestored.store(true, Ordering::Relaxed);
                 }
@@ -1324,6 +1325,39 @@ pub(super) async fn sync_add(
             }
             None => error,
         }),
+    }
+}
+
+/// removes the parts of file lists this run wrote that data.lock, as a failed add left it, does
+/// not name, and data.lock.d once that leaves it empty: the folder is as the add found it.
+fn unwrite_lists(context: &Context, project: &Project) {
+    let written: Vec<String> = context
+        .lists
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(root, _)| *root == project.root)
+        .map(|(_, part)| part.clone())
+        .collect();
+    if written.is_empty() {
+        return;
+    }
+    let text = std::fs::read_to_string(project.root.join(lock::FILE)).unwrap_or_default();
+    let named: std::collections::HashSet<String> = lock::listed(&text)
+        .into_iter()
+        .flat_map(|(_, parts)| parts)
+        .collect();
+    for part in written.iter().filter(|part| !named.contains(*part)) {
+        let path = project
+            .root
+            .join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Err(err) = std::fs::remove_file(&path) {
+            tracing::debug!(%err, part, "could not remove a file list the add wrote");
+        }
+    }
+    if let Ok(folder) = lock::lists::folder(&project.root) {
+        // only an empty folder goes
+        let _ = std::fs::remove_dir(folder);
     }
 }
 

@@ -300,6 +300,7 @@ pub(super) fn write(
     })();
     if let Err(error) = written {
         let error = restore(project, &mut saved, std::slice::from_ref(&name), error);
+        super::unwrite_lists(work.context, project);
         if saved.keep {
             adding.unrestored.store(true, Ordering::Relaxed);
         }
