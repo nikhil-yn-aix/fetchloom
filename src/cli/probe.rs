@@ -98,6 +98,8 @@ pub(in crate::cli) enum Lack {
     Gone(Error),
     /// its source refused it, as 401 or 403 says, with the sign-in hint a download gives.
     Refused(Error),
+    /// its source answered with a file but not its size, so the size could not be checked.
+    Unsized(Error),
     /// no answer after the retries, a web page where the file was expected, or another answer.
     Unknown(Error),
     /// it was imported from files, and no mirror holds it, so no source can give it.
@@ -105,15 +107,22 @@ pub(in crate::cli) enum Lack {
 }
 
 impl Lack {
-    /// what `--json` calls it: `changed`, `gone`, `refused`, `unknown` or `imported`.
+    /// what `--json` calls it: `changed`, `gone`, `refused`, `unsized`, `unknown` or `imported`.
     pub(in crate::cli) fn outcome(&self) -> &'static str {
         match self {
             Lack::Changed { .. } => "changed",
             Lack::Gone(_) => "gone",
             Lack::Refused(_) => "refused",
+            Lack::Unsized(_) => "unsized",
             Lack::Unknown(_) => "unknown",
             Lack::Imported => "imported",
         }
+    }
+
+    /// whether it shows the file is lost: its source has nothing at its link or another file
+    /// there, or no source ever had it. a refusal or no answer shows nothing either way.
+    pub(in crate::cli) fn lost(&self) -> bool {
+        matches!(self, Lack::Changed { .. } | Lack::Gone(_) | Lack::Imported)
     }
 
     /// the size a changed file has now.
@@ -136,7 +145,10 @@ impl Lack {
                     sized(pinned, size)
                 ),
             ),
-            Lack::Gone(error) | Lack::Refused(error) | Lack::Unknown(error) => error,
+            Lack::Gone(error)
+            | Lack::Refused(error)
+            | Lack::Unsized(error)
+            | Lack::Unknown(error) => error,
             Lack::Imported => Error::new(
                 Kind::ReferenceUnresolved,
                 "it was imported from files, and no mirror holds it",
@@ -189,7 +201,7 @@ pub(in crate::cli) fn judged(
             size: total,
             host: host.to_owned(),
         }),
-        Probed::File { total: None, .. } => Err(Lack::Unknown(Error::new(
+        Probed::File { total: None, .. } => Err(Lack::Unsized(Error::new(
             Kind::SourceInvalid,
             format!("{host} answered without saying the file's size"),
         ))),

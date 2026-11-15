@@ -14,6 +14,7 @@ fn outcome(judged: Result<(), Lack>) -> (&'static str, Option<u64>) {
         }
         Err(Lack::Gone(_)) => ("gone", None),
         Err(Lack::Refused(_)) => ("refused", None),
+        Err(Lack::Unsized(_)) => ("unsized", None),
         Err(Lack::Unknown(_)) => ("unknown", None),
         Err(Lack::Imported) => ("imported", None),
     }
@@ -35,7 +36,7 @@ fn an_answer_is_served_only_at_the_pinned_size() {
         (file(Some(10), false), false, ("served", None)),
         (file(Some(12), false), false, ("changed", Some(12))),
         (file(Some(0), false), false, ("changed", Some(0))),
-        (file(None, false), false, ("unknown", None)),
+        (file(None, false), false, ("unsized", None)),
         (file(Some(10), true), false, ("unknown", None)),
         (file(Some(10), true), true, ("served", None)),
         (file(Some(12), true), true, ("changed", Some(12))),

@@ -20,13 +20,17 @@ const NAMED: usize = 20;
 /// the most hints of distinct refusals and failures told after the lines.
 const HINTS: usize = 3;
 
+/// what to do when files could not be checked and none gave a hint of its own.
+const AGAIN: &str = "ask again later: a source that gave no answer may be busy or down";
+
 /// what `--sources` found, as `--json` gives it.
 #[derive(Debug, Default, Serialize)]
 pub(super) struct Sources {
     /// the files data.lock pins for the datasets data.toml fetches, and of those, how many a
-    /// mirror or source still serves.
+    /// mirror or source still serves and how many could not be checked.
     files: u64,
     served: u64,
+    unchecked: u64,
     datasets: Vec<Dataset>,
 }
 
@@ -38,19 +42,24 @@ struct Dataset {
     served: u64,
     /// of those served, how many a mirror holds.
     on_mirrors: u64,
+    /// of those served, how many its source answered for without saying their size.
+    no_size: u64,
     /// each file no mirror or source serves.
     not_served: Vec<Unserved>,
+    /// each file no mirror or source answered for clearly: refused, or no answer came.
+    unchecked: Vec<Unserved>,
     /// the mirrors that hold any, as the run names them.
     #[serde(skip)]
     mirrors: BTreeSet<String>,
 }
 
-/// a pinned file no mirror or source serves, and why.
+/// a pinned file no mirror or source was found to serve, and why.
 #[derive(Debug, Serialize)]
 struct Unserved {
     /// the file as data.lock names it, after its dataset: `iris/iris.csv`.
     file: String,
-    /// `changed`, `gone`, `refused`, `unknown` or `imported`.
+    /// `changed`, `gone` or `imported` for a file not served, `refused` or `unknown` for one
+    /// not checked.
     outcome: &'static str,
     /// for `changed`, the size the source serves in its place.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +67,9 @@ struct Unserved {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     help: Option<String>,
+    /// the kind of error a download of it would meet.
+    #[serde(skip)]
+    kind: Kind,
 }
 
 impl Unserved {
@@ -73,6 +85,10 @@ impl Unserved {
 impl Sources {
     fn unserved(&self) -> impl Iterator<Item = &Unserved> {
         self.datasets.iter().flat_map(|dataset| &dataset.not_served)
+    }
+
+    fn unchecked(&self) -> impl Iterator<Item = &Unserved> {
+        self.datasets.iter().flat_map(|dataset| &dataset.unchecked)
     }
 }
 
@@ -147,7 +163,9 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
                 files: 0,
                 served: 0,
                 on_mirrors: 0,
+                no_size: 0,
                 not_served: Vec::new(),
+                unchecked: Vec::new(),
                 mirrors: BTreeSet::new(),
             });
         }
@@ -169,7 +187,17 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
                 dataset.served += 1;
                 sources.served += 1;
             }
-            Found::Nowhere(lack) => dataset.not_served.push(unserved(pinned, lack)),
+            // the source gave the file, as it did to the download, only not its size
+            Found::Nowhere(Lack::Unsized(_)) => {
+                dataset.served += 1;
+                dataset.no_size += 1;
+                sources.served += 1;
+            }
+            Found::Nowhere(lack) if lack.lost() => dataset.not_served.push(unserved(pinned, lack)),
+            Found::Nowhere(lack) => {
+                sources.unchecked += 1;
+                dataset.unchecked.push(unserved(pinned, lack));
+            }
         }
     }
     sources
@@ -185,58 +213,21 @@ fn unserved(pinned: &Pinned<'_>, lack: Lack) -> Unserved {
         size,
         message: error.message,
         help: error.help.map(String::from),
+        kind: error.kind,
     }
 }
 
-/// a line for each dataset: a step on stderr for one served whole, else a row on stdout with a row
-/// under it for each file not served, at most [`SHOWN`] at a terminal but for `-v`; then the closing
-/// line, and what to do.
+/// a line for each dataset, as [`tell_dataset`] says it; then the closing lines, and what to do.
 pub(super) fn tell(output: &Output, sources: &Sources) {
     let shown = output
         .answer_width()
         .filter(|_| !output.shows_details())
         .map(|_| SHOWN);
     for dataset in &sources.datasets {
-        let files = units::count(dataset.files, "file", "files");
-        if dataset.not_served.is_empty() {
-            let mirrored = match (dataset.on_mirrors, dataset.mirrors.len()) {
-                (0, _) => String::new(),
-                (on, 1) => format!(
-                    " · {} on {}",
-                    units::grouped(on),
-                    dataset.mirrors.first().map_or("", String::as_str)
-                ),
-                (on, mirrors) => format!(" · {} on {mirrors} mirrors", units::grouped(on)),
-            };
-            output.step("Served", &format!("{} · {files}{mirrored}", dataset.name));
-            continue;
-        }
-        output.report(
-            "Not served",
-            &format!(
-                "{} · {} of {files}",
-                dataset.name,
-                units::grouped(dataset.not_served.len() as u64)
-            ),
-        );
-        let most = shown.unwrap_or(usize::MAX);
-        for file in dataset.not_served.iter().take(most) {
-            output.report("", &file.said());
-        }
-        let hidden = dataset.not_served.len().saturating_sub(most);
-        if hidden > 0 {
-            output.report(
-                "",
-                &format!(
-                    "and {} more · `{}` names each",
-                    units::grouped(hidden as u64),
-                    crate::cli::project::command("status --sources -v")
-                ),
-            );
-        }
+        tell_dataset(output, dataset, shown);
     }
-    let unserved = sources.files - sources.served;
-    if unserved == 0 {
+    let unserved = sources.files - sources.served - sources.unchecked;
+    if unserved == 0 && sources.unchecked == 0 {
         output.done(
             "Ok",
             &match sources.files {
@@ -250,16 +241,31 @@ pub(super) fn tell(output: &Output, sources: &Sources) {
         );
         return;
     }
-    output.mark(
-        "Found",
-        &format!(
-            "{} of {} in data.lock that no mirror or source serves",
-            units::grouped(unserved),
+    let of_all = |count: u64| {
+        format!(
+            "{} of {} in data.lock",
+            units::grouped(count),
             units::count(sources.files, "file", "files")
-        ),
-    );
+        )
+    };
+    if unserved > 0 {
+        output.mark(
+            "Found",
+            &format!("{} that no mirror or source serves", of_all(unserved)),
+        );
+    }
+    if sources.unchecked > 0 {
+        output.mark(
+            "Unchecked",
+            &format!("{}, which may still be served", of_all(sources.unchecked)),
+        );
+    }
     let mut helps: Vec<&str> = Vec::new();
-    for help in sources.unserved().filter_map(|file| file.help.as_deref()) {
+    for help in sources
+        .unserved()
+        .chain(sources.unchecked())
+        .filter_map(|file| file.help.as_deref())
+    {
         if !helps.contains(&help) {
             helps.push(help);
         }
@@ -267,7 +273,63 @@ pub(super) fn tell(output: &Output, sources: &Sources) {
     for help in helps.iter().take(HINTS) {
         output.hint(help);
     }
-    output.hint(&next(sources));
+    if unserved > 0 {
+        output.hint(&next(sources));
+    } else if helps.is_empty() {
+        output.hint(AGAIN);
+    }
+}
+
+/// a step on stderr for `dataset` when every file is served, else a row on stdout for its files
+/// not served and one for those not checked, each with a row under it for each file, at most
+/// `shown` but for `-v`.
+fn tell_dataset(output: &Output, dataset: &Dataset, shown: Option<usize>) {
+    let files = units::count(dataset.files, "file", "files");
+    if dataset.not_served.is_empty() && dataset.unchecked.is_empty() {
+        let mirrored = match (dataset.on_mirrors, dataset.mirrors.len()) {
+            (0, _) => String::new(),
+            (on, 1) => format!(
+                " · {} on {}",
+                units::grouped(on),
+                dataset.mirrors.first().map_or("", String::as_str)
+            ),
+            (on, mirrors) => format!(" · {} on {mirrors} mirrors", units::grouped(on)),
+        };
+        let size_note = match dataset.no_size {
+            0 => String::new(),
+            count => format!(" · {} answered without a size", units::grouped(count)),
+        };
+        output.step(
+            "Served",
+            &format!("{} · {files}{mirrored}{size_note}", dataset.name),
+        );
+        return;
+    }
+    for (label, listed) in [
+        ("Not served", &dataset.not_served),
+        ("Unchecked", &dataset.unchecked),
+    ] {
+        if listed.is_empty() {
+            continue;
+        }
+        let count = units::grouped(listed.len() as u64);
+        output.report(label, &format!("{} · {count} of {files}", dataset.name));
+        let most = shown.unwrap_or(usize::MAX);
+        for file in listed.iter().take(most) {
+            output.report("", &file.said());
+        }
+        let hidden = listed.len().saturating_sub(most);
+        if hidden > 0 {
+            output.report(
+                "",
+                &format!(
+                    "and {} more · `{}` names each",
+                    units::grouped(hidden as u64),
+                    crate::cli::project::command("status --sources -v")
+                ),
+            );
+        }
+    }
 }
 
 /// what to do about the files no mirror or source serves: keep a copy on a mirror, or pin what a
@@ -297,69 +359,96 @@ fn next(sources: &Sources) -> String {
     )
 }
 
-/// fails with `data.not_ready` naming each file no mirror or source serves, for `--check`.
+/// fails for `--check`: with `data.not_ready` naming each file no mirror or source serves, else,
+/// when some could not be checked, with the error a download of one would meet, a refusal's before
+/// no answer's, since asking again later does not end a refusal.
 pub(super) fn ready(sources: &Sources) -> Result<(), Error> {
     let lines: Vec<String> = sources.unserved().map(Unserved::said).collect();
-    if lines.is_empty() {
-        return Ok(());
+    if !lines.is_empty() {
+        return Err(Error::new(
+            Kind::NotReady,
+            format!(
+                "no mirror or source serves {} data.lock pins",
+                units::count(lines.len() as u64, "file", "files")
+            ),
+        )
+        .details_up_to(&lines, NAMED)
+        .help(next(sources)));
     }
+    let Some(first) = sources.unchecked().min_by_key(|file| match file.kind {
+        Kind::AuthRequired => 0,
+        Kind::NetworkUnreachable
+        | Kind::NetworkStatus
+        | Kind::NetworkRateLimited
+        | Kind::NetworkRefused
+        | Kind::OfflineMissing => 2,
+        _ => 1,
+    }) else {
+        return Ok(());
+    };
+    let lines: Vec<String> = sources.unchecked().map(Unserved::said).collect();
     Err(Error::new(
-        Kind::NotReady,
+        first.kind,
         format!(
-            "no mirror or source serves {} data.lock pins",
+            "could not check {} data.lock pins, which may still be served",
             units::count(lines.len() as u64, "file", "files")
         ),
     )
     .details_up_to(&lines, NAMED)
-    .help(next(sources)))
+    .help(first.help.as_deref().unwrap_or(AGAIN)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn unserved(outcome: &'static str) -> Unserved {
+    fn unserved(outcome: &'static str, kind: Kind) -> Unserved {
         Unserved {
             file: format!("pets/{outcome}.png"),
             outcome,
             size: None,
             message: format!("{outcome} at data.example.org"),
             help: None,
+            kind,
         }
     }
 
-    /// the check fails only for files served nowhere, naming each, and passes a project whose
-    /// every file a mirror or source serves.
+    /// the check fails as not ready only for files served nowhere, naming each; else, for files it
+    /// could not check, with the error a download would meet, a refusal's first; and it passes a
+    /// project whose every file a mirror or source serves.
     #[test]
-    fn the_check_fails_only_for_files_served_nowhere() {
+    fn the_check_fails_as_not_ready_only_for_files_served_nowhere() {
         let mut sources = Sources {
-            files: 3,
-            served: 3,
+            files: 4,
+            served: 4,
+            unchecked: 0,
             datasets: vec![Dataset {
                 name: "pets".to_owned(),
-                files: 3,
-                served: 3,
+                files: 4,
+                served: 4,
                 on_mirrors: 1,
+                no_size: 1,
                 not_served: Vec::new(),
+                unchecked: Vec::new(),
                 mirrors: BTreeSet::new(),
             }],
         };
         assert!(ready(&sources).is_ok());
-        sources.served = 1;
-        sources.datasets[0].served = 1;
-        sources.datasets[0].not_served = vec![unserved("gone"), unserved("refused")];
+        let pets = &mut sources.datasets[0];
+        pets.not_served = vec![unserved("gone", Kind::ReferenceUnresolved)];
+        pets.unchecked = vec![
+            unserved("unknown", Kind::NetworkStatus),
+            unserved("refused", Kind::AuthRequired),
+        ];
         let error = ready(&sources).unwrap_err();
         assert_eq!(error.kind, Kind::NotReady);
         assert_eq!(
             error.message,
-            "no mirror or source serves 2 files data.lock pins"
+            "no mirror or source serves 1 file data.lock pins"
         );
         assert_eq!(
             error.details,
-            [
-                "pets/gone.png · gone: gone at data.example.org",
-                "pets/refused.png · refused: refused at data.example.org"
-            ]
+            ["pets/gone.png · gone: gone at data.example.org"]
         );
         assert_eq!(
             error.help.as_deref(),
@@ -367,11 +456,32 @@ mod tests {
                 "`fetchloom push` from a machine whose cache holds them keeps a copy on a mirror, or `fetchloom lock --upgrade pets` pins what the source serves now"
             )
         );
-        // pinning again brings back no file a source refuses
-        sources.datasets[0].not_served.remove(0);
+        // pinning again brings back no file that only this machine had
+        sources.datasets[0].not_served = vec![unserved("imported", Kind::ReferenceUnresolved)];
         assert_eq!(
             ready(&sources).unwrap_err().help.as_deref(),
             Some("`fetchloom push` from a machine whose cache holds them keeps a copy on a mirror")
+        );
+        // with no file lost, those not checked fail it as a download would, a refusal first
+        sources.datasets[0].not_served.clear();
+        let error = ready(&sources).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(
+            error.message,
+            "could not check 2 files data.lock pins, which may still be served"
+        );
+        assert_eq!(
+            error.details,
+            [
+                "pets/unknown.png · unknown: unknown at data.example.org",
+                "pets/refused.png · refused: refused at data.example.org"
+            ]
+        );
+        sources.datasets[0].unchecked.pop();
+        let error = ready(&sources).unwrap_err();
+        assert_eq!(
+            (error.kind, error.help.as_deref()),
+            (Kind::NetworkStatus, Some(AGAIN))
         );
     }
 }

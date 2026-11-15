@@ -68,8 +68,8 @@ fn each_pinned_file_is_served_or_says_why_not() -> Result {
     let document = json(&output)?;
     let sources = &document["result"]["sources"];
     assert_eq!(
-        (&sources["files"], &sources["served"]),
-        (&5.into(), &2.into()),
+        (&sources["files"], &sources["served"], &sources["unchecked"]),
+        (&5.into(), &2.into(), &1.into()),
         "{sources}"
     );
     // a part of one byte, and a whole file from a server that pays the range no heed
@@ -84,7 +84,8 @@ fn each_pinned_file_is_served_or_says_why_not() -> Result {
     let gone = outcome("moved")?;
     assert_eq!(gone["outcome"], "gone", "{gone}");
     assert_eq!(gone["file"], "moved/moved.csv");
-    let refused = outcome("locked")?;
+    // a refusal shows nothing lost, so the file is not checked rather than not served
+    let refused = dataset(&document, "locked")?["unchecked"][0].clone();
     assert_eq!(refused["outcome"], "refused", "{refused}");
     assert!(refused["help"].is_string(), "{refused}");
     let changed = outcome("grown")?;
@@ -221,7 +222,7 @@ fn a_host_that_gives_no_answer_is_asked_no_more() -> Result {
     let document = json(&output)?;
     let mut unasked = 0;
     for name in names {
-        let file = &dataset(&document, name)?["not_served"][0];
+        let file = &dataset(&document, name)?["unchecked"][0];
         assert_eq!(file["outcome"], "unknown", "{file}");
         if file["message"] == "not asked, since 127.0.0.1 gave no answer for another file" {
             unasked += 1;
@@ -231,6 +232,63 @@ fn a_host_that_gives_no_answer_is_asked_no_more() -> Result {
     let sent = source.requests().len() - asked;
     assert!(sent < names.len(), "{sent} requests");
     assert_eq!(unasked, names.len() - sent);
+    Ok(())
+}
+
+/// a source that gives the file without its size serves it; one that is busy, refuses or is down
+/// leaves the file not checked, which `--check` fails as a download of it would, never as lost.
+#[test]
+fn a_file_not_checked_is_never_called_lost() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![("/files/iris.csv".to_owned(), file(IRIS, "\"i\""))])?;
+    pinned(&sandbox, &source, &["/files/iris.csv"])?;
+    let check = || {
+        sandbox
+            .command(&["--json", "status", "--sources", "--check"])
+            .env("FETCHLOOM_RETRIES", "0")
+            .output()
+    };
+    // a whole file and no length, as a server paying the range no heed may send
+    source.change(vec![(
+        "/files/iris.csv".to_owned(),
+        reply("200 OK", &[], IRIS),
+    )]);
+    let output = check()?;
+    ok(&output)?;
+    let iris = dataset(&json(&output)?, "iris")?.clone();
+    assert_eq!(
+        (&iris["served"], &iris["no_size"]),
+        (&1.into(), &1.into()),
+        "{iris}"
+    );
+    let told = text(&sandbox.run(&["status", "--sources"])?.stderr)?;
+    assert!(
+        told.contains("Served iris · 1 file · 1 answered without a size"),
+        "{told}"
+    );
+    for (status, code, kind) in [
+        ("503 Service Unavailable", 20, "network.status"),
+        ("403 Forbidden", 40, "auth.required"),
+    ] {
+        let answer = reply(status, &[("Content-Length", "0")], b"");
+        source.change(vec![("/files/iris.csv".to_owned(), answer)]);
+        let output = check()?;
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            text(&output.stderr)?
+        );
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], kind, "{error}");
+        assert_eq!(
+            error["message"],
+            "could not check 1 file data.lock pins, which may still be served"
+        );
+    }
+    drop(source);
+    let output = check()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
     Ok(())
 }
 

@@ -1060,8 +1060,8 @@ pub(crate) struct Status {
     pub(crate) check: bool,
 
     /// also ask whether a mirror or its source still serves each file in data.lock, by asking for
-    /// its first byte, so nothing is downloaded. with --check, fail only when a file is served
-    /// nowhere, so ci can run it on a fresh clone
+    /// its first byte, so nothing is downloaded. with --check, fail when a file is served nowhere
+    /// or could not be checked, so ci can run it on a fresh clone
     #[arg(long, help_heading = "options")]
     pub(crate) sources: bool,
 }
