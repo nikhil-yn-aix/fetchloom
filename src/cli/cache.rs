@@ -1228,7 +1228,42 @@ fn add_with_stop(
         }
         gather(&mut groups, group);
     }
+    add_stated(needed, cache, lock, readers.as_mut(), &mut groups, stop)?;
     stop.check()
+}
+
+/// adds what a first sync cut short downloaded of each dataset `add --no-sync` pinned in `lock`:
+/// a file found by the SHA-256 its source states, or by the MD5 the cache recorded for its link.
+fn add_stated(
+    needed: &mut Needed,
+    cache: &Cache,
+    lock: &Lock,
+    mut readers: Option<&mut Readers<'_>>,
+    groups: &mut Option<&mut Vec<Group>>,
+    stop: &Stop,
+) -> Result<(), Error> {
+    for stated in &lock.stated {
+        let used = match &mut readers {
+            Some(readers) => readers.use_of(stated.name(), false, stop)?,
+            None => Use::Placed,
+        };
+        let mut group = match (&mut readers, &groups) {
+            (Some(readers), Some(_)) => readers.group(stated.name(), used, stop)?,
+            _ => None,
+        };
+        for file in &stated.files {
+            stop.check()?;
+            let recorded = || {
+                let md5 = file.md5.as_ref()?;
+                cache.stated_md5(md5, &file.url).map(|(digest, _)| digest)
+            };
+            if let Some(digest) = file.sha256.or_else(recorded) {
+                note(needed, &mut group, digest, used);
+            }
+        }
+        gather(groups, group);
+    }
+    Ok(())
 }
 
 fn note(needed: &mut Needed, group: &mut Option<Group>, digest: Sha256, used: Use) {
@@ -1767,6 +1802,80 @@ mod tests {
         });
         add_with_stop(&mut needed, cache, lock, read, None, None, &Stop::default()).unwrap();
         needed
+    }
+
+    /// a dataset `add --no-sync` pinned keeps what its first sync downloaded before it was cut
+    /// short: a file by the SHA-256 its source states, or by the MD5 the cache recorded of the
+    /// bytes its link served, for the sync that comes back to it.
+    #[test]
+    fn what_a_cut_short_sync_downloaded_of_a_stated_dataset_is_needed() {
+        use crate::project::lock::{Stated, StatedFile, Words};
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let iris = store(&cache, b"length,width\n");
+        let species = store(&cache, b"species\n");
+        let md5 = crate::digest::Md5::from_hex(&"5d".repeat(16)).unwrap();
+        let link = |name: &str| format!("https://example.org/{name}");
+        let stated = crate::cache::Stated {
+            digest: species.digest,
+            size: species.size,
+            version: None,
+        };
+        cache
+            .save_stated_md5(&md5, &link("species.csv"), &stated)
+            .unwrap();
+        let file = |name: &str, size, sha256, md5| StatedFile {
+            path: name.to_owned(),
+            size,
+            sha256,
+            md5,
+            url: link(name),
+        };
+        let lock = Lock {
+            stated: vec![Stated {
+                pin: Locked {
+                    name: "two".to_owned(),
+                    reference: link(""),
+                    spec: String::new(),
+                    extract: true,
+                    web_page: false,
+                    resolved: link(""),
+                    title: None,
+                    license: None,
+                    doi: None,
+                    access: crate::source::Access::Unknown,
+                    timestamp: String::new(),
+                    files: Vec::new(),
+                },
+                files: vec![
+                    file(
+                        "gone.csv",
+                        12,
+                        Some(crate::digest::sha256(b"never came")),
+                        None,
+                    ),
+                    file("iris.csv", iris.size, Some(iris.digest), None),
+                    file("species.csv", species.size, None, Some(md5)),
+                ],
+                written: Words::default(),
+            }],
+            ..Lock::default()
+        };
+
+        let mut needed = Needed::default();
+        add_with_stop(
+            &mut needed,
+            &cache,
+            &lock,
+            None,
+            None,
+            None,
+            &Stop::default(),
+        )
+        .unwrap();
+
+        assert!(needed.objects.contains(&iris.digest), "by its SHA-256");
+        assert!(needed.objects.contains(&species.digest), "by its MD5");
     }
 
     /// a dataset that is placed, or that no recipe reads, counts as placed data.

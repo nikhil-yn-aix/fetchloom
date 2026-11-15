@@ -78,7 +78,7 @@ with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count tho
 
 ## gc
 
-1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, each [recipe](../guides/recipes.md)'s pinned result, every file of a dataset with `place = false`, which builds read, and the files of a [kept rebuild](build.md#a-rebuild-that-differs).
+1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, each [recipe](../guides/recipes.md)'s pinned result, every file of a dataset with `place = false`, which builds read, the files of a [kept rebuild](build.md#a-rebuild-that-differs), and what a sync cut short already downloaded of a dataset [`add --no-sync`](add.md) pinned.
 2. remove unneeded files and records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
 3. clean unfinished downloads nobody came back for in a day, or with `--now` every one no running fetchloom holds, and old temporary files, then report what it deleted.
 4. report the unneeded files kept because they are less than a day old.
