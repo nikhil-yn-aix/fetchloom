@@ -1611,6 +1611,125 @@ fn cookies_chrome_sealed_open_and_go_to_their_host() -> Result {
     Ok(())
 }
 
+/// a home with a firefox profile that only `profiles.ini` names, `field notes`, outside firefox's
+/// folder, beside an older one, and a chromium profile sealed with chromium's fixed key.
+#[cfg(target_os = "linux")]
+fn two_browsers(home: &std::path::Path) -> Result {
+    let firefox = home.join(".mozilla/firefox");
+    let later = 4_000_000_000_000;
+    firefox_cookies(
+        &firefox.join("Profiles/k3j4h5g6.default-release"),
+        &[("old", "127.0.0.1", later, "")],
+    )?;
+    firefox_cookies(
+        &home.join("elsewhere/lab-profile"),
+        &[
+            ("session", "127.0.0.1", later, ""),
+            ("sid", "sso.example.org", later, ""),
+        ],
+    )?;
+    std::fs::write(
+        firefox.join("profiles.ini"),
+        format!(
+            "[General]\nStartWithLastProfile=1\n\n[Profile1]\nName=field notes\nIsRelative=0\nPath={}\n\n[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/k3j4h5g6.default-release\nDefault=1\n",
+            home.join("elsewhere/lab-profile").display()
+        ),
+    )?;
+    chrome_cookies(
+        &home.join(".config/chromium/Default"),
+        &[("127.0.0.1", "chromium_sid", "chromium-value", true)],
+    )
+}
+
+/// each sign-in takes its browser's cookies for one host and port, which go there alone, not to
+/// another port of the host, not to the same server by another name and not past a redirect to
+/// another site.
+#[cfg(target_os = "linux")]
+#[test]
+fn cookies_from_each_browser_go_to_their_own_host_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    two_browsers(&sandbox.work().parent().ok_or("no sandbox")?.join("home"))?;
+    let other = Routes::start(vec![("/data.csv".to_owned(), file(b"c,d\n", "\"v2\""))])?;
+    let site = Routes::start(vec![
+        ("/data.csv".to_owned(), file(b"a,b\n", "\"v1\"")),
+        (
+            "/moved".to_owned(),
+            reply(
+                "302 Found",
+                &[
+                    ("Location", &format!("{}/data.csv", other.url)),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            ),
+        ),
+    ])?;
+    let (host, other_host) = (host_of(&site), host_of(&other));
+    let login = sandbox.run(&[
+        "auth",
+        "login",
+        &host,
+        "--browser",
+        "firefox:field notes",
+        "--yes",
+    ])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "Found 1 cookie for {host} in firefox's profile ~/elsewhere/lab-profile\n"
+        )),
+        "{stderr}"
+    );
+    let login = sandbox.run(&[
+        "auth",
+        "login",
+        &other_host,
+        "--browser",
+        "chromium",
+        "--yes",
+    ])?;
+    let stderr = text(&login.stderr)?;
+    assert!(login.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "Found 1 cookie for {other_host} in chromium's profile ~/.config/chromium/Default\n"
+        )),
+        "{stderr}"
+    );
+    sandbox.allow(&other.url);
+    let port = host.rsplit(':').next().unwrap_or_default();
+    for (link, name) in [
+        (format!("{}/data.csv", site.url), "site.csv"),
+        (format!("http://localhost:{port}/data.csv"), "named.csv"),
+        (format!("{}/moved", site.url), "moved.csv"),
+        (format!("{}/data.csv", other.url), "other.csv"),
+    ] {
+        let output = sandbox.run(&["get", &link, "-o", name])?;
+        assert!(output.status.success(), "{link}: {}", text(&output.stderr)?);
+    }
+    let session = Some("session=session-value".to_owned());
+    assert_eq!(
+        cookies_by_target(&site),
+        [
+            ("/data.csv".to_owned(), session.clone()),
+            ("/data.csv".to_owned(), None),
+            ("/moved".to_owned(), session),
+        ]
+    );
+    assert_eq!(
+        cookies_by_target(&other),
+        [
+            ("/data.csv".to_owned(), None),
+            (
+                "/data.csv".to_owned(),
+                Some("chromium_sid=chromium-value".to_owned())
+            ),
+        ]
+    );
+    Ok(())
+}
+
 /// chrome and edge on windows seal cookies with app-bound encryption, which only they may open.
 #[cfg(windows)]
 #[test]
