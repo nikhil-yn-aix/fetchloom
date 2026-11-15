@@ -2479,6 +2479,48 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     Ok(())
 }
 
+/// sync removed the earlier file itself, so once a failed replacement can go ahead, the next sync
+/// places the pin without saying someone deleted or moved the file.
+#[cfg(unix)]
+#[test]
+fn a_failed_replacement_is_placed_later_without_blaming_anyone() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V2, "\"v2\"")],
+    )?;
+    copy_iris(&sandbox, &server)?;
+    let upgraded = sandbox.run(&["lock", "--upgrade", "iris"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    // a copy reads the new bytes, which the cache now refuses
+    let object = crate::recipes::object(&sandbox.cache(), V2);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
+    let failed = sandbox.run(&["sync", "--offline"]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o444))?;
+    let failed = failed?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    assert_eq!(failed.status.code(), Some(50), "{}", text(&failed.stderr)?);
+    assert!(!placed.exists(), "{}", text(&failed.stderr)?);
+
+    let synced = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    let placement = &document["result"]["placement"];
+    assert_eq!(placement["put_back"], serde_json::json!([]), "{document}");
+    assert_eq!(placement["placed"], 1, "{document}");
+    assert_eq!(fs::read(&placed)?, V2, "{document}");
+    Ok(())
+}
+
 /// the list is rolled back whole, so the files placed for each of its datasets go too.
 #[cfg(unix)]
 #[test]

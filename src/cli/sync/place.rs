@@ -992,7 +992,8 @@ impl<'a> Placing<'a> {
         placement.notice(
             manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
         );
-        let settled = settle(
+        // a settling that fails ends as a failed placing does, recording the files it removed
+        let (todo, adopted, unsettled) = match settle(
             project,
             &mut placer,
             cache,
@@ -1000,16 +1001,17 @@ impl<'a> Placing<'a> {
             &targets,
             actions,
             &mut placement,
-        );
-        let (todo, adopted) = settled.inspect_err(|_| {
-            settle_aside(project, &data_dir, survey.threads, &placement, |_| false);
-        })?;
+        ) {
+            Ok((todo, adopted)) => (todo, adopted, None),
+            Err(error) => (Vec::new(), true, Some(error)),
+        };
         survey.smudge_edited();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let threads = survey.threads;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
+        let failure = unsettled.or(failure);
         // one look at the stop decides flushing, taking back an add's files and the result, so
         // a stop asked between them cannot leave an add's files placed and the add rolled back
         let stopped = stop.is_asked();
@@ -1448,6 +1450,11 @@ fn settle<'t, 'a>(
                     Some(_) => {
                         let forced = matches!(action, Action::Overwrite(_));
                         make_way(project, placer, survey, &taken, target, forced, placement)?;
+                        // sync removed it, so a run that cannot place the pin leaves no record
+                        // that would have the next run tell of a file someone deleted
+                        if !forced {
+                            adopted |= survey.state.files.remove(&target.path).is_some();
+                        }
                     }
                     None => {}
                 }
