@@ -736,8 +736,9 @@ fn settings_unset_fixes_a_file_that_stops_every_run() -> Result {
 }
 
 /// a change that would leave a file every run stops at, as `mirrors_only` with no mirror to ask, is
-/// refused, set or unset, naming the way out; a file a problem stops already still takes a change,
-/// with a warning that the problem is there.
+/// refused, set or unset, naming the way out: a mirror to keep first when the change sets
+/// `mirrors_only`, never unsetting what the person sets; a file a problem stops already still
+/// takes a change, with a warning that the problem is there.
 #[test]
 fn settings_set_refuses_a_file_every_run_would_stop_at() -> Result {
     let sandbox = Sandbox::new()?;
@@ -752,7 +753,8 @@ fn settings_set_refuses_a_file_every_run_would_stop_at() -> Result {
     );
     let help = error["help"].as_str().unwrap_or_default();
     assert!(
-        help.contains("`fetchloom settings unset mirrors_only`"),
+        help.contains("`fetchloom settings set mirrors /mnt/lab/fetchloom`")
+            && !help.contains("unset mirrors_only"),
         "{help}"
     );
     assert_eq!(std::fs::read_to_string(&path)?, "jobs = 4\n");

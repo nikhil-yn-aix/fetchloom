@@ -146,9 +146,13 @@ pub(super) fn change(
     let changed = match action {
         args::SettingsAction::Set(set) => {
             let here = std::env::current_dir().ok();
+            let sets_it = set.key == "mirrors_only";
+            let usable = |settings: &crate::settings::Settings| usable(settings, sets_it);
             crate::settings::edit::set(var, key, &set.values, here.as_deref(), &usable)?
         }
-        args::SettingsAction::Unset(_) => crate::settings::edit::unset(var, key, &usable)?,
+        args::SettingsAction::Unset(_) => {
+            crate::settings::edit::unset(var, key, &|settings| usable(settings, false))?
+        }
     };
     let overridden_by = crate::settings::edit::overridden(var, &changed.key);
     tell_changed(&context.output, &changed, overridden_by);
@@ -164,15 +168,16 @@ pub(super) fn change(
 }
 
 /// what every run checks of its settings once each is read: that `mirrors_only` has a mirror to
-/// ask, where no `--mirror` gives one.
-fn usable(settings: &crate::settings::Settings) -> Result<(), Error> {
+/// ask, where no `--mirror` gives one. a change that `sets_it` is told to keep a mirror first.
+fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Error> {
+    let help = if sets_it {
+        "keep a mirror in `mirrors` first, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one"
+    } else {
+        "keep a mirror in `mirrors`, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one, or run `fetchloom settings unset mirrors_only` first"
+    };
     super::fetch::mirrors::read(&[], settings)
         .map(drop)
-        .map_err(|error| {
-            error.help(
-                "keep a mirror in `mirrors`, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one, or run `fetchloom settings unset mirrors_only` first",
-            )
-        })
+        .map_err(|error| error.help(help))
 }
 
 /// says what `changed` did: the key's value before and after, and in which file, then, when a
