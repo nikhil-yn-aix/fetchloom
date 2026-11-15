@@ -309,6 +309,26 @@ fn cache() -> (tempfile::TempDir, Cache) {
     (folder, cache)
 }
 
+/// keeps the first and last quarter of `body`, a MiB from `url` whose `ETag` is `"v1"`, as a
+/// download stopped partway leaves them.
+fn keep_both_ends(cache: &Cache, url: &Url, body: &[u8]) {
+    let validators = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        last_modified: None,
+        ..Validators::default()
+    };
+    let crate::cache::Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let mut writer = partial
+        .writer(0, Some(MIB), validators, false, true)
+        .unwrap();
+    let quarter = usize::try_from(MIB / 4).unwrap();
+    writer.write_at(0, &body[..quarter]).unwrap();
+    writer.write_at(3 * MIB / 4, &body[3 * quarter..]).unwrap();
+    writer.save().unwrap();
+}
+
 /// the requests that asked for a closed range.
 fn parts(server: &Server) -> Vec<String> {
     server
@@ -610,23 +630,7 @@ fn a_resume_fetches_only_the_ranges_not_kept() {
         let mut net = net(&server.url, 8);
         net.split.when = when;
         let (_folder, cache) = cache();
-        let validators = Validators {
-            etag: Some("\"v1\"".to_owned()),
-            last_modified: None,
-            ..Validators::default()
-        };
-        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
-            panic!("nothing else holds the download");
-        };
-        let mut writer = partial
-            .writer(0, Some(MIB), validators, false, true)
-            .unwrap();
-        let quarter = usize::try_from(MIB / 4).unwrap();
-        writer.write_at(0, &body[..quarter]).unwrap();
-        writer.write_at(3 * MIB / 4, &body[3 * quarter..]).unwrap();
-        writer.save().unwrap();
-        drop(writer);
-        drop(partial);
+        keep_both_ends(&cache, &server.url, &body);
         let fetched = download(&net, &cache, &server.url, Expect::default());
         assert_eq!(fetched.digest, sha256(&body), "{when:?}");
         let first = &server.heads()[0];
@@ -654,23 +658,7 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
         let mut net = net(&server.url, 8).with_rate(rate);
         net.split.when = when;
         let (_folder, cache) = cache();
-        let validators = Validators {
-            etag: Some("\"v1\"".to_owned()),
-            last_modified: None,
-            ..Validators::default()
-        };
-        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
-            panic!("nothing else holds the download");
-        };
-        let mut writer = partial
-            .writer(0, Some(MIB), validators, false, true)
-            .unwrap();
-        let quarter = usize::try_from(MIB / 4).unwrap();
-        writer.write_at(0, &body[..quarter]).unwrap();
-        writer.write_at(3 * MIB / 4, &body[3 * quarter..]).unwrap();
-        writer.save().unwrap();
-        drop(writer);
-        drop(partial);
+        keep_both_ends(&cache, &server.url, &body);
         let fetch = Fetch::new(server.url.clone());
         // a hang guard only: a round takes about half a second, and a busy disk has held the
         // cache's writes for 15 s
