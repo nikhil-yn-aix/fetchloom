@@ -260,6 +260,36 @@ fn a_bucket_mirror_counts_for_status_sources() -> Result {
     Ok(())
 }
 
+/// offline asks no bucket mirror, and says so in its own words.
+#[test]
+fn offline_names_the_bucket_mirror_it_did_not_ask() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let (clone, cache) = cold(&sandbox, "clone")?;
+    let output = sandbox
+        .command_in(
+            &clone,
+            &[
+                "--json",
+                "--offline",
+                "sync",
+                "--locked",
+                "--mirror",
+                MIRROR,
+            ],
+        )
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let help = &json(&output)?["errors"][0]["help"];
+    assert!(
+        help.as_str().is_some_and(|help| help
+            .starts_with("offline asks no S3 mirror, so s3://lab-data/mirror was not asked: ")),
+        "{help}"
+    );
+    Ok(())
+}
+
 /// a login typed into a bucket's address is refused, and never repeated.
 #[test]
 fn a_login_in_a_bucket_address_is_refused_unshown() -> Result {

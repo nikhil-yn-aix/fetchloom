@@ -1572,20 +1572,29 @@ impl<'a> Loop<'a> {
             "{}, or name a folder mirror that holds them with `--mirror <folder>`",
             self.net.offline().missing_help("them")
         );
-        let web: Vec<String> = self
+        let remote: Vec<&crate::mirror::Location> = self
             .context
             .mirrors
             .mirrors
             .list
             .iter()
             .filter(|mirror| !matches!(mirror, crate::mirror::Location::Folder(_)))
-            .map(ToString::to_string)
             .collect();
-        error.help(match web.as_slice() {
+        let buckets = remote
+            .iter()
+            .filter(|mirror| matches!(mirror, crate::mirror::Location::S3(_)))
+            .count();
+        let kind = match buckets {
+            0 => "web mirror",
+            all if all == remote.len() => "S3 mirror",
+            _ => "web or S3 mirror",
+        };
+        let named: Vec<String> = remote.iter().map(ToString::to_string).collect();
+        error.help(match named.as_slice() {
             [] => help,
-            [mirror] => format!("offline asks no web mirror, so {mirror} was not asked: {help}"),
+            [mirror] => format!("offline asks no {kind}, so {mirror} was not asked: {help}"),
             many => format!(
-                "offline asks no web mirror, so {} were not asked: {help}",
+                "offline asks no {kind}, so {} were not asked: {help}",
                 many.join(", ")
             ),
         })
