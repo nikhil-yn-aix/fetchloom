@@ -346,9 +346,9 @@ def _still_named(details: list[str], *texts: str | None) -> list[str]:
 def _folder_shown(folder: str, placeholders: dict[str, str]) -> str | None:
     """``folder`` as fetchloom shows it after ``-C``: quoted as :func:`_shell_word` quotes it, or on
     windows, where it withholds a folder no command there can hold, the placeholder ``placeholders``
-    gives it, as given or made absolute as fetchloom names it. none for one withheld without one."""
+    gives it. none for one withheld without one."""
     if _WINDOWS and _UNSAFE_ON_WINDOWS.intersection(folder):
-        return placeholders.get(folder) or placeholders.get(os.path.abspath(folder))
+        return placeholders.get(folder)
     return _shell_word(folder)
 
 
@@ -382,18 +382,21 @@ def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str
 def _meant(help: str | None, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
     """the name fetchloom guessed was meant in ``help``, its did-you-mean for a name given to
     ``path`` in ``project``, whose folder ``placeholders`` may name, that names nothing, or None
-    for any other help and for a name a shell needs quoted."""
-    folder = ""
+    for any other help and for a name a shell needs quoted. fetchloom names that folder after
+    ``-C`` as the system does, absolute, so ``project`` is looked for as given and made absolute."""
+    folders = [""]
     if os.fspath(project) != ".":
-        shown = _folder_shown(_local(project), placeholders)
-        if shown is None:
-            return None
-        folder = f"-C {shown} "
+        local = _local(project)
+        shown = [_folder_shown(folder, placeholders) for folder in dict.fromkeys([local, os.path.abspath(local)])]
+        folders = [f"-C {folder} " for folder in shown if folder is not None]
     flags = "(?: --(?:yes|offline|locked))*"
-    guess = re.fullmatch(
-        rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
-    )
-    return guess.group(1) if guess else None
+    for folder in folders:
+        guess = re.fullmatch(
+            rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
+        )
+        if guess:
+            return guess.group(1)
+    return None
 
 
 def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, bool]) -> str:

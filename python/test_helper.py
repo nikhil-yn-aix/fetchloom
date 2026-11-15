@@ -366,9 +366,15 @@ class Errors(unittest.TestCase):
                 'fetchloom.path("iris")',
             ),
             (
-                lambda: fetchloom.path("irs", "study", offline=True),
-                "fetchloom --json --progress -C study path --offline -- iris",
-                'fetchloom.path("iris", project="study", offline=True)',
+                lambda: fetchloom.path("irs", "/work/study", offline=True),
+                "fetchloom --json --progress -C /work/study path --offline -- iris",
+                'fetchloom.path("iris", project="/work/study", offline=True)',
+            ),
+            # fetchloom names the folder after -C as the system does, so a relative one comes back absolute
+            (
+                lambda: fetchloom.path("irs", "study"),
+                f"fetchloom --json --progress -C {fetchloom._shell_word(os.path.abspath('study'))} path -- iris",
+                'fetchloom.path("iris", project="study")',
             ),
             # a name a shell needs quoted stays the command a person types
             (
