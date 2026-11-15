@@ -30,6 +30,8 @@ pub(crate) enum Warning {
     BuildUnchecked,
     /// a cached file changed, so it is downloaded again when it is needed.
     CacheChanged,
+    /// the cache folder belongs to another user, or every user may write to it.
+    CacheForeign,
     /// a run told `--yes` goes on though its downloads take the cache past `cache_budget`.
     CacheOverBudget,
     /// a path in the cache could not be read, or removed.
@@ -144,6 +146,7 @@ impl Warning {
             Warning::BuildUnbuilt => "build.unbuilt",
             Warning::BuildUnchecked => "build.unchecked",
             Warning::CacheChanged => "cache.changed",
+            Warning::CacheForeign => "cache.foreign",
             Warning::CacheOverBudget => "cache.over_budget",
             Warning::CacheUnreadable => "cache.unreadable",
             Warning::CacheUnregistered => "cache.unregistered",
@@ -228,6 +231,7 @@ mod tests {
             BuildUnbuilt,
             BuildUnchecked,
             CacheChanged,
+            CacheForeign,
             CacheOverBudget,
             CacheUnreadable,
             CacheUnregistered,

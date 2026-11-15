@@ -502,7 +502,7 @@ fn open_cache() -> Result<Cache, Error> {
     let _setup = output.map(|output| output.setup("Opening", "the cache"));
     // counts its seconds on a terminal until the cache is held
     let waiting = std::sync::Mutex::new(None);
-    hold_cache(open_unheld()?, Access::Shared, stop, &|| {
+    let cache = hold_cache(open_unheld()?, Access::Shared, stop, &|| {
         if let Some(output) = output {
             *waiting
                 .lock()
@@ -511,7 +511,21 @@ fn open_cache() -> Result<Cache, Error> {
                 "for `fetchloom cache gc` to finish with the cache",
             ));
         }
-    })
+    })?;
+    if let Some(output) = output
+        && let Some(exposed) = crate::cache::exposed(cache.root())
+    {
+        // a run may open the cache more than once, and says this only the first time
+        static TOLD: std::sync::Once = std::sync::Once::new();
+        TOLD.call_once(|| {
+            output.warn_with(
+                Warning::CacheForeign,
+                &exposed,
+                "keep the cache in a folder only you can write, set with `fetchloom settings set cache <folder>` or FETCHLOOM_CACHE, unless your team shares this one on purpose",
+            );
+        });
+    }
+    Ok(cache)
 }
 
 /// what a run that waits for the cache tells and listens to: the command's output and stop

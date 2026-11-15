@@ -1269,3 +1269,23 @@ fn gc_now_at_a_terminal_frees_imported_bytes_on_a_yes() -> Result {
     }
     Ok(())
 }
+
+/// a cache folder other users of the machine can write lets them change what every project of
+/// this user places from it, so a run that opens it says so.
+#[cfg(unix)]
+#[test]
+fn a_cache_folder_others_can_write_is_warned_about() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let cache = sandbox.cache();
+    fs::create_dir_all(&cache)?;
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o777))?;
+
+    let document = json(&sandbox.run(&["--json", "cache"])?)?;
+
+    assert!(
+        crate::support::kinds(&document).contains(&"cache.foreign"),
+        "{document}"
+    );
+    Ok(())
+}

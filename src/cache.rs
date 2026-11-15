@@ -104,6 +104,41 @@ fn adoptable(root: &Path) -> io::Result<()> {
     ))
 }
 
+/// what lets others change the files projects place from the cache folder at `root`: it belongs
+/// to another user, or every user may write to it. none on windows, where a folder takes its
+/// access from the folders it is in.
+pub(crate) fn exposed(root: &Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let found = fs::metadata(root).ok()?;
+        let user = rustix::process::geteuid().as_raw();
+        exposure(found.uid(), found.mode(), user).map(|what| {
+            format!(
+                "the cache folder {} {what}, so they can change the files projects place from it",
+                root.display()
+            )
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+/// [`exposed`] for a folder of `owner` with `mode`, as `user` sees it.
+#[cfg(unix)]
+fn exposure(owner: u32, mode: u32, user: u32) -> Option<&'static str> {
+    if owner != user {
+        Some("belongs to another user")
+    } else if mode & 0o002 != 0 {
+        Some("lets every user of this machine write to it")
+    } else {
+        None
+    }
+}
+
 /// whether `root` holds the tag fetchloom writes in its cache.
 fn tagged(root: &Path) -> bool {
     let mut text = String::new();
@@ -1395,6 +1430,23 @@ pub(crate) mod tests {
         fs::remove_file(disk.join("CACHEDIR.TAG")).unwrap();
         Cache::open(disk.clone()).unwrap();
         assert!(Cache::unopened(disk).is_ok());
+    }
+
+    /// a team's cache may be another member's folder or one their group writes; only the owner
+    /// being someone else or every user writing is told.
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_folder_another_user_owns_or_anyone_writes_is_exposed() {
+        assert_eq!(super::exposure(1000, 0o40700, 1000), None);
+        assert_eq!(super::exposure(1000, 0o42770, 1000), None);
+        assert_eq!(
+            super::exposure(1001, 0o40700, 1000),
+            Some("belongs to another user")
+        );
+        assert_eq!(
+            super::exposure(1000, 0o40777, 1000),
+            Some("lets every user of this machine write to it")
+        );
     }
 
     #[test]
