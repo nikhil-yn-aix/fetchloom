@@ -1173,3 +1173,39 @@ fn a_conflict_after_a_finished_rebase_is_named_for_what_made_it() -> Result {
     );
     Ok(())
 }
+
+/// a settled merge leaves git's files unmerged, so the hint names `git add` and the step that
+/// finishes what git is in; a dataset no pin answers says that sync pins it.
+#[test]
+fn a_settled_merge_says_how_to_finish_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = three_files()?;
+    sandbox.allow(&routes.url);
+    if two_additions(&sandbox, &routes, "merge")?.is_none() {
+        return Ok(());
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{written}select = [\"core.csv\"]\n"))?;
+    let merged = run(&sandbox, &["lock"])?;
+    succeeded(&merged)?;
+    let told = text(&merged.stderr)?;
+    for line in [
+        "warning: core is not pinned, as neither side of data.lock pins it as data.toml now asks\n  help: run `fetchloom sync`, which pins it",
+        "hint: run `fetchloom sync` to update data/, then `git add data.toml data.lock` and `git commit` to finish the merge",
+    ] {
+        assert!(told.contains(line), "{told}");
+    }
+
+    let sandbox = Sandbox::new()?;
+    placed_apart(&sandbox)?.ok_or("git went away")?;
+    stopped(&sandbox, &["rebase", "-q", "tom"])?;
+    let chosen = text(&run(&sandbox, &["lock", "--theirs", "kappa"])?.stderr)?;
+    assert!(
+        chosen.contains(
+            "then `git add data.toml data.lock` and `git rebase --continue` to finish the rebase"
+        ),
+        "{chosen}"
+    );
+    Ok(())
+}

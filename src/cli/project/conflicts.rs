@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use super::{Changes, Report, committed, dry_run_done};
+use super::{Changes, Report, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
 use crate::cli::sync::{Scope, tell_stale};
@@ -107,12 +107,16 @@ pub(super) fn merge(
         let written = write(project, &merged, &conflicted.manifest, changed)?;
         context.wrote_lists(&project.root, written);
     }
+    let operation = program
+        .as_deref()
+        .and_then(|git| git::operation(git, &project.root));
     tell(
         context,
         project,
         &merged,
         conflicted.files(),
         args.dry.dry_run,
+        operation,
     );
     Ok(Some(Report {
         project: project.root.clone(),
@@ -331,7 +335,15 @@ fn write(
     Ok(written)
 }
 
-fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_run: bool) {
+/// what the merge did, then what is left: `operation` is what git is in, which says how to finish.
+fn tell(
+    context: &Context,
+    project: &Project,
+    merged: &Merged,
+    files: &str,
+    dry_run: bool,
+    operation: Option<Operation>,
+) {
     let output = &context.output;
     let verb = if dry_run { "Would merge" } else { "Merged" };
     output.done(verb, &format!("{files} \u{b7} {}", facts(&merged.summary)));
@@ -341,9 +353,13 @@ fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_
             [one] => (one.clone(), "is", "it"),
             many => (many.join(", "), "are", "them"),
         };
-        output.warn(Warning::MergeUnpinned, &format!(
-            "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
-        ));
+        output.warn_with(
+            Warning::MergeUnpinned,
+            &format!(
+                "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
+            ),
+            &format!("run `fetchloom sync`, which pins {them}"),
+        );
     }
     let manifest = Manifest::parse(&merged.manifest).ok();
     // a recipe's result taken from one side may be made from inputs the other side changed
@@ -358,14 +374,30 @@ fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_
         || manifest::DATA_DIR.to_owned(),
         |manifest| manifest.data_dir,
     );
-    let sync = if unpinned.is_empty() {
-        format!("run `fetchloom sync` to update {data_dir}/")
-    } else {
-        format!("run `fetchloom sync`, which pins them and updates {data_dir}/")
+    // git keeps both files unmerged until they are added, whatever fetchloom wrote
+    let mut files = vec![manifest::FILE];
+    if merged.lock.is_some() {
+        files.push(lock::FILE);
+    }
+    if project.root.join(lock::lists::FOLDER).is_dir() {
+        files.push(lock::lists::FOLDER);
+    }
+    let add = format!("`git add {}`", files.join(" "));
+    let finish = match operation {
+        Some(Operation::Merge) => format!("{add} and `git commit` to finish the merge"),
+        Some(Operation::Rebase) => {
+            format!("{add} and `git rebase --continue` to finish the rebase")
+        }
+        Some(Operation::CherryPick) => {
+            format!("{add} and `git cherry-pick --continue` to finish the cherry-pick")
+        }
+        Some(Operation::Revert) => {
+            format!("{add} and `git revert --continue` to finish the revert")
+        }
+        None => format!("{add} to mark the conflict resolved"),
     };
-    output.next(&format!(
-        "{sync}, then commit {} to finish the merge",
-        committed(project)
+    output.hint(&format!(
+        "run `fetchloom sync` to update {data_dir}/, then {finish}"
     ));
 }
 
