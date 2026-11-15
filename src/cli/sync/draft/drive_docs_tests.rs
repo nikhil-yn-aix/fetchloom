@@ -110,6 +110,49 @@ fn an_unmatched_select_still_reports_an_example() {
     );
 }
 
+/// the example paths leave out hidden files such as `.gitattributes`, which a host keeps beside
+/// the data, and show a few; a listing of only hidden files still shows one.
+#[test]
+fn an_unmatched_select_shows_a_few_paths_that_are_not_hidden() {
+    let mut listing = mixed();
+    listing.unavailable.clear();
+    let template = listing.files[0].clone();
+    let with = |paths: &[&str]| -> Vec<Remote> {
+        paths
+            .iter()
+            .map(|path| Remote {
+                path: (*path).to_owned(),
+                ..template.clone()
+            })
+            .collect()
+    };
+    for (paths, said) in [
+        (
+            &[
+                ".gitattributes",
+                "README.md",
+                ".github/ci.yml",
+                "iris.csv",
+                "data/train.csv",
+                "data/test.csv",
+            ][..],
+            "6 files were considered, for example README.md, iris.csv and data/train.csv",
+        ),
+        (
+            &[".gitattributes"][..],
+            "1 file was considered, for example .gitattributes",
+        ),
+    ] {
+        listing.files = with(paths);
+        let error = filtered("docs", &entry(&["*.parquet"], &[], true), &listing).unwrap_err();
+        assert!(
+            error.details.iter().any(|line| line == said),
+            "{:?}",
+            error.details
+        );
+    }
+}
+
 /// the fix names the command line, as add and get take a pattern, or data.toml.
 #[test]
 fn an_unmatched_select_is_fixed_where_it_was_written() {

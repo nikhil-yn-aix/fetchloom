@@ -1013,11 +1013,11 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
         .filter(|deeper| {
             glob.is_top_level_only() && listing.paths().any(|path| deeper.matches(path))
         });
-    let example = match &deeper {
-        Some(deeper) => listing.paths().find(|path| deeper.matches(path)),
-        None => listing.paths().next(),
+    let examples = match &deeper {
+        Some(deeper) => examples(|| listing.paths().filter(|path| deeper.matches(path))),
+        None => examples(|| listing.paths()),
     };
-    if let Some(example) = example {
+    if !examples.is_empty() {
         let considered = if listing.unavailable.is_empty() {
             units::count(listing.files.len() as u64, "file was", "files were")
         } else {
@@ -1027,7 +1027,10 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
                 "entries were",
             )
         };
-        error = error.detail(format!("{considered} considered, for example {example}"));
+        error = error.detail(format!(
+            "{considered} considered, for example {}",
+            units::listed(&examples, "and")
+        ));
     }
     // an archive is one file to select, so a pattern meant for what it holds matches nothing
     let archive = listing
@@ -1050,6 +1053,19 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
                 "compare the pattern with the paths above, then fix select in data.toml"
             }
         }),
+    }
+}
+
+/// the first few of `paths` to show as examples, leaving out hidden ones such as `.gitattributes`,
+/// which a host keeps beside the data; the first path when every one is hidden.
+fn examples<'a, I: Iterator<Item = &'a str>>(paths: impl Fn() -> I) -> Vec<&'a str> {
+    const SHOWN: usize = 3;
+    let hidden = |path: &str| path.split('/').any(|part| part.starts_with('.'));
+    let shown: Vec<&str> = paths().filter(|path| !hidden(path)).take(SHOWN).collect();
+    if shown.is_empty() {
+        paths().take(1).collect()
+    } else {
+        shown
     }
 }
 
