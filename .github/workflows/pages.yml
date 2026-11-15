@@ -41,6 +41,7 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     permissions:
       contents: read
+      attestations: read
       pages: write
       id-token: write
     steps:
@@ -73,14 +74,14 @@ jobs:
             cat "$RUNNER_TEMP/release.err" >&2
             exit 1
           fi
-      - name: download the debian packages
+      - name: download and check the debian packages
         if: steps.release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern '*.deb' --pattern SHA256SUMS
-          python3 python/check_release.py dist --suffix .deb --count 2
+          python3 python/check_release.py dist --suffix .deb --count 2 --repo "$GITHUB_REPOSITORY" --tag "$TAG"
       # a flat repository: `deb [signed-by=...] https://nikhil-yn-aix.github.io/fetchloom/apt ./`
       - name: build the signed apt repository
         if: steps.release.outputs.tag != ''

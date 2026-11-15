@@ -35,12 +35,12 @@ build jobs have a 60-minute timeout and the intel check job 20 minutes. attestat
 
 | job | needs | work |
 |---|---|---|
-| `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS`, upload them |
+| `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS` and their provenance attestations, upload them |
 | `crates` | the `crates` environment holding the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked` from the tag |
 
 both environments deploy only from tags matching `v*.*.*`, and each waits for the owner to approve the run. keep the crates token in the `crates` environment, not among the repository's secrets, which a workflow on any branch can read.
 
-`python/check_release.py` checks the downloaded package inventory before publication: all six wheels or both debs must have one checksum entry and matching bytes. it rejects missing packages, unlisted downloads, duplicate entries and malformed checksum lines. entries for other release artifact types may remain undownloaded. update the expected counts with the release matrix when adding a platform. this check detects incomplete or inconsistent assets; it does not independently authenticate a release whose assets and checksums were both replaced.
+`python/check_release.py` checks the downloaded package inventory before publication: all six wheels or both debs must have one checksum entry and matching bytes. it rejects missing packages, unlisted downloads, duplicate entries and malformed checksum lines. entries for other release artifact types may remain undownloaded. update the expected counts with the release matrix when adding a platform. checksums alone cannot catch a release whose assets and `SHA256SUMS` were both replaced, so it then runs `gh attestation verify` on each package and fails unless `release.yml` attested those bytes on a github-hosted runner from the release's tag. the jobs that run it have `attestations: read`.
 
 ## apt repository
 

@@ -1,17 +1,21 @@
-"""check every downloaded package before publication or apt signing."""
+"""check every downloaded package before publication or apt signing: its bytes against
+SHA256SUMS, then its provenance attestation with gh."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 
-def check_release(folder: Path, suffix: str, count: int) -> None:
-    """raise ValueError unless SHA256SUMS in ``folder`` lists ``count`` packages ending in
-    ``suffix``, each downloaded as a regular file with that SHA-256, and no other."""
+def check_release(folder: Path, suffix: str, count: int) -> list[str]:
+    """the names of the ``count`` packages ending in ``suffix`` that SHA256SUMS in ``folder``
+    lists, in order; raise ValueError unless each was downloaded as a regular file with that
+    SHA-256, and no other."""
     entries = {}
     for number, line in enumerate((folder / "SHA256SUMS").read_text(encoding="utf-8").splitlines(), 1):
         match = re.fullmatch(r"([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9._+-]*)", line)
@@ -40,6 +44,23 @@ def check_release(folder: Path, suffix: str, count: int) -> None:
         if digest.hexdigest() != expected:
             raise ValueError(f"SHA-256 mismatch for {name}")
     print(f"checked all {count} {suffix} packages")
+    return sorted(selected)
+
+
+def check_provenance(folder: Path, names: list[str], repository: str, tag: str) -> None:
+    """raise ValueError unless gh verifies, for each package, an attestation that release.yml of
+    ``repository`` made for its bytes on a github-hosted runner from the tag ``tag``. a release's
+    assets can be replaced after it is built, SHA256SUMS along with them."""
+    gh = shutil.which("gh")
+    if gh is None:
+        raise ValueError("gh is needed to verify where each package was built")
+    for name in names:
+        verify = [gh, "attestation", "verify", str(folder / name), "--repo", repository,
+                  "--signer-workflow", f"{repository}/.github/workflows/release.yml",
+                  "--source-ref", f"refs/tags/{tag}", "--deny-self-hosted-runners"]
+        if subprocess.run(verify, check=False).returncode != 0:
+            raise ValueError(f"{name} has no attestation from release.yml at {tag}")
+    print(f"release.yml built all {len(names)} packages from {tag}")
 
 
 def main() -> int:
@@ -47,9 +68,12 @@ def main() -> int:
     parser.add_argument("folder", type=Path)
     parser.add_argument("--suffix", choices=[".whl", ".deb"], required=True)
     parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("--repo", required=True, help="the repository that built the release, owner/name")
+    parser.add_argument("--tag", required=True, help="the release's tag, such as v0.1.0")
     args = parser.parse_args()
     try:
-        check_release(args.folder, args.suffix, args.count)
+        names = check_release(args.folder, args.suffix, args.count)
+        check_provenance(args.folder, names, args.repo, args.tag)
     except (OSError, ValueError) as error:
         print(f"release verification failed: {error}", file=sys.stderr)
         return 1

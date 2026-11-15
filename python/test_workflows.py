@@ -15,6 +15,13 @@ def pins(path):
     return dict(re.findall(r"^  (PIN_\w+): (\S+)$", path.read_text(encoding="utf-8"), re.MULTILINE))
 
 
+def jobs(name):
+    """each job of the workflow ``name``, its id to its text, split at the two-space keys under jobs:."""
+    text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8").split("\njobs:\n", 1)[1]
+    parts = re.split(r"(?m)^  ([\w-]+):\n", text)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
 class WorkflowTests(unittest.TestCase):
     def test_workflows_that_install_one_tool_pin_one_version(self):
         seen = {}
@@ -46,6 +53,17 @@ class WorkflowTests(unittest.TestCase):
                 if re.match(r"\s+ref: ", line):
                     with self.subTest(workflow=path.name, line=number):
                         self.assertRegex(line, r"^\s+ref: refs/(?:heads|tags)/")
+
+
+    def test_release_packages_are_checked_before_they_are_published_or_signed(self):
+        """python/check_release.py verifies each package's attestation, which takes attestations:
+        read, before pypi gets the wheels or the apt key signs the debian packages."""
+        for workflow, job, then in [("publish.yml", "pypi", "uses: pypa/gh-action-pypi-publish@"),
+                                    ("pages.yml", "pages", "gpg --batch --yes --armor --detach-sign")]:
+            with self.subTest(workflow=workflow):
+                text = jobs(workflow)[job]
+                self.assertIn("\n      attestations: read\n", text)
+                self.assertLess(text.index("python3 python/check_release.py "), text.index(then))
 
 
 if __name__ == "__main__":

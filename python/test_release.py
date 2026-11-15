@@ -1,6 +1,7 @@
-"""release checksum gates, using the command each workflow actually runs."""
+"""release gates, checksums and provenance, using the command each workflow actually runs."""
 
 import hashlib
+import os
 import shlex
 import subprocess
 import sys
@@ -11,10 +12,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = [("publish.yml", ".whl", 6), ("pages.yml", ".deb", 2)]
+REPOSITORY, TAG = "owner/project", "v0.1.0"
+# a stand-in for gh that logs each command line and refuses the package GH_REFUSE names
+GH = '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$GH_LOG"\n[ "${3##*/}" != "$GH_REFUSE" ]\n'
 
 
+@unittest.skipIf(sys.platform == "win32", "the stand-in gh is a shell script; the release gates run on ubuntu")
 class ReleaseChecks(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        tools = Path(folder.name)
+        (tools / "gh").write_text(GH, encoding="utf-8")
+        (tools / "gh").chmod(0o755)
+        self.log = tools / "gh.log"
+        self.env = dict(os.environ, PATH=os.pathsep.join([str(tools), os.environ.get("PATH", "")]),
+                        GH_LOG=str(self.log), GH_REFUSE="")
+
     def run_check(self, workflow, suffix, count, change):
+        self.log.write_text("", encoding="utf-8")
         with tempfile.TemporaryDirectory() as folder:
             assets = Path(folder)
             names = [f"fetchloom-{index}{suffix}" for index in range(count)]
@@ -31,12 +47,13 @@ class ReleaseChecks(unittest.TestCase):
                 "python3 python/check_release.py ",
             ))]
             self.assertEqual(len(checks), 1, "the workflow must have one asset checksum gate")
-            command = shlex.split(checks[0])
+            command = [word.replace("$GITHUB_REPOSITORY", REPOSITORY).replace("$TAG", TAG)
+                       for word in shlex.split(checks[0])]
             if command[0] == "python3":
                 command[0] = sys.executable
                 command[1] = str(ROOT / command[1])
                 command[2] = str(assets)
-            return subprocess.run(command, cwd=assets, capture_output=True, text=True, timeout=30)
+            return subprocess.run(command, cwd=assets, env=self.env, capture_output=True, text=True, timeout=30)
 
     def check_all(self, change, success):
         for workflow, suffix, count in WORKFLOWS:
@@ -74,7 +91,6 @@ class ReleaseChecks(unittest.TestCase):
     def test_malformed_checksum_rows_are_refused(self):
         self.check_all(lambda assets, names, lines: lines.append("not a checksum"), False)
 
-    @unittest.skipIf(sys.platform == "win32", "makes a symlink")
     def test_a_package_that_is_a_link_is_refused(self):
         def link(assets, names, lines):
             # the same bytes, so only the link itself is wrong
@@ -89,6 +105,27 @@ class ReleaseChecks(unittest.TestCase):
                 result = self.run_check(workflow, suffix, count, link)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertEqual(result.stderr, f"release verification failed: fetchloom-0{suffix} is not a regular package file\n")
+
+    def test_each_package_must_have_an_attestation_from_the_release_workflow(self):
+        for workflow, suffix, count in WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                result = self.run_check(workflow, suffix, count, lambda assets, names, lines: None)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                verified = [line.split(" ") for line in self.log.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual([words[:2] + [Path(words[2]).name] + words[3:] for words in verified], [
+                    ["attestation", "verify", f"fetchloom-{index}{suffix}", "--repo", REPOSITORY,
+                     "--signer-workflow", f"{REPOSITORY}/.github/workflows/release.yml",
+                     "--source-ref", f"refs/tags/{TAG}", "--deny-self-hosted-runners"]
+                    for index in range(count)])
+
+    def test_a_package_without_that_attestation_is_refused(self):
+        for workflow, suffix, count in WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                self.env["GH_REFUSE"] = f"fetchloom-1{suffix}"
+                result = self.run_check(workflow, suffix, count, lambda assets, names, lines: None)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, "release verification failed: "
+                                 f"fetchloom-1{suffix} has no attestation from release.yml at {TAG}\n")
 
 
 class ReleaseChecksums(unittest.TestCase):

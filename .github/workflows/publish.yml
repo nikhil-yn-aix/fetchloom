@@ -24,17 +24,18 @@ jobs:
       url: https://pypi.org/project/fetchloom/
     permissions:
       contents: read
+      attestations: read
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: download the wheels
+      - name: download and check the wheels
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern '*.whl' --pattern SHA256SUMS
-          python3 python/check_release.py dist --suffix .whl --count 6
+          python3 python/check_release.py dist --suffix .whl --count 6 --repo "$GITHUB_REPOSITORY" --tag "$TAG"
           rm dist/SHA256SUMS
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
