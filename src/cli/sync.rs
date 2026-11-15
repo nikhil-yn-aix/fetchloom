@@ -3114,7 +3114,7 @@ mod tests {
         assert_eq!(project.lock().unwrap(), Some(lock.clone()));
         assert!(
             runner
-                .write_lock(&Before::whole(Some(lock.clone())), &Lock::default())
+                .write_lock(&Before::whole(Some(lock)), &Lock::default())
                 .unwrap()
                 .is_some()
         );
@@ -3445,7 +3445,7 @@ mod tests {
         let (lock, kept) = settled(
             &others,
             vec![locked("a")],
-            vec![changed.clone(), locked("d")],
+            vec![changed, locked("d")],
             Vec::new(),
         );
         assert_eq!(

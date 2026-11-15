@@ -726,7 +726,7 @@ mod tests {
         let rest = compress(&text[three.len()..]).unwrap();
         let first = compress(&three).unwrap();
         for (reason, bytes, line) in [
-            ("not compressed", text.clone().into_bytes(), 1),
+            ("not compressed", text.into_bytes(), 1),
             (
                 "no frame after",
                 [first.clone(), b"rest".to_vec()].concat(),
@@ -734,7 +734,7 @@ mod tests {
             ),
             (
                 "cut short",
-                [first.clone(), rest[..rest.len() - 3].to_vec()].concat(),
+                [first, rest[..rest.len() - 3].to_vec()].concat(),
                 4,
             ),
         ] {

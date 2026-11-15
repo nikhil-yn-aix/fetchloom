@@ -1533,7 +1533,7 @@ mod tests {
             .unwrap();
         assert_eq!(repacked, locked);
 
-        let mut broken = locked.clone();
+        let mut broken = locked;
         broken.files[1].url = "not a link".to_owned();
         let Err(error) = Draft::switched(&unpacking, unpacking.source().unwrap(), &broken) else {
             panic!("a broken link drafts nothing");

@@ -938,7 +938,7 @@ mod tests {
         let escaping = Candidate {
             tree: crate::cache::tree_hash(&outside),
             files: outside,
-            ..candidate.clone()
+            ..candidate
         };
         for (case, rebuild, now, pin, answers) in [
             (

@@ -2075,7 +2075,7 @@ mod tests {
             Ok(lists::compress(part).unwrap())
         };
         let (read, unlisted) = Lock::read_with(&text, &given, &|_| true, 0).unwrap();
-        assert_eq!((read, unlisted), (lock.clone(), Vec::new()));
+        assert_eq!((read, unlisted), (lock, Vec::new()));
         assert_eq!(*asked.borrow(), [parts[0].0.clone()]);
         asked.borrow_mut().clear();
         for elsewhere in ["data.toml", "data.lock.d/../../secret.tsv.zst"] {
