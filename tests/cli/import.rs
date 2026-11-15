@@ -158,7 +158,7 @@ fn a_clone_without_the_bytes_recovers_by_copying_them() -> Result {
     );
     assert_eq!(
         error["help"],
-        "copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are"
+        "a folder mirror that holds them brings them back, as `fetchloom sync flowers --mirror <folder>`; else copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are"
     );
     // running sync again, before the files are copied, would only fail again
     assert_eq!(error["fix"], serde_json::Value::Null);

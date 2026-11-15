@@ -80,7 +80,8 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
         format!("{name} was imported from files, and {lacking}"),
     )
     .help(format!(
-        "copy them to {folder} by hand, then run `{}`, or run `{}` where they are",
+        "a folder mirror that holds them brings them back, as `{}`; else copy them to {folder} by hand, then run `{}`, or run `{}` where they are",
+        crate::suggested::command(&format!("sync {name} --mirror <folder>")),
         crate::suggested::command("sync"),
         crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
