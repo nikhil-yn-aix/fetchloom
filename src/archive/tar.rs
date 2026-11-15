@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::io::{self, BufRead, Read};
 
 use ::tar::{Archive, Entry, EntryType};
-use bzip2::bufread::MultiBzDecoder;
+use bzip2::bufread::BzDecoder;
 use flate2::bufread::GzDecoder;
 use liblzma::bufread::XzDecoder;
 use liblzma::stream::{CONCATENATED, Stream};
@@ -38,9 +38,7 @@ pub(super) fn decompressed<'r>(
     memory: u64,
 ) -> io::Result<Box<dyn Read + 'r>> {
     Ok(match format {
-        Format::TarGz => Box::new(GzMembers {
-            member: Some(GzDecoder::new(compressed)),
-        }),
+        Format::TarGz => Box::new(Streams::<GzDecoder<_>>::new(compressed)),
         Format::TarXz => Box::new(XzDecoder::new_stream(
             compressed,
             Stream::new_auto_decoder(memory.max(XZ_MEMORY), CONCATENATED)?,
@@ -50,7 +48,7 @@ pub(super) fn decompressed<'r>(
             decoder.window_log_max(zstd_window_log(memory))?;
             Box::new(decoder)
         }
-        Format::TarBz2 => Box::new(MultiBzDecoder::new(compressed)),
+        Format::TarBz2 => Box::new(Streams::<BzDecoder<_>>::new(compressed)),
         Format::Tar | Format::Zip | Format::SevenZ => Box::new(compressed),
     })
 }
@@ -310,30 +308,76 @@ impl<R: Read> Read for Capped<'_, R> {
     }
 }
 
-/// gzip members joined end to end, as pigz and bgzip write them, then perhaps zero bytes up to the
-/// end, which gzip ignores too. any other byte after a member starts another.
-struct GzMembers<R> {
-    /// the member being read, none once the stream ended.
-    member: Option<GzDecoder<R>>,
+/// a decoder of one compressed stream, which gives back what follows the stream once it ends.
+trait OneStream: Read + Sized {
+    type Input: BufRead;
+    /// the format, as an error names it.
+    const NAME: &'static str;
+    fn start(input: Self::Input) -> Self;
+    fn input(&mut self) -> &mut Self::Input;
+    fn into_input(self) -> Self::Input;
 }
 
-impl<R: BufRead> Read for GzMembers<R> {
+impl<R: BufRead> OneStream for GzDecoder<R> {
+    type Input = R;
+    const NAME: &'static str = "gzip";
+    fn start(input: R) -> Self {
+        GzDecoder::new(input)
+    }
+    fn input(&mut self) -> &mut R {
+        self.get_mut()
+    }
+    fn into_input(self) -> R {
+        self.into_inner()
+    }
+}
+
+impl<R: BufRead> OneStream for BzDecoder<R> {
+    type Input = R;
+    const NAME: &'static str = "bzip2";
+    fn start(input: R) -> Self {
+        BzDecoder::new(input)
+    }
+    fn input(&mut self) -> &mut R {
+        self.get_mut()
+    }
+    fn into_input(self) -> R {
+        self.into_inner()
+    }
+}
+
+/// streams joined end to end, as pigz, bgzip and pbzip2 write them, then perhaps zero bytes up to
+/// the end, which gzip and bzip2 ignore too. any other byte after a stream starts another.
+struct Streams<D> {
+    /// the stream being read, none once the last one ended.
+    stream: Option<D>,
+}
+
+impl<D: OneStream> Streams<D> {
+    fn new(input: D::Input) -> Streams<D> {
+        Streams {
+            stream: Some(D::start(input)),
+        }
+    }
+}
+
+impl<D: OneStream> Read for Streams<D> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        while let Some(member) = &mut self.member {
-            let read = member.read(buffer)?;
+        while let Some(stream) = &mut self.stream {
+            let read = stream.read(buffer)?;
             if read > 0 || buffer.is_empty() {
                 return Ok(read);
             }
-            let compressed = member.get_mut();
-            match compressed.fill_buf()?.first().copied() {
-                None => self.member = None,
+            let input = stream.input();
+            match input.fill_buf()?.first().copied() {
+                None => self.stream = None,
                 Some(0) => {
-                    zeros_to_end(compressed)?;
-                    self.member = None;
+                    zeros_to_end(input, D::NAME)?;
+                    self.stream = None;
                 }
                 Some(_) => {
-                    let compressed = self.member.take().map(GzDecoder::into_inner);
-                    self.member = compressed.map(GzDecoder::new);
+                    let input = self.stream.take().map(D::into_input);
+                    self.stream = input.map(D::start);
                 }
             }
         }
@@ -341,8 +385,9 @@ impl<R: BufRead> Read for GzMembers<R> {
     }
 }
 
-/// reads past zero bytes to the end of `compressed`, failing at any other byte.
-fn zeros_to_end(compressed: &mut impl BufRead) -> io::Result<()> {
+/// reads past zero bytes to the end of `compressed`, failing at any other byte after the `name`
+/// stream.
+fn zeros_to_end(compressed: &mut impl BufRead, name: &str) -> io::Result<()> {
     loop {
         let bytes = compressed.fill_buf()?;
         if bytes.is_empty() {
@@ -351,7 +396,7 @@ fn zeros_to_end(compressed: &mut impl BufRead) -> io::Result<()> {
         if bytes.iter().any(|byte| *byte != 0) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "bytes other than zeros come after its gzip stream",
+                format!("bytes other than zeros come after its {name} stream"),
             ));
         }
         let zeros = bytes.len();
@@ -451,29 +496,31 @@ mod tests {
         assert!(err.message.contains("damaged"), "{err:?}");
     }
 
-    /// zero bytes after a gzip stream are padding, which gzip ignores, while any other bytes
-    /// after it, even after zeros, are damage.
+    /// zero bytes after a gzip or bzip2 stream are padding, which gzip and bzip2 ignore, while any
+    /// other bytes after it, even after zeros, are damage.
     #[test]
-    fn zeros_after_a_gzip_stream_are_padding() {
-        let packed = compress(Format::TarGz, &tar_of(FILES));
-        // a few blocks, fewer zeros than a gzip header, and more than one read of the archive
-        for zeros in [1024, 1, 9, super::super::BUFFER + 1] {
-            let padded = [packed.clone(), vec![0; zeros]].concat();
-            assert_eq!(
-                paths(&Scratch::new(), Format::TarGz, &padded),
-                ["README.md", "data/empty.txt", "data/train.csv"],
-                "{zeros} zeros"
-            );
-        }
-        let member = compress(Format::TarGz, b"");
-        let zeros_then_member = [vec![0; 4], member].concat();
-        for after in [&b"junk"[..], b"\0\0\0\0junk", &zeros_then_member] {
-            let err = Scratch::new().refuse(Format::TarGz, &[&packed[..], after].concat());
-            assert!(
-                err.message.starts_with("the archive is damaged"),
-                "{after:?}: {}",
-                err.message
-            );
+    fn zeros_after_a_gzip_or_bzip2_stream_are_padding() {
+        for format in [Format::TarGz, Format::TarBz2] {
+            let packed = compress(format, &tar_of(FILES));
+            // a few blocks, fewer zeros than a gzip header, and more than one read of the archive
+            for zeros in [1024, 1, 9, super::super::BUFFER + 1] {
+                let padded = [packed.clone(), vec![0; zeros]].concat();
+                assert_eq!(
+                    paths(&Scratch::new(), format, &padded),
+                    ["README.md", "data/empty.txt", "data/train.csv"],
+                    "{format:?}, {zeros} zeros"
+                );
+            }
+            let stream = compress(format, b"");
+            let zeros_then_stream = [vec![0; 4], stream].concat();
+            for after in [&b"junk"[..], b"\0\0\0\0junk", &zeros_then_stream] {
+                let err = Scratch::new().refuse(format, &[&packed[..], after].concat());
+                assert!(
+                    err.message.starts_with("the archive is damaged"),
+                    "{format:?}, {after:?}: {}",
+                    err.message
+                );
+            }
         }
     }
 
